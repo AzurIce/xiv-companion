@@ -64,9 +64,9 @@ function recipeLevelLabel(data: CraftDataPackage, recipe: CraftRecipe) {
 }
 
 function sourceIcon(source: ItemSource) {
-  if (source.kind === 'gilShop') return <Coins class="h-3.5 w-3.5" />
-  if (source.kind === 'specialShop') return <Shuffle class="h-3.5 w-3.5" />
-  return <Leaf class="h-3.5 w-3.5" />
+  if (source.kind === 'gilShop') return <Coins class="h-3.5 w-3.5 shrink-0" />
+  if (source.kind === 'specialShop') return <Shuffle class="h-3.5 w-3.5 shrink-0" />
+  return <Leaf class="h-3.5 w-3.5 shrink-0" />
 }
 
 function sourceDetail(data: CraftDataPackage, source: ItemSource, amount: number) {
@@ -75,12 +75,6 @@ function sourceDetail(data: CraftDataPackage, source: ItemSource, amount: number
     return `${source.shopName} · ${sourceCostLabel(data, source, amount)}`
   }
   return '采矿 / 园艺'
-}
-
-function sourceAbbr(source: ItemSource) {
-  if (source.kind === 'gilShop') return '店'
-  if (source.kind === 'specialShop') return '换'
-  return '采'
 }
 
 function sourceCostLabel(data: CraftDataPackage, source: ItemSource, amount: number) {
@@ -114,6 +108,29 @@ function sourceButtonClass(source: ItemSource | undefined, active: boolean, igno
   return 'border-border bg-secondary text-secondary-foreground'
 }
 
+type MaterialPlanEntry = {
+  itemId: number
+  amount: number
+  sources: ItemSource[]
+  choice?: SourceChoice
+  source?: ItemSource
+  ignored: boolean
+  shopName?: string
+  gil?: number
+  costs?: Array<{ itemId: number; amount: number }>
+}
+
+type ExchangePlanGroup = {
+  key: string
+  shopName: string
+  costs: Array<{ itemId: number; amount: number }>
+  entries: MaterialPlanEntry[]
+}
+
+function exchangeGroupKey(source: Extract<ItemSource, { kind: 'specialShop' }>) {
+  return `${source.shopName}|${source.costs.map((cost) => cost.itemId).join('+')}`
+}
+
 function SourceChoiceControls(props: {
   data: CraftDataPackage
   itemId: number
@@ -130,24 +147,24 @@ function SourceChoiceControls(props: {
   }
 
   return (
-    <div class="flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>
+    <div class="flex flex-wrap gap-1.5" onClick={(event) => event.stopPropagation()}>
       <button
         type="button"
         class={cx(
-          'inline-flex h-6 items-center gap-1 rounded border px-2 text-[11px] font-medium transition-colors',
+          'inline-flex min-h-7 max-w-full items-center gap-1 rounded border px-2 py-1 text-left text-[11px] font-medium leading-snug transition-colors',
           sourceButtonClass(undefined, ignored(), true),
         )}
         onClick={() => props.onChoose(props.itemId, ignored() ? undefined : { kind: 'ignore' })}
         title="已持有"
         aria-label="已持有"
       >
-        <CircleCheck class="h-3 w-3" />
+        <CircleCheck class="h-3 w-3 shrink-0" />
         已持有
       </button>
 
       <Show
         when={props.sources.length > 0}
-        fallback={<span class="inline-flex h-6 items-center rounded border bg-background/80 px-2 text-[11px] text-muted-foreground">无来源</span>}
+        fallback={<span class="inline-flex min-h-7 items-center rounded border bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">无来源</span>}
       >
         <For each={props.sources}>
           {(source, i) => {
@@ -156,7 +173,7 @@ function SourceChoiceControls(props: {
               <button
                 type="button"
                 class={cx(
-                  'inline-flex h-6 max-w-full items-center gap-1 rounded border px-2 text-[11px] font-medium transition-colors',
+                  'inline-flex min-h-7 max-w-full items-center gap-1 rounded border px-2 py-1 text-left text-[11px] font-medium leading-snug transition-colors',
                   sourceButtonClass(source, active()),
                 )}
                 onClick={() => props.onChoose(props.itemId, { kind: 'index', index: i() })}
@@ -166,7 +183,7 @@ function SourceChoiceControls(props: {
                 <span>{sourceLabel(source)}</span>
                 <Show when={sourceCostLabel(props.data, source, props.amount)}>
                   {(label) => (
-                    <span class={cx('max-w-32 truncate', active() ? 'opacity-90' : 'opacity-70')}>
+                    <span class={cx('min-w-0 whitespace-normal break-words', active() ? 'opacity-90' : 'opacity-70')}>
                       {label()}
                     </span>
                   )}
@@ -176,6 +193,88 @@ function SourceChoiceControls(props: {
           }}
         </For>
       </Show>
+    </div>
+  )
+}
+
+function MaterialPlanRow(props: {
+  data: CraftDataPackage
+  entry: MaterialPlanEntry
+  class: string
+  meta?: JSX.Element
+  subdued?: boolean
+  onChoose: (itemId: number, choice: SourceChoice | undefined) => void
+}) {
+  const item = () => getItem(props.data, props.entry.itemId)
+
+  return (
+    <div class={cx('rounded-sm border-l-2 px-2 py-2 text-sm', props.class, props.subdued && 'opacity-75')}>
+      <div class="grid grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-2">
+        <ItemIcon icon={item()?.icon ?? 0} size="sm" />
+        <div class="min-w-0">
+          <div class="truncate font-medium">{getItemName(props.data, props.entry.itemId)}</div>
+          <Show when={props.meta}>
+            <div class="whitespace-normal break-words text-xs leading-snug text-muted-foreground">{props.meta}</div>
+          </Show>
+        </div>
+        <Badge variant="outline" class="bg-background/70">x{formatInteger(props.entry.amount)}</Badge>
+      </div>
+
+      <div class="mt-2 pl-7">
+        <SourceChoiceControls
+          data={props.data}
+          itemId={props.entry.itemId}
+          amount={props.entry.amount}
+          sources={props.entry.sources}
+          choice={props.entry.choice}
+          onChoose={props.onChoose}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ExchangeGroupPanel(props: {
+  data: CraftDataPackage
+  group: ExchangePlanGroup
+  onChoose: (itemId: number, choice: SourceChoice | undefined) => void
+}) {
+  return (
+    <div class="overflow-hidden rounded-md border bg-[#fbf9ff]">
+      <div class="grid grid-cols-1 lg:grid-cols-[150px_minmax(0,1fr)] xl:grid-cols-1 2xl:grid-cols-[160px_minmax(0,1fr)]">
+        <div class="border-b bg-[#f0ebff] p-3 lg:border-b-0 lg:border-r xl:border-b xl:border-r-0 2xl:border-b-0 2xl:border-r">
+          <div class="mb-2 min-w-0 break-words text-xs font-medium text-[#4c3290]">{props.group.shopName}</div>
+          <div class="space-y-1.5">
+            <For each={props.group.costs}>
+              {(cost) => (
+                <SummaryItemRow
+                  data={props.data}
+                  itemId={cost.itemId}
+                  amount={cost.amount}
+                  class="border-l-[#bfa7ff] bg-background/75"
+                />
+              )}
+            </For>
+          </div>
+        </div>
+
+        <div class="divide-y">
+          <For each={props.group.entries}>
+            {(entry) => (
+              <div class="p-2">
+                <MaterialPlanRow
+                  data={props.data}
+                  entry={entry}
+                  class="border-l-[#d7c7ff] bg-[#f7f2ff]"
+                  meta={entry.costs ? costListLabel(props.data, entry.costs) : undefined}
+                  subdued
+                  onChoose={props.onChoose}
+                />
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
     </div>
   )
 }
@@ -208,11 +307,9 @@ function TreeNode(props: {
   node: CraftTreeNode
   depth: number
   collapsed: Set<string>
-  sourceChoices: Map<number, SourceChoice>
   selectedItemId?: number
   onToggle: (key: string) => void
   onSelect: (node: CraftTreeNode) => void
-  onChooseSource: (itemId: number, choice: SourceChoice | undefined) => void
 }) {
   const item = () => getItem(props.data, props.node.itemId)
   const key = () => collapseKey(props.node.itemId, props.depth)
@@ -221,12 +318,6 @@ function TreeNode(props: {
   const isSelected = () => props.selectedItemId === props.node.itemId
   const recipe = () => props.node.recipe
   const countsAsLeaf = () => !isCraftable() || isCollapsed()
-  const sources = () => props.data.sources[String(props.node.itemId)] ?? []
-  const choices = () => props.sourceChoices ?? new Map<number, SourceChoice>()
-  const ignored = () => choices().get(props.node.itemId)?.kind === 'ignore'
-  const currentSource = () => countsAsLeaf() && !ignored()
-    ? resolveSource(props.node.itemId, sources(), choices())
-    : undefined
 
   return (
     <div>
@@ -235,8 +326,9 @@ function TreeNode(props: {
           'group cursor-pointer rounded-sm border-l-2 px-2 py-1 text-sm transition-colors',
           isSelected()
             ? 'border-l-[#60a5fa] bg-[#dceeff] text-[#123047] ring-1 ring-[#a9d3ff]'
-            : sourceToneClass(currentSource(), ignored()),
-          !isSelected() && !countsAsLeaf() && 'hover:bg-accent/70',
+            : countsAsLeaf()
+              ? 'border-l-border bg-muted/35 hover:bg-muted/55'
+              : 'border-l-transparent bg-background hover:bg-accent/70',
         )}
         style={{ 'padding-left': `${8 + props.depth * 18}px` }}
         onClick={() => props.onSelect(props.node)}
@@ -273,33 +365,11 @@ function TreeNode(props: {
 
           <div class="flex items-center gap-1">
             <Show when={countsAsLeaf()}>
-              <Show
-                when={ignored()}
-                fallback={
-                  <Show when={currentSource()}>
-                    {(source) => <Badge variant="outline" class="bg-background/70">{sourceAbbr(source())}</Badge>}
-                  </Show>
-                }
-              >
-                <Badge variant="outline" class="bg-background/70">持</Badge>
-              </Show>
+              <Badge variant="outline" class="bg-background/70">叶</Badge>
             </Show>
             <Badge variant="outline" class="bg-background/70">x{formatInteger(props.node.amountNeeded)}</Badge>
           </div>
         </div>
-
-        <Show when={countsAsLeaf()}>
-          <div class="mt-1 pl-11">
-            <SourceChoiceControls
-              data={props.data}
-              itemId={props.node.itemId}
-              amount={props.node.amountNeeded}
-              sources={sources()}
-              choice={choices().get(props.node.itemId)}
-              onChoose={props.onChooseSource}
-            />
-          </div>
-        </Show>
       </div>
 
       <Show when={isCraftable() && !isCollapsed()}>
@@ -310,11 +380,9 @@ function TreeNode(props: {
               node={child}
               depth={props.depth + 1}
               collapsed={props.collapsed}
-              sourceChoices={props.sourceChoices}
               selectedItemId={props.selectedItemId}
               onToggle={props.onToggle}
               onSelect={props.onSelect}
-              onChooseSource={props.onChooseSource}
             />
           )}
         </For>
@@ -412,64 +480,81 @@ export default function CraftingPage() {
   const materialPlan = createMemo(() => {
     const data = craftData()
     const empty = {
-      gathering: [] as Array<{ itemId: number; amount: number }>,
-      shops: [] as Array<{ itemId: number; amount: number; shopName: string; gil: number }>,
-      exchanges: [] as Array<{ itemId: number; amount: number; shopName: string; costs: Array<{ itemId: number; amount: number }> }>,
-      exchangeCosts: [] as Array<{ itemId: number; amount: number }>,
-      owned: [] as Array<{ itemId: number; amount: number }>,
-      unknown: [] as Array<{ itemId: number; amount: number }>,
+      gathering: [] as MaterialPlanEntry[],
+      shops: [] as MaterialPlanEntry[],
+      exchangeGroups: [] as ExchangePlanGroup[],
+      owned: [] as MaterialPlanEntry[],
+      unknown: [] as MaterialPlanEntry[],
       gilTotal: 0,
     }
     if (!data) return empty
 
     const gathering: typeof empty.gathering = []
     const shops: typeof empty.shops = []
-    const exchanges: typeof empty.exchanges = []
     const owned: typeof empty.owned = []
     const unknown: typeof empty.unknown = []
-    const exchangeCosts = new Map<number, number>()
+    const exchangeGroups = new Map<string, ExchangePlanGroup & { costMap: Map<number, number> }>()
     let gilTotal = 0
     const choices = sourceChoices()
 
     for (const material of materials()) {
       const sources = data.sources[String(material.itemId)] ?? []
       const choice = choices.get(material.itemId)
+      const source = resolveSource(material.itemId, sources, choices)
+      const baseEntry: MaterialPlanEntry = {
+        ...material,
+        sources,
+        choice,
+        source,
+        ignored: choice?.kind === 'ignore',
+      }
       if (choice?.kind === 'ignore') {
-        owned.push(material)
+        owned.push(baseEntry)
         continue
       }
-      const source = resolveSource(material.itemId, sources, choices)
       if (source?.kind === 'gilShop') {
         const gil = (getItem(data, material.itemId)?.priceMid ?? 0) * material.amount
         gilTotal += gil
-        shops.push({ ...material, shopName: source.shopName, gil })
+        shops.push({ ...baseEntry, shopName: source.shopName, gil })
       } else if (source?.kind === 'specialShop') {
         const costs = source.costs.map((cost) => ({
           itemId: cost.itemId,
           amount: cost.count * material.amount,
         }))
-        exchanges.push({
-          ...material,
-          shopName: source.shopName,
-          costs,
-        })
+        const key = exchangeGroupKey(source)
+        let group = exchangeGroups.get(key)
+        if (!group) {
+          group = {
+            key,
+            shopName: source.shopName,
+            costs: [],
+            entries: [],
+            costMap: new Map<number, number>(),
+          }
+          exchangeGroups.set(key, group)
+        }
+        group.entries.push({ ...baseEntry, shopName: source.shopName, costs })
         for (const cost of costs) {
-          exchangeCosts.set(cost.itemId, (exchangeCosts.get(cost.itemId) ?? 0) + cost.amount)
+          group.costMap.set(cost.itemId, (group.costMap.get(cost.itemId) ?? 0) + cost.amount)
         }
       } else if (source?.kind === 'gathering') {
-        gathering.push(material)
+        gathering.push(baseEntry)
       } else {
-        unknown.push(material)
+        unknown.push(baseEntry)
       }
     }
 
     return {
       gathering,
       shops,
-      exchanges,
-      exchangeCosts: [...exchangeCosts.entries()]
-        .map(([itemId, amount]) => ({ itemId, amount }))
-        .sort((a, b) => a.itemId - b.itemId),
+      exchangeGroups: [...exchangeGroups.values()].map((group) => ({
+        key: group.key,
+        shopName: group.shopName,
+        entries: group.entries,
+        costs: [...group.costMap.entries()]
+          .map(([itemId, amount]) => ({ itemId, amount }))
+          .sort((a, b) => a.itemId - b.itemId),
+      })),
       owned,
       unknown,
       gilTotal,
@@ -521,7 +606,7 @@ export default function CraftingPage() {
         </div>
       </div>
 
-      <div class="grid w-full flex-1 lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_320px] xl:grid-cols-[340px_minmax(0,1fr)_360px] xl:grid-rows-1">
+      <div class="grid w-full flex-1 lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_320px] xl:grid-cols-[340px_minmax(0,1fr)_420px] xl:grid-rows-1 2xl:grid-cols-[360px_minmax(0,1fr)_480px]">
         <aside class="flex h-[340px] flex-col overflow-hidden border-b bg-card sm:h-[380px] lg:row-span-2 lg:h-auto lg:min-h-0 lg:border-b-0 lg:border-r xl:row-span-1">
           <div class="border-b p-3">
             <div class="relative">
@@ -650,11 +735,9 @@ export default function CraftingPage() {
                       node={root()}
                       depth={0}
                       collapsed={collapsed()}
-                      sourceChoices={sourceChoices()}
                       selectedItemId={selectedNode()?.itemId}
                       onToggle={toggleCollapsed}
                       onSelect={setSelectedNode}
-                      onChooseSource={chooseSource}
                     />
                   </div>
                 </div>
@@ -680,8 +763,8 @@ export default function CraftingPage() {
                 <Show when={materialPlan().gathering.length > 0}>
                   <Badge variant="success"><Leaf class="mr-1 h-3 w-3" />采集 {materialPlan().gathering.length}</Badge>
                 </Show>
-                <Show when={materialPlan().exchangeCosts.length > 0}>
-                  <Badge variant="outline"><Shuffle class="mr-1 h-3 w-3" />兑换成本 {materialPlan().exchangeCosts.length}</Badge>
+                <Show when={materialPlan().exchangeGroups.length > 0}>
+                  <Badge variant="outline"><Shuffle class="mr-1 h-3 w-3" />兑换 {materialPlan().exchangeGroups.length}</Badge>
                 </Show>
                 <Show when={materialPlan().gilTotal > 0}>
                   <Badge variant="warning"><Coins class="mr-1 h-3 w-3" />{formatInteger(materialPlan().gilTotal)}G</Badge>
@@ -696,61 +779,44 @@ export default function CraftingPage() {
               <Show when={craftData()}>
                 {(data) => (
                   <div class="space-y-4">
+                    <Show when={materialPlan().exchangeGroups.length > 0}>
+                      <section>
+                        <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
+                          <Shuffle class="h-4 w-4 text-[#3b2778]" />
+                          兑换
+                        </div>
+                        <div class="space-y-2">
+                          <For each={materialPlan().exchangeGroups}>
+                            {(group) => (
+                              <ExchangeGroupPanel
+                                data={data()}
+                                group={group}
+                                onChoose={chooseSource}
+                              />
+                            )}
+                          </For>
+                        </div>
+                      </section>
+                    </Show>
+
                     <Show when={materialPlan().gathering.length > 0}>
                       <section>
                         <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
                           <Leaf class="h-4 w-4 text-emerald-700" />
                           采集清单
                         </div>
-                        <For each={materialPlan().gathering}>
-                          {(material) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={material.itemId}
-                              amount={material.amount}
-                              class="border-l-emerald-200 bg-emerald-50/80"
-                            />
-                          )}
-                        </For>
-                      </section>
-                    </Show>
-
-                    <Show when={materialPlan().exchangeCosts.length > 0}>
-                      <section>
-                        <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
-                          <Shuffle class="h-4 w-4 text-[#3b2778]" />
-                          兑换成本
+                        <div class="space-y-2">
+                          <For each={materialPlan().gathering}>
+                            {(entry) => (
+                              <MaterialPlanRow
+                                data={data()}
+                                entry={entry}
+                                class="border-l-emerald-200 bg-emerald-50/80"
+                                onChoose={chooseSource}
+                              />
+                            )}
+                          </For>
                         </div>
-                        <For each={materialPlan().exchangeCosts}>
-                          {(cost) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={cost.itemId}
-                              amount={cost.amount}
-                              class="border-l-[#d7c7ff] bg-[#f5efff]"
-                            />
-                          )}
-                        </For>
-                      </section>
-                    </Show>
-
-                    <Show when={materialPlan().exchanges.length > 0}>
-                      <section>
-                        <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
-                          <Shuffle class="h-4 w-4 text-muted-foreground" />
-                          兑换获得
-                        </div>
-                        <For each={materialPlan().exchanges}>
-                          {(exchange) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={exchange.itemId}
-                              amount={exchange.amount}
-                              class="border-l-[#d7c7ff] bg-[#f5efff]"
-                              meta={`${exchange.shopName} · ${costListLabel(data(), exchange.costs)}`}
-                            />
-                          )}
-                        </For>
                       </section>
                     </Show>
 
@@ -760,17 +826,19 @@ export default function CraftingPage() {
                           <Coins class="h-4 w-4 text-amber-700" />
                           商店购买
                         </div>
-                        <For each={materialPlan().shops}>
-                          {(shop) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={shop.itemId}
-                              amount={shop.amount}
-                              class="border-l-amber-200 bg-amber-50/80"
-                              meta={`${shop.shopName}${shop.gil > 0 ? ` · ${formatInteger(shop.gil)}G` : ''}`}
-                            />
-                          )}
-                        </For>
+                        <div class="space-y-2">
+                          <For each={materialPlan().shops}>
+                            {(entry) => (
+                              <MaterialPlanRow
+                                data={data()}
+                                entry={entry}
+                                class="border-l-amber-200 bg-amber-50/80"
+                                meta={`${entry.shopName}${entry.gil ? ` · ${formatInteger(entry.gil)}G` : ''}`}
+                                onChoose={chooseSource}
+                              />
+                            )}
+                          </For>
+                        </div>
                       </section>
                     </Show>
 
@@ -778,18 +846,20 @@ export default function CraftingPage() {
                       <section>
                         <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
                           <PackageSearch class="h-4 w-4 text-muted-foreground" />
-                          未解析来源
+                          未安排
                         </div>
-                        <For each={materialPlan().unknown}>
-                          {(material) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={material.itemId}
-                              amount={material.amount}
-                              class="border-l-border bg-background"
-                            />
-                          )}
-                        </For>
+                        <div class="space-y-2">
+                          <For each={materialPlan().unknown}>
+                            {(entry) => (
+                              <MaterialPlanRow
+                                data={data()}
+                                entry={entry}
+                                class="border-l-border bg-background"
+                                onChoose={chooseSource}
+                              />
+                            )}
+                          </For>
+                        </div>
                       </section>
                     </Show>
 
@@ -799,17 +869,35 @@ export default function CraftingPage() {
                           <CircleCheck class="h-4 w-4" />
                           已持有
                         </div>
-                        <For each={materialPlan().owned}>
-                          {(material) => (
-                            <SummaryItemRow
-                              data={data()}
-                              itemId={material.itemId}
-                              amount={material.amount}
-                              class="border-l-[#a8a29e] bg-[#f1f0ee] text-muted-foreground"
-                            />
-                          )}
-                        </For>
+                        <div class="space-y-2">
+                          <For each={materialPlan().owned}>
+                            {(entry) => (
+                              <MaterialPlanRow
+                                data={data()}
+                                entry={entry}
+                                class="border-l-[#a8a29e] bg-[#f1f0ee] text-muted-foreground"
+                                onChoose={chooseSource}
+                              />
+                            )}
+                          </For>
+                        </div>
                       </section>
+                    </Show>
+
+                    <Show
+                      when={
+                        materialPlan().exchangeGroups.length === 0
+                        && materialPlan().gathering.length === 0
+                        && materialPlan().shops.length === 0
+                        && materialPlan().unknown.length === 0
+                        && materialPlan().owned.length === 0
+                      }
+                    >
+                      <EmptyState
+                        icon={<PackageSearch class="h-6 w-6" />}
+                        title="暂无材料"
+                        description="选择一个配方后会在这里生成叶子材料清单"
+                      />
                     </Show>
                   </div>
                 )}

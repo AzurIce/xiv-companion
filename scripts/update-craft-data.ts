@@ -106,10 +106,55 @@ function addSource(map: Record<string, ItemSource[]>, itemId: number, source: It
   map[key] = list
 }
 
+function itemIdByName(items: Record<string, CraftItem>): Map<string, number> {
+  const names = new Map<string, number>()
+  for (const item of Object.values(items)) {
+    if (item.name) names.set(item.name, item.id)
+  }
+  return names
+}
+
+function resolveNameId(names: Map<string, number>, name: string): number | undefined {
+  return names.get(name.replaceAll('"', ''))
+}
+
 function resolveSpecialShopCostItemId(
+  shopName: string,
   useCurrencyType: number,
   costItemId: number,
+  names: Map<string, number>,
 ): number {
+  const cleanName = shopName.replaceAll('"', '')
+
+  if (cleanName.includes('巧手白票')) return resolveNameId(names, '巧手白票') ?? costItemId
+  if (cleanName.includes('大地白票')) return resolveNameId(names, '大地白票') ?? costItemId
+  if (cleanName.includes('巧手工票')) return resolveNameId(names, '制作蓝票的票据') ?? costItemId
+  if (cleanName.includes('大地工票')) return resolveNameId(names, '采集蓝票的票据') ?? costItemId
+
+  const tomestone = cleanName.match(/亚拉戈([^（]+?)神典石/)
+  if (tomestone?.[1]) {
+    const itemId = resolveNameId(names, `亚拉戈${tomestone[1]}神典石`)
+    if (itemId) return itemId
+  }
+
+  if (useCurrencyType === 4) {
+    const currencyItems: Record<number, number> = {
+      1: resolveNameId(names, '亚拉戈诗学神典石') ?? 28,
+      2: resolveNameId(names, '亚拉戈数理神典石') ?? costItemId,
+      3: resolveNameId(names, '亚拉戈记忆神典石') ?? costItemId,
+    }
+    return currencyItems[costItemId] ?? costItemId
+  }
+
+  if (useCurrencyType === 2) {
+    const currencyItems: Record<number, number> = {
+      1: resolveNameId(names, '亚拉戈诗学神典石') ?? 28,
+      2: resolveNameId(names, '亚拉戈数理神典石') ?? costItemId,
+      3: resolveNameId(names, '亚拉戈记忆神典石') ?? costItemId,
+    }
+    return currencyItems[costItemId] ?? costItemId
+  }
+
   if (useCurrencyType !== 16) return costItemId
 
   const currencyItems: Record<number, number> = {
@@ -200,8 +245,9 @@ function loadSecretRecipeBooks(): Record<string, string> {
   return books
 }
 
-function loadSources(): Record<string, ItemSource[]> {
+function loadSources(items: Record<string, CraftItem>): Record<string, ItemSource[]> {
   const sources: Record<string, ItemSource[]> = {}
+  const names = itemIdByName(items)
 
   for (const row of readRows('GatheringItem.csv')) {
     const itemId = numberValue(row[1])
@@ -224,6 +270,7 @@ function loadSources(): Record<string, ItemSource[]> {
 
   for (const row of readRows('SpecialShop.csv')) {
     const shopName = row[1] || '兑换'
+    if (shopName.includes('测试')) continue
     const useCurrencyType = numberValue(row[2042])
     const costGroups = [
       { itemBase: 482, countBase: 542 },
@@ -241,7 +288,7 @@ function loadSources(): Record<string, ItemSource[]> {
         const costCount = numberValue(row[group.countBase + i])
         if (costItemId && costCount) {
           costs.push({
-            itemId: resolveSpecialShopCostItemId(useCurrencyType, costItemId),
+            itemId: resolveSpecialShopCostItemId(shopName, useCurrencyType, costItemId, names),
             count: costCount,
           })
         }
@@ -281,7 +328,7 @@ function main() {
   const recipes = loadRecipes()
   const recipeLevels = loadRecipeLevels()
   const secretRecipeBooks = loadSecretRecipeBooks()
-  const sources = loadSources()
+  const sources = loadSources(items)
   const sourceCount = Object.values(sources).reduce((sum, list) => sum + list.length, 0)
 
   const data: CraftDataPackage = {

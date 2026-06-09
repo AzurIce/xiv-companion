@@ -11,7 +11,6 @@
     "dev": "bun run --cwd app dev",
     "build": "bun run --cwd app build",
     "preview": "bun run --cwd app preview",
-    "update-craft-data": "bun run scripts/update-craft-data.ts"
+    "update-craft-data": "cargo xtask update-craft-data"
   }
 }
-

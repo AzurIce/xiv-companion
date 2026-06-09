@@ -7,6 +7,7 @@ The first module is a crafting search workspace extracted from Tomestone. The sh
 ## Stack
 
 - Bun workspace
+- Cargo xtask workspace
 - Vite
 - Solid.js
 - Tailwind CSS v4
@@ -27,5 +28,7 @@ The dev server uses `http://127.0.0.1:5174` by default to avoid colliding with a
 
 ```powershell
 $env:DATAMINING_DIR="E:\_ff14\ffxiv-datamining-cn"
-bun run update-craft-data
+cargo xtask update-craft-data
 ```
+
+The current xtask keeps the existing TypeScript exporter as the compatibility backend and adds a Rust-side data audit. The exporter entry point can be replaced with a physis-backed reader without changing the app-facing command.

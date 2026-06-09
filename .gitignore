@@ -1,9 +1,9 @@
 node_modules/
 dist/
+target/
 .vite/
 *.log
 *.tsbuildinfo
 app/public/craft-data.json
 app/public/version.json
 tmp_*.csv
-
