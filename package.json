@@ -1,0 +1,17 @@
+{
+  "name": "xiv-companian",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "app"
+  ],
+  "scripts": {
+    "dev": "bun run --cwd app dev",
+    "build": "bun run --cwd app build",
+    "preview": "bun run --cwd app preview",
+    "update-craft-data": "bun run scripts/update-craft-data.ts"
+  }
+}
+

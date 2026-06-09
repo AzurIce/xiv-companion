@@ -1,0 +1,27 @@
+{
+  "name": "xiv-companian-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174",
+    "build": "bun node_modules/typescript/bin/tsc -b && bun node_modules/vite/bin/vite.js build",
+    "preview": "bun node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4174"
+  },
+  "dependencies": {
+    "@kobalte/core": "^0.13.11",
+    "@solidjs/router": "^0.16.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@xiv-companian/shared": "workspace:*",
+    "@xiv-companian/ui": "workspace:*",
+    "lucide-solid": "^0.561.0",
+    "solid-js": "^1.9.12",
+    "tailwindcss": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.10",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}
