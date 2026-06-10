@@ -1,5 +1,5 @@
 {
-  "name": "xiv-companian-app",
+  "name": "xiv-companion-app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -12,8 +12,8 @@
     "@kobalte/core": "^0.13.11",
     "@solidjs/router": "^0.16.1",
     "@tailwindcss/vite": "^4.3.0",
-    "@xiv-companian/shared": "workspace:*",
-    "@xiv-companian/ui": "workspace:*",
+    "@xiv-companion/shared": "workspace:*",
+    "@xiv-companion/ui": "workspace:*",
     "lucide-solid": "^0.561.0",
     "solid-js": "^1.9.12",
     "tailwindcss": "^4.3.0"

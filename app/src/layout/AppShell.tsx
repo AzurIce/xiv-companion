@@ -13,8 +13,8 @@ import {
   Sofa,
   Wrench,
 } from 'lucide-solid'
-import { appModules, moduleGroupLabel, type AppModule } from '@xiv-companian/shared'
-import { Badge } from '@xiv-companian/ui'
+import { appModules, moduleGroupLabel, type AppModule } from '@xiv-companion/shared'
+import { Badge } from '@xiv-companion/ui'
 
 const groups: AppModule['group'][] = ['tools', 'preview', 'data']
 

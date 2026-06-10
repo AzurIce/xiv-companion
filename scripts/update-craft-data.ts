@@ -7,7 +7,7 @@ import type {
   CraftRecipe,
   ItemSource,
   RecipeLevelInfo,
-} from '@xiv-companian/shared'
+} from '@xiv-companion/shared'
 
 const ROOT = resolve(import.meta.dir, '..')
 const DATAMINING_DIR = resolve(process.env.DATAMINING_DIR ?? join(ROOT, '..', 'ffxiv-datamining-cn'))

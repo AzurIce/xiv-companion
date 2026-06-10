@@ -1,5 +1,5 @@
-import { appModules } from '@xiv-companian/shared'
-import { Card, CardContent, CardHeader, CardTitle } from '@xiv-companian/ui'
+import { appModules } from '@xiv-companion/shared'
+import { Card, CardContent, CardHeader, CardTitle } from '@xiv-companion/ui'
 
 export default function PlaceholderPage(props: { moduleId: string }) {
   const module = () => appModules.find((item) => item.id === props.moduleId)

@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { splitProps } from 'solid-js'
-import { cx } from '@xiv-companian/shared'
+import { cx } from '@xiv-companion/shared'
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'ghost'

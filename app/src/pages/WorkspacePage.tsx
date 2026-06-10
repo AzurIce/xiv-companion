@@ -1,8 +1,8 @@
 import { For } from 'solid-js'
 import { A } from '@solidjs/router'
 import { Boxes, Database, Shirt, Sofa, Wrench } from 'lucide-solid'
-import { appModules, cx } from '@xiv-companian/shared'
-import { Badge, Card, CardContent, CardHeader, CardTitle } from '@xiv-companian/ui'
+import { appModules, cx } from '@xiv-companion/shared'
+import { Badge, Card, CardContent, CardHeader, CardTitle } from '@xiv-companion/ui'
 
 function iconFor(id: string) {
   if (id === 'crafting') return <Wrench class="h-5 w-5" />
