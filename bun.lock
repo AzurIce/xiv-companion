@@ -12,38 +12,15 @@
         "@kobalte/core": "^0.13.11",
         "@solidjs/router": "^0.16.1",
         "@tailwindcss/vite": "^4.3.0",
-        "@xiv-companion/shared": "workspace:*",
-        "@xiv-companion/ui": "workspace:*",
         "lucide-solid": "^0.561.0",
         "solid-js": "^1.9.12",
         "tailwindcss": "^4.3.0",
       },
       "devDependencies": {
         "@types/node": "^24.12.2",
-        "typescript": "~6.0.2",
+        "typescript": "~5.9.3",
         "vite": "^8.0.10",
         "vite-plugin-solid": "^2.11.12",
-      },
-    },
-    "packages/shared": {
-      "name": "@xiv-companion/shared",
-      "version": "0.1.0",
-      "dependencies": {
-        "solid-js": "^1.9.12",
-      },
-      "devDependencies": {
-        "typescript": "~6.0.2",
-      },
-    },
-    "packages/ui": {
-      "name": "@xiv-companion/ui",
-      "version": "0.1.0",
-      "dependencies": {
-        "@xiv-companion/shared": "workspace:*",
-        "solid-js": "^1.9.12",
-      },
-      "devDependencies": {
-        "typescript": "~6.0.2",
       },
     },
   },
@@ -220,10 +197,6 @@
 
     "@types/node": ["@types/node@24.13.1", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-RSpUJGmvsJ1ZeBehQZFhIdpsz+bIpES0nIQXko4Ybq+N+kX6XvOq3Jo+iJ82FWLdblFq85AsMikd3m35jgezYg=="],
 
-    "@xiv-companion/shared": ["@xiv-companion/shared@workspace:packages/shared"],
-
-    "@xiv-companion/ui": ["@xiv-companion/ui@workspace:packages/ui"],
-
     "babel-plugin-jsx-dom-expressions": ["babel-plugin-jsx-dom-expressions@0.40.7", "", { "dependencies": { "@babel/helper-module-imports": "7.18.6", "@babel/plugin-syntax-jsx": "^7.18.6", "@babel/types": "^7.20.7", "html-entities": "2.3.3", "parse5": "^7.1.2" }, "peerDependencies": { "@babel/core": "^7.20.12" } }, "sha512-/O6JWUmjv03OI9lL2ry9bUjpD5S3PclM55RRJEyCdcFZ5W2SEA/59d+l2hNsk3gI6kiWRdRPdOtqZmsQzFN1pQ=="],
 
     "babel-preset-solid": ["babel-preset-solid@1.9.12", "", { "dependencies": { "babel-plugin-jsx-dom-expressions": "^0.40.6" }, "peerDependencies": { "@babel/core": "^7.0.0", "solid-js": "^1.9.12" }, "optionalPeers": ["solid-js"] }, "sha512-LLqnuKVDlKpyBlMPcH6qEvs/wmS9a+NczppxJ3ryS/c0O5IiSFOIBQi9GzyiGDSbcJpx4Gr87jyFTos1MyEuWg=="],
@@ -342,7 +315,7 @@
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
-    "typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
 

@@ -36,8 +36,8 @@ import {
   type ItemSource,
   type SourceChoice,
   cx,
-} from '@xiv-companion/shared'
-import { Badge, Button, EmptyState, Input } from '@xiv-companion/ui'
+} from '../../lib'
+import { Badge, Button, EmptyState, Input } from '../../ui'
 
 function ItemIcon(props: { icon: number; size?: 'sm' | 'md' }) {
   const urls = () => getIconUrls(props.icon)

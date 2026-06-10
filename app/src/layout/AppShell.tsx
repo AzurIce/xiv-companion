@@ -8,7 +8,7 @@ import {
   PanelLeftOpen,
   Wrench,
 } from 'lucide-solid'
-import { appModules, moduleGroupLabel, type AppModule } from '@xiv-companion/shared'
+import { appModules, moduleGroupLabel, type AppModule } from '../lib'
 
 const groups = Array.from(new Set(appModules.map((module) => module.group))) as AppModule['group'][]
 

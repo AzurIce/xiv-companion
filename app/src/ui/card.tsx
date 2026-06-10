@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { splitProps } from 'solid-js'
-import { cx } from '@xiv-companion/shared'
+import { cx } from '../lib'
 
 export interface CardProps extends JSX.HTMLAttributes<HTMLDivElement> {}
 

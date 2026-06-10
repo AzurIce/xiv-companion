@@ -1,8 +1,8 @@
 import { createResource, For, Show } from 'solid-js'
 import { A } from '@solidjs/router'
 import { Database, Wrench } from 'lucide-solid'
-import { appModules, cx, formatInteger, loadCraftData } from '@xiv-companion/shared'
-import { Card, CardContent, CardHeader, CardTitle } from '@xiv-companion/ui'
+import { appModules, cx, formatInteger, loadCraftData } from '../lib'
+import { Card, CardContent, CardHeader, CardTitle } from '../ui'
 
 function iconFor(id: string) {
   if (id === 'crafting') return <Wrench class="h-5 w-5" />

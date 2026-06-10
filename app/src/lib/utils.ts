@@ -11,4 +11,3 @@ export function formatInteger(value: number): string {
 export function baseUrl(): string {
   return import.meta.env.BASE_URL || '/'
 }
-

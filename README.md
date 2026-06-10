@@ -1,12 +1,12 @@
 # XIV Companion
 
-XIV Companion is a Solid.js app-style toolbox for Final Fantasy XIV utilities.
+XIV Companion is a Solid.js app for Final Fantasy XIV utilities.
 
-The first module is a crafting search workspace extracted from Tomestone. The shell is designed for additional modules such as glamour preview, housing preview, and data browsing.
+The current module is a crafting search workspace extracted from game data.
 
 ## Stack
 
-- Bun workspace
+- Bun app
 - Cargo xtask workspace
 - Vite
 - Solid.js

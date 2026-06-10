@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { splitProps } from 'solid-js'
-import { cx } from '@xiv-companion/shared'
+import { cx } from '../lib'
 
 export interface BadgeProps extends JSX.HTMLAttributes<HTMLSpanElement> {
   variant?: 'default' | 'secondary' | 'outline' | 'success' | 'warning'
@@ -25,4 +25,3 @@ export function Badge(props: BadgeProps) {
     />
   )
 }
-

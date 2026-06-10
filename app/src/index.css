@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @source "./src";
-@source "../../packages/ui/src";
+@source "./ui";
 
 @theme inline {
   --color-background: oklch(0.985 0 0);
@@ -58,4 +58,3 @@
     font: inherit;
   }
 }
-
