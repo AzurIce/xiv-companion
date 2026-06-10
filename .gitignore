@@ -7,3 +7,4 @@ target/
 app/public/craft-data.json
 app/public/version.json
 tmp_*.csv
+.direnv

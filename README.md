@@ -16,6 +16,17 @@ The first module is a crafting search workspace extracted from Tomestone. The sh
 
 ## Development
 
+With Nix flakes:
+
+```bash
+nix develop
+bun install
+bun run update-craft-data
+bun run dev
+```
+
+Without Nix:
+
 ```powershell
 bun install
 bun run update-craft-data
