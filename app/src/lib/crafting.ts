@@ -1,3 +1,23 @@
+import initWasm, {
+  CraftDataEngine as WasmCraftDataEngine,
+  defaultSourceIndex as wasmDefaultSourceIndex,
+  resolveSource as wasmResolveSource,
+  sourceLabel as wasmSourceLabel,
+  sourcePriority as wasmSourcePriority,
+  summarizeMaterials as wasmSummarizeMaterials,
+} from '../wasm/xiv_companion'
+import type {
+  CraftDataPackage,
+  CraftItem,
+  CraftRecipe,
+  CraftTreeNode,
+  ItemSource,
+  MaterialSummary,
+  RecipeLevelInfo,
+  SourceChoiceEntry,
+  SourceChoice,
+  SpecialShopCost,
+} from '../wasm/xiv_companion'
 import { baseUrl } from './utils'
 
 declare const __BUILD_COMMIT__: string
@@ -25,84 +45,22 @@ export const CRAFT_TYPE_ABBRS = [
   '烹调',
 ] as const
 
-export interface CraftItem {
-  id: number
-  name: string
-  icon: number
-  itemUiCategory: number
-  itemSearchCategory: number
-  priceMid: number
-  priceLow: number
+export type {
+  CraftDataPackage,
+  CraftItem,
+  CraftRecipe,
+  CraftTreeNode,
+  ItemSource,
+  MaterialSummary,
+  RecipeLevelInfo,
+  SourceChoice,
+  SpecialShopCost,
 }
 
-export interface CraftIngredient {
-  itemId: number
-  amount: number
-}
-
-export interface CraftRecipe {
-  id: number
-  resultItemId: number
-  resultAmount: number
-  craftType: number
-  recipeLevelTableId: number
-  ingredients: CraftIngredient[]
-  secretRecipeBook: number
-}
-
-export interface RecipeLevelInfo {
-  classJobLevel: number
-  stars: number
-  difficulty: number
-  quality: number
-  durability: number
-}
-
-export interface SpecialShopCost {
-  itemId: number
-  count: number
-}
-
-export type ItemSource =
-  | { kind: 'gilShop'; shopName: string }
-  | { kind: 'specialShop'; shopName: string; costs: SpecialShopCost[] }
-  | { kind: 'fishing'; fishId: number; spotId: number }
-  | { kind: 'gathering' }
-
-export interface CraftDataPackage {
-  generatedAt: string
-  gameVersion: string
-  source: string
-  counts: {
-    items: number
-    recipes: number
-    sources: number
-  }
-  items: Record<string, CraftItem>
-  recipes: CraftRecipe[]
-  recipeLevels: Record<string, RecipeLevelInfo>
-  secretRecipeBooks: Record<string, string>
-  sources: Record<string, ItemSource[]>
-}
-
-export interface CraftDataIndex {
-  recipesByResult: Map<number, CraftRecipe[]>
-  craftableByType: Map<number, CraftRecipe[]>
-}
-
-export interface CraftTreeNode {
-  itemId: number
-  amountNeeded: number
-  recipe?: CraftRecipe
-  children: CraftTreeNode[]
-}
-
-export type SourceChoice =
-  | { kind: 'index'; index: number }
-  | { kind: 'market' }
-  | { kind: 'ignore' }
+export type CraftDataEngine = WasmCraftDataEngine
 
 let craftDataPromise: Promise<CraftDataPackage> | null = null
+let wasmPromise: Promise<void> | null = null
 
 export async function loadCraftData(): Promise<CraftDataPackage> {
   if (craftDataPromise) return craftDataPromise
@@ -114,26 +72,18 @@ export async function loadCraftData(): Promise<CraftDataPackage> {
   return craftDataPromise
 }
 
-export function createCraftDataIndex(data: CraftDataPackage): CraftDataIndex {
-  const recipesByResult = new Map<number, CraftRecipe[]>()
-  const craftableByType = new Map<number, CraftRecipe[]>()
+export async function createCraftDataEngine(data: CraftDataPackage): Promise<CraftDataEngine> {
+  await initCraftWasm()
+  return new WasmCraftDataEngine(data)
+}
 
-  for (const recipe of data.recipes) {
-    const byResult = recipesByResult.get(recipe.resultItemId) ?? []
-    byResult.push(recipe)
-    recipesByResult.set(recipe.resultItemId, byResult)
-
-    const craftType = Math.min(Math.max(recipe.craftType, 0), 7)
-    const byType = craftableByType.get(craftType) ?? []
-    byType.push(recipe)
-    craftableByType.set(craftType, byType)
-  }
-
-  for (const recipes of craftableByType.values()) {
-    recipes.sort((a, b) => a.resultItemId - b.resultItemId)
-  }
-
-  return { recipesByResult, craftableByType }
+export function craftableRecipes(
+  engine: CraftDataEngine,
+  craftType: number | undefined,
+  query: string,
+  limit = 300,
+): CraftRecipe[] {
+  return engine.craftableRecipes(craftType, query, limit)
 }
 
 export function getItem(data: CraftDataPackage, itemId: number): CraftItem | undefined {
@@ -157,59 +107,18 @@ export function getIconUrls(iconId: number): string[] {
 }
 
 export function buildCraftTree(
+  engine: CraftDataEngine,
   itemId: number,
   amount: number,
-  index: CraftDataIndex,
-  visited = new Set<number>(),
 ): CraftTreeNode {
-  const recipe = !visited.has(itemId) ? index.recipesByResult.get(itemId)?.[0] : undefined
-  const children: CraftTreeNode[] = []
-
-  if (recipe) {
-    visited.add(itemId)
-    const craftCount = Math.ceil(amount / Math.max(recipe.resultAmount, 1))
-    for (const ingredient of recipe.ingredients) {
-      children.push(
-        buildCraftTree(
-          ingredient.itemId,
-          ingredient.amount * craftCount,
-          index,
-          visited,
-        ),
-      )
-    }
-    visited.delete(itemId)
-  }
-
-  return { itemId, amountNeeded: amount, recipe, children }
+  return engine.buildCraftTree(itemId, amount)
 }
 
 export function summarizeMaterials(
   node: CraftTreeNode,
   collapsed = new Set<string>(),
-): Array<{ itemId: number; amount: number }> {
-  const totals = new Map<number, number>()
-  collectLeaves(node, 0, collapsed, totals)
-  return [...totals.entries()]
-    .map(([itemId, amount]) => ({ itemId, amount }))
-    .sort((a, b) => a.itemId - b.itemId)
-}
-
-function collectLeaves(
-  node: CraftTreeNode,
-  depth: number,
-  collapsed: Set<string>,
-  totals: Map<number, number>,
-) {
-  const key = collapseKey(node.itemId, depth)
-  if (!node.children.length || collapsed.has(key)) {
-    totals.set(node.itemId, (totals.get(node.itemId) ?? 0) + node.amountNeeded)
-    return
-  }
-
-  for (const child of node.children) {
-    collectLeaves(child, depth + 1, collapsed, totals)
-  }
+): MaterialSummary[] {
+  return wasmSummarizeMaterials(node, [...collapsed])
 }
 
 export function collapseKey(itemId: number, depth: number): string {
@@ -217,17 +126,7 @@ export function collapseKey(itemId: number, depth: number): string {
 }
 
 export function defaultSourceIndex(sources: ItemSource[]): number | undefined {
-  if (!sources.length) return undefined
-  let bestIndex = 0
-  let bestPriority = sourcePriority(sources[0]!)
-  for (let i = 1; i < sources.length; i += 1) {
-    const priority = sourcePriority(sources[i]!)
-    if (priority < bestPriority) {
-      bestIndex = i
-      bestPriority = priority
-    }
-  }
-  return bestIndex
+  return wasmDefaultSourceIndex(sources) ?? undefined
 }
 
 export function resolveSource(
@@ -235,23 +134,22 @@ export function resolveSource(
   sources: ItemSource[],
   choices: Map<number, SourceChoice>,
 ): ItemSource | undefined {
-  const choice = choices.get(itemId)
-  if (choice?.kind === 'ignore') return undefined
-  if (choice?.kind === 'market') return undefined
-  if (choice?.kind === 'index') return sources[choice.index]
-  const index = defaultSourceIndex(sources)
-  return index == null ? undefined : sources[index]
+  return wasmResolveSource(itemId, sources, sourceChoiceEntries(choices)) ?? undefined
 }
 
 export function sourceLabel(source: ItemSource): string {
-  if (source.kind === 'gilShop') return '金币商店'
-  if (source.kind === 'specialShop') return '兑换'
-  if (source.kind === 'fishing') return '钓鱼'
-  return '采集'
+  return wasmSourceLabel(source)
 }
 
 export function sourcePriority(source: ItemSource): number {
-  if (source.kind === 'gathering' || source.kind === 'fishing') return 1
-  if (source.kind === 'gilShop') return 2
-  return 3
+  return wasmSourcePriority(source)
+}
+
+function initCraftWasm() {
+  wasmPromise ??= initWasm().then(() => undefined)
+  return wasmPromise
+}
+
+function sourceChoiceEntries(choices: Map<number, SourceChoice>): SourceChoiceEntry[] {
+  return [...choices.entries()].map(([itemId, choice]) => ({ itemId, choice }))
 }

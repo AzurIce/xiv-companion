@@ -6,5 +6,6 @@ target/
 *.tsbuildinfo
 app/public/craft-data.json
 app/public/version.json
+app/src/wasm/
 tmp_*.csv
 .direnv

@@ -7,6 +7,7 @@
     "app"
   ],
   "scripts": {
+    "build:wasm": "just build-wasm",
     "dev": "bun run --cwd app dev",
     "build": "bun run --cwd app build",
     "preview": "bun run --cwd app preview"

@@ -17,11 +17,12 @@ import {
 import {
   buildCraftTree,
   collapseKey,
-  createCraftDataIndex,
   CRAFT_TYPE_ABBRS,
   CRAFT_TYPE_NAMES,
+  craftableRecipes,
   defaultSourceIndex,
   formatInteger,
+  createCraftDataEngine,
   getIconUrls,
   getItem,
   getItemName,
@@ -759,6 +760,7 @@ function TreeNode(props: {
 
 export default function CraftingPage() {
   const [craftData] = createResource(loadCraftData)
+  const [craftEngine] = createResource(craftData, createCraftDataEngine)
   const [query, setQuery] = createSignal('')
   const [craftType, setCraftType] = createSignal<number | undefined>()
   const [selectedRecipeId, setSelectedRecipeId] = createSignal<number | undefined>()
@@ -766,28 +768,10 @@ export default function CraftingPage() {
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
   const [sourceChoices, setSourceChoices] = createSignal(new Map<number, SourceChoice>())
 
-  const index = createMemo(() => {
-    const data = craftData()
-    return data ? createCraftDataIndex(data) : undefined
-  })
-
   const recipes = createMemo(() => {
-    const idx = index()
-    const data = craftData()
-    if (!idx || !data) return []
-
-    const source = craftType() == null
-      ? Array.from(idx.craftableByType.values()).flat()
-      : idx.craftableByType.get(craftType()!) ?? []
-    const text = query().trim().toLowerCase()
-
-    return source
-      .filter((recipe) => {
-        if (!text) return true
-        const name = getItemName(data, recipe.resultItemId).toLowerCase()
-        return name.includes(text) || String(recipe.resultItemId).includes(text) || String(recipe.id).includes(text)
-      })
-      .slice(0, 300)
+    const engine = craftEngine()
+    if (!engine) return []
+    return craftableRecipes(engine, craftType(), query(), 300)
   })
 
   const selectedRecipe = createMemo(() => {
@@ -812,9 +796,9 @@ export default function CraftingPage() {
 
   const tree = createMemo(() => {
     const recipe = selectedRecipe()
-    const idx = index()
-    if (!recipe || !idx) return undefined
-    return buildCraftTree(recipe.resultItemId, 1, idx)
+    const engine = craftEngine()
+    if (!recipe || !engine) return undefined
+    return buildCraftTree(engine, recipe.resultItemId, 1)
   })
 
   const treeView = createMemo(() => {
@@ -994,6 +978,14 @@ export default function CraftingPage() {
   const inspectItem = (itemId: number, amountNeeded: number) => {
     setDetailTarget({ itemId, amountNeeded })
   }
+
+  const detailRecipe = createMemo(() => {
+    const target = detailTarget()
+    const engine = craftEngine()
+    if (!target) return undefined
+    if (target.recipe) return target.recipe
+    return engine ? buildCraftTree(engine, target.itemId, target.amountNeeded).recipe : undefined
+  })
 
   const marketMeta = (entry: MaterialPlanEntry) => {
     if (marketQuotes.loading) return `估价载入中 · ${MARKET_WORLD_DC_REGION}`
@@ -1373,7 +1365,7 @@ export default function CraftingPage() {
           <NodeDetailDialog
             data={view().data}
             target={view().target}
-            recipe={view().target.recipe ?? index()?.recipesByResult.get(view().target.itemId)?.[0]}
+            recipe={detailRecipe()}
             onClose={() => setDetailTarget(undefined)}
           />
         )}

@@ -34,6 +34,9 @@
             "clippy"
             "rustfmt"
           ];
+          targets = [
+            "wasm32-unknown-unknown"
+          ];
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -42,6 +45,9 @@
         devShells.default = craneLib.devShell {
           packages = with pkgs; [
             bun
+            just
+            lld
+            wasm-bindgen-cli
           ];
         };
       }
