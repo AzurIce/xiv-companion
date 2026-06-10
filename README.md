@@ -21,7 +21,7 @@ With Nix flakes:
 ```bash
 nix develop
 bun install
-bun run update-craft-data
+cargo update-craft-data --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/
 bun run dev
 ```
 
@@ -29,17 +29,15 @@ Without Nix:
 
 ```powershell
 bun install
-bun run update-craft-data
+cargo update-craft-data --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/
 bun run dev
 ```
 
 The dev server uses `http://127.0.0.1:5174` by default to avoid colliding with adjacent FFXIV projects.
 
-`update-craft-data` reads `..\ffxiv-datamining-cn` by default. Override with:
+`cargo update-craft-data` reads the game `sqpack` data directly through the
+`xtask/xtask-update-craft-data` package. Pass either the install directory or
+the inner `game` directory with `--game-dir`.
 
-```powershell
-$env:DATAMINING_DIR="E:\_ff14\ffxiv-datamining-cn"
-cargo xtask update-craft-data
-```
-
-The current xtask keeps the existing TypeScript exporter as the compatibility backend and adds a Rust-side data audit. The exporter entry point can be replaced with a physis-backed reader without changing the app-facing command.
+The command writes `app/public/craft-data.json` and `app/public/version.json`,
+then audits the generated exchange data by default.

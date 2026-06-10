@@ -2,29 +2,20 @@ import type { JSX } from 'solid-js'
 import { createEffect, createSignal, For } from 'solid-js'
 import { A, useLocation } from '@solidjs/router'
 import {
-  Boxes,
-  Database,
   Home,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
-  Settings,
-  Shirt,
-  Sofa,
   Wrench,
 } from 'lucide-solid'
 import { appModules, moduleGroupLabel, type AppModule } from '@xiv-companion/shared'
-import { Badge } from '@xiv-companion/ui'
 
-const groups: AppModule['group'][] = ['tools', 'preview', 'data']
+const groups = Array.from(new Set(appModules.map((module) => module.group))) as AppModule['group'][]
 
 function ModuleIcon(props: { id: string; class?: string }) {
   const iconClass = () => props.class ?? 'h-4 w-4'
   if (props.id === 'crafting') return <Wrench class={iconClass()} />
-  if (props.id === 'glamour') return <Shirt class={iconClass()} />
-  if (props.id === 'housing') return <Sofa class={iconClass()} />
-  if (props.id === 'library') return <Database class={iconClass()} />
-  return <Boxes class={iconClass()} />
+  return <Wrench class={iconClass()} />
 }
 
 function IconTooltip(props: { label: string; enabled?: boolean; class?: string; children: JSX.Element }) {
@@ -63,9 +54,6 @@ function ModuleLink(props: { module: AppModule; compact?: boolean; collapsed?: b
       >
         {props.module.label}
       </span>
-      {props.module.status === 'planned' && !props.compact && !props.collapsed && (
-        <Badge variant="outline" class="ml-auto text-[10px]">计划</Badge>
-      )}
     </A>
   )
 
@@ -172,31 +160,6 @@ export default function AppShell(props: { children?: JSX.Element }) {
           </For>
         </div>
 
-        <div class="border-t p-3">
-          <IconTooltip label="设置" enabled={collapsed()}>
-            <A
-              href="/settings"
-              class="flex rounded-md text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
-              classList={{
-                'h-10 items-center justify-center': collapsed(),
-                'h-9 items-center gap-3 px-3': !collapsed(),
-              }}
-              activeClass="bg-accent text-foreground"
-              title={collapsed() ? '设置' : undefined}
-            >
-              <Settings class="h-4 w-4" />
-              <span
-                class="overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-300 ease-out"
-                classList={{
-                  'max-w-0 -translate-x-1 opacity-0': collapsed(),
-                  'max-w-28 translate-x-0 opacity-100': !collapsed(),
-                }}
-              >
-                设置
-              </span>
-            </A>
-          </IconTooltip>
-        </div>
       </aside>
 
       <div class="flex min-w-0 flex-col">
@@ -211,14 +174,6 @@ export default function AppShell(props: { children?: JSX.Element }) {
                 {activeModule()?.label ?? '工作台'}
               </div>
             </div>
-            <A
-              href="/settings"
-              class="inline-flex h-8 w-8 items-center justify-center rounded-md border bg-background text-muted-foreground"
-              aria-label="设置"
-              title="设置"
-            >
-              <Settings class="h-4 w-4" />
-            </A>
           </div>
           <nav class="flex gap-2 overflow-x-auto px-4 pb-3" aria-label="模块">
             <A

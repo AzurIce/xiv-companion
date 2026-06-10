@@ -1,2 +1,2 @@
 [alias]
-xtask = "run -p xtask-data --"
+update-craft-data = "run -p xtask-update-craft-data --"

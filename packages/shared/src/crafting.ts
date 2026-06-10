@@ -1,6 +1,7 @@
 import { baseUrl } from './utils'
 
 declare const __BUILD_COMMIT__: string
+declare const __BUILD_DATE__: string
 
 export const CRAFT_TYPE_NAMES = [
   '刻木匠',
@@ -65,10 +66,12 @@ export interface SpecialShopCost {
 export type ItemSource =
   | { kind: 'gilShop'; shopName: string }
   | { kind: 'specialShop'; shopName: string; costs: SpecialShopCost[] }
+  | { kind: 'fishing'; fishId: number; spotId: number }
   | { kind: 'gathering' }
 
 export interface CraftDataPackage {
   generatedAt: string
+  gameVersion: string
   source: string
   counts: {
     items: number
@@ -96,13 +99,14 @@ export interface CraftTreeNode {
 
 export type SourceChoice =
   | { kind: 'index'; index: number }
+  | { kind: 'market' }
   | { kind: 'ignore' }
 
 let craftDataPromise: Promise<CraftDataPackage> | null = null
 
 export async function loadCraftData(): Promise<CraftDataPackage> {
   if (craftDataPromise) return craftDataPromise
-  craftDataPromise = fetch(`${baseUrl()}craft-data.json?v=${__BUILD_COMMIT__}`)
+  craftDataPromise = fetch(`${baseUrl()}craft-data.json?v=${__BUILD_COMMIT__}-${encodeURIComponent(__BUILD_DATE__)}`)
     .then((res) => {
       if (!res.ok) throw new Error(`craft-data.json ${res.status}`)
       return res.json() as Promise<CraftDataPackage>
@@ -233,6 +237,7 @@ export function resolveSource(
 ): ItemSource | undefined {
   const choice = choices.get(itemId)
   if (choice?.kind === 'ignore') return undefined
+  if (choice?.kind === 'market') return undefined
   if (choice?.kind === 'index') return sources[choice.index]
   const index = defaultSourceIndex(sources)
   return index == null ? undefined : sources[index]
@@ -241,11 +246,12 @@ export function resolveSource(
 export function sourceLabel(source: ItemSource): string {
   if (source.kind === 'gilShop') return '金币商店'
   if (source.kind === 'specialShop') return '兑换'
+  if (source.kind === 'fishing') return '钓鱼'
   return '采集'
 }
 
 export function sourcePriority(source: ItemSource): number {
-  if (source.kind === 'gathering') return 1
+  if (source.kind === 'gathering' || source.kind === 'fishing') return 1
   if (source.kind === 'gilShop') return 2
   return 3
 }

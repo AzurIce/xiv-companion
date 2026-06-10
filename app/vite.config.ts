@@ -19,9 +19,17 @@ const version = versionInfo()
 export default defineConfig({
   base: process.env.BASE_URL || '/',
   plugins: [solid(), tailwindcss()],
+  server: {
+    proxy: {
+      '/api/universalis': {
+        target: 'https://universalis.app',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/universalis/, ''),
+      },
+    },
+  },
   define: {
     __BUILD_COMMIT__: JSON.stringify(version.commit),
     __BUILD_DATE__: JSON.stringify(version.date),
   },
 })
-
