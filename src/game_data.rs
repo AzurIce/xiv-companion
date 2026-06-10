@@ -13,7 +13,7 @@ use physis::{
 
 use crate::{
     CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe, ItemSource,
-    RecipeLevelInfo, SpecialShopCost,
+    MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
 };
 
 pub struct GameExcel {
@@ -29,6 +29,7 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
     let recipes = game.load_recipes()?;
     let recipe_levels = game.load_recipe_levels()?;
     let secret_recipe_books = game.load_secret_recipe_books()?;
+    let macro_action_names = game.load_macro_action_names()?;
     let sources = game.load_sources(&items)?;
     let source_count = sources.values().map(Vec::len).sum();
 
@@ -45,6 +46,7 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
         recipes,
         recipe_levels,
         secret_recipe_books,
+        macro_action_names,
         sources,
     })
 }
@@ -185,6 +187,37 @@ impl GameExcel {
         });
 
         Ok(books)
+    }
+
+    pub fn load_macro_action_names(&mut self) -> Result<BTreeMap<String, String>> {
+        let action_names = self.load_row_names("Action")?;
+        let craft_action_names = self.load_row_names("CraftAction")?;
+        let general_action_names = self.load_row_names("GeneralAction")?;
+        let mut names = BTreeMap::new();
+
+        for definition in MACRO_ACTION_DEFINITIONS {
+            let name = match definition.macro_name_source {
+                MacroActionNameSource::Action(row_id) => action_names.get(&row_id),
+                MacroActionNameSource::CraftAction(row_id) => craft_action_names.get(&row_id),
+                MacroActionNameSource::GeneralAction(row_id) => general_action_names.get(&row_id),
+            };
+            if let Some(name) = name.filter(|name| !name.is_empty()) {
+                names.insert(definition.key.to_string(), name.to_owned());
+            }
+        }
+
+        Ok(names)
+    }
+
+    fn load_row_names(&mut self, sheet_name: &str) -> Result<HashMap<u32, String>> {
+        let sheet = self.sheet(sheet_name, Language::ChineseSimplified)?;
+        let mut names = HashMap::new();
+        for_each_row(&sheet, |row_id, row| {
+            if let Some(name) = string_value(row, 0).filter(|name| !name.is_empty()) {
+                names.insert(row_id, name.to_owned());
+            }
+        });
+        Ok(names)
     }
 
     pub fn load_sources(

@@ -220,57 +220,19 @@ const DEFAULT_SOLVE_OPTIONS: RaphaelSolveOptions = {
   stellarSteadyHandCharges: 0,
 }
 
-const MACRO_ACTION_NAMES: Record<string, string> = {
-  basic_synthesis: '制作',
-  basic_touch: '加工',
-  masters_mend: '精修',
-  observe: '观察',
-  tricks_of_the_trade: '秘诀',
-  waste_not: '俭约',
-  veneration: '崇敬',
-  standard_touch: '中级加工',
-  great_strides: '阔步',
-  innovation: '改革',
-  waste_not_ii: '长期俭约',
-  byregots_blessing: '比尔格的祝福',
-  precise_touch: '集中加工',
-  muscle_memory: '坚信',
-  careful_synthesis: '模范制作',
-  manipulation: '掌握',
-  prudent_touch: '俭约加工',
-  advanced_touch: '上级加工',
-  reflect: '闲静',
-  preparatory_touch: '坯料加工',
-  groundwork: '坯料制作',
-  delicate_synthesis: '精密制作',
-  intensive_synthesis: '集中制作',
-  trained_eye: '工匠的神速技巧',
-  heart_and_soul: '专心致志',
-  prudent_synthesis: '俭约制作',
-  trained_finesse: '工匠的神技',
-  refined_touch: '精妙加工',
-  quick_innovation: '高速改革',
-  immaculate_mend: '精修',
-  trained_perfection: '工匠的神技',
-  stellar_steady_hand: '宇宙稳手',
-  rapid_synthesis: '高速制作',
-  hasty_touch: '仓促',
-  daring_touch: '大胆加工',
+function macroActionName(data: CraftDataPackage, action: MacroAction) {
+  return data.macroActionNames?.[action.id] ?? action.id
 }
 
-function macroActionName(action: MacroAction) {
-  return MACRO_ACTION_NAMES[action.id] ?? action.id
+function formatMacroLine(data: CraftDataPackage, action: MacroAction) {
+  return `/ac "${macroActionName(data, action)}" <wait.${action.waitSeconds}>`
 }
 
-function formatMacroLine(action: MacroAction) {
-  return `/ac "${macroActionName(action)}" <wait.${action.waitSeconds}>`
-}
-
-function macroBlocks(actions: MacroAction[], withNotify: boolean) {
+function macroBlocks(data: CraftDataPackage, actions: MacroAction[], withNotify: boolean) {
   const maxActionLines = withNotify ? 14 : 15
   const result: string[][] = []
   for (let i = 0; i < actions.length; i += maxActionLines) {
-    const block = actions.slice(i, i + maxActionLines).map(formatMacroLine)
+    const block = actions.slice(i, i + maxActionLines).map((action) => formatMacroLine(data, action))
     if (withNotify) block.push(`/echo 宏 #${result.length + 1} 完成 <se.1>`)
     result.push(block)
   }
@@ -831,7 +793,7 @@ function MacroSolverPanel(props: {
     const level = recipeLevel()
     return !!props.recipe && !!level && (level.progressDivider ?? 0) > 0 && (level.qualityDivider ?? 0) > 0
   }
-  const blocks = () => macroBlocks(result()?.actions ?? [], withNotify())
+  const blocks = () => macroBlocks(props.data, result()?.actions ?? [], withNotify())
 
   const updateAttr = (key: keyof CrafterAttributes, value: number) => {
     setAttrs((current) => ({ ...current, [key]: Number.isFinite(value) ? Math.max(0, value) : 0 }))

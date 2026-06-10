@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 
 #[cfg(feature = "wasm")]
-use crate::{CraftRecipe, RecipeLevelInfo};
+use crate::{CraftRecipe, RecipeLevelInfo, macro_action_key_by_game_action_id};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
@@ -125,11 +125,16 @@ pub fn solve_raphael_macro(
     let actions = solver.solve().map_err(|err| format!("{err:?}"))?;
     let final_state =
         SimulationState::from_macro(&settings, &actions).map_err(|err| format!("{err:?}"))?;
-    let duration_seconds = actions.iter().map(|action| u32::from(action.time_cost())).sum();
+    let duration_seconds = actions
+        .iter()
+        .map(|action| u32::from(action.time_cost()))
+        .sum();
     let actions = actions
         .into_iter()
         .map(|action| MacroAction {
-            id: action_id(action).to_string(),
+            id: macro_action_key_by_game_action_id(action.action_id())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("action_{}", action.action_id())),
             wait_seconds: action.time_cost(),
         })
         .collect::<Vec<_>>();
@@ -169,47 +174,4 @@ fn base_quality(attrs: &CrafterAttributes, recipe_level: &RecipeLevelInfo) -> u3
 #[cfg(feature = "wasm")]
 fn clamp_u16(value: u32) -> u16 {
     value.min(u16::MAX as u32) as u16
-}
-
-#[cfg(feature = "wasm")]
-fn action_id(action: raphael_simulator::Action) -> &'static str {
-    use raphael_simulator::Action;
-
-    match action {
-        Action::BasicSynthesis => "basic_synthesis",
-        Action::BasicTouch => "basic_touch",
-        Action::MasterMend => "masters_mend",
-        Action::Observe => "observe",
-        Action::TricksOfTheTrade => "tricks_of_the_trade",
-        Action::WasteNot => "waste_not",
-        Action::Veneration => "veneration",
-        Action::StandardTouch => "standard_touch",
-        Action::GreatStrides => "great_strides",
-        Action::Innovation => "innovation",
-        Action::WasteNot2 => "waste_not_ii",
-        Action::ByregotsBlessing => "byregots_blessing",
-        Action::PreciseTouch => "precise_touch",
-        Action::MuscleMemory => "muscle_memory",
-        Action::CarefulSynthesis => "careful_synthesis",
-        Action::Manipulation => "manipulation",
-        Action::PrudentTouch => "prudent_touch",
-        Action::AdvancedTouch => "advanced_touch",
-        Action::Reflect => "reflect",
-        Action::PreparatoryTouch => "preparatory_touch",
-        Action::Groundwork => "groundwork",
-        Action::DelicateSynthesis => "delicate_synthesis",
-        Action::IntensiveSynthesis => "intensive_synthesis",
-        Action::TrainedEye => "trained_eye",
-        Action::HeartAndSoul => "heart_and_soul",
-        Action::PrudentSynthesis => "prudent_synthesis",
-        Action::TrainedFinesse => "trained_finesse",
-        Action::RefinedTouch => "refined_touch",
-        Action::QuickInnovation => "quick_innovation",
-        Action::ImmaculateMend => "immaculate_mend",
-        Action::TrainedPerfection => "trained_perfection",
-        Action::StellarSteadyHand => "stellar_steady_hand",
-        Action::RapidSynthesis => "rapid_synthesis",
-        Action::HastyTouch => "hasty_touch",
-        Action::DaringTouch => "daring_touch",
-    }
 }
