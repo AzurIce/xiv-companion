@@ -65,6 +65,20 @@ pub struct CraftRecipe {
     pub result_amount: u32,
     pub craft_type: u32,
     pub recipe_level_table_id: u32,
+    #[serde(default)]
+    pub max_level_scaling: u32,
+    #[serde(default = "default_recipe_factor")]
+    pub difficulty_factor: u32,
+    #[serde(default = "default_recipe_factor")]
+    pub quality_factor: u32,
+    #[serde(default = "default_recipe_factor")]
+    pub durability_factor: u32,
+    #[serde(default)]
+    pub required_craftsmanship: u32,
+    #[serde(default)]
+    pub required_control: u32,
+    #[serde(default)]
+    pub is_expert: bool,
     pub ingredients: Vec<CraftIngredient>,
     pub secret_recipe_book: u32,
 }
@@ -76,9 +90,25 @@ pub struct CraftRecipe {
 pub struct RecipeLevelInfo {
     pub class_job_level: u32,
     pub stars: u32,
+    #[serde(default)]
+    pub suggested_craftsmanship: u32,
     pub difficulty: u32,
     pub quality: u32,
+    #[serde(default)]
+    pub progress_divider: u32,
+    #[serde(default)]
+    pub quality_divider: u32,
+    #[serde(default)]
+    pub progress_modifier: u32,
+    #[serde(default)]
+    pub quality_modifier: u32,
     pub durability: u32,
+    #[serde(default)]
+    pub conditions_flag: u32,
+}
+
+fn default_recipe_factor() -> u32 {
+    100
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

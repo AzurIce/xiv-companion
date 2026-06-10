@@ -1,5 +1,6 @@
 pub mod model;
 pub mod planner;
+pub mod solver;
 
 #[cfg(feature = "game-data")]
 pub mod audit;
@@ -12,3 +13,4 @@ mod wasm;
 
 pub use model::*;
 pub use planner::*;
+pub use solver::*;

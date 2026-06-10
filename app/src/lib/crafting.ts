@@ -2,6 +2,7 @@ import initWasm, {
   CraftDataEngine as WasmCraftDataEngine,
   defaultSourceIndex as wasmDefaultSourceIndex,
   resolveSource as wasmResolveSource,
+  solveRaphaelMacro as wasmSolveRaphaelMacro,
   sourceLabel as wasmSourceLabel,
   sourcePriority as wasmSourcePriority,
   summarizeMaterials as wasmSummarizeMaterials,
@@ -12,7 +13,11 @@ import type {
   CraftRecipe,
   CraftTreeNode,
   ItemSource,
+  MacroAction,
+  MacroSolveResult,
   MaterialSummary,
+  CrafterAttributes,
+  RaphaelSolveOptions,
   RecipeLevelInfo,
   SourceChoiceEntry,
   SourceChoice,
@@ -53,7 +58,11 @@ export type {
   ItemSource,
   MaterialSummary,
   RecipeLevelInfo,
+  CrafterAttributes,
   SourceChoice,
+  MacroAction,
+  MacroSolveResult,
+  RaphaelSolveOptions,
   SpecialShopCost,
 }
 
@@ -143,6 +152,33 @@ export function sourceLabel(source: ItemSource): string {
 
 export function sourcePriority(source: ItemSource): number {
   return wasmSourcePriority(source)
+}
+
+export async function solveRaphaelMacro(
+  recipe: CraftRecipe,
+  recipeLevel: RecipeLevelInfo,
+  attrs: CrafterAttributes,
+  options: RaphaelSolveOptions,
+): Promise<MacroSolveResult> {
+  if (typeof Worker !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(new URL('./solver.worker.ts', import.meta.url), { type: 'module' })
+      worker.onmessage = (event: MessageEvent<{ result?: MacroSolveResult; error?: string }>) => {
+        worker.terminate()
+        if (event.data.error) reject(new Error(event.data.error))
+        else if (event.data.result) resolve(event.data.result)
+        else reject(new Error('求解器没有返回结果'))
+      }
+      worker.onerror = (event) => {
+        worker.terminate()
+        reject(new Error(event.message || '求解器运行失败'))
+      }
+      worker.postMessage({ recipe, recipeLevel, attrs, options })
+    })
+  }
+
+  await initCraftWasm()
+  return wasmSolveRaphaelMacro(recipe, recipeLevel, attrs, options)
 }
 
 function initCraftWasm() {

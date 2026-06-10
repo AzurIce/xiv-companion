@@ -11,11 +11,19 @@ crate-type = ["rlib", "cdylib"]
 [features]
 default = []
 game-data = ["dep:anyhow", "dep:physis"]
-wasm = ["dep:tsify", "dep:wasm-bindgen", "tsify/js"]
+wasm = [
+    "dep:raphael-simulator",
+    "dep:raphael-solver",
+    "dep:tsify",
+    "dep:wasm-bindgen",
+    "tsify/js",
+]
 
 [dependencies]
 anyhow = { version = "1.0.102", optional = true }
 physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
+raphael-simulator = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-sim", tag = "v0.28.4", optional = true }
+raphael-solver = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-solver", tag = "v0.28.4", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
 tsify = { version = "0.5.6", default-features = false, optional = true }

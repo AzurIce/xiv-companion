@@ -5,12 +5,16 @@ import {
   ChevronRight,
   CircleCheck,
   Coins,
+  Copy,
   ExternalLink,
   Fish,
+  Hammer,
   Info,
   Leaf,
+  LoaderCircle,
   PackageSearch,
   Search,
+  Sparkles,
   Shuffle,
   X,
 } from 'lucide-solid'
@@ -28,13 +32,18 @@ import {
   getItemName,
   loadCraftData,
   resolveSource,
+  solveRaphaelMacro,
   sourceLabel,
   summarizeMaterials,
+  type CrafterAttributes,
   type CraftItem,
   type CraftDataPackage,
   type CraftRecipe,
   type CraftTreeNode,
   type ItemSource,
+  type MacroAction,
+  type MacroSolveResult,
+  type RaphaelSolveOptions,
   type SourceChoice,
   cx,
 } from '../../lib'
@@ -192,6 +201,86 @@ function fishCakeUrl(spotId: number, fishId: number) {
 
 const MARKET_WORLD_DC_REGION = '中国'
 const UNIVERSALIS_BASE_URL = import.meta.env.DEV ? '/api/universalis' : 'https://universalis.app'
+
+const DEFAULT_CRAFTER_ATTRIBUTES: CrafterAttributes = {
+  level: 100,
+  craftsmanship: 4900,
+  control: 4800,
+  craftPoints: 620,
+}
+
+const DEFAULT_SOLVE_OPTIONS: RaphaelSolveOptions = {
+  targetQuality: undefined,
+  useManipulation: true,
+  useHeartAndSoul: false,
+  useQuickInnovation: false,
+  useTrainedEye: true,
+  backloadProgress: false,
+  adversarial: false,
+  stellarSteadyHandCharges: 0,
+}
+
+const MACRO_ACTION_NAMES: Record<string, string> = {
+  basic_synthesis: '制作',
+  basic_touch: '加工',
+  masters_mend: '精修',
+  observe: '观察',
+  tricks_of_the_trade: '秘诀',
+  waste_not: '俭约',
+  veneration: '崇敬',
+  standard_touch: '中级加工',
+  great_strides: '阔步',
+  innovation: '改革',
+  waste_not_ii: '长期俭约',
+  byregots_blessing: '比尔格的祝福',
+  precise_touch: '集中加工',
+  muscle_memory: '坚信',
+  careful_synthesis: '模范制作',
+  manipulation: '掌握',
+  prudent_touch: '俭约加工',
+  advanced_touch: '上级加工',
+  reflect: '闲静',
+  preparatory_touch: '坯料加工',
+  groundwork: '坯料制作',
+  delicate_synthesis: '精密制作',
+  intensive_synthesis: '集中制作',
+  trained_eye: '工匠的神速技巧',
+  heart_and_soul: '专心致志',
+  prudent_synthesis: '俭约制作',
+  trained_finesse: '工匠的神技',
+  refined_touch: '精妙加工',
+  quick_innovation: '高速改革',
+  immaculate_mend: '精修',
+  trained_perfection: '工匠的神技',
+  stellar_steady_hand: '宇宙稳手',
+  rapid_synthesis: '高速制作',
+  hasty_touch: '仓促',
+  daring_touch: '大胆加工',
+}
+
+function macroActionName(action: MacroAction) {
+  return MACRO_ACTION_NAMES[action.id] ?? action.id
+}
+
+function formatMacroLine(action: MacroAction) {
+  return `/ac "${macroActionName(action)}" <wait.${action.waitSeconds}>`
+}
+
+function macroBlocks(actions: MacroAction[], withNotify: boolean) {
+  const maxActionLines = withNotify ? 14 : 15
+  const result: string[][] = []
+  for (let i = 0; i < actions.length; i += maxActionLines) {
+    const block = actions.slice(i, i + maxActionLines).map(formatMacroLine)
+    if (withNotify) block.push(`/echo 宏 #${result.length + 1} 完成 <se.1>`)
+    result.push(block)
+  }
+  return result
+}
+
+function percentLabel(value: number, max: number) {
+  if (max <= 0) return '0%'
+  return `${Math.min(100, Math.round(value / max * 100))}%`
+}
 
 type MarketQuote = {
   itemId: number
@@ -671,6 +760,261 @@ function NodeDetailDialog(props: {
   )
 }
 
+function NumericField(props: {
+  label: string
+  value: number | undefined
+  min?: number
+  max?: number
+  onInput: (value: number) => void
+}) {
+  return (
+    <label class="grid gap-1 text-xs font-medium text-muted-foreground">
+      {props.label}
+      <Input
+        type="number"
+        min={props.min}
+        max={props.max}
+        value={props.value ?? ''}
+        onInput={(event) => props.onInput(Number(event.currentTarget.value))}
+        class="h-8"
+      />
+    </label>
+  )
+}
+
+function ToggleField(props: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label class="flex items-center gap-2 rounded-sm border bg-background/70 px-2 py-1.5 text-xs font-medium text-muted-foreground">
+      <input
+        type="checkbox"
+        checked={props.checked}
+        onChange={(event) => props.onChange(event.currentTarget.checked)}
+        class="h-3.5 w-3.5 accent-foreground"
+      />
+      {props.label}
+    </label>
+  )
+}
+
+function MacroSolverPanel(props: {
+  data: CraftDataPackage
+  recipe?: CraftRecipe
+}) {
+  const [attrs, setAttrs] = createSignal<CrafterAttributes>({ ...DEFAULT_CRAFTER_ATTRIBUTES })
+  const [options, setOptions] = createSignal<RaphaelSolveOptions>({ ...DEFAULT_SOLVE_OPTIONS })
+  const [result, setResult] = createSignal<MacroSolveResult | undefined>()
+  const [error, setError] = createSignal<string | undefined>()
+  const [solving, setSolving] = createSignal(false)
+  const [withNotify, setWithNotify] = createSignal(true)
+  const [copiedIndex, setCopiedIndex] = createSignal<number | undefined>()
+  let solveRunId = 0
+
+  createEffect(() => {
+    props.recipe?.id
+    solveRunId += 1
+    setResult(undefined)
+    setError(undefined)
+    setCopiedIndex(undefined)
+    setSolving(false)
+    setOptions((current) => ({ ...current, targetQuality: undefined }))
+  })
+
+  const recipeLevel = () => {
+    const recipe = props.recipe
+    return recipe ? props.data.recipeLevels[String(recipe.recipeLevelTableId)] : undefined
+  }
+  const canSolve = () => {
+    const level = recipeLevel()
+    return !!props.recipe && !!level && (level.progressDivider ?? 0) > 0 && (level.qualityDivider ?? 0) > 0
+  }
+  const blocks = () => macroBlocks(result()?.actions ?? [], withNotify())
+
+  const updateAttr = (key: keyof CrafterAttributes, value: number) => {
+    setAttrs((current) => ({ ...current, [key]: Number.isFinite(value) ? Math.max(0, value) : 0 }))
+  }
+  const updateOption = <K extends keyof RaphaelSolveOptions>(key: K, value: RaphaelSolveOptions[K]) => {
+    setOptions((current) => ({ ...current, [key]: value }))
+  }
+  const run = async () => {
+    const recipe = props.recipe
+    const level = recipeLevel()
+    if (!recipe || !level) return
+    const runId = ++solveRunId
+    const recipeId = recipe.id
+    setSolving(true)
+    setError(undefined)
+    setResult(undefined)
+    setCopiedIndex(undefined)
+    try {
+      const next = await solveRaphaelMacro(recipe, level, attrs(), options())
+      if (runId === solveRunId && props.recipe?.id === recipeId) setResult(next)
+    } catch (err) {
+      if (runId === solveRunId && props.recipe?.id === recipeId) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      if (runId === solveRunId && props.recipe?.id === recipeId) setSolving(false)
+    }
+  }
+  const copyBlock = async (index: number, lines: string[]) => {
+    await navigator.clipboard.writeText(lines.join('\r\n'))
+    setCopiedIndex(index)
+  }
+
+  return (
+    <div class="min-h-0 flex-1 overflow-y-auto p-3">
+      <Show
+        when={props.recipe && recipeLevel()}
+        fallback={<EmptyState icon={<Hammer class="h-6 w-6" />} title="暂无配方" description="选择一个配方后可以尝试生成生产宏" />}
+      >
+        {(level) => (
+          <div class="space-y-4">
+            <div class="rounded-md border bg-background/70 p-3">
+              <div class="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold">Raphael 宏求解</div>
+                  <div class="mt-1 text-xs text-muted-foreground">
+                    Lv.{level().classJobLevel} · 耐久 {level().durability} · 难度 {formatInteger(level().difficulty)} · 品质 {formatInteger(level().quality)}
+                  </div>
+                </div>
+                <Badge variant="outline">实验</Badge>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <NumericField label="等级" value={attrs().level} min={1} max={100} onInput={(value) => updateAttr('level', value)} />
+                <NumericField label="作业精度" value={attrs().craftsmanship} min={1} onInput={(value) => updateAttr('craftsmanship', value)} />
+                <NumericField label="加工精度" value={attrs().control} min={1} onInput={(value) => updateAttr('control', value)} />
+                <NumericField label="制作力" value={attrs().craftPoints} min={1} onInput={(value) => updateAttr('craftPoints', value)} />
+                <NumericField
+                  label="目标品质"
+                  value={options().targetQuality ?? level().quality}
+                  min={1}
+                  max={level().quality}
+                  onInput={(value) => updateOption('targetQuality', Math.min(Math.max(1, value), level().quality))}
+                />
+                <NumericField
+                  label="宇宙稳手次数"
+                  value={options().stellarSteadyHandCharges}
+                  min={0}
+                  max={9}
+                  onInput={(value) => updateOption('stellarSteadyHandCharges', Math.min(Math.max(0, value), 9))}
+                />
+              </div>
+
+              <div class="mt-3 grid grid-cols-1 gap-2 2xl:grid-cols-2">
+                <ToggleField label="使用掌握" checked={options().useManipulation} onChange={(value) => updateOption('useManipulation', value)} />
+                <ToggleField label="允许工匠的神速技巧" checked={options().useTrainedEye} onChange={(value) => updateOption('useTrainedEye', value)} />
+                <ToggleField label="允许专心致志" checked={options().useHeartAndSoul} onChange={(value) => updateOption('useHeartAndSoul', value)} />
+                <ToggleField label="允许高速改革" checked={options().useQuickInnovation} onChange={(value) => updateOption('useQuickInnovation', value)} />
+                <ToggleField label="后置作业技能" checked={options().backloadProgress} onChange={(value) => updateOption('backloadProgress', value)} />
+                <ToggleField label="防黑球" checked={options().adversarial} onChange={(value) => updateOption('adversarial', value)} />
+              </div>
+
+              <div class="mt-3 flex items-center justify-between gap-2">
+                <label class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={withNotify()}
+                    onChange={(event) => setWithNotify(event.currentTarget.checked)}
+                    class="h-3.5 w-3.5 accent-foreground"
+                  />
+                  宏结束提示
+                </label>
+                <Button size="sm" variant="primary" disabled={!canSolve() || solving()} onClick={run}>
+                  <Show when={solving()} fallback={<Sparkles class="h-3.5 w-3.5" />}>
+                    <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                  </Show>
+                  {solving() ? '求解中' : '开始求解'}
+                </Button>
+              </div>
+
+              <Show when={!canSolve()}>
+                <div class="mt-3 rounded-sm border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                  当前数据缺少求解公式字段，请重新运行数据导出后再求解。
+                </div>
+              </Show>
+              <Show when={error()}>
+                {(message) => (
+                  <div class="mt-3 rounded-sm border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                    {message()}
+                  </div>
+                )}
+              </Show>
+            </div>
+
+            <Show when={result()}>
+              {(value) => (
+                <div class="space-y-3">
+                  <div class="flex flex-wrap gap-2">
+                    <Badge variant="outline">步骤 {value().steps}</Badge>
+                    <Badge variant="outline">耗时 {value().durationSeconds}s</Badge>
+                    <Badge variant="outline">宏 {blocks().length}</Badge>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="rounded-md border bg-background p-2">
+                      <div class="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <span class="text-muted-foreground">进度</span>
+                        <span class="font-medium">{formatInteger(value().finalProgress)} / {formatInteger(value().maxProgress)}</span>
+                      </div>
+                      <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div class="h-full bg-emerald-500" style={{ width: percentLabel(value().finalProgress, value().maxProgress) }} />
+                      </div>
+                    </div>
+                    <div class="rounded-md border bg-background p-2">
+                      <div class="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <span class="text-muted-foreground">品质</span>
+                        <span class="font-medium">{formatInteger(value().finalQuality)} / {formatInteger(value().maxQuality)}</span>
+                      </div>
+                      <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div class="h-full bg-cyan-500" style={{ width: percentLabel(value().finalQuality, value().maxQuality) }} />
+                      </div>
+                      <Show when={value().targetQuality < value().maxQuality}>
+                        <div class="mt-1 text-[11px] text-muted-foreground">目标 {formatInteger(value().targetQuality)}</div>
+                      </Show>
+                    </div>
+                    <div class="rounded-md border bg-background p-2 text-xs">
+                      <div class="text-muted-foreground">剩余耐久</div>
+                      <div class="mt-1 font-medium">{formatInteger(value().finalDurability)}</div>
+                    </div>
+                    <div class="rounded-md border bg-background p-2 text-xs">
+                      <div class="text-muted-foreground">剩余 CP</div>
+                      <div class="mt-1 font-medium">{formatInteger(value().finalCp)}</div>
+                    </div>
+                  </div>
+                  <For each={blocks()}>
+                    {(lines, index) => (
+                      <div class="overflow-hidden rounded-md border bg-background">
+                        <div class="flex items-center justify-between border-b px-3 py-2">
+                          <div class="text-sm font-semibold">宏 #{index() + 1}</div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title={`复制宏 #${index() + 1}`}
+                            aria-label={`复制宏 #${index() + 1}`}
+                            onClick={() => copyBlock(index(), lines)}
+                          >
+                            <Copy class="h-3.5 w-3.5" />
+                            {copiedIndex() === index() ? '已复制' : '复制'}
+                          </Button>
+                        </div>
+                        <pre class="max-h-64 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs leading-relaxed">{lines.join('\n')}</pre>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              )}
+            </Show>
+          </div>
+        )}
+      </Show>
+    </div>
+  )
+}
+
 function TreeNode(props: {
   data: CraftDataPackage
   node: CraftTreeNode
@@ -767,6 +1111,7 @@ export default function CraftingPage() {
   const [detailTarget, setDetailTarget] = createSignal<DetailTarget | undefined>()
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
   const [sourceChoices, setSourceChoices] = createSignal(new Map<number, SourceChoice>())
+  const [sideTab, setSideTab] = createSignal<'materials' | 'macro'>('materials')
 
   const recipes = createMemo(() => {
     const engine = craftEngine()
@@ -1015,7 +1360,7 @@ export default function CraftingPage() {
         </div>
       </div>
 
-      <div class="grid w-full flex-1 lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_320px] xl:grid-cols-[340px_minmax(0,1fr)_380px] xl:grid-rows-1 2xl:grid-cols-[360px_minmax(0,1fr)_420px]">
+      <div class="grid w-full flex-1 lg:min-h-0 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_320px] xl:grid-cols-[300px_minmax(0,1fr)_400px] xl:grid-rows-1 2xl:grid-cols-[320px_minmax(0,1fr)_460px]">
         <aside class="flex h-[340px] flex-col overflow-hidden border-b bg-card sm:h-[380px] lg:row-span-2 lg:h-auto lg:min-h-0 lg:border-b-0 lg:border-r xl:row-span-1">
           <div class="border-b p-3">
             <div class="relative">
@@ -1156,17 +1501,33 @@ export default function CraftingPage() {
         </section>
 
         <aside class="flex min-h-[420px] flex-col overflow-hidden border-t bg-card lg:col-start-2 lg:row-start-2 lg:min-h-0 xl:col-start-auto xl:row-start-auto xl:border-l xl:border-t-0">
-          <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div class="shrink-0 border-b p-4">
-              <div class="flex items-start gap-2">
-                <Info class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div class="min-w-0">
-                  <div class="text-base font-semibold">准备计划</div>
-                  <div class="mt-1 text-xs text-muted-foreground">
-                    由合成树叶子节点的当前来源生成；折叠中间节点时，该节点会作为叶子材料计入。
-                  </div>
-                </div>
-              </div>
+          <div class="shrink-0 border-b p-3">
+            <div class="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
+              <button
+                type="button"
+                class={cx(
+                  'flex h-8 items-center justify-center gap-1.5 rounded text-sm font-medium transition-colors',
+                  sideTab() === 'materials' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+                onClick={() => setSideTab('materials')}
+              >
+                <Info class="h-3.5 w-3.5" />
+                材料
+              </button>
+              <button
+                type="button"
+                class={cx(
+                  'flex h-8 items-center justify-center gap-1.5 rounded text-sm font-medium transition-colors',
+                  sideTab() === 'macro' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+                onClick={() => setSideTab('macro')}
+              >
+                <Hammer class="h-3.5 w-3.5" />
+                宏求解
+              </button>
+            </div>
+
+            <Show when={sideTab() === 'materials'}>
               <div class="mt-3 flex flex-wrap gap-2">
                 <Badge variant="outline">叶子 {materials().length}</Badge>
                 <Show when={materialPlan().gathering.length > 0}>
@@ -1188,8 +1549,18 @@ export default function CraftingPage() {
                   <Badge variant="outline"><CircleCheck class="mr-1 h-3 w-3" />已拥有 {materialPlan().owned.length}</Badge>
                 </Show>
               </div>
-            </div>
+            </Show>
+          </div>
 
+          <Show
+            when={sideTab() === 'materials'}
+            fallback={
+              <Show when={craftData()}>
+                {(data) => <MacroSolverPanel data={data()} recipe={selectedRecipe()} />}
+              </Show>
+            }
+          >
+            <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div class="min-h-0 flex-1 overflow-y-auto p-3">
               <Show when={craftData()}>
                 {(data) => (
@@ -1355,7 +1726,8 @@ export default function CraftingPage() {
                 )}
               </Show>
             </div>
-          </section>
+            </section>
+          </Show>
 
         </aside>
       </div>

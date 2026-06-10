@@ -126,6 +126,13 @@ impl GameExcel {
                 result_amount: number_value(row, 5).max(1),
                 craft_type: number_value(row, 1),
                 recipe_level_table_id: number_value(row, 2),
+                max_level_scaling: number_value(row, 3),
+                difficulty_factor: defaulted_number_value(row, 26, 100),
+                quality_factor: defaulted_number_value(row, 27, 100),
+                durability_factor: defaulted_number_value(row, 28, 100),
+                required_craftsmanship: number_value(row, 30),
+                required_control: number_value(row, 31),
+                is_expert: bool_value(row, 43),
                 ingredients,
                 secret_recipe_book: number_value(row, 40),
             });
@@ -144,9 +151,15 @@ impl GameExcel {
                 RecipeLevelInfo {
                     class_job_level: number_value(row, 0),
                     stars: number_value(row, 1),
+                    suggested_craftsmanship: number_value(row, 2),
                     difficulty: number_value(row, 3),
                     quality: number_value(row, 4),
+                    progress_divider: number_value(row, 5),
+                    quality_divider: number_value(row, 6),
+                    progress_modifier: number_value(row, 7),
+                    quality_modifier: number_value(row, 8),
                     durability: number_value(row, 9),
+                    conditions_flag: number_value(row, 10),
                 },
             );
         });
@@ -337,6 +350,17 @@ fn number_value(row: &Row, col: usize) -> u32 {
         .get(col)
         .map(field_number_value)
         .unwrap_or_default()
+}
+
+fn defaulted_number_value(row: &Row, col: usize, default: u32) -> u32 {
+    match number_value(row, col) {
+        0 => default,
+        value => value,
+    }
+}
+
+fn bool_value(row: &Row, col: usize) -> bool {
+    matches!(row.columns.get(col), Some(Field::Bool(true)))
 }
 
 fn field_number_value(field: &Field) -> u32 {

@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CraftDataIndex, CraftDataPackage, CraftRecipe, CraftTreeNode, ItemSource, MaterialSummary,
-    SourceChoiceEntry, build_craft_tree as planner_build_craft_tree,
-    craftable_recipes as planner_craftable_recipes, create_craft_data_index,
+    CraftDataIndex, CraftDataPackage, CraftRecipe, CraftTreeNode, CrafterAttributes, ItemSource,
+    MacroSolveResult, MaterialSummary, RaphaelSolveOptions, RecipeLevelInfo, SourceChoiceEntry,
+    build_craft_tree as planner_build_craft_tree, craftable_recipes as planner_craftable_recipes,
+    create_craft_data_index,
     default_source_index as planner_default_source_index, resolve_source as planner_resolve_source,
-    source_label as planner_source_label, source_priority as planner_source_priority,
+    solve_raphael_macro as solver_solve_raphael_macro, source_label as planner_source_label,
+    source_priority as planner_source_priority,
     summarize_materials as planner_summarize_materials,
 };
 
@@ -73,4 +75,15 @@ pub fn source_label(source: ItemSource) -> String {
 #[wasm_bindgen(js_name = sourcePriority)]
 pub fn source_priority(source: ItemSource) -> u8 {
     planner_source_priority(&source)
+}
+
+#[wasm_bindgen(js_name = solveRaphaelMacro)]
+pub fn solve_raphael_macro(
+    recipe: CraftRecipe,
+    recipe_level: RecipeLevelInfo,
+    attrs: CrafterAttributes,
+    options: RaphaelSolveOptions,
+) -> Result<MacroSolveResult, JsValue> {
+    solver_solve_raphael_macro(&recipe, &recipe_level, &attrs, &options)
+        .map_err(|message| JsValue::from_str(&message))
 }
