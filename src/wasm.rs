@@ -72,7 +72,7 @@ pub fn source_label(source: ItemSource) -> String {
 }
 
 #[wasm_bindgen(js_name = sourcePriority)]
-pub fn source_priority(source: ItemSource) -> u8 {
+pub fn source_priority(source: ItemSource) -> u16 {
     planner_source_priority(&source)
 }
 

@@ -228,10 +228,54 @@ pub fn source_label(source: &ItemSource) -> &'static str {
     }
 }
 
-pub fn source_priority(source: &ItemSource) -> u8 {
+pub fn source_priority(source: &ItemSource) -> u16 {
     match source {
-        ItemSource::Gathering | ItemSource::Fishing { .. } => 1,
-        ItemSource::GilShop { .. } => 2,
-        ItemSource::SpecialShop { .. } => 3,
+        ItemSource::Gathering | ItemSource::Fishing { .. } => 100,
+        ItemSource::GilShop { .. } => 200,
+        ItemSource::SpecialShop { costs, .. } => {
+            300 + costs
+                .iter()
+                .filter_map(|cost| tomestone_age_rank(cost.item_id))
+                .max()
+                .map(|rank| 100u16.saturating_sub(rank))
+                .unwrap_or(100)
+        }
+    }
+}
+
+fn tomestone_age_rank(item_id: u32) -> Option<u16> {
+    match item_id {
+        28 => Some(1),
+        30..=49 => Some((item_id - 28) as u16),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SpecialShopCost;
+
+    #[test]
+    fn default_source_prefers_newer_tomestone_exchange() {
+        let sources = vec![
+            ItemSource::SpecialShop {
+                shop_name: "亚拉戈天道神典石（其他）".to_string(),
+                costs: vec![SpecialShopCost {
+                    item_id: 47,
+                    count: 20,
+                }],
+            },
+            ItemSource::SpecialShop {
+                shop_name: "亚拉戈数理神典石（其他）".to_string(),
+                costs: vec![SpecialShopCost {
+                    item_id: 48,
+                    count: 10,
+                }],
+            },
+        ];
+
+        assert_eq!(default_source_index(&sources), Some(1));
+        assert!(source_priority(&sources[1]) < source_priority(&sources[0]));
     }
 }

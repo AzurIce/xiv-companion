@@ -34,6 +34,7 @@ import {
   resolveSource,
   solveRaphaelMacro,
   sourceLabel,
+  sourcePriority,
   summarizeMaterials,
   type CrafterAttributes,
   type CraftItem,
@@ -157,7 +158,7 @@ function sourceDisplayGroups(
     group.details.push(sourceInfoLabel(source))
   })
 
-  return [...groups.values()]
+  return [...groups.values()].sort((a, b) => sourcePriority(a.source) - sourcePriority(b.source))
 }
 
 function sourceToneClass(source: ItemSource | undefined, ignored = false) {
