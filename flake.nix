@@ -48,6 +48,7 @@
             just
             lld
             wasm-bindgen-cli
+            zsh
           ];
         };
       }
