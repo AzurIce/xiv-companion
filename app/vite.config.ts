@@ -16,8 +16,17 @@ function versionInfo() {
 
 const version = versionInfo()
 
+function appBaseUrl() {
+  const value = process.env.XIV_COMPANION_BASE_URL || process.env.BASE_URL || '/'
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    return value.endsWith('/') ? value : `${value}/`
+  }
+  const withLeadingSlash = value.startsWith('/') ? value : `/${value}`
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`
+}
+
 export default defineConfig({
-  base: process.env.BASE_URL || '/',
+  base: appBaseUrl(),
   plugins: [solid(), tailwindcss()],
   server: {
     proxy: {
