@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       craft_data_url:
-        description: "URL to download app/public/craft-data.json"
+        description: "Optional URL to override app/public/craft-data.json"
         required: false
         type: string
 
@@ -56,7 +56,7 @@ jobs:
           fi
 
           if [[ ! -s app/public/craft-data.json ]]; then
-            echo "::error::app/public/craft-data.json is missing. Set the CRAFT_DATA_URL repository variable or workflow input to a downloadable craft-data.json."
+            echo "::error::app/public/craft-data.json is missing. Commit it or set the CRAFT_DATA_URL repository variable/workflow input."
             exit 1
           fi
 
