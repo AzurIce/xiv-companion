@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js'
-import { createEffect, createMemo, createResource, createSignal, For, Show } from 'solid-js'
+import { createEffect, createMemo, createResource, createSignal, For, Show, untrack } from 'solid-js'
+import { useSearchParams } from '@solidjs/router'
 import {
   ChevronDown,
   ChevronRight,
@@ -219,6 +220,26 @@ const DEFAULT_SOLVE_OPTIONS: RaphaelSolveOptions = {
   backloadProgress: false,
   adversarial: false,
   stellarSteadyHandCharges: 0,
+}
+
+type CraftingSearchParams = {
+  q?: string
+  type?: string
+  recipe?: string
+}
+
+function searchParamValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function parseCraftTypeParam(value: string | string[] | undefined) {
+  const parsed = Number(searchParamValue(value))
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < CRAFT_TYPE_ABBRS.length ? parsed : undefined
+}
+
+function parseRecipeParam(value: string | string[] | undefined) {
+  const parsed = Number(searchParamValue(value))
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
 }
 
 function macroActionName(data: CraftDataPackage, action: MacroAction) {
@@ -1066,15 +1087,51 @@ function TreeNode(props: {
 }
 
 export default function CraftingPage() {
+  const [searchParams, setSearchParams] = useSearchParams<CraftingSearchParams>()
   const [craftData] = createResource(loadCraftData)
   const [craftEngine] = createResource(craftData, createCraftDataEngine)
-  const [query, setQuery] = createSignal('')
-  const [craftType, setCraftType] = createSignal<number | undefined>()
-  const [selectedRecipeId, setSelectedRecipeId] = createSignal<number | undefined>()
+  const [query, setQuery] = createSignal(searchParamValue(searchParams.q) ?? '')
+  const [craftType, setCraftType] = createSignal<number | undefined>(parseCraftTypeParam(searchParams.type))
+  const [selectedRecipeId, setSelectedRecipeId] = createSignal<number | undefined>(parseRecipeParam(searchParams.recipe))
+  const [recipeLinked, setRecipeLinked] = createSignal(parseRecipeParam(searchParams.recipe) != null)
   const [detailTarget, setDetailTarget] = createSignal<DetailTarget | undefined>()
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
   const [sourceChoices, setSourceChoices] = createSignal(new Map<number, SourceChoice>())
   const [sideTab, setSideTab] = createSignal<'materials' | 'macro'>('materials')
+
+  createEffect(() => {
+    const nextQuery = searchParamValue(searchParams.q) ?? ''
+    const nextCraftType = parseCraftTypeParam(searchParams.type)
+    const nextRecipeId = parseRecipeParam(searchParams.recipe)
+
+    if (untrack(query) !== nextQuery) setQuery(nextQuery)
+    if (untrack(craftType) !== nextCraftType) setCraftType(nextCraftType)
+    if (untrack(selectedRecipeId) !== nextRecipeId) setSelectedRecipeId(nextRecipeId)
+    if (untrack(recipeLinked) !== (nextRecipeId != null)) setRecipeLinked(nextRecipeId != null)
+  })
+
+  createEffect(() => {
+    const nextQuery = query() || undefined
+    const nextCraftType = craftType()
+    const nextRecipeId = recipeLinked() ? selectedRecipeId() : undefined
+
+    if (
+      (searchParamValue(searchParams.q) ?? '') === (nextQuery ?? '')
+      && parseCraftTypeParam(searchParams.type) === nextCraftType
+      && parseRecipeParam(searchParams.recipe) === nextRecipeId
+    ) {
+      return
+    }
+
+    setSearchParams(
+      {
+        q: nextQuery,
+        type: nextCraftType,
+        recipe: nextRecipeId,
+      },
+      { replace: true },
+    )
+  })
 
   const recipes = createMemo(() => {
     const engine = craftEngine()
@@ -1248,6 +1305,7 @@ export default function CraftingPage() {
 
   const selectRecipe = (recipe: CraftRecipe) => {
     setSelectedRecipeId(recipe.id)
+    setRecipeLinked(true)
     setDetailTarget(undefined)
     setCollapsed(new Set<string>())
     setSourceChoices(new Map<number, SourceChoice>())

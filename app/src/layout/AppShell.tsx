@@ -2,6 +2,7 @@ import type { JSX } from 'solid-js'
 import { createEffect, createSignal, For } from 'solid-js'
 import { A, useLocation } from '@solidjs/router'
 import {
+  BookOpen,
   Home,
   LayoutDashboard,
   PanelLeftClose,
@@ -15,6 +16,7 @@ const groups = Array.from(new Set(appModules.map((module) => module.group))) as 
 function ModuleIcon(props: { id: string; class?: string }) {
   const iconClass = () => props.class ?? 'h-4 w-4'
   if (props.id === 'crafting') return <Wrench class={iconClass()} />
+  if (props.id === 'notes') return <BookOpen class={iconClass()} />
   return <Wrench class={iconClass()} />
 }
 

@@ -10,6 +10,7 @@ export interface AppModule {
 
 export const appModules: AppModule[] = [
   { id: 'crafting', label: '合成检索', href: '/crafting', group: 'tools', status: 'ready' },
+  { id: 'notes', label: '笔记', href: '/notes', group: 'tools', status: 'ready' },
 ]
 
 export function moduleGroupLabel(group: AppModule['group']): string {
