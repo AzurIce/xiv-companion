@@ -1,10 +1,11 @@
 import { createResource, For, Show } from 'solid-js'
 import { A } from '@solidjs/router'
-import { BookOpen, Database, Wrench } from 'lucide-solid'
+import { BookOpen, Database, UserRoundCog, Wrench } from 'lucide-solid'
 import { appModules, cx, formatInteger, loadCraftData } from '../lib'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui'
 
 function iconFor(id: string) {
+  if (id === 'character') return <UserRoundCog class="h-5 w-5" />
   if (id === 'crafting') return <Wrench class="h-5 w-5" />
   if (id === 'notes') return <BookOpen class="h-5 w-5" />
   return <Wrench class="h-5 w-5" />
@@ -85,6 +86,7 @@ export default function WorkspacePage() {
                     <CardContent class="space-y-2">
                       <CardTitle>{module.label}</CardTitle>
                       <div class="text-sm text-muted-foreground">
+                        {module.id === 'character' && '职业等级、任务进度、生产三围'}
                         {module.id === 'crafting' && '配方树、素材汇总、来源选择'}
                         {module.id === 'notes' && '目录页面、分栏卡片、材料汇总'}
                       </div>

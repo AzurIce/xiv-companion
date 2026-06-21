@@ -1,0 +1,93 @@
+diff --git a/raphael-solver/src/macro_solver/solver.rs b/raphael-solver/src/macro_solver/solver.rs
+index 4dc5cd8..2f29048 100644
+--- a/raphael-solver/src/macro_solver/solver.rs
++++ b/raphael-solver/src/macro_solver/solver.rs
+@@ -70,6 +70,17 @@ impl<'a> MacroSolver<'a> {
+     }
+ 
+     pub fn solve(&mut self) -> Result<Vec<Action>, SolverException> {
++        self.solve_inner(None)
++    }
++
++    pub fn solve_with_initial_solution(
++        &mut self,
++        initial_actions: &[Action],
++    ) -> Result<Vec<Action>, SolverException> {
++        self.solve_inner(Some(initial_actions))
++    }
++
++    fn solve_inner(&mut self, initial_actions: Option<&[Action]>) -> Result<Vec<Action>, SolverException> {
+         log::debug!(
+             "rayon::current_num_threads() = {}",
+             rayon::current_num_threads()
+@@ -112,7 +123,12 @@ impl<'a> MacroSolver<'a> {
+ 
+         let timer = ScopedTimer::new("Search");
+         let actions = self
+-            .do_solve(&mut quality_ub_solver, &mut step_lb_solver, initial_state)?
++            .do_solve(
++                &mut quality_ub_solver,
++                &mut step_lb_solver,
++                initial_state,
++                initial_actions,
++            )?
+             .actions();
+         drop(timer);
+ 
+@@ -126,10 +142,15 @@ impl<'a> MacroSolver<'a> {
+         quality_ub_solver: &mut QualityUbSolver<'alloc>,
+         step_lb_solver: &mut StepLbSolver<'alloc>,
+         state: SimulationState,
++        initial_actions: Option<&[Action]>,
+     ) -> Result<Solution, SolverException> {
+         let mut search_queue = SearchQueue::new(self.settings, state);
+-        let mut solution: Option<Solution> = None;
+-        let mut min_accepted_score = SearchScore::MIN;
++        let mut solution: Option<Solution> = initial_actions
++            .map(|actions| self.solution_from_actions(actions))
++            .transpose()?;
++        let mut min_accepted_score = solution
++            .as_ref()
++            .map_or(SearchScore::MIN, |solution| solution.score.0);
+ 
+         while let Some(Batch {
+             score,
+@@ -224,6 +245,38 @@ impl<'a> MacroSolver<'a> {
+     pub fn runtime_stats(&self) -> MacroSolverStats {
+         self.last_solve_runtime_stats
+     }
++
++    fn solution_from_actions(&self, actions: &[Action]) -> Result<Solution, SolverException> {
++        let mut state = SimulationState::new(&self.settings.simulator_settings);
++        let mut solver_actions = Vec::new();
++        let mut steps = 0;
++        let mut duration = 0;
++        for action in actions {
++            let solver_action = ActionCombo::Single(*action);
++            state = use_action_combo(&self.settings, state, solver_action)
++                .map_err(|_| SolverException::NoSolution)?;
++            solver_actions.push(solver_action);
++            steps += solver_action.steps();
++            duration += solver_action.duration();
++        }
++        if state.progress < self.settings.max_progress()
++            || (!self.settings.allow_non_max_quality_solutions
++                && state.quality < self.settings.max_quality())
++        {
++            return Err(SolverException::NoSolution);
++        }
++        let search_score = SearchScore {
++            quality_upper_bound: std::cmp::min(state.quality, self.settings.max_quality()),
++            steps_lower_bound: steps,
++            duration_lower_bound: duration,
++            current_steps: steps,
++            current_duration: duration,
++        };
++        Ok(Solution {
++            score: (search_score, state.quality),
++            solver_actions,
++        })
++    }
+ }
+ 
+ struct WorkerResult<'alloc> {

@@ -17,6 +17,8 @@ pub struct CraftDataPackage {
     pub source: String,
     pub counts: CraftDataCounts,
     pub items: BTreeMap<String, CraftItem>,
+    #[serde(default)]
+    pub equipment: Vec<CrafterEquipmentItem>,
     pub recipes: Vec<CraftRecipe>,
     pub recipe_levels: BTreeMap<String, RecipeLevelInfo>,
     pub secret_recipe_books: BTreeMap<String, String>,
@@ -245,6 +247,25 @@ pub struct CraftItem {
     pub item_search_category: u32,
     pub price_mid: u32,
     pub price_low: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "wasm", derive(Tsify))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct CrafterEquipmentItem {
+    pub item_id: u32,
+    pub name: String,
+    pub icon: u32,
+    pub slot_id: String,
+    pub item_level: u32,
+    pub equip_level: u32,
+    pub craft_type: Option<u32>,
+    pub craftsmanship: u32,
+    pub control: u32,
+    pub craft_points: u32,
+    pub materia_slot_count: u32,
+    pub advanced_melding: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

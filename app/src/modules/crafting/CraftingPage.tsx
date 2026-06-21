@@ -1,5 +1,5 @@
 import type { JSX } from 'solid-js'
-import { createEffect, createMemo, createResource, createSignal, For, Show, untrack } from 'solid-js'
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, untrack } from 'solid-js'
 import { useSearchParams } from '@solidjs/router'
 import {
   ChevronDown,
@@ -14,6 +14,7 @@ import {
   Leaf,
   LoaderCircle,
   PackageSearch,
+  RefreshCw,
   Search,
   Sparkles,
   Shuffle,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-solid'
 import {
   buildCraftTree,
+  characterRaphaelInputForCraftType,
   collapseKey,
   CRAFT_TYPE_ABBRS,
   CRAFT_TYPE_NAMES,
@@ -31,6 +33,10 @@ import {
   getIconUrls,
   getItem,
   getItemName,
+  gearsetAttributes,
+  gearsetMainHandCraftType,
+  gearsetMatchesCraftType,
+  loadCharacterState,
   loadCraftData,
   resolveSource,
   solveRaphaelMacro,
@@ -42,6 +48,8 @@ import {
   type CraftDataPackage,
   type CraftRecipe,
   type CraftTreeNode,
+  type CharacterState,
+  type GearAttributes,
   type ItemSource,
   type MacroAction,
   type MacroSolveResult,
@@ -203,24 +211,6 @@ function fishCakeUrl(spotId: number, fishId: number) {
 
 const MARKET_WORLD_DC_REGION = '中国'
 const UNIVERSALIS_BASE_URL = import.meta.env.DEV ? '/api/universalis' : 'https://universalis.app'
-
-const DEFAULT_CRAFTER_ATTRIBUTES: CrafterAttributes = {
-  level: 100,
-  craftsmanship: 4900,
-  control: 4800,
-  craftPoints: 620,
-}
-
-const DEFAULT_SOLVE_OPTIONS: RaphaelSolveOptions = {
-  targetQuality: undefined,
-  useManipulation: true,
-  useHeartAndSoul: false,
-  useQuickInnovation: false,
-  useTrainedEye: true,
-  backloadProgress: false,
-  adversarial: false,
-  stellarSteadyHandCharges: 0,
-}
 
 type CraftingSearchParams = {
   q?: string
@@ -784,12 +774,34 @@ function ToggleField(props: {
   )
 }
 
+type MacroAttrSource = 'activeGearset' | 'manual' | `gearset:${string}`
+
+function gearsetSourceId(gearsetId: string): MacroAttrSource {
+  return `gearset:${gearsetId}`
+}
+
+function gearsetIdFromSource(source: MacroAttrSource) {
+  return source.startsWith('gearset:') ? source.slice('gearset:'.length) : undefined
+}
+
+function attrsWithGearAttributes(attrs: CrafterAttributes, gearAttrs: GearAttributes): CrafterAttributes {
+  return {
+    ...attrs,
+    craftsmanship: gearAttrs.craftsmanship,
+    control: gearAttrs.control,
+    craftPoints: gearAttrs.craftPoints,
+  }
+}
+
 function MacroSolverPanel(props: {
   data: CraftDataPackage
+  characterState: CharacterState
   recipe?: CraftRecipe
 }) {
-  const [attrs, setAttrs] = createSignal<CrafterAttributes>({ ...DEFAULT_CRAFTER_ATTRIBUTES })
-  const [options, setOptions] = createSignal<RaphaelSolveOptions>({ ...DEFAULT_SOLVE_OPTIONS })
+  const initialProfile = characterRaphaelInputForCraftType(props.characterState, props.recipe?.craftType)
+  const [attrs, setAttrs] = createSignal<CrafterAttributes>({ ...initialProfile.attrs })
+  const [options, setOptions] = createSignal<RaphaelSolveOptions>({ ...initialProfile.options })
+  const [attrSource, setAttrSource] = createSignal<MacroAttrSource>('activeGearset')
   const [result, setResult] = createSignal<MacroSolveResult | undefined>()
   const [error, setError] = createSignal<string | undefined>()
   const [solving, setSolving] = createSignal(false)
@@ -797,14 +809,42 @@ function MacroSolverPanel(props: {
   const [copiedIndex, setCopiedIndex] = createSignal<number | undefined>()
   let solveRunId = 0
 
+  const selectedGearset = createMemo(() => {
+    const source = attrSource()
+    const gearsetId = source === 'activeGearset' ? props.characterState.activeGearsetId : gearsetIdFromSource(source)
+    return props.characterState.gearsets.find((gearset) => gearset.id === gearsetId) ?? props.characterState.gearsets[0]
+  })
+  const characterProfile = createMemo(() => (
+    characterRaphaelInputForCraftType(props.characterState, props.recipe?.craftType, selectedGearset()?.id)
+  ))
+  const currentGearsetAttributes = () => {
+    const gearset = selectedGearset()
+    return gearset ? gearsetAttributes(gearset) : undefined
+  }
+  const gearsetWarning = createMemo(() => {
+    if (attrSource() === 'manual') return undefined
+    const gearset = selectedGearset()
+    const recipe = props.recipe
+    if (!gearset || !recipe || gearsetMatchesCraftType(gearset, recipe.craftType)) return undefined
+    const mainHandCraftType = gearsetMainHandCraftType(gearset)
+    return `主手为 ${CRAFT_TYPE_ABBRS[mainHandCraftType ?? 0] ?? '其他职业'}，当前配方为 ${CRAFT_TYPE_ABBRS[recipe.craftType] ?? '其他职业'}；三围仍会照常用于求解。`
+  })
+  const explicitGearsets = () => props.characterState.gearsets.filter((gearset) => gearset.id !== props.characterState.activeGearsetId)
+
   createEffect(() => {
     props.recipe?.id
+    const profile = characterProfile()
     solveRunId += 1
+    setAttrs((current) => (
+      attrSource() === 'manual'
+        ? { ...current, level: profile.attrs.level }
+        : { ...profile.attrs }
+    ))
     setResult(undefined)
     setError(undefined)
     setCopiedIndex(undefined)
     setSolving(false)
-    setOptions((current) => ({ ...current, targetQuality: undefined }))
+    setOptions({ ...profile.options, targetQuality: undefined })
   })
 
   const recipeLevel = () => {
@@ -822,6 +862,33 @@ function MacroSolverPanel(props: {
   }
   const updateOption = <K extends keyof RaphaelSolveOptions>(key: K, value: RaphaelSolveOptions[K]) => {
     setOptions((current) => ({ ...current, [key]: value }))
+  }
+  const syncCharacterProfile = () => {
+    const profile = characterProfile()
+    setAttrs((current) => (
+      attrSource() === 'manual'
+        ? { ...current, level: profile.attrs.level }
+        : { ...profile.attrs }
+    ))
+    setOptions((current) => ({
+      ...profile.options,
+      targetQuality: current.targetQuality,
+      stellarSteadyHandCharges: current.stellarSteadyHandCharges,
+      backloadProgress: current.backloadProgress,
+      adversarial: current.adversarial,
+    }))
+  }
+  const updateAttrSource = (value: MacroAttrSource) => {
+    setAttrSource(value)
+    const profile = characterRaphaelInputForCraftType(
+      props.characterState,
+      props.recipe?.craftType,
+      value === 'activeGearset' ? props.characterState.activeGearsetId : gearsetIdFromSource(value),
+    )
+    setAttrs((current) => {
+      if (value === 'manual') return current
+      return attrsWithGearAttributes(current, profile.attrs)
+    })
   }
   const run = async () => {
     const recipe = props.recipe
@@ -864,9 +931,48 @@ function MacroSolverPanel(props: {
                   <div class="mt-1 text-xs text-muted-foreground">
                     Lv.{level().classJobLevel} · 耐久 {level().durability} · 难度 {formatInteger(level().difficulty)} · 品质 {formatInteger(level().quality)}
                   </div>
+                  <div class="mt-1 text-xs text-muted-foreground">
+                    角色：{characterProfile().job.name} Lv.{characterProfile().progress.level}
+                    {characterProfile().options.useManipulation ? ' · 掌握可用' : ' · 掌握未解锁'}
+                  </div>
+                  <div class="mt-1 text-xs text-muted-foreground">
+                    <Show when={attrSource() !== 'manual'} fallback="三围：手动输入">
+                      配装：{selectedGearset()?.name} · 作业 {formatInteger(currentGearsetAttributes()?.craftsmanship ?? 0)} / 加工 {formatInteger(currentGearsetAttributes()?.control ?? 0)} / CP {formatInteger(currentGearsetAttributes()?.craftPoints ?? 0)}
+                    </Show>
+                  </div>
+                  <Show when={gearsetWarning()}>
+                    {(message) => <div class="mt-1 text-xs font-medium text-red-600">{message()}</div>}
+                  </Show>
                 </div>
-                <Badge variant="outline">实验</Badge>
+                <div class="flex items-center gap-2">
+                  <Button size="icon" variant="ghost" title="同步角色参数" aria-label="同步角色参数" onClick={syncCharacterProfile}>
+                    <RefreshCw class="h-4 w-4" />
+                  </Button>
+                  <Badge variant="outline">实验</Badge>
+                </div>
               </div>
+
+              <label class="mb-3 grid gap-1 text-xs font-medium text-muted-foreground">
+                三围来源
+                <select
+                  value={attrSource()}
+                  onChange={(event) => updateAttrSource(event.currentTarget.value as MacroAttrSource)}
+                  class="h-8 rounded-md border bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="activeGearset">当前激活配装</option>
+                  <For each={explicitGearsets()}>
+                    {(gearset) => <option value={gearsetSourceId(gearset.id)}>{gearset.name}</option>}
+                  </For>
+                  <option value="manual">手动输入</option>
+                </select>
+              </label>
+              <Show when={gearsetWarning()}>
+                {(message) => (
+                  <div class="mb-3 rounded-sm border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                    {message()}
+                  </div>
+                )}
+              </Show>
 
               <div class="grid grid-cols-2 gap-2">
                 <NumericField label="等级" value={attrs().level} min={1} max={100} onInput={(value) => updateAttr('level', value)} />
@@ -1090,6 +1196,7 @@ export default function CraftingPage() {
   const [searchParams, setSearchParams] = useSearchParams<CraftingSearchParams>()
   const [craftData] = createResource(loadCraftData)
   const [craftEngine] = createResource(craftData, createCraftDataEngine)
+  const [characterState, setCharacterState] = createSignal(loadCharacterState())
   const [query, setQuery] = createSignal(searchParamValue(searchParams.q) ?? '')
   const [craftType, setCraftType] = createSignal<number | undefined>(parseCraftTypeParam(searchParams.type))
   const [selectedRecipeId, setSelectedRecipeId] = createSignal<number | undefined>(parseRecipeParam(searchParams.recipe))
@@ -1098,6 +1205,16 @@ export default function CraftingPage() {
   const [collapsed, setCollapsed] = createSignal(new Set<string>())
   const [sourceChoices, setSourceChoices] = createSignal(new Map<number, SourceChoice>())
   const [sideTab, setSideTab] = createSignal<'materials' | 'macro'>('materials')
+
+  createEffect(() => {
+    const refresh = () => setCharacterState(loadCharacterState())
+    window.addEventListener('focus', refresh)
+    window.addEventListener('storage', refresh)
+    onCleanup(() => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('storage', refresh)
+    })
+  })
 
   createEffect(() => {
     const nextQuery = searchParamValue(searchParams.q) ?? ''
@@ -1577,7 +1694,7 @@ export default function CraftingPage() {
             when={sideTab() === 'materials'}
             fallback={
               <Show when={craftData()}>
-                {(data) => <MacroSolverPanel data={data()} recipe={selectedRecipe()} />}
+                {(data) => <MacroSolverPanel data={data()} characterState={characterState()} recipe={selectedRecipe()} />}
               </Show>
             }
           >

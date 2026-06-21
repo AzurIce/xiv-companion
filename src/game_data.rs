@@ -12,8 +12,9 @@ use physis::{
 };
 
 use crate::{
-    CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe, ItemSource,
-    MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
+    CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe,
+    CrafterEquipmentItem, ItemSource, MACRO_ACTION_DEFINITIONS, MacroActionNameSource,
+    RecipeLevelInfo, SpecialShopCost,
 };
 
 pub struct GameExcel {
@@ -26,6 +27,7 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
     let mut game = GameExcel::new(game_dir)?;
     let game_version = game_version(&game.game_dir);
     let items = game.load_items()?;
+    let equipment = game.load_crafter_equipment()?;
     let recipes = game.load_recipes()?;
     let recipe_levels = game.load_recipe_levels()?;
     let secret_recipe_books = game.load_secret_recipe_books()?;
@@ -43,6 +45,7 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
             sources: source_count,
         },
         items,
+        equipment,
         recipes,
         recipe_levels,
         secret_recipe_books,
@@ -98,6 +101,60 @@ impl GameExcel {
         });
 
         Ok(items)
+    }
+
+    pub fn load_crafter_equipment(&mut self) -> Result<Vec<CrafterEquipmentItem>> {
+        let sheet = self.sheet("Item", Language::ChineseSimplified)?;
+        let mut equipment = Vec::new();
+
+        for_each_row(&sheet, |row_id, row| {
+            let Some(name) = string_value(row, 9).filter(|name| !name.is_empty()) else {
+                return;
+            };
+            let Some(slot_id) = crafter_slot_id(number_value(row, 17)) else {
+                return;
+            };
+            let mut craftsmanship = 0;
+            let mut control = 0;
+            let mut craft_points = 0;
+            for (base_param, value) in item_param_pairs(row) {
+                match base_param {
+                    70 => craftsmanship += value,
+                    71 => control += value,
+                    11 => craft_points += value,
+                    _ => {}
+                }
+            }
+
+            if craftsmanship == 0 && control == 0 && craft_points == 0 {
+                return;
+            }
+
+            equipment.push(CrafterEquipmentItem {
+                item_id: row_id,
+                name: name.to_owned(),
+                icon: number_value(row, 10),
+                slot_id: slot_id.to_owned(),
+                item_level: number_value(row, 11),
+                equip_level: number_value(row, 40),
+                craft_type: crafter_craft_type(number_value(row, 43)),
+                craftsmanship,
+                control,
+                craft_points,
+                materia_slot_count: number_value(row, 86),
+                advanced_melding: bool_value(row, 87),
+            });
+        });
+
+        equipment.sort_by(|a, b| {
+            b.item_level
+                .cmp(&a.item_level)
+                .then_with(|| b.equip_level.cmp(&a.equip_level))
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.item_id.cmp(&b.item_id))
+        });
+
+        Ok(equipment)
     }
 
     pub fn load_recipes(&mut self) -> Result<Vec<CraftRecipe>> {
@@ -394,6 +451,60 @@ fn defaulted_number_value(row: &Row, col: usize, default: u32) -> u32 {
 
 fn bool_value(row: &Row, col: usize) -> bool {
     matches!(row.columns.get(col), Some(Field::Bool(true)))
+}
+
+fn item_param_pairs(row: &Row) -> impl Iterator<Item = (u32, u32)> + '_ {
+    [
+        (59, 60),
+        (61, 62),
+        (63, 64),
+        (65, 66),
+        (67, 68),
+        (69, 70),
+        (73, 74),
+        (75, 76),
+        (77, 78),
+        (79, 80),
+        (81, 82),
+        (83, 84),
+    ]
+    .into_iter()
+    .filter_map(|(base_param_col, value_col)| {
+        let base_param = number_value(row, base_param_col);
+        let value = number_value(row, value_col);
+        (base_param != 0 && value != 0).then_some((base_param, value))
+    })
+}
+
+fn crafter_slot_id(equip_slot_category: u32) -> Option<&'static str> {
+    match equip_slot_category {
+        1 => Some("mainHand"),
+        2 => Some("offHand"),
+        3 => Some("head"),
+        4 => Some("body"),
+        5 => Some("hands"),
+        7 => Some("legs"),
+        8 => Some("feet"),
+        9 => Some("ears"),
+        10 => Some("neck"),
+        11 => Some("wrists"),
+        12 => Some("ring"),
+        _ => None,
+    }
+}
+
+fn crafter_craft_type(class_job_category: u32) -> Option<u32> {
+    match class_job_category {
+        9 => Some(0),
+        10 => Some(1),
+        11 => Some(2),
+        12 => Some(3),
+        13 => Some(4),
+        14 => Some(5),
+        15 => Some(6),
+        16 => Some(7),
+        _ => None,
+    }
 }
 
 fn field_number_value(field: &Field) -> u32 {

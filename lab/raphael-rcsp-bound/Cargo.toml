@@ -1,0 +1,11 @@
+[workspace]
+
+[package]
+name = "raphael-rcsp-bound"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+raphael-sim = { path = "../upstream/raphael-rs/raphael-sim" }
+raphael-solver = { path = "../upstream/raphael-rs/raphael-solver" }
