@@ -20,7 +20,7 @@ struct Args {
     game_dir: Option<PathBuf>,
 
     /// Output directory for craft-data.json and version.json.
-    #[arg(long, value_name = "DIR", default_value = "app/public")]
+    #[arg(long, value_name = "DIR", default_value = "assets")]
     out_dir: PathBuf,
 
     /// Only audit an existing craft-data.json without exporting.

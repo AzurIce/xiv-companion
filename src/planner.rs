@@ -13,7 +13,7 @@ pub struct CraftDataIndex {
     pub craft_type_order: Vec<u32>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -25,7 +25,7 @@ pub struct CraftTreeNode {
     pub children: Vec<CraftTreeNode>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]

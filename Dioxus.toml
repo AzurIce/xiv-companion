@@ -1,0 +1,13 @@
+[application]
+tailwind_input = "tailwind.css"
+tailwind_output = "assets/tailwind.css"
+
+[web.app]
+title = "XIV Companion"
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+script = []

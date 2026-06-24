@@ -11,11 +11,22 @@ crate-type = ["rlib", "cdylib"]
 [features]
 default = []
 game-data = ["dep:anyhow", "dep:physis"]
+web = [
+    "dep:console_error_panic_hook",
+    "dep:dioxus",
+    "dep:dioxus-free-icons",
+    "dep:gloo-net",
+    "dep:js-sys",
+    "dep:raphael-simulator",
+    "dep:raphael-solver",
+    "dep:urlencoding",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
 wasm = [
     "dep:raphael-simulator",
     "dep:raphael-solver",
     "dep:tsify",
-    "dep:wasm-bindgen",
     "tsify/js",
 ]
 
@@ -27,7 +38,22 @@ raphael-solver = { git = "https://github.com/KonaeAkira/raphael-rs.git", package
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
 tsify = { version = "0.5.6", default-features = false, optional = true }
-wasm-bindgen = { version = "=0.2.121", optional = true }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+dioxus = { version = "0.7.9", features = ["web", "router"], optional = true }
+dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true }
+gloo-net = { version = "0.6.0", optional = true }
+js-sys = { version = "0.3.83", optional = true }
+urlencoding = { version = "2.1.3", optional = true }
+wasm-bindgen = "0.2.121"
+wasm-bindgen-futures = { version = "0.4.53", optional = true }
+web-sys = { version = "0.3.83", features = [
+    "Clipboard",
+    "Crypto",
+    "HtmlInputElement",
+    "Navigator",
+    "Storage",
+    "Window",
+], optional = true }
 
 [workspace]
 members = ["xtask/*"]

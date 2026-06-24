@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: "Vite base URL, for example /xiv-companion/ or /"
+        description: "Dioxus base path, for example /xiv-companion/ or /"
         required: false
         type: string
       craft_data_url:
-        description: "Optional URL to override app/public/craft-data.json"
+        description: "Optional URL to override assets/craft-data.json"
         required: false
         type: string
 
@@ -31,6 +31,7 @@ jobs:
     env:
       CRAFT_DATA_URL: ${{ github.event.inputs.craft_data_url || vars.CRAFT_DATA_URL || secrets.CRAFT_DATA_URL }}
       XIV_COMPANION_BASE_URL: ${{ github.event.inputs.base_url || vars.XIV_COMPANION_BASE_URL || format('/{0}/', github.event.repository.name) }}
+      DIST_DIR: target/dx/xiv-companion/release/web/public
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,35 +42,37 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: Install dependencies
-        run: nix develop --command bun install --frozen-lockfile
-
       - name: Prepare static data
         run: |
           set -euo pipefail
-          mkdir -p app/public
+          mkdir -p assets
 
           if [[ -n "${CRAFT_DATA_URL}" ]]; then
             curl --fail --location --show-error --silent --retry 3 \
               "${CRAFT_DATA_URL}" \
-              --output app/public/craft-data.json
+              --output assets/craft-data.json
           fi
 
-          if [[ ! -s app/public/craft-data.json ]]; then
-            echo "::error::app/public/craft-data.json is missing. Commit it or set the CRAFT_DATA_URL repository variable/workflow input."
+          if [[ ! -s assets/craft-data.json ]]; then
+            echo "::error::assets/craft-data.json is missing. Commit it or set the CRAFT_DATA_URL repository variable/workflow input."
             exit 1
           fi
 
           printf '{"commit":"%s","date":"%s"}\n' \
             "${GITHUB_SHA}" \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            > app/public/version.json
+            > assets/version.json
+
+      - name: Install Dioxus tools
+        run: |
+          nix develop --command cargo install dioxus-cli --version 0.7.9 --locked
+          nix develop --command cargo install wasm-bindgen-cli --version 0.2.121 --locked
 
       - name: Build
-        run: nix develop --command bun run --cwd app build
+        run: nix develop --command dx build --web --release --features web --package xiv-companion --bin xiv-companion --base-path "${XIV_COMPANION_BASE_URL}"
 
       - name: Preserve underscore paths
-        run: touch app/dist/.nojekyll
+        run: touch "${DIST_DIR}/.nojekyll"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -77,7 +80,7 @@ jobs:
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: app/dist
+          path: ${{ env.DIST_DIR }}
           include-hidden-files: true
 
   deploy:

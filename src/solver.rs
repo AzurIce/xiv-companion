@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "wasm")]
 use tsify::Tsify;
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "web"))]
 use crate::{CraftRecipe, RecipeLevelInfo, macro_action_key_by_game_action_id};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -16,7 +16,7 @@ pub struct CrafterAttributes {
     pub craft_points: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -31,7 +31,7 @@ pub struct RaphaelSolveOptions {
     pub stellar_steady_hand_charges: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -40,7 +40,7 @@ pub struct MacroAction {
     pub wait_seconds: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "wasm", derive(Tsify))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -57,7 +57,7 @@ pub struct MacroSolveResult {
     pub final_cp: u32,
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "web"))]
 pub fn solve_raphael_macro(
     recipe: &CraftRecipe,
     recipe_level: &RecipeLevelInfo,
@@ -153,7 +153,7 @@ pub fn solve_raphael_macro(
     })
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "web"))]
 fn base_progress(attrs: &CrafterAttributes, recipe_level: &RecipeLevelInfo) -> u32 {
     let mut value = attrs.craftsmanship as f32 * 10.0 / recipe_level.progress_divider as f32 + 2.0;
     if attrs.level <= recipe_level.class_job_level {
@@ -162,7 +162,7 @@ fn base_progress(attrs: &CrafterAttributes, recipe_level: &RecipeLevelInfo) -> u
     value as u32
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "web"))]
 fn base_quality(attrs: &CrafterAttributes, recipe_level: &RecipeLevelInfo) -> u32 {
     let mut value = attrs.control as f32 * 10.0 / recipe_level.quality_divider as f32 + 35.0;
     if attrs.level <= recipe_level.class_job_level {
@@ -171,7 +171,7 @@ fn base_quality(attrs: &CrafterAttributes, recipe_level: &RecipeLevelInfo) -> u3
     value as u32
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(any(feature = "wasm", feature = "web"))]
 fn clamp_u16(value: u32) -> u16 {
     value.min(u16::MAX as u32) as u16
 }

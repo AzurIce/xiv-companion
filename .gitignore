@@ -4,7 +4,6 @@ target/
 .vite/
 *.log
 *.tsbuildinfo
-app/public/version.json
-app/src/wasm/
+assets/version.json
 tmp_*.csv
 .direnv

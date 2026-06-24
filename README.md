@@ -1,43 +1,52 @@
 # XIV Companion
 
-XIV Companion is a Solid.js app for Final Fantasy XIV utilities.
+XIV Companion is a Dioxus web app for Final Fantasy XIV utilities.
 
-The current module is a crafting search workspace extracted from game data.
+The app currently includes:
+
+- crafting search with recipe trees, material summaries, source choices, market estimates, and Raphael macro solving
+- notes with local storage, folders/pages, crafting summary cards, material planning, and item details
 
 ## Stack
 
-- Bun app
-- Cargo xtask workspace
-- Vite
-- Solid.js
-- Tailwind CSS v4
-- Kobalte Core
-- lucide-solid
+- Rust
+- Dioxus 0.7
+- Tailwind CSS v4 through Dioxus assets
+- Cargo xtask workspace for game-data export
 
 ## Development
 
-With Nix flakes:
+Install the web toolchain once:
 
 ```bash
-nix develop
-bun install
-cargo update-craft-data --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/
-bun run dev
+cargo install dioxus-cli --version 0.7.9 --locked
+cargo install wasm-bindgen-cli --version 0.2.121 --locked
+rustup target add wasm32-unknown-unknown
 ```
 
-Without Nix:
+Generate or refresh crafting data:
 
-```powershell
-bun install
+```bash
 cargo update-craft-data --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/
-bun run dev
 ```
 
-The dev server uses `http://127.0.0.1:5174` by default to avoid colliding with adjacent FFXIV projects.
+Run the Dioxus dev server:
+
+```bash
+dx serve --web --features web --addr 127.0.0.1 --port 5174 --open false
+```
+
+Build for production:
+
+```bash
+dx build --web --release --features web --package xiv-companion --bin xiv-companion
+```
+
+The production bundle is written to `target/dx/xiv-companion/release/web/public`.
 
 `cargo update-craft-data` reads the game `sqpack` data directly through the
 `xtask/xtask-update-craft-data` package. Pass either the install directory or
 the inner `game` directory with `--game-dir`.
 
-The command writes `app/public/craft-data.json` and `app/public/version.json`,
-then audits the generated exchange data by default.
+The command writes `assets/craft-data.json` and `assets/version.json`, then
+audits the generated exchange data by default.

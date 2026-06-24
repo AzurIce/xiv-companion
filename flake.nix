@@ -44,11 +44,8 @@
       {
         devShells.default = craneLib.devShell {
           packages = with pkgs; [
-            bun
             just
             lld
-            wasm-bindgen-cli
-            zsh
           ];
         };
       }
