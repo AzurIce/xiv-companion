@@ -11,7 +11,10 @@ mod utils;
 
 use shell::{AppShell, Route};
 
-const MAIN_CSS: Asset = asset!("/assets/tailwind.css");
+const _: Asset = asset!(
+    "/assets/tailwind.css",
+    AssetOptions::css().with_static_head(true)
+);
 
 #[component]
 pub fn App() -> Element {
@@ -30,7 +33,6 @@ pub fn App() -> Element {
     });
 
     rsx! {
-        document::Stylesheet { href: MAIN_CSS }
         AppShell { route }
     }
 }
