@@ -63,16 +63,23 @@ jobs:
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             > assets/version.json
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.20.1
+
       - name: Install Dioxus tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          nix develop --command cargo install dioxus-cli --version 0.7.9 --locked
-          nix develop --command cargo install wasm-bindgen-cli --version 0.2.121 --locked
+          nix develop --command cargo binstall dioxus-cli@0.7.9 --no-confirm --force --disable-strategies compile
+          nix develop --command cargo binstall wasm-bindgen-cli@0.2.121 --no-confirm --force --disable-strategies compile
 
       - name: Build
         run: nix develop --command dx build --web --release --features web --package xiv-companion --bin xiv-companion --base-path "${XIV_COMPANION_BASE_URL}"
 
       - name: Preserve underscore paths
-        run: touch "${DIST_DIR}/.nojekyll"
+        run: |
+          cp "${DIST_DIR}/index.html" "${DIST_DIR}/404.html"
+          touch "${DIST_DIR}/.nojekyll"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

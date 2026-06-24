@@ -19,8 +19,9 @@ The app currently includes:
 Install the web toolchain once:
 
 ```bash
-cargo install dioxus-cli --version 0.7.9 --locked
-cargo install wasm-bindgen-cli --version 0.2.121 --locked
+cargo install cargo-binstall
+cargo binstall dioxus-cli@0.7.9 --force
+cargo binstall wasm-bindgen-cli@0.2.121 --force
 rustup target add wasm32-unknown-unknown
 ```
 
