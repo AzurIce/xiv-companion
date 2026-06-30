@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use physis::{
     Language,
     excel::{Field, Row},
-    resource::SqPackResource,
+    resource::{Resource, SqPackResource},
 };
 
 use crate::{
@@ -16,15 +16,31 @@ use crate::{
     MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
 };
 
-pub struct GameExcel {
-    game_dir: PathBuf,
-    resource: SqPackResource,
+pub struct GameExcel<R: Resource> {
+    source_label: String,
+    game_version: String,
+    resource: R,
 }
 
 pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftDataPackage> {
     let game_dir = normalize_game_dir(game_dir)?;
-    let mut game = GameExcel::new(game_dir)?;
-    let game_version = game_version(&game.game_dir);
+    let game_version = game_version(&game_dir);
+    let source_label = game_dir.display().to_string();
+    let resource = SqPackResource::from_existing(
+        game_dir
+            .to_str()
+            .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?,
+    );
+    export_craft_data_from_resource(resource, source_label, game_version, generated_at)
+}
+
+pub fn export_craft_data_from_resource<R: Resource>(
+    resource: R,
+    source_label: String,
+    game_version: String,
+    generated_at: String,
+) -> Result<CraftDataPackage> {
+    let mut game = GameExcel::new(resource, source_label, game_version);
     let items = game.load_items()?;
     let recipes = game.load_recipes()?;
     let recipe_levels = game.load_recipe_levels()?;
@@ -35,8 +51,8 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
 
     Ok(CraftDataPackage {
         generated_at,
-        game_version,
-        source: game.game_dir.display().to_string(),
+        game_version: game.game_version.clone(),
+        source: game.source_label.clone(),
         counts: CraftDataCounts {
             items: items.len(),
             recipes: recipes.len(),
@@ -51,24 +67,19 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
     })
 }
 
-impl GameExcel {
-    pub fn new(game_dir: PathBuf) -> Result<Self> {
-        let game_dir_string = game_dir
-            .to_str()
-            .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?;
-        Ok(Self {
-            resource: SqPackResource::from_existing(game_dir_string),
-            game_dir,
-        })
+impl<R: Resource> GameExcel<R> {
+    pub fn new(resource: R, source_label: String, game_version: String) -> Self {
+        Self {
+            source_label,
+            game_version,
+            resource,
+        }
     }
 
     fn sheet(&mut self, name: &str, language: Language) -> Result<physis::excel::Sheet> {
-        let header = self
-            .resource
-            .read_excel_sheet_header(name)
+        let header = physis::resource::generic_read_excel_sheet_header(&mut self.resource, name)
             .with_context(|| format!("failed to read {name} sheet header"))?;
-        self.resource
-            .read_excel_sheet(&header, name, language)
+        physis::resource::generic_read_excel_sheet(&mut self.resource, &header, name, language)
             .with_context(|| format!("failed to read {name} sheet"))
     }
 

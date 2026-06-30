@@ -1,10 +1,15 @@
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
+pub(crate) mod browser_sqpack;
 mod data;
 mod icons;
+mod load_progress;
+mod log;
 mod modules;
 mod pages;
+mod resource_settings;
+mod resources;
 mod shell;
 mod ui;
 mod utils;

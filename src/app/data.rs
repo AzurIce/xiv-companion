@@ -4,17 +4,19 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 
+use crate::app::resource_settings::{
+    ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
+};
 use xiv_companion::{
-    CraftDataIndex, CraftDataPackage, CraftItem, CraftRecipe, CraftTreeNode, ItemSource,
-    MaterialSummary, SourceChoice, build_craft_tree,
-    craftable_recipes as planner_craftable_recipes, create_craft_data_index,
+    CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
+    CraftTreeNode, ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
+    ResourceSource, SourceChoice, build_craft_tree, craftable_recipes as planner_craftable_recipes,
+    create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
     source_label as planner_source_label, source_priority as planner_source_priority,
     summarize_materials as planner_summarize_materials,
 };
-
-const CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 
 pub const CRAFT_TYPE_NAMES: [&str; 8] = [
     "刻木匠",
@@ -32,7 +34,7 @@ pub const CRAFT_TYPE_ABBRS: [&str; 8] = [
 ];
 
 thread_local! {
-    static CRAFT_DATA_CACHE: RefCell<Option<Rc<CraftDataPackage>>> = const { RefCell::new(None) };
+    static ITEM_ICON_CACHE: RefCell<HashMap<String, ItemIconResourceInfo>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -41,26 +43,37 @@ pub struct CraftDataEngine {
     pub index: Rc<CraftDataIndex>,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct LoadedCraftData {
+    pub source: ResourceSource,
+    pub data: Rc<CraftDataPackage>,
+}
+
 impl PartialEq for CraftDataEngine {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.data, &other.data)
     }
 }
 
-pub async fn load_craft_data() -> Result<Rc<CraftDataPackage>, String> {
-    if let Some(data) = CRAFT_DATA_CACHE.with(|cache| cache.borrow().clone()) {
-        return Ok(data);
-    }
-
-    let bytes = dioxus::asset_resolver::read_asset_bytes(CRAFT_DATA_ASSET)
+pub async fn load_craft_data_with_source(
+    settings: ResourceSettings,
+) -> Result<LoadedCraftData, String> {
+    let loaded = configured_web_resource_hub_for(&settings)
+        .load_with_source::<CraftDataResource>(CraftDataId::Default)
         .await
-        .map_err(|error| format!("craft-data.json {error}"))?;
+        .map_err(|error| error.to_string())?;
+    Ok(LoadedCraftData {
+        source: loaded.source,
+        data: Rc::new(loaded.value),
+    })
+}
 
-    let data = serde_json::from_slice::<CraftDataPackage>(&bytes)
-        .map_err(|error| format!("craft-data.json {error}"))?;
-    let data = Rc::new(data);
-    CRAFT_DATA_CACHE.with(|cache| cache.replace(Some(data.clone())));
-    Ok(data)
+pub async fn load_craft_data() -> Result<Rc<CraftDataPackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<CraftDataResource>(CraftDataId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
 }
 
 pub fn create_craft_data_engine(data: Rc<CraftDataPackage>) -> CraftDataEngine {
@@ -87,16 +100,25 @@ pub fn get_item_name(data: &CraftDataPackage, item_id: u32) -> String {
     planner_get_item_name(data, item_id)
 }
 
-pub fn get_icon_urls(icon_id: u32) -> Vec<String> {
-    if icon_id == 0 {
-        return Vec::new();
+pub async fn load_item_icon(icon_id: u32) -> Result<ItemIconResourceInfo, String> {
+    let settings = crate::app::resource_settings::load_resource_settings();
+    let cache_key = format!("{}|{}", icon_id, serde_json::to_string(&settings).unwrap_or_default());
+    if let Some(info) = ITEM_ICON_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
+        return Ok(info);
     }
-    let folder = icon_id / 1000 * 1000;
-    vec![
-        format!("https://xivapi.com/i/{folder:06}/{icon_id:06}.png"),
-        format!("https://www.garlandtools.org/files/icons/item/t/{icon_id}.png"),
-        format!("https://garlandtools.org/files/icons/item/t/{icon_id}.png"),
-    ]
+
+    let loaded = crate::app::resource_settings::configured_web_resource_hub()
+        .load_with_source::<ItemIconResource>(ItemIconId { icon_id })
+        .await
+        .map_err(|error| error.to_string())?;
+    ITEM_ICON_CACHE.with(|cache| {
+        cache.borrow_mut().insert(cache_key, loaded.value.clone());
+    });
+    Ok(loaded.value)
+}
+
+pub fn clear_item_icon_cache() {
+    ITEM_ICON_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 pub fn build_tree(engine: &CraftDataEngine, item_id: u32, amount: u32) -> CraftTreeNode {

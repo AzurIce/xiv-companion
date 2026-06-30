@@ -10,12 +10,14 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-game-data = ["dep:anyhow", "dep:physis"]
+game-data = ["dep:anyhow", "dep:binrw", "dep:flate2", "dep:physis"]
 web = [
+    "game-data",
     "dep:console_error_panic_hook",
     "dep:dioxus",
     "dep:dioxus-free-icons",
     "dep:gloo-net",
+    "dep:indexed-db",
     "dep:js-sys",
     "dep:raphael-simulator",
     "dep:raphael-solver",
@@ -32,6 +34,8 @@ wasm = [
 
 [dependencies]
 anyhow = { version = "1.0.102", optional = true }
+binrw = { version = "0.15", optional = true }
+flate2 = { version = "1.1.5", default-features = false, features = ["rust_backend"], optional = true }
 physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
 raphael-simulator = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-sim", tag = "v0.28.4", optional = true }
 raphael-solver = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-solver", tag = "v0.28.4", optional = true }
@@ -42,18 +46,30 @@ console_error_panic_hook = { version = "0.1.7", optional = true }
 dioxus = { version = "0.7.9", features = ["web", "router"], optional = true }
 dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true }
 gloo-net = { version = "0.6.0", optional = true }
+indexed-db = { version = "0.4", optional = true }
 js-sys = { version = "0.3.83", optional = true }
 urlencoding = { version = "2.1.3", optional = true }
 wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = { version = "0.4.53", optional = true }
 web-sys = { version = "0.3.83", features = [
     "Clipboard",
+    "CanvasRenderingContext2d",
+    "console",
     "Crypto",
+    "Document",
+    "HtmlCanvasElement",
     "HtmlInputElement",
+    "ImageData",
     "Navigator",
+    "ErrorEvent",
+    "MessageEvent",
     "Storage",
     "Window",
+    "Worker",
 ], optional = true }
+
+[dev-dependencies]
+futures-executor = "0.3.32"
 
 [workspace]
 members = ["xtask/*"]
