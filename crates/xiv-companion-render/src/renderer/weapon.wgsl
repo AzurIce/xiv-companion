@@ -113,6 +113,7 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
 
 fn resolve_normal(input: VertexOutput) -> vec3<f32> {
     let geometric_normal = normalize(input.normal);
+    let sampled = textureSample(normal_texture, base_color_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
     if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
         return geometric_normal;
     }
@@ -120,7 +121,6 @@ fn resolve_normal(input: VertexOutput) -> vec3<f32> {
     let bitangent = normalize(input.bitangent.xyz);
     let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
     let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
-    let sampled = textureSample(normal_texture, base_color_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
     let mapped = normalize(vec3<f32>(sampled.x, sampled.y * camera.options.y, sampled.z));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }

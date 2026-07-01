@@ -13,6 +13,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::app::load_progress::{CraftDataLoadProgress, report_craft_data_progress};
 use crate::app::log;
+use crate::app::user_local_directory::ensure_window_user_local_directory_handle;
 
 const SQPACK_READ_WINDOW: u64 = 64 * 1024 * 1024;
 
@@ -55,12 +56,7 @@ impl BrowserSqPack {
             "sqpack",
             "opening BrowserSqPack from selected directory handle",
         );
-        let window = web_sys::window().ok_or_else(|| "当前运行环境没有 window".to_string())?;
-        let root = js_sys::Reflect::get(
-            window.as_ref(),
-            &JsValue::from_str("__xivCompanionUserLocalDirectory"),
-        )
-        .map_err(format_js_error)?;
+        let root = ensure_window_user_local_directory_handle().await?;
         Self::from_handle(root).await
     }
 

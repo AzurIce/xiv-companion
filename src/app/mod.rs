@@ -9,6 +9,7 @@ mod pages;
 mod resource_settings;
 mod resources;
 mod shell;
+mod user_local_directory;
 
 use shell::{AppShell, Route};
 

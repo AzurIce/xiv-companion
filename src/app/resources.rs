@@ -49,12 +49,11 @@ impl ResourceProvider for BrowserSqPackProvider {
     }
 
     fn supports(&self, request: &ProviderRequest) -> bool {
-        browser_sqpack_handle_available()
-            && ((request.kind == CraftDataKind.into() && request.key == "default")
-                || (request.kind == ItemIconKind.into() && request.key.parse::<u32>().is_ok())
-                || (request.kind == WeaponCatalogKind.into() && request.key == "default")
-                || (request.kind == WeaponModelKind.into()
-                    && parse_weapon_model_request_key(&request.key).is_ok()))
+        (request.kind == CraftDataKind.into() && request.key == "default")
+            || (request.kind == ItemIconKind.into() && request.key.parse::<u32>().is_ok())
+            || (request.kind == WeaponCatalogKind.into() && request.key == "default")
+            || (request.kind == WeaponModelKind.into()
+                && parse_weapon_model_request_key(&request.key).is_ok())
     }
 
     fn read<'a>(
@@ -90,7 +89,7 @@ impl ResourceProvider for BrowserSqPackProvider {
                             message: error.clone(),
                         }));
                         ResourceError::new(
-                            ResourceErrorKind::ProviderFailed,
+                            browser_sqpack_provider_error_kind(&error),
                             resource_kind,
                             Some(self.source()),
                             error,
@@ -113,7 +112,7 @@ impl ResourceProvider for BrowserSqPackProvider {
                     .await
                     .map_err(|error| {
                         ResourceError::new(
-                            ResourceErrorKind::ProviderFailed,
+                            browser_sqpack_provider_error_kind(&error),
                             resource_kind.clone(),
                             Some(self.source()),
                             error,
@@ -147,7 +146,7 @@ impl ResourceProvider for BrowserSqPackProvider {
                     .await
                     .map_err(|error| {
                         ResourceError::new(
-                            ResourceErrorKind::ProviderFailed,
+                            browser_sqpack_provider_error_kind(&error),
                             resource_kind.clone(),
                             Some(self.source()),
                             error,
@@ -192,7 +191,7 @@ impl ResourceProvider for BrowserSqPackProvider {
                 .await
                 .map_err(|error| {
                     ResourceError::new(
-                        ResourceErrorKind::NotFound,
+                        browser_sqpack_not_found_or_access_error_kind(&error),
                         resource_kind.clone(),
                         Some(self.source()),
                         error,
@@ -248,6 +247,31 @@ impl ResourceProvider for BrowserSqPackProvider {
             })
         })
     }
+}
+
+fn browser_sqpack_provider_error_kind(error: &str) -> ResourceErrorKind {
+    browser_sqpack_access_error_kind(error).unwrap_or(ResourceErrorKind::ProviderFailed)
+}
+
+fn browser_sqpack_not_found_or_access_error_kind(error: &str) -> ResourceErrorKind {
+    browser_sqpack_access_error_kind(error).unwrap_or(ResourceErrorKind::NotFound)
+}
+
+fn browser_sqpack_access_error_kind(error: &str) -> Option<ResourceErrorKind> {
+    if error.contains("尚未选择")
+        || error.contains("权限")
+        || error.contains("permission")
+        || error.contains("denied")
+        || error.contains("没有 window")
+    {
+        return Some(ResourceErrorKind::PermissionMissing);
+    }
+
+    if error.contains("没有 sqpack") {
+        return Some(ResourceErrorKind::NotFound);
+    }
+
+    None
 }
 
 async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
@@ -1310,18 +1334,6 @@ fn format_js_error(error: JsValue) -> String {
         .and_then(|value| value.as_string())
         .or_else(|| error.as_string())
         .unwrap_or_else(|| "JavaScript 调用失败".to_string())
-}
-
-fn browser_sqpack_handle_available() -> bool {
-    web_sys::window()
-        .and_then(|window| {
-            js_sys::Reflect::get(
-                window.as_ref(),
-                &JsValue::from_str("__xivCompanionUserLocalDirectory"),
-            )
-            .ok()
-        })
-        .is_some_and(|value| !value.is_undefined() && !value.is_null())
 }
 
 pub struct BundledProvider;

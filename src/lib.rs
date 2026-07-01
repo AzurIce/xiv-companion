@@ -4,8 +4,15 @@ pub mod resources;
 pub mod solver;
 pub mod weapon_models;
 
-#[cfg(feature = "web")]
-pub mod renderer;
+#[cfg(feature = "renderer")]
+pub mod renderer {
+    pub use xiv_companion_render::renderer::*;
+
+    #[cfg(all(feature = "render-test-support", not(target_arch = "wasm32")))]
+    pub mod test_support {
+        pub use xiv_companion_render::test_support::*;
+    }
+}
 
 #[cfg(feature = "game-data")]
 pub mod audit;
