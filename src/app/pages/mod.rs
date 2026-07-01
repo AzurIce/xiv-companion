@@ -19,9 +19,8 @@ use crate::app::resource_settings::{
     load_resource_settings, path_user_local_provider_available_for_runtime, save_resource_settings,
 };
 use xiv_companion_render::{
-    APP_MODULES, Icon, IconKind, cx, format_integer,
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent, CardHeader,
-    CardTitle, input_class,
+    APP_MODULES, Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent,
+    CardHeader, CardTitle, Icon, IconKind, cx, format_integer, input_class,
 };
 
 pub use crafting::CraftingPage;
@@ -438,7 +437,7 @@ fn user_local_next_action(status: UserLocalStatus) -> &'static str {
             "如果使用 Native 路径模式，请输入完整 game 目录；Web 模式无需手动路径。"
         }
         UserLocalStatus::Configured => {
-            "保存并应用后，CraftData 和 ItemIcon 都会从本地 SqPack 读取；策略仍可按资源单独调整。"
+            "保存并应用后，CraftData 等游戏数据会从本地 SqPack 读取；ItemIcon 固定使用 Builtin/API。"
         }
     }
 }
@@ -496,10 +495,10 @@ fn validate_resource_settings(
         return SettingsValidation {
             valid: false,
             user_local_status,
-            message: "当前浏览器运行时还没有可应用的 UserLocal provider。".to_string(),
+            message: "当前运行时还没有可应用的 UserLocal provider。".to_string(),
             details: vec![
-                "目录选择已经可以获得 FileSystemDirectoryHandle。".to_string(),
-                "现有 LocalCraftDataProvider/LocalItemIconProvider 仍是路径型 provider，不能直接消费这个 handle。".to_string(),
+                "Web 版需要先通过“选择游戏目录”保存 FileSystemDirectoryHandle。".to_string(),
+                "保存后 BrowserSqPackProvider 会使用该 handle 读取 CraftData 等游戏数据；ItemIcon 仍固定使用 Builtin/API。".to_string(),
             ],
         };
     }
@@ -690,21 +689,23 @@ async fn test_craft_data(settings: ResourceSettings, source: ResourceSource) -> 
 }
 
 async fn test_item_icon(settings: ResourceSettings, source: ResourceSource) -> ResourceTestResult {
+    if source == ResourceSource::UserLocal {
+        return ResourceTestResult::Err(ResourceDiagnostic {
+            title: "ItemIcon 固定使用 Builtin/API".to_string(),
+            summary: "Web 版不再从本地 SqPack 解码 .tex 图标。".to_string(),
+            action: "图标会使用浏览器原生 <img> 加载 API/Builtin URL；本地 UserLocal 保留给 CraftData 和未来模型等游戏数据。".to_string(),
+            details: vec![
+                "避免批量 TEX 解码造成主线程卡顿和 WASM 内存峰值。".to_string(),
+                "如需验证图标，请测试 Builtin 来源。".to_string(),
+            ],
+        });
+    }
+
     let hub = configured_web_resource_hub_for(&settings);
     match hub
         .load_from::<ItemIconResource>(source, ItemIconId { icon_id: 65000 })
         .await
     {
-        Ok(info) if info.local_image.is_some() => {
-            let image = info.local_image.expect("checked");
-            ResourceTestResult::Ok(format!(
-                "{} {}x{} / {} bytes",
-                image.path,
-                image.width,
-                image.height,
-                format_integer(image.rgba.len() as f64)
-            ))
-        }
         Ok(info) => ResourceTestResult::Ok(format!("{} builtin URLs", info.urls.len())),
         Err(error) => ResourceTestResult::Err(diagnose_resource_error(
             "ItemIcon", source, &settings, error,
@@ -1311,6 +1312,8 @@ fn ResourceRoutingTable(
     on_craft_data_change: EventHandler<Option<SourcePreference>>,
     on_item_icon_change: EventHandler<Option<SourcePreference>>,
 ) -> Element {
+    let _ = (item_icon_preference, on_item_icon_change);
+
     rsx! {
         div { class: "overflow-hidden rounded-lg border",
             // Table header
@@ -1342,15 +1345,16 @@ fn ResourceRoutingTable(
                 onchange: move |v: String| on_craft_data_change.call(resource_override_from_value(&v)),
             }
 
-            // ItemIcon row
+            // ItemIcon row: Web icons are always browser-native API/Builtin URLs.
             RoutingRow {
                 label: "ItemIcon",
-                description: "物品图标纹理",
+                description: "物品图标 URL（Web 固定 Builtin/API）",
                 effective_label: Some(format_preference(item_icon_effective)),
-                value: resource_override_value(item_icon_preference),
-                include_inherit: true,
-                user_local_available,
-                onchange: move |v: String| on_item_icon_change.call(resource_override_from_value(&v)),
+                value: "builtin-only",
+                include_inherit: false,
+                user_local_available: false,
+                disabled: true,
+                onchange: move |_v: String| {},
             }
         }
     }
@@ -1365,6 +1369,7 @@ fn RoutingRow(
     include_inherit: bool,
     user_local_available: bool,
     onchange: EventHandler<String>,
+    #[props(default = false)] disabled: bool,
 ) -> Element {
     rsx! {
         div { class: "grid grid-cols-[1fr_auto] items-center gap-3 border-b border-border/50 px-4 py-2.5 last:border-b-0 md:grid-cols-[1fr_auto_1fr]",
@@ -1386,6 +1391,7 @@ fn RoutingRow(
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     ]),
                     value,
+                    disabled,
                     onchange: move |event| onchange.call(event.value()),
                     if include_inherit {
                         option { value: "inherit", "继承全局" }
@@ -1432,9 +1438,9 @@ fn ResourceTestSection(
             // ItemIcon test
             ResourceTestRow {
                 label: "ItemIcon",
-                description: "物品图标 (id=65000)",
+                description: "物品图标 URL（固定 Builtin/API，id=65000）",
                 result: icon_test,
-                user_local_disabled,
+                user_local_disabled: true,
                 on_test_builtin: move |_| on_test_icon.call(ResourceSource::Builtin),
                 on_test_local: move |_| on_test_icon.call(ResourceSource::UserLocal),
             }

@@ -23,8 +23,8 @@ use xiv_companion::{
 use super::crafting::ItemIcon;
 use crate::app::data::{load_weapon_catalog, load_weapon_model};
 use xiv_companion_render::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
-    Icon, IconKind, cx, format_integer,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconKind, cx,
+    format_integer, input_class,
 };
 
 const RESULT_LIMIT: usize = 220;

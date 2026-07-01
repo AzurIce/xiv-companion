@@ -70,18 +70,24 @@ impl ResourceSettings {
     }
 
     pub fn item_icon_preference(&self) -> SourcePreference {
-        self.item_icon_preference.unwrap_or(self.global_preference)
+        if cfg!(target_arch = "wasm32") {
+            SourcePreference::BuiltinOnly
+        } else {
+            self.item_icon_preference.unwrap_or(self.global_preference)
+        }
     }
 }
 
 pub fn load_resource_settings() -> ResourceSettings {
-    local_storage_value(SETTINGS_KEY)
+    let settings = local_storage_value(SETTINGS_KEY)
         .and_then(|value| serde_json::from_str::<ResourceSettings>(&value).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    normalize_resource_settings_for_runtime(settings)
 }
 
 pub fn save_resource_settings(settings: &ResourceSettings) {
-    if let Ok(value) = serde_json::to_string(settings) {
+    let settings = normalize_resource_settings_for_runtime(settings.clone());
+    if let Ok(value) = serde_json::to_string(&settings) {
         set_local_storage_value(SETTINGS_KEY, &value);
     }
 }
@@ -108,6 +114,13 @@ pub fn path_user_local_provider_available_for_runtime() -> bool {
     !cfg!(target_arch = "wasm32")
 }
 
+fn normalize_resource_settings_for_runtime(mut settings: ResourceSettings) -> ResourceSettings {
+    if cfg!(target_arch = "wasm32") {
+        settings.item_icon_preference = Some(SourcePreference::BuiltinOnly);
+    }
+    settings
+}
+
 pub fn configured_web_resource_hub() -> ResourceHub {
     configured_web_resource_hub_for(&load_resource_settings())
 }
@@ -129,10 +142,17 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
         CraftDataKind.into(),
         settings.craft_data_preference().to_policy(),
     );
-    hub.set_policy(
-        ItemIconKind.into(),
-        settings.item_icon_preference().to_policy(),
-    );
+    if cfg!(target_arch = "wasm32") {
+        hub.set_policy(
+            ItemIconKind.into(),
+            SourcePolicy::Fixed(ResourceSource::Builtin),
+        );
+    } else {
+        hub.set_policy(
+            ItemIconKind.into(),
+            settings.item_icon_preference().to_policy(),
+        );
+    }
     hub
 }
 
