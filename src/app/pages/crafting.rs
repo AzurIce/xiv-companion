@@ -12,7 +12,6 @@ use crate::app::ui::{
 };
 use crate::app::utils::{cx, format_integer};
 use dioxus::prelude::*;
-use wasm_bindgen::{Clamped, JsCast};
 use gloo_net::http::Request;
 use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
@@ -792,77 +791,19 @@ fn BuiltinItemIconView(urls: Vec<String>, size_class: &'static str) -> Element {
 }
 
 #[component]
-fn LocalItemIconView(image: xiv_companion::LocalItemIconImage, size_class: &'static str) -> Element {
-    let image = image.clone();
-    let data_url = use_resource(move || {
-        let image = image.clone();
-        async move { rgba_to_data_url(&image) }
-    });
-
-    match data_url.read().as_ref() {
-        Some(Ok(url)) => rsx! {
-            img {
-                src: url.clone(),
-                alt: "",
-                loading: "lazy",
-                class: cx([size_class, "shrink-0 rounded border bg-muted object-cover"]),
-            }
-        },
-        _ => rsx! {
-            div { class: cx([size_class, "rounded border bg-muted animate-pulse"]) }
-        },
-    }
-}
-
-#[component]
 pub(super) fn ItemIcon(icon: u32, #[props(default = "md")] size: &'static str) -> Element {
     let icon_info = use_resource(move || load_item_icon(icon));
     let size_class = if size == "sm" { "h-5 w-5" } else { "h-7 w-7" };
 
     match icon_info.read().as_ref() {
-        Some(Ok(info)) => {
-            if let Some(image) = info.local_image.clone() {
-                rsx! { LocalItemIconView { image, size_class } }
-            } else if !info.urls.is_empty() {
-                rsx! { BuiltinItemIconView { urls: info.urls.clone(), size_class } }
-            } else {
-                rsx! { div { class: cx([size_class, "rounded border bg-muted"]) } }
-            }
+        Some(Ok(info)) if !info.urls.is_empty() => {
+            rsx! { BuiltinItemIconView { urls: info.urls.clone(), size_class } }
         }
+        Some(Ok(_)) => rsx! { div { class: cx([size_class, "rounded border bg-muted"]) } },
         _ => rsx! {
             div { class: cx([size_class, "rounded border bg-muted animate-pulse"]) }
         },
     }
-}
-
-fn rgba_to_data_url(image: &xiv_companion::LocalItemIconImage) -> Result<String, String> {
-    let window = web_sys::window().ok_or_else(|| "当前运行环境没有 window".to_string())?;
-    let document = window.document().ok_or_else(|| "当前运行环境没有 document".to_string())?;
-    let canvas = document
-        .create_element("canvas")
-        .map_err(|error| format!("创建 canvas 失败: {}", error.as_string().unwrap_or_default()))?
-        .dyn_into::<web_sys::HtmlCanvasElement>()
-        .map_err(|_| "创建 canvas 元素失败".to_string())?;
-    canvas.set_width(u32::from(image.width));
-    canvas.set_height(u32::from(image.height));
-    let context = canvas
-        .get_context("2d")
-        .map_err(|error| format!("获取 canvas context 失败: {}", error.as_string().unwrap_or_default()))?
-        .ok_or_else(|| "canvas 2d context 不可用".to_string())?
-        .dyn_into::<web_sys::CanvasRenderingContext2d>()
-        .map_err(|_| "canvas 2d context 类型错误".to_string())?;
-    let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-        Clamped(image.rgba.as_slice()),
-        u32::from(image.width),
-        u32::from(image.height),
-    )
-    .map_err(|error| format!("构造 ImageData 失败: {}", error.as_string().unwrap_or_default()))?;
-    context
-        .put_image_data(&image_data, 0.0, 0.0)
-        .map_err(|error| format!("写入 canvas 失败: {}", error.as_string().unwrap_or_default()))?;
-    canvas
-        .to_data_url()
-        .map_err(|error| format!("导出本地图标失败: {}", error.as_string().unwrap_or_default()))
 }
 
 #[component]

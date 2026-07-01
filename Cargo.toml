@@ -53,19 +53,15 @@ wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = { version = "0.4.53", optional = true }
 web-sys = { version = "0.3.83", features = [
     "Clipboard",
-    "CanvasRenderingContext2d",
     "console",
     "Crypto",
     "Document",
-    "HtmlCanvasElement",
     "HtmlInputElement",
-    "ImageData",
     "Navigator",
     "ErrorEvent",
     "MessageEvent",
     "Storage",
     "Window",
-    "Worker",
 ], optional = true }
 
 [dev-dependencies]

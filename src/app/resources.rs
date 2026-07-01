@@ -1,13 +1,10 @@
 use dioxus::prelude::*;
 use js_sys::JsString;
-use physis::ReadableFile;
 use wasm_bindgen::JsValue;
 use xiv_companion::{
-    BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage, ProviderRequest,
-    ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceProvider, ResourceSource, item_icon_tex_path, register_craft_data_resource,
-    register_item_icon_resource,
-    resources::{craft_data::CraftDataKind, item_icon::ItemIconKind},
+    BuiltinItemIconProvider, ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind,
+    ResourceFuture, ResourceHub, ResourceProvider, ResourceSource, register_craft_data_resource,
+    register_item_icon_resource, resources::craft_data::CraftDataKind,
 };
 
 use crate::app::browser_sqpack::BrowserSqPack;
@@ -21,7 +18,6 @@ const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 const LOCAL_RESOURCE_CACHE_DB: &str = "xiv-companion-resource-cache";
 const LOCAL_RESOURCE_CACHE_STORE: &str = "resources";
 const LOCAL_CRAFT_DATA_CACHE_KEY: &str = "user-local-craft-data";
-const ITEM_ICON_READ_WINDOW: u64 = 2 * 1024 * 1024;
 
 pub fn default_web_resource_hub() -> ResourceHub {
     let mut hub = ResourceHub::new();
@@ -42,8 +38,8 @@ impl ResourceProvider for BrowserSqPackProvider {
 
     fn supports(&self, request: &ProviderRequest) -> bool {
         browser_sqpack_handle_available()
-            && ((request.kind == CraftDataKind.into() && request.key == "default")
-                || (request.kind == ItemIconKind.into() && request.key.parse::<u32>().is_ok()))
+            && request.kind == CraftDataKind.into()
+            && request.key == "default"
     }
 
     fn read<'a>(
@@ -61,217 +57,132 @@ impl ResourceProvider for BrowserSqPackProvider {
                 ));
             }
 
-            if request.kind == CraftDataKind.into() {
-                log::info("resource", "loading CraftData from UserLocal SqPack");
-                let start_ms = log::now_ms();
-                let (bytes, fingerprint) = load_from_browser_sqpack_direct("craft-data", "default")
-                    .await
-                    .map_err(|error| {
-                        report_craft_data_progress(Some(CraftDataLoadProgress {
-                            stage: "本地 CraftData 失败".to_string(),
-                            detail: error.clone(),
-                            current: 1,
-                            total: 1,
-                            elapsed_ms: log::elapsed_ms(start_ms),
-                            done: true,
-                        }));
-                        report_craft_data_cache_status(Some(CraftDataCacheStatus::Error {
-                            message: error.clone(),
-                        }));
-                        ResourceError::new(
-                            ResourceErrorKind::ProviderFailed,
-                            resource_kind,
-                            Some(self.source()),
-                            error,
-                        )
-                    })?;
-                log::info(
-                    "resource",
-                    format!("loaded CraftData from UserLocal in {}", log::format_elapsed(log::elapsed_ms(start_ms))),
-                );
-                return Ok(ResourceBlob { bytes, fingerprint });
-            }
-
-            log::info("resource", format!("loading ItemIcon {} from UserLocal SqPack", request.key));
+            log::info("resource", "loading CraftData from UserLocal SqPack");
             let start_ms = log::now_ms();
-            let icon_id = request.key.parse::<u32>().map_err(|error| {
-                ResourceError::new(
-                    ResourceErrorKind::Unsupported,
-                    resource_kind.clone(),
-                    Some(self.source()),
-                    format!("invalid item icon id {}: {error}", request.key),
-                )
-            })?;
-            let path = item_icon_tex_path(icon_id);
-            let (bytes, _) = load_from_browser_sqpack_direct("item-icon", &request.key)
-                .await
-                .map_err(|error| {
-                    ResourceError::new(
-                        ResourceErrorKind::NotFound,
-                        resource_kind.clone(),
-                        Some(self.source()),
-                        error,
-                    )
-                })?;
-            let texture = physis::tex::Texture::from_existing(physis::Platform::Win32, &bytes)
-                .ok_or_else(|| {
-                    ResourceError::new(
-                        ResourceErrorKind::DecodeFailed,
-                        resource_kind.clone(),
-                        Some(self.source()),
-                        format!("failed to decode local icon texture {path}"),
-                    )
-                })?;
-            let rgba = texture.to_rgba().ok_or_else(|| {
-                ResourceError::new(
-                    ResourceErrorKind::DecodeFailed,
-                    resource_kind.clone(),
-                    Some(self.source()),
-                    format!("failed to convert local icon texture {path} to RGBA"),
-                )
-            })?;
-            log::info(
-                "resource",
-                format!(
-                    "decoded local ItemIcon {icon_id}: {}x{} in {}",
-                    texture.width,
-                    texture.height,
-                    log::format_elapsed(log::elapsed_ms(start_ms)),
-                ),
-            );
-            let info = ItemIconResourceInfo {
-                icon_id,
-                urls: Vec::new(),
-                local_image: Some(LocalItemIconImage {
-                    path,
-                    width: texture.width,
-                    height: texture.height,
-                    rgba,
-                }),
-            };
-            let bytes = serde_json::to_vec(&info).map_err(|error| {
+            let (bytes, fingerprint) = load_browser_sqpack_craft_data().await.map_err(|error| {
+                report_craft_data_progress(Some(CraftDataLoadProgress {
+                    stage: "本地 CraftData 失败".to_string(),
+                    detail: error.clone(),
+                    current: 1,
+                    total: 1,
+                    elapsed_ms: log::elapsed_ms(start_ms),
+                    done: true,
+                }));
+                report_craft_data_cache_status(Some(CraftDataCacheStatus::Error {
+                    message: error.clone(),
+                }));
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
                     resource_kind,
                     Some(self.source()),
-                    format!("failed to encode local item icon resource info: {error}"),
+                    error,
                 )
             })?;
-            Ok(ResourceBlob {
-                bytes,
-                fingerprint: None,
-            })
+            log::info(
+                "resource",
+                format!(
+                    "loaded CraftData from UserLocal in {}",
+                    log::format_elapsed(log::elapsed_ms(start_ms))
+                ),
+            );
+            Ok(ResourceBlob { bytes, fingerprint })
         })
     }
 }
 
-async fn load_from_browser_sqpack_direct(
-    kind: &str,
-    key: &str,
-) -> Result<(Vec<u8>, Option<String>), String> {
-    log::debug("resource", format!("BrowserSqPack request: {kind}/{key}"));
+async fn load_browser_sqpack_craft_data() -> Result<(Vec<u8>, Option<String>), String> {
+    log::debug("resource", "BrowserSqPack request: craft-data/default");
     let start_ms = log::now_ms();
     let mut sqpack = BrowserSqPack::from_window_handle().await?;
-    match kind {
-        "craft-data" => {
-            let cache_fingerprint = sqpack.craft_data_cache_fingerprint().await?;
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Checking));
-            report_craft_data_progress(Some(CraftDataLoadProgress {
-                stage: "检查本地缓存".to_string(),
-                detail: "CraftData JSON".to_string(),
-                current: 0,
-                total: 1,
-                elapsed_ms: log::elapsed_ms(start_ms),
-                done: false,
-            }));
-            if let Some((bytes, game_version)) = load_cached_local_craft_data(&cache_fingerprint).await? {
-                report_craft_data_cache_status(Some(CraftDataCacheStatus::Hit { bytes: bytes.len() }));
-                let elapsed_ms = log::elapsed_ms(start_ms);
-                log::info(
-                    "resource",
-                    format!("loaded CraftData from IndexedDB cache in {}", log::format_elapsed(elapsed_ms)),
-                );
-                report_craft_data_progress(Some(CraftDataLoadProgress {
-                    stage: "使用本地缓存".to_string(),
-                    detail: game_version.clone().unwrap_or_else(|| "CraftData JSON".to_string()),
-                    current: 1,
-                    total: 1,
-                    elapsed_ms,
-                    done: true,
-                }));
-                return Ok((bytes, game_version));
-            }
 
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Miss {
-                reason: "fingerprint mismatch or empty".to_string(),
-            }));
-            log::info("resource", "local CraftData cache miss; exporting from SqPack");
-            let resource = sqpack.preload_craft_data_resource().await?;
-            let after_preload_ms = log::elapsed_ms(start_ms);
-            report_craft_data_progress(Some(CraftDataLoadProgress {
-                stage: "导出 CraftData".to_string(),
-                detail: "转换本地 EXD 为应用数据".to_string(),
-                current: 1,
-                total: 1,
-                elapsed_ms: after_preload_ms,
-                done: false,
-            }));
-            let export_start_ms = log::now_ms();
-            let generated_at = js_sys::Date::new_0()
-                .to_iso_string()
-                .as_string()
-                .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
-            let data = xiv_companion::game_data::export_craft_data_from_resource(
-                resource,
-                "Browser Local SqPack".to_string(),
-                "Local SqPack".to_string(),
-                generated_at,
-            )
-            .map_err(|error| format!("failed to export CraftData from local SqPack: {error:#}"))?;
-            let fingerprint = Some(data.game_version.clone());
-            let export_elapsed_ms = log::elapsed_ms(export_start_ms);
-            let bytes = serde_json::to_vec(&data)
-                .map_err(|error| format!("failed to encode local CraftData: {error}"))?;
-            let total_elapsed_ms = log::elapsed_ms(start_ms);
-            log::info(
-                "resource",
-                format!(
-                    "CraftData local pipeline completed: preload={}, export={}, total={}",
-                    log::format_elapsed(after_preload_ms),
-                    log::format_elapsed(export_elapsed_ms),
-                    log::format_elapsed(total_elapsed_ms),
-                ),
-            );
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saving { bytes: bytes.len() }));
-            save_cached_local_craft_data(
-                &cache_fingerprint,
-                &data.game_version,
-                &bytes,
-            )
-            .await?;
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saved { bytes: bytes.len() }));
-            report_craft_data_progress(Some(CraftDataLoadProgress {
-                stage: "本地 CraftData 就绪".to_string(),
-                detail: format!("{} / {} items / {} recipes", data.game_version, data.counts.items, data.counts.recipes),
-                current: 1,
-                total: 1,
-                elapsed_ms: total_elapsed_ms,
-                done: true,
-            }));
-            Ok((bytes, fingerprint))
-        }
-        "item-icon" => {
-            let icon_id = key
-                .parse::<u32>()
-                .map_err(|error| format!("invalid icon id {key}: {error}"))?;
-            let path = item_icon_tex_path(icon_id);
-            let bytes = sqpack
-                .read_game_file_with_window(&path, ITEM_ICON_READ_WINDOW)
-                .await?;
-            Ok((bytes, None))
-        }
-        other => Err(format!("unknown BrowserSqPack request {other}")),
+    let cache_fingerprint = sqpack.craft_data_cache_fingerprint().await?;
+    report_craft_data_cache_status(Some(CraftDataCacheStatus::Checking));
+    report_craft_data_progress(Some(CraftDataLoadProgress {
+        stage: "检查本地缓存".to_string(),
+        detail: "CraftData JSON".to_string(),
+        current: 0,
+        total: 1,
+        elapsed_ms: log::elapsed_ms(start_ms),
+        done: false,
+    }));
+    if let Some((bytes, game_version)) = load_cached_local_craft_data(&cache_fingerprint).await? {
+        report_craft_data_cache_status(Some(CraftDataCacheStatus::Hit { bytes: bytes.len() }));
+        let elapsed_ms = log::elapsed_ms(start_ms);
+        log::info(
+            "resource",
+            format!(
+                "loaded CraftData from IndexedDB cache in {}",
+                log::format_elapsed(elapsed_ms)
+            ),
+        );
+        report_craft_data_progress(Some(CraftDataLoadProgress {
+            stage: "使用本地缓存".to_string(),
+            detail: game_version
+                .clone()
+                .unwrap_or_else(|| "CraftData JSON".to_string()),
+            current: 1,
+            total: 1,
+            elapsed_ms,
+            done: true,
+        }));
+        return Ok((bytes, game_version));
     }
+
+    report_craft_data_cache_status(Some(CraftDataCacheStatus::Miss {
+        reason: "fingerprint mismatch or empty".to_string(),
+    }));
+    log::info("resource", "local CraftData cache miss; exporting from SqPack");
+    let resource = sqpack.preload_craft_data_resource().await?;
+    let after_preload_ms = log::elapsed_ms(start_ms);
+    report_craft_data_progress(Some(CraftDataLoadProgress {
+        stage: "导出 CraftData".to_string(),
+        detail: "转换本地 EXD 为应用数据".to_string(),
+        current: 1,
+        total: 1,
+        elapsed_ms: after_preload_ms,
+        done: false,
+    }));
+    let export_start_ms = log::now_ms();
+    let generated_at = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+    let data = xiv_companion::game_data::export_craft_data_from_resource(
+        resource,
+        "Browser Local SqPack".to_string(),
+        "Local SqPack".to_string(),
+        generated_at,
+    )
+    .map_err(|error| format!("failed to export CraftData from local SqPack: {error:#}"))?;
+    let fingerprint = Some(data.game_version.clone());
+    let export_elapsed_ms = log::elapsed_ms(export_start_ms);
+    let bytes = serde_json::to_vec(&data)
+        .map_err(|error| format!("failed to encode local CraftData: {error}"))?;
+    let total_elapsed_ms = log::elapsed_ms(start_ms);
+    log::info(
+        "resource",
+        format!(
+            "CraftData local pipeline completed: preload={}, export={}, total={}",
+            log::format_elapsed(after_preload_ms),
+            log::format_elapsed(export_elapsed_ms),
+            log::format_elapsed(total_elapsed_ms),
+        ),
+    );
+    report_craft_data_cache_status(Some(CraftDataCacheStatus::Saving { bytes: bytes.len() }));
+    save_cached_local_craft_data(&cache_fingerprint, &data.game_version, &bytes).await?;
+    report_craft_data_cache_status(Some(CraftDataCacheStatus::Saved { bytes: bytes.len() }));
+    report_craft_data_progress(Some(CraftDataLoadProgress {
+        stage: "本地 CraftData 就绪".to_string(),
+        detail: format!(
+            "{} / {} items / {} recipes",
+            data.game_version, data.counts.items, data.counts.recipes
+        ),
+        current: 1,
+        total: 1,
+        elapsed_ms: total_elapsed_ms,
+        done: true,
+    }));
+    Ok((bytes, fingerprint))
 }
 
 async fn local_resource_cache_db() -> Result<indexed_db::Database<String>, String> {
