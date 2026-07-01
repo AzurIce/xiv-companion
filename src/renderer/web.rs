@@ -11,7 +11,7 @@ use web_sys::HtmlCanvasElement;
 
 use crate::WeaponModelData;
 
-use super::WeaponRenderer;
+use super::{WeaponRenderOptions, WeaponRenderer};
 
 pub struct WebWeaponCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -112,6 +112,10 @@ impl WebWeaponCanvasRenderer {
     }
 
     pub fn render(&mut self) {
+        self.render_with_options(WeaponRenderOptions::default());
+    }
+
+    pub fn render_with_options(&mut self, options: WeaponRenderOptions) {
         self.resize_to_client();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
@@ -136,6 +140,7 @@ impl WebWeaponCanvasRenderer {
             orbit.pitch,
             orbit.zoom,
             [orbit.pan_x, orbit.pan_y],
+            options,
         );
         output.present();
     }

@@ -1,16 +1,66 @@
 use wgpu::util::DeviceExt;
 
-use crate::WeaponModelData;
+use crate::{WeaponModelData, WeaponModelMaterial};
+
+const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeaponRenderOptions {
+    pub normal_mapping: bool,
+    pub normal_y_sign: f32,
+    pub bloom: bool,
+    pub bloom_strength: f32,
+}
+
+impl Default for WeaponRenderOptions {
+    fn default() -> Self {
+        Self {
+            normal_mapping: true,
+            normal_y_sign: -1.0,
+            bloom: true,
+            bloom_strength: DEFAULT_BLOOM_STRENGTH,
+        }
+    }
+}
+
+impl WeaponRenderOptions {
+    fn normalized(self) -> Self {
+        Self {
+            normal_mapping: self.normal_mapping,
+            normal_y_sign: if self.normal_y_sign < 0.0 { -1.0 } else { 1.0 },
+            bloom: self.bloom,
+            bloom_strength: self.bloom_strength.clamp(0.0, 2.0),
+        }
+    }
+
+    fn bloom_strength(self) -> f32 {
+        let normalized = self.normalized();
+        if normalized.bloom {
+            normalized.bloom_strength
+        } else {
+            0.0
+        }
+    }
+}
 
 pub struct WeaponRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    blur_pipeline: wgpu::RenderPipeline,
+    compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    index_count: u32,
+    draw_batches: Vec<DrawBatch>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    material_bind_groups: Vec<wgpu::BindGroup>,
+    post_sampler: wgpu::Sampler,
+    compose_uniform_buffer: wgpu::Buffer,
+    blur_bind_group_layout: wgpu::BindGroupLayout,
+    compose_bind_group_layout: wgpu::BindGroupLayout,
+    post_process: Option<PostProcessState>,
     format: wgpu::TextureFormat,
     bounds_center: [f32; 3],
     bounds_radius: f32,
@@ -27,6 +77,10 @@ impl WeaponRenderer {
             label: Some("weapon model shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("weapon.wgsl").into()),
         });
+        let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("weapon postprocess shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
+        });
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weapon camera uniform"),
@@ -35,34 +89,198 @@ impl WeaponRenderer {
             mapped_at_creation: false,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("weapon camera bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon camera bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("weapon camera bind group"),
-            layout: &bind_group_layout,
+            layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
 
+        let material_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon material bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("weapon pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&camera_bind_group_layout),
+                Some(&material_bind_group_layout),
+            ],
             immediate_size: 0,
         });
+
+        let blur_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon-bloom-pass bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let compose_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon compose bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("weapon-bloom-pass pipeline layout"),
+            bind_group_layouts: &[Some(&blur_bind_group_layout)],
+            immediate_size: 0,
+        });
+        let compose_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("weapon compose pipeline layout"),
+                bind_group_layouts: &[Some(&compose_bind_group_layout)],
+                immediate_size: 0,
+            });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("weapon model pipeline"),
@@ -76,11 +294,18 @@ impl WeaponRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: POST_FORMAT,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: POST_FORMAT,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -104,7 +329,24 @@ impl WeaponRenderer {
             cache: None,
         });
 
-        let (vertices, indices) = flatten_model(model);
+        let blur_pipeline = create_post_pipeline(
+            &device,
+            &post_shader,
+            &blur_pipeline_layout,
+            "weapon-bloom-pass pipeline",
+            "blur_fs",
+            POST_FORMAT,
+        );
+        let compose_pipeline = create_post_pipeline(
+            &device,
+            &post_shader,
+            &compose_pipeline_layout,
+            "weapon compose pipeline",
+            "compose_fs",
+            format,
+        );
+
+        let (vertices, indices, draw_batches) = flatten_model(model);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon vertex buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -115,16 +357,43 @@ impl WeaponRenderer {
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let material_bind_groups =
+            create_material_bind_groups(&device, &queue, &material_bind_group_layout, model);
+        let post_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("weapon postprocess sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let compose_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon compose uniform"),
+            contents: bytemuck::bytes_of(&PostUniform {
+                params: [DEFAULT_BLOOM_STRENGTH, 0.0, 0.0, 0.0],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         Self {
             device,
             queue,
             pipeline,
+            blur_pipeline,
+            compose_pipeline,
             vertex_buffer,
             index_buffer,
-            index_count: indices.len() as u32,
+            draw_batches,
             camera_buffer,
             camera_bind_group,
+            material_bind_groups,
+            post_sampler,
+            compose_uniform_buffer,
+            blur_bind_group_layout,
+            compose_bind_group_layout,
+            post_process: None,
             format,
             bounds_center: model.bounds.center,
             bounds_radius: model.bounds.radius,
@@ -132,7 +401,7 @@ impl WeaponRenderer {
     }
 
     pub fn render_to(
-        &self,
+        &mut self,
         target_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         viewport: [u32; 2],
@@ -140,6 +409,7 @@ impl WeaponRenderer {
         pitch: f32,
         zoom: f32,
         pan: [f32; 2],
+        options: WeaponRenderOptions,
     ) {
         let uniform = camera_uniform(
             self.bounds_center,
@@ -149,9 +419,23 @@ impl WeaponRenderer {
             pitch,
             zoom,
             pan,
+            options,
         );
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        self.queue.write_buffer(
+            &self.compose_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&PostUniform {
+                params: [options.bloom_strength(), 0.0, 0.0, 0.0],
+            }),
+        );
+        let viewport = [viewport[0].max(1), viewport[1].max(1)];
+        self.ensure_post_process_targets(viewport);
+        let post = self
+            .post_process
+            .as_ref()
+            .expect("post process targets are initialized");
 
         let mut encoder = self
             .device
@@ -161,21 +445,32 @@ impl WeaponRenderer {
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("weapon render pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.055,
-                            g: 0.061,
-                            b: 0.067,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                label: Some("weapon scene render pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &post.scene_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.055,
+                                g: 0.061,
+                                b: 0.067,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &post.bright_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -193,10 +488,111 @@ impl WeaponRenderer {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            for batch in &self.draw_batches {
+                if let Some(bind_group) = self
+                    .material_bind_groups
+                    .get(batch.material_slot)
+                    .or_else(|| self.material_bind_groups.first())
+                {
+                    render_pass.set_bind_group(1, bind_group, &[]);
+                    render_pass.draw_indexed(
+                        batch.index_start..batch.index_start + batch.index_count,
+                        0,
+                        0..1,
+                    );
+                }
+            }
+        }
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("weapon bloom horizontal pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &post.blur_a_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            render_pass.set_pipeline(&self.blur_pipeline);
+            render_pass.set_bind_group(0, &post.blur_bright_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("weapon bloom vertical pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &post.blur_b_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            render_pass.set_pipeline(&self.blur_pipeline);
+            render_pass.set_bind_group(0, &post.blur_a_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("weapon compose pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            render_pass.set_pipeline(&self.compose_pipeline);
+            render_pass.set_bind_group(0, &post.compose_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    fn ensure_post_process_targets(&mut self, viewport: [u32; 2]) {
+        let width = viewport[0].max(1);
+        let height = viewport[1].max(1);
+        let needs_recreate = self
+            .post_process
+            .as_ref()
+            .map(|targets| targets.width != width || targets.height != height)
+            .unwrap_or(true);
+
+        if needs_recreate {
+            self.post_process = Some(PostProcessState::new(
+                &self.device,
+                &self.blur_bind_group_layout,
+                &self.compose_bind_group_layout,
+                &self.post_sampler,
+                &self.compose_uniform_buffer,
+                width,
+                height,
+            ));
+        }
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -208,21 +604,518 @@ impl WeaponRenderer {
     }
 }
 
-fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>) {
+struct PostProcessState {
+    width: u32,
+    height: u32,
+    scene_view: wgpu::TextureView,
+    bright_view: wgpu::TextureView,
+    blur_a_view: wgpu::TextureView,
+    blur_b_view: wgpu::TextureView,
+    blur_bright_bind_group: wgpu::BindGroup,
+    blur_a_bind_group: wgpu::BindGroup,
+    compose_bind_group: wgpu::BindGroup,
+}
+
+impl PostProcessState {
+    fn new(
+        device: &wgpu::Device,
+        blur_layout: &wgpu::BindGroupLayout,
+        compose_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        compose_uniform_buffer: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let scene_view = create_post_texture_view(device, "weapon scene texture", width, height);
+        let bright_view = create_post_texture_view(device, "weapon bright texture", width, height);
+        let blur_a_view = create_post_texture_view(device, "weapon-bloom-pass a", width, height);
+        let blur_b_view = create_post_texture_view(device, "weapon-bloom-pass b", width, height);
+
+        let blur_horizontal_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon-bloom-pass horizontal uniform"),
+            contents: bytemuck::bytes_of(&PostUniform {
+                params: [1.0 / width as f32, 0.0, 0.0, 0.0],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let blur_vertical_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon-bloom-pass vertical uniform"),
+            contents: bytemuck::bytes_of(&PostUniform {
+                params: [0.0, 1.0 / height as f32, 0.0, 0.0],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let blur_bright_bind_group = create_post_bind_group(
+            device,
+            blur_layout,
+            &bright_view,
+            sampler,
+            &blur_horizontal_buffer,
+            &bright_view,
+            "weapon-bloom-pass bright bind group",
+        );
+        let blur_a_bind_group = create_post_bind_group(
+            device,
+            blur_layout,
+            &blur_a_view,
+            sampler,
+            &blur_vertical_buffer,
+            &blur_a_view,
+            "weapon-bloom-pass a bind group",
+        );
+        let compose_bind_group = create_post_bind_group(
+            device,
+            compose_layout,
+            &scene_view,
+            sampler,
+            compose_uniform_buffer,
+            &blur_b_view,
+            "weapon compose bind group",
+        );
+
+        Self {
+            width,
+            height,
+            scene_view,
+            bright_view,
+            blur_a_view,
+            blur_b_view,
+            blur_bright_bind_group,
+            blur_a_bind_group,
+            compose_bind_group,
+        }
+    }
+}
+
+fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
+    let mut draw_batches = Vec::new();
 
     for mesh in &model.meshes {
         let base = vertices.len() as u32;
         vertices.extend(mesh.vertices.iter().map(|vertex| GpuVertex {
             position: vertex.position,
             normal: vertex.normal,
-            color: mesh.color,
+            uv0: vertex.uv0,
+            bitangent: vertex.bitangent,
+            color: vertex.color,
         }));
+        let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
+        draw_batches.push(DrawBatch {
+            material_slot: mesh.material_slot,
+            index_start,
+            index_count: mesh.indices.len() as u32,
+        });
     }
 
-    (vertices, indices)
+    (vertices, indices, draw_batches)
+}
+
+fn create_post_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+    fragment_entry: &str,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_post_texture_view(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: POST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+fn create_post_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniform_buffer: &wgpu::Buffer,
+    bloom_view: &wgpu::TextureView,
+    label: &str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(bloom_view),
+            },
+        ],
+    })
+}
+
+fn create_material_bind_groups(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    model: &WeaponModelData,
+) -> Vec<wgpu::BindGroup> {
+    if model.materials.is_empty() {
+        return vec![create_material_bind_group(
+            device,
+            queue,
+            layout,
+            &fallback_material(),
+            model,
+        )];
+    }
+
+    model
+        .materials
+        .iter()
+        .map(|material| create_material_bind_group(device, queue, layout, material, model))
+        .collect()
+}
+
+fn create_material_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    material: &WeaponModelMaterial,
+    model: &WeaponModelData,
+) -> wgpu::BindGroup {
+    let uniform = MaterialUniform {
+        diffuse_color: [
+            material.diffuse_color[0],
+            material.diffuse_color[1],
+            material.diffuse_color[2],
+            1.0,
+        ],
+        emissive_color: [
+            material.emissive_color[0],
+            material.emissive_color[1],
+            material.emissive_color[2],
+            material
+                .emissive_texture
+                .and_then(|index| model.textures.get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
+        ],
+        specular_color: [
+            material.specular_color[0],
+            material.specular_color[1],
+            material.specular_color[2],
+            material.roughness,
+        ],
+        params: [
+            material
+                .base_color_texture
+                .and_then(|index| model.textures.get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
+            material.metalness,
+            material
+                .normal_texture
+                .and_then(|index| model.textures.get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
+            material
+                .mask_texture
+                .and_then(|index| model.textures.get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
+        ],
+    };
+    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("weapon material uniform"),
+        contents: bytemuck::bytes_of(&uniform),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let texture_view = material
+        .base_color_texture
+        .and_then(|index| model.textures.get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon white texture",
+                1,
+                1,
+                &[255, 255, 255, 255],
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let mask_texture_view = material
+        .mask_texture
+        .and_then(|index| model.textures.get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon mask texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral mask texture",
+                1,
+                1,
+                &[255, 128, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let emissive_texture_view = material
+        .emissive_texture
+        .and_then(|index| model.textures.get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon emissive texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon black emissive texture",
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let normal_texture_view = material
+        .normal_texture
+        .and_then(|index| model.textures.get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon normal texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon flat normal texture",
+                1,
+                1,
+                &[128, 128, 255, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("weapon material sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("weapon material bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&normal_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&mask_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&emissive_texture_view),
+            },
+        ],
+    })
+}
+
+fn create_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    let expected_len = width as usize * height as usize * 4;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    if rgba.len() >= expected_len {
+        let copy_layout = if height == 1 {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            }
+        } else {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            }
+        };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba[..expected_len],
+            copy_layout,
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    texture
+}
+
+fn fallback_material() -> WeaponModelMaterial {
+    WeaponModelMaterial {
+        slot: 0,
+        material_index: 0,
+        name: "fallback".to_string(),
+        path: None,
+        shader_package_name: None,
+        fallback_color: [0.78, 0.72, 0.64],
+        diffuse_color: [0.78, 0.72, 0.64],
+        specular_color: [0.35, 0.35, 0.35],
+        emissive_color: [0.0, 0.0, 0.0],
+        roughness: 0.55,
+        metalness: 0.0,
+        texture_indices: Vec::new(),
+        base_color_texture: None,
+        normal_texture: None,
+        mask_texture: None,
+        emissive_texture: None,
+    }
 }
 
 fn camera_uniform(
@@ -233,7 +1126,9 @@ fn camera_uniform(
     pitch: f32,
     zoom: f32,
     pan: [f32; 2],
+    options: WeaponRenderOptions,
 ) -> CameraUniform {
+    let options = options.normalized();
     let aspect = if viewport[1] == 0 {
         1.0
     } else {
@@ -270,6 +1165,12 @@ fn camera_uniform(
     CameraUniform {
         view_proj: (projection * view).to_cols_array_2d(),
         light_dir: [light.x, light.y, light.z, 0.0],
+        options: [
+            if options.normal_mapping { 1.0 } else { 0.0 },
+            options.normal_y_sign,
+            0.0,
+            0.0,
+        ],
     }
 }
 
@@ -278,6 +1179,29 @@ fn camera_uniform(
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
+    options: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialUniform {
+    diffuse_color: [f32; 4],
+    emissive_color: [f32; 4],
+    specular_color: [f32; 4],
+    params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct PostUniform {
+    params: [f32; 4],
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DrawBatch {
+    material_slot: usize,
+    index_start: u32,
+    index_count: u32,
 }
 
 #[repr(C)]
@@ -285,7 +1209,9 @@ struct CameraUniform {
 struct GpuVertex {
     position: [f32; 3],
     normal: [f32; 3],
-    color: [f32; 3],
+    uv0: [f32; 2],
+    bitangent: [f32; 4],
+    color: [f32; 4],
 }
 
 impl GpuVertex {
@@ -307,7 +1233,21 @@ impl GpuVertex {
                 wgpu::VertexAttribute {
                     offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>() * 2 + std::mem::size_of::<[f32; 2]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>() * 2
+                        + std::mem::size_of::<[f32; 2]>()
+                        + std::mem::size_of::<[f32; 4]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }

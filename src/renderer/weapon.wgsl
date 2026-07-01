@@ -1,38 +1,126 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
+    options: vec4<f32>, // x: normal mapping, y: normal y sign
+};
+
+struct Material {
+    diffuse_color: vec4<f32>,
+    emissive_color: vec4<f32>, // a: has emissive texture
+    specular_color: vec4<f32>,
+    params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
 };
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) color: vec3<f32>,
+    @location(2) uv0: vec2<f32>,
+    @location(3) bitangent: vec4<f32>,
+    @location(4) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) uv0: vec2<f32>,
+    @location(2) bitangent: vec4<f32>,
+    @location(3) color: vec4<f32>,
 };
 
 @group(0) @binding(0)
 var<uniform> camera: Camera;
+
+@group(1) @binding(0)
+var<uniform> material: Material;
+
+@group(1) @binding(1)
+var base_color_texture: texture_2d<f32>;
+
+@group(1) @binding(2)
+var base_color_sampler: sampler;
+
+@group(1) @binding(3)
+var normal_texture: texture_2d<f32>;
+
+@group(1) @binding(4)
+var mask_texture: texture_2d<f32>;
+
+@group(1) @binding(5)
+var emissive_texture: texture_2d<f32>;
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bright: vec4<f32>,
+};
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(input.position, 1.0);
     out.normal = normalize(input.normal);
+    out.uv0 = input.uv0;
+    out.bitangent = input.bitangent;
     out.color = input.color;
     return out;
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let normal = normalize(input.normal);
+fn fs_main(input: VertexOutput) -> FragmentOutput {
+    let normal = resolve_normal(input);
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
-    let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * 0.18;
-    let shaded = input.color * (0.25 + diffuse * 0.72) + vec3<f32>(rim);
-    return vec4<f32>(shaded, 1.0);
+    let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
+    let mask = resolve_mask(input.uv0);
+    let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
+    let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
+    let specular_scale = mix(1.0, mask.r * 1.35, material.params.w);
+    let specular_power = mix(80.0, 12.0, roughness);
+    let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
+    let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0).rgb;
+    let texture_mix = select(vec3<f32>(1.0), sampled_base, material.params.x > 0.5);
+    let vertex_tint = select(input.color.rgb, vec3<f32>(1.0), dot(abs(input.color.rgb), vec3<f32>(1.0)) <= 0.0003);
+    let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
+    let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * 0.16;
+    let specular_tint = mix(material.specular_color.rgb, base, metalness * 0.35);
+    let lit = base * (0.22 + diffuse * 0.74)
+        + specular_tint * specular * specular_scale * 0.24
+        + vec3<f32>(rim);
+    let emissive_tex = textureSample(emissive_texture, base_color_sampler, input.uv0).rgb;
+    let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
+    let color = lit + emissive;
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0)) * smoothstep(0.72, 1.0, luma);
+
+    var out: FragmentOutput;
+    out.color = vec4<f32>(color, input.color.a);
+    out.bright = vec4<f32>(emissive * 1.15 + highlight * 0.65, 1.0);
+    return out;
+}
+
+fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
+    if material.params.w <= 0.5 {
+        return vec3<f32>(1.0, material.specular_color.a, material.params.y);
+    }
+    return textureSample(mask_texture, base_color_sampler, uv).rgb;
+}
+
+fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
+    let material_emissive = material.emissive_color.rgb * (0.65 + vertex_alpha * 0.35);
+    let texture_emissive = emissive_tex * material.emissive_color.a;
+    let mask_hint = smoothstep(0.72, 1.0, mask.b) * material.params.w * 0.35;
+    return material_emissive + texture_emissive + material_emissive * mask_hint;
+}
+
+fn resolve_normal(input: VertexOutput) -> vec3<f32> {
+    let geometric_normal = normalize(input.normal);
+    if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
+        return geometric_normal;
+    }
+
+    let bitangent = normalize(input.bitangent.xyz);
+    let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
+    let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
+    let sampled = textureSample(normal_texture, base_color_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
+    let mapped = normalize(vec3<f32>(sampled.x, sampled.y * camera.options.y, sampled.z));
+    return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }

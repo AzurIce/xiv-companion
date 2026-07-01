@@ -11,11 +11,13 @@ use wasm_bindgen::{JsCast, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
+use xiv_companion::renderer::WeaponRenderOptions;
 #[cfg(target_arch = "wasm32")]
 use xiv_companion::renderer::WebWeaponCanvasRenderer;
 
 use xiv_companion::{
-    PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData, weapon_slot_label,
+    PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
+    WeaponModelTextureKind, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
@@ -267,6 +269,8 @@ fn WeaponModelPane(
     selected: Option<WeaponCatalogItem>,
     model: Resource<Result<Rc<WeaponModelData>, String>>,
 ) -> Element {
+    let render_options = use_signal(WeaponRenderOptions::default);
+
     rsx! {
         section { class: "flex min-h-0 min-w-0 flex-col overflow-hidden bg-background",
             if let Some(item) = selected.clone() {
@@ -299,7 +303,8 @@ fn WeaponModelPane(
                                 let key = model_canvas_key(data);
                                 rsx! {
                                     div { key: "{key}", class: "absolute inset-0",
-                                        WeaponModelCanvas { model: data.clone() }
+                                        WeaponModelCanvas { model: data.clone(), render_options }
+                                        WeaponRenderControls { options: render_options }
                                     }
                                 }
                             },
@@ -353,6 +358,9 @@ fn WeaponModelPane(
 #[component]
 fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
     let mesh_count = model.meshes.len();
+    let material_count = model.materials.len();
+    let texture_count = model.textures.len();
+    let texture_counts = TextureKindCounts::from_model(&model);
     let vertex_count: usize = model.meshes.iter().map(|mesh| mesh.vertices.len()).sum();
     let index_count: usize = model.meshes.iter().map(|mesh| mesh.indices.len()).sum();
     let bounds = model.bounds;
@@ -362,9 +370,23 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
             section { class: "space-y-2",
                 div { class: "text-sm font-semibold", "模型" }
                 StatRow { label: "Mesh", value: format_integer(mesh_count as f64) }
+                StatRow { label: "Material", value: format_integer(material_count as f64) }
+                StatRow { label: "Texture", value: format_integer(texture_count as f64) }
                 StatRow { label: "Vertex", value: format_integer(vertex_count as f64) }
                 StatRow { label: "Index", value: format_integer(index_count as f64) }
                 StatRow { label: "Radius", value: format!("{:.3}", bounds.radius) }
+            }
+
+            if texture_count > 0 {
+                section { class: "space-y-2",
+                    div { class: "text-sm font-semibold", "Textures" }
+                    StatRow { label: "Base", value: texture_counts.base.to_string() }
+                    StatRow { label: "Normal", value: texture_counts.normal.to_string() }
+                    StatRow { label: "Mask", value: texture_counts.mask.to_string() }
+                    StatRow { label: "Specular", value: texture_counts.specular.to_string() }
+                    StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
+                    StatRow { label: "Other", value: texture_counts.other.to_string() }
+                }
             }
 
             section { class: "space-y-2",
@@ -396,6 +418,33 @@ fn StatRow(label: &'static str, value: String) -> Element {
     }
 }
 
+#[derive(Default)]
+struct TextureKindCounts {
+    base: usize,
+    normal: usize,
+    mask: usize,
+    specular: usize,
+    emissive: usize,
+    other: usize,
+}
+
+impl TextureKindCounts {
+    fn from_model(model: &WeaponModelData) -> Self {
+        let mut counts = Self::default();
+        for texture in &model.textures {
+            match texture.kind {
+                WeaponModelTextureKind::BaseColor => counts.base += 1,
+                WeaponModelTextureKind::Normal => counts.normal += 1,
+                WeaponModelTextureKind::Mask => counts.mask += 1,
+                WeaponModelTextureKind::Specular => counts.specular += 1,
+                WeaponModelTextureKind::Emissive => counts.emissive += 1,
+                WeaponModelTextureKind::Other => counts.other += 1,
+            }
+        }
+        counts
+    }
+}
+
 #[component]
 fn SkeletonLine() -> Element {
     rsx! {
@@ -404,7 +453,89 @@ fn SkeletonLine() -> Element {
 }
 
 #[component]
-fn WeaponModelCanvas(model: Rc<WeaponModelData>) -> Element {
+fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
+    let current = options();
+    let bloom_percent = (current.bloom_strength * 100.0).round() as i32;
+
+    rsx! {
+        div {
+            class: "absolute right-2 top-4 z-10 rounded-md border border-border bg-background/90 p-3 text-xs shadow-md backdrop-blur",
+            style: "width: 14rem;",
+            div { class: "mb-2 flex items-center justify-between gap-3",
+                span { class: "font-medium", "渲染" }
+                span { class: "text-[11px] text-muted-foreground", "{bloom_percent}%" }
+            }
+            div { class: "space-y-2",
+                RenderCheckbox {
+                    label: "Normal",
+                    checked: current.normal_mapping,
+                    on_change: move |checked| {
+                        let mut next = options();
+                        next.normal_mapping = checked;
+                        options.set(next);
+                    },
+                }
+                RenderCheckbox {
+                    label: "Bloom",
+                    checked: current.bloom,
+                    on_change: move |checked| {
+                        let mut next = options();
+                        next.bloom = checked;
+                        options.set(next);
+                    },
+                }
+                RenderCheckbox {
+                    label: "Flip Y",
+                    checked: current.normal_y_sign < 0.0,
+                    on_change: move |checked| {
+                        let mut next = options();
+                        next.normal_y_sign = if checked { -1.0 } else { 1.0 };
+                        options.set(next);
+                    },
+                }
+                input {
+                    class: "h-4 w-full cursor-pointer accent-foreground",
+                    r#type: "range",
+                    min: "0",
+                    max: "160",
+                    step: "5",
+                    value: "{bloom_percent}",
+                    disabled: !current.bloom,
+                    oninput: move |event| {
+                        let mut next = options();
+                        next.bloom_strength = parse_render_slider_value(&event.value()) / 100.0;
+                        options.set(next);
+                    },
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RenderCheckbox(label: &'static str, checked: bool, on_change: EventHandler<bool>) -> Element {
+    rsx! {
+        label { class: "flex items-center justify-between gap-3",
+            span { class: "text-muted-foreground", "{label}" }
+            input {
+                class: "h-4 w-4 accent-foreground",
+                r#type: "checkbox",
+                checked,
+                onchange: move |event| on_change.call(event.checked()),
+            }
+        }
+    }
+}
+
+fn parse_render_slider_value(value: &str) -> f32 {
+    value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 160.0)
+}
+
+#[component]
+fn WeaponModelCanvas(
+    model: Rc<WeaponModelData>,
+    render_options: Signal<WeaponRenderOptions>,
+) -> Element {
     let canvas_id = format!(
         "weapon-model-canvas-{}-{}-{}",
         model.item_id,
@@ -421,6 +552,7 @@ fn WeaponModelCanvas(model: Rc<WeaponModelData>) -> Element {
         use_effect(move || {
             let canvas_id = effect_canvas_id.clone();
             let model = effect_model.clone();
+            let options = render_options;
             effect_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 let result = async {
@@ -439,7 +571,9 @@ fn WeaponModelCanvas(model: Rc<WeaponModelData>) -> Element {
                 .await;
 
                 match result {
-                    Ok(renderer) => start_weapon_render_loop(WasmRc::new(RefCell::new(renderer))),
+                    Ok(renderer) => {
+                        start_weapon_render_loop(WasmRc::new(RefCell::new(renderer)), options)
+                    }
                     Err(error) => effect_error.set(Some(error)),
                 }
             });
@@ -467,7 +601,10 @@ fn WeaponModelCanvas(model: Rc<WeaponModelData>) -> Element {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start_weapon_render_loop(renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>) {
+fn start_weapon_render_loop(
+    renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>,
+    render_options: Signal<WeaponRenderOptions>,
+) {
     let callback_slot: WasmRc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
         WasmRc::new(RefCell::new(None));
     let callback_slot_for_loop = callback_slot.clone();
@@ -477,7 +614,7 @@ fn start_weapon_render_loop(renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>) 
         let connected = {
             let mut renderer = renderer_for_loop.borrow_mut();
             if renderer.canvas_connected() {
-                renderer.render();
+                renderer.render_with_options(render_options());
                 true
             } else {
                 false

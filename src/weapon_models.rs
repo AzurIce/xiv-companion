@@ -71,6 +71,10 @@ pub struct WeaponModelData {
     pub model_sub: Option<PackedModelId>,
     pub loaded_paths: Vec<String>,
     pub bounds: WeaponModelBounds,
+    #[serde(default)]
+    pub materials: Vec<WeaponModelMaterial>,
+    #[serde(default)]
+    pub textures: Vec<WeaponModelTexture>,
     pub meshes: Vec<WeaponModelMesh>,
 }
 
@@ -100,6 +104,8 @@ pub struct WeaponModelMesh {
     pub path: String,
     pub part_index: u32,
     pub material_index: u16,
+    #[serde(default)]
+    pub material_slot: usize,
     pub material_name: String,
     pub color: [f32; 3],
     pub vertices: Vec<WeaponModelVertex>,
@@ -111,6 +117,61 @@ pub struct WeaponModelMesh {
 pub struct WeaponModelVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    #[serde(default)]
+    pub uv0: [f32; 2],
+    #[serde(default)]
+    pub uv1: [f32; 2],
+    #[serde(default)]
+    pub bitangent: [f32; 4],
+    #[serde(default)]
+    pub color: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponModelMaterial {
+    pub slot: usize,
+    pub material_index: u16,
+    pub name: String,
+    pub path: Option<String>,
+    pub shader_package_name: Option<String>,
+    pub fallback_color: [f32; 3],
+    pub diffuse_color: [f32; 3],
+    pub specular_color: [f32; 3],
+    pub emissive_color: [f32; 3],
+    pub roughness: f32,
+    pub metalness: f32,
+    #[serde(default)]
+    pub texture_indices: Vec<usize>,
+    #[serde(default)]
+    pub base_color_texture: Option<usize>,
+    #[serde(default)]
+    pub normal_texture: Option<usize>,
+    #[serde(default)]
+    pub mask_texture: Option<usize>,
+    #[serde(default)]
+    pub emissive_texture: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponModelTexture {
+    pub path: String,
+    pub kind: WeaponModelTextureKind,
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeaponModelTextureKind {
+    BaseColor,
+    Normal,
+    Mask,
+    Specular,
+    Emissive,
+    Other,
 }
 
 pub fn is_weapon_equip_slot_category(category: u32) -> bool {
@@ -142,6 +203,56 @@ pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
         .collect()
 }
 
+pub fn weapon_material_candidate_paths(
+    model: PackedModelId,
+    model_path: &str,
+    material_name: &str,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let normalized_name = normalize_resource_path(material_name);
+    if normalized_name.is_empty() {
+        return candidates;
+    }
+
+    push_unique_path(&mut candidates, normalized_name.clone());
+    if normalized_name.starts_with("chara/") {
+        return candidates;
+    }
+
+    let normalized_model_path = normalize_resource_path(model_path);
+    let Some((object_root, _)) = normalized_model_path.split_once("/model/") else {
+        return candidates;
+    };
+    let material_root = format!("{object_root}/material");
+
+    if normalized_name.starts_with("v") {
+        push_unique_path(
+            &mut candidates,
+            format!("{material_root}/{normalized_name}"),
+        );
+    }
+
+    let material_file = normalized_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized_name.as_str());
+    let mut versions = Vec::new();
+    for version in [model.variant_id, model.body_id, 1, 101, 201] {
+        if version != 0 && !versions.contains(&version) {
+            versions.push(version);
+        }
+    }
+
+    for version in versions {
+        push_unique_path(
+            &mut candidates,
+            format!("{material_root}/v{version:04}/{material_file}"),
+        );
+    }
+    push_unique_path(&mut candidates, format!("{material_root}/{material_file}"));
+    candidates
+}
+
 pub fn weapon_slot_label(category: u32) -> &'static str {
     match category {
         1 => "主手",
@@ -149,6 +260,27 @@ pub fn weapon_slot_label(category: u32) -> &'static str {
         13 => "双手主手",
         14 => "双持主手",
         _ => "武器",
+    }
+}
+
+fn normalize_resource_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.trim_start_matches('/').split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            value => parts.push(value),
+        }
+    }
+    parts.join("/").to_ascii_lowercase()
+}
+
+fn push_unique_path(paths: &mut Vec<String>, path: String) {
+    if !path.is_empty() && !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
     }
 }
 
@@ -182,6 +314,10 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
             .map(|vertex| WeaponModelVertex {
                 position: vertex.position,
                 normal: normalized_or_fallback(vertex.normal),
+                uv0: vertex.uv0,
+                uv1: vertex.uv1,
+                bitangent: vertex.bitangent,
+                color: vertex_color_or_fallback(vertex.color),
             })
             .collect::<Vec<_>>();
         let indices = part.indices.iter().map(|index| u32::from(*index)).collect();
@@ -189,6 +325,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
             path: path.to_string(),
             part_index: part_index as u32,
             material_index: part.material_index,
+            material_slot: part.material_index as usize,
             material_name,
             color,
             vertices,
@@ -253,7 +390,17 @@ fn normalized_or_fallback(normal: [f32; 3]) -> [f32; 3] {
     }
 }
 
-fn material_color(material_index: u16) -> [f32; 3] {
+fn vertex_color_or_fallback(color: [f32; 4]) -> [f32; 4] {
+    if color[..3].iter().any(|value| value.abs() > 0.0001) {
+        color
+    } else if color[3].abs() > 0.0001 {
+        [1.0, 1.0, 1.0, color[3]]
+    } else {
+        [1.0, 1.0, 1.0, 1.0]
+    }
+}
+
+pub fn material_color(material_index: u16) -> [f32; 3] {
     const COLORS: [[f32; 3]; 8] = [
         [0.78, 0.72, 0.64],
         [0.56, 0.66, 0.78],
