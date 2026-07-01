@@ -233,7 +233,7 @@ fn install_orbit_handlers(
             orbit.pan_x -= dx * pan_scale;
             orbit.pan_y += dy * pan_scale;
         } else {
-            orbit.yaw += dx * 0.01;
+            orbit.yaw -= dx * 0.01;
             orbit.pitch = (orbit.pitch + dy * 0.01).clamp(-1.35, 1.35);
         }
     }) as Box<dyn FnMut(_)>);
