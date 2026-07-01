@@ -3,11 +3,17 @@ use js_sys::JsString;
 use physis::ReadableFile;
 use wasm_bindgen::JsValue;
 use xiv_companion::{
-    BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage, ProviderRequest,
-    ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceProvider, ResourceSource, item_icon_tex_path, register_craft_data_resource,
-    register_item_icon_resource,
-    resources::{craft_data::CraftDataKind, item_icon::ItemIconKind},
+    BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage, PackedModelId,
+    ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
+    ResourceProvider, ResourceSource, WeaponModelData, calculate_model_bounds, item_icon_tex_path,
+    meshes_from_mdl_bytes, register_craft_data_resource, register_item_icon_resource,
+    register_weapon_model_resources,
+    resources::{
+        craft_data::CraftDataKind,
+        item_icon::ItemIconKind,
+        weapon_model::{WeaponCatalogKind, WeaponModelKind, parse_weapon_model_request_key},
+    },
+    weapon_model_candidate_paths,
 };
 
 use crate::app::browser_sqpack::BrowserSqPack;
@@ -27,6 +33,7 @@ pub fn default_web_resource_hub() -> ResourceHub {
     let mut hub = ResourceHub::new();
     register_craft_data_resource(&mut hub);
     register_item_icon_resource(&mut hub);
+    register_weapon_model_resources(&mut hub);
     hub.add_provider(BundledProvider);
     hub.add_provider(BuiltinItemIconProvider);
     hub.add_provider(BrowserSqPackProvider);
@@ -43,7 +50,10 @@ impl ResourceProvider for BrowserSqPackProvider {
     fn supports(&self, request: &ProviderRequest) -> bool {
         browser_sqpack_handle_available()
             && ((request.kind == CraftDataKind.into() && request.key == "default")
-                || (request.kind == ItemIconKind.into() && request.key.parse::<u32>().is_ok()))
+                || (request.kind == ItemIconKind.into() && request.key.parse::<u32>().is_ok())
+                || (request.kind == WeaponCatalogKind.into() && request.key == "default")
+                || (request.kind == WeaponModelKind.into()
+                    && parse_weapon_model_request_key(&request.key).is_ok()))
     }
 
     fn read<'a>(
@@ -87,12 +97,86 @@ impl ResourceProvider for BrowserSqPackProvider {
                     })?;
                 log::info(
                     "resource",
-                    format!("loaded CraftData from UserLocal in {}", log::format_elapsed(log::elapsed_ms(start_ms))),
+                    format!(
+                        "loaded CraftData from UserLocal in {}",
+                        log::format_elapsed(log::elapsed_ms(start_ms))
+                    ),
                 );
                 return Ok(ResourceBlob { bytes, fingerprint });
             }
 
-            log::info("resource", format!("loading ItemIcon {} from UserLocal SqPack", request.key));
+            if request.kind == WeaponCatalogKind.into() {
+                log::info("resource", "loading WeaponCatalog from UserLocal SqPack");
+                let start_ms = log::now_ms();
+                let bytes = load_weapon_catalog_from_browser_sqpack()
+                    .await
+                    .map_err(|error| {
+                        ResourceError::new(
+                            ResourceErrorKind::ProviderFailed,
+                            resource_kind.clone(),
+                            Some(self.source()),
+                            error,
+                        )
+                    })?;
+                log::info(
+                    "resource",
+                    format!(
+                        "loaded WeaponCatalog from UserLocal in {}",
+                        log::format_elapsed(log::elapsed_ms(start_ms)),
+                    ),
+                );
+                return Ok(ResourceBlob {
+                    bytes,
+                    fingerprint: None,
+                });
+            }
+
+            if request.kind == WeaponModelKind.into() {
+                log::info("resource", format!("loading WeaponModel {}", request.key));
+                let start_ms = log::now_ms();
+                let id = parse_weapon_model_request_key(&request.key).map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::Unsupported,
+                        resource_kind.clone(),
+                        Some(self.source()),
+                        error,
+                    )
+                })?;
+                let model = load_weapon_model_from_browser_sqpack(id)
+                    .await
+                    .map_err(|error| {
+                        ResourceError::new(
+                            ResourceErrorKind::ProviderFailed,
+                            resource_kind.clone(),
+                            Some(self.source()),
+                            error,
+                        )
+                    })?;
+                log::info(
+                    "resource",
+                    format!(
+                        "decoded WeaponModel in {}",
+                        log::format_elapsed(log::elapsed_ms(start_ms)),
+                    ),
+                );
+                let bytes = serde_json::to_vec(&model).map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::ProviderFailed,
+                        resource_kind,
+                        Some(self.source()),
+                        format!("failed to encode weapon model resource info: {error}"),
+                    )
+                })?;
+                return Ok(ResourceBlob {
+                    bytes,
+                    fingerprint: None,
+                });
+            }
+
+            log::info(
+                "resource",
+                format!("loading ItemIcon {} from UserLocal SqPack", request.key),
+            );
             let start_ms = log::now_ms();
             let icon_id = request.key.parse::<u32>().map_err(|error| {
                 ResourceError::new(
@@ -165,6 +249,89 @@ impl ResourceProvider for BrowserSqPackProvider {
     }
 }
 
+async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
+    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let resource = sqpack.preload_weapon_catalog_resource().await?;
+    let generated_at = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+    let data = xiv_companion::game_data::export_weapon_catalog_from_resource(
+        resource,
+        "Browser Local SqPack".to_string(),
+        "Local SqPack".to_string(),
+        generated_at,
+    )
+    .map_err(|error| format!("failed to export WeaponCatalog from local SqPack: {error:#}"))?;
+    serde_json::to_vec(&data).map_err(|error| format!("failed to encode WeaponCatalog: {error}"))
+}
+
+async fn load_weapon_model_from_browser_sqpack(
+    id: xiv_companion::WeaponModelId,
+) -> Result<WeaponModelData, String> {
+    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let model_main = PackedModelId::from_raw(id.model_main);
+    let model_sub = (id.model_sub != 0).then(|| PackedModelId::from_raw(id.model_sub));
+    let mut loaded_paths = Vec::new();
+    let mut meshes = Vec::new();
+
+    load_weapon_model_meshes(&mut sqpack, model_main, &mut loaded_paths, &mut meshes).await?;
+    if let Some(model_sub) = model_sub {
+        if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
+            if let Err(error) =
+                load_weapon_model_meshes(&mut sqpack, model_sub, &mut loaded_paths, &mut meshes)
+                    .await
+            {
+                log::warn(
+                    "resource",
+                    format!("failed to load secondary weapon model: {error}"),
+                );
+            }
+        }
+    }
+
+    if meshes.is_empty() {
+        return Err(format!("{} 没有可渲染的模型网格", id.item_name));
+    }
+
+    Ok(WeaponModelData {
+        item_id: id.item_id,
+        item_name: id.item_name,
+        model_main,
+        model_sub,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        meshes,
+    })
+}
+
+async fn load_weapon_model_meshes(
+    sqpack: &mut BrowserSqPack,
+    model: PackedModelId,
+    loaded_paths: &mut Vec<String>,
+    meshes: &mut Vec<xiv_companion::WeaponModelMesh>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for path in weapon_model_candidate_paths(model) {
+        match sqpack.read_game_file(&path).await {
+            Ok(bytes) => {
+                let mut path_meshes =
+                    meshes_from_mdl_bytes(&path, &bytes).map_err(|error| format!("{error:#}"))?;
+                loaded_paths.push(path);
+                meshes.append(&mut path_meshes);
+                return Ok(());
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    Err(format!(
+        "无法读取 weapon model {} (tried: {})",
+        model.model_id,
+        errors.join("; ")
+    ))
+}
+
 async fn load_from_browser_sqpack_direct(
     kind: &str,
     key: &str,
@@ -184,16 +351,25 @@ async fn load_from_browser_sqpack_direct(
                 elapsed_ms: log::elapsed_ms(start_ms),
                 done: false,
             }));
-            if let Some((bytes, game_version)) = load_cached_local_craft_data(&cache_fingerprint).await? {
-                report_craft_data_cache_status(Some(CraftDataCacheStatus::Hit { bytes: bytes.len() }));
+            if let Some((bytes, game_version)) =
+                load_cached_local_craft_data(&cache_fingerprint).await?
+            {
+                report_craft_data_cache_status(Some(CraftDataCacheStatus::Hit {
+                    bytes: bytes.len(),
+                }));
                 let elapsed_ms = log::elapsed_ms(start_ms);
                 log::info(
                     "resource",
-                    format!("loaded CraftData from IndexedDB cache in {}", log::format_elapsed(elapsed_ms)),
+                    format!(
+                        "loaded CraftData from IndexedDB cache in {}",
+                        log::format_elapsed(elapsed_ms)
+                    ),
                 );
                 report_craft_data_progress(Some(CraftDataLoadProgress {
                     stage: "使用本地缓存".to_string(),
-                    detail: game_version.clone().unwrap_or_else(|| "CraftData JSON".to_string()),
+                    detail: game_version
+                        .clone()
+                        .unwrap_or_else(|| "CraftData JSON".to_string()),
                     current: 1,
                     total: 1,
                     elapsed_ms,
@@ -205,7 +381,10 @@ async fn load_from_browser_sqpack_direct(
             report_craft_data_cache_status(Some(CraftDataCacheStatus::Miss {
                 reason: "fingerprint mismatch or empty".to_string(),
             }));
-            log::info("resource", "local CraftData cache miss; exporting from SqPack");
+            log::info(
+                "resource",
+                "local CraftData cache miss; exporting from SqPack",
+            );
             let resource = sqpack.preload_craft_data_resource().await?;
             let after_preload_ms = log::elapsed_ms(start_ms);
             report_craft_data_progress(Some(CraftDataLoadProgress {
@@ -242,17 +421,19 @@ async fn load_from_browser_sqpack_direct(
                     log::format_elapsed(total_elapsed_ms),
                 ),
             );
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saving { bytes: bytes.len() }));
-            save_cached_local_craft_data(
-                &cache_fingerprint,
-                &data.game_version,
-                &bytes,
-            )
-            .await?;
-            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saved { bytes: bytes.len() }));
+            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saving {
+                bytes: bytes.len(),
+            }));
+            save_cached_local_craft_data(&cache_fingerprint, &data.game_version, &bytes).await?;
+            report_craft_data_cache_status(Some(CraftDataCacheStatus::Saved {
+                bytes: bytes.len(),
+            }));
             report_craft_data_progress(Some(CraftDataLoadProgress {
                 stage: "本地 CraftData 就绪".to_string(),
-                detail: format!("{} / {} items / {} recipes", data.game_version, data.counts.items, data.counts.recipes),
+                detail: format!(
+                    "{} / {} items / {} recipes",
+                    data.game_version, data.counts.items, data.counts.recipes
+                ),
                 current: 1,
                 total: 1,
                 elapsed_ms: total_elapsed_ms,
@@ -275,8 +456,8 @@ async fn load_from_browser_sqpack_direct(
 }
 
 async fn local_resource_cache_db() -> Result<indexed_db::Database<String>, String> {
-    let factory = indexed_db::Factory::get()
-        .map_err(|error| format!("打开 IndexedDB 缓存失败: {error}"))?;
+    let factory =
+        indexed_db::Factory::get().map_err(|error| format!("打开 IndexedDB 缓存失败: {error}"))?;
     factory
         .open(LOCAL_RESOURCE_CACHE_DB, 1, |event| async move {
             let db = event.database();
@@ -309,12 +490,15 @@ async fn load_cached_local_craft_data(
 
     let fingerprint = js_string_field(&record, "fingerprint");
     if fingerprint.as_deref() != Some(expected_fingerprint) {
-        log::info("resource-cache", "CraftData cache miss: fingerprint changed");
+        log::info(
+            "resource-cache",
+            "CraftData cache miss: fingerprint changed",
+        );
         return Ok(None);
     }
 
-    let bytes = js_sys::Reflect::get(&record, &JsValue::from_str("bytes"))
-        .map_err(format_js_error)?;
+    let bytes =
+        js_sys::Reflect::get(&record, &JsValue::from_str("bytes")).map_err(format_js_error)?;
     if bytes.is_undefined() || bytes.is_null() {
         log::warn("resource-cache", "CraftData cache record has no bytes");
         return Ok(None);

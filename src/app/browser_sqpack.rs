@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use binrw::{BinRead, BinReaderExt, Endian, binread, binrw};
+use binrw::{BinRead, BinReaderExt, BinWrite, Endian, VecArgs, binread, binrw};
 use flate2::read::DeflateDecoder;
+use physis::model::ModelFileHeader;
 use physis::resource::Resource;
 use physis::{ByteBuffer, Language, Platform, ReadableFile};
 use wasm_bindgen::{JsCast, JsValue};
@@ -50,7 +51,10 @@ pub struct BrowserSqPack {
 
 impl BrowserSqPack {
     pub async fn from_window_handle() -> Result<Self, String> {
-        log::debug("sqpack", "opening BrowserSqPack from selected directory handle");
+        log::debug(
+            "sqpack",
+            "opening BrowserSqPack from selected directory handle",
+        );
         let window = web_sys::window().ok_or_else(|| "当前运行环境没有 window".to_string())?;
         let root = js_sys::Reflect::get(
             window.as_ref(),
@@ -87,7 +91,8 @@ impl BrowserSqPack {
     }
 
     pub async fn read_game_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
-        self.read_game_file_with_window(path, SQPACK_READ_WINDOW).await
+        self.read_game_file_with_window(path, SQPACK_READ_WINDOW)
+            .await
     }
 
     pub async fn read_game_file_with_window(
@@ -112,7 +117,10 @@ impl BrowserSqPack {
             .ok_or_else(|| format!("解包本地 SqPack 文件失败: {path}"))?;
         log::debug(
             "sqpack",
-            format!("read game file: {path} from {dat_path} ({} bytes)", decoded.len()),
+            format!(
+                "read game file: {path} from {dat_path} ({} bytes)",
+                decoded.len()
+            ),
         );
         Ok(decoded)
     }
@@ -147,7 +155,10 @@ impl BrowserSqPack {
         let start_ms = log::now_ms();
         let plan = craft_data_sheet_plan();
         let total = plan.len() as u32;
-        log::info("sqpack", format!("preloading CraftData sheets ({total} sheets)"));
+        log::info(
+            "sqpack",
+            format!("preloading CraftData sheets ({total} sheets)"),
+        );
         let mut files = HashMap::new();
         for (index, (sheet, languages)) in plan.into_iter().enumerate() {
             report_craft_data_progress(Some(CraftDataLoadProgress {
@@ -177,6 +188,25 @@ impl BrowserSqPack {
             elapsed_ms,
             done: false,
         }));
+        Ok(InMemoryPhysisResource::new(files))
+    }
+
+    pub async fn preload_weapon_catalog_resource(
+        &mut self,
+    ) -> Result<InMemoryPhysisResource, String> {
+        let start_ms = log::now_ms();
+        log::info("sqpack", "preloading WeaponCatalog Item sheet");
+        let mut files = HashMap::new();
+        self.preload_sheet(&mut files, "Item", &[Language::ChineseSimplified])
+            .await?;
+        log::info(
+            "sqpack",
+            format!(
+                "preloaded WeaponCatalog sheets: {} files in {}",
+                files.len(),
+                log::format_elapsed(log::elapsed_ms(start_ms)),
+            ),
+        );
         Ok(InMemoryPhysisResource::new(files))
     }
 
@@ -235,7 +265,8 @@ impl BrowserSqPack {
         let repo = repository_for_path(path);
         for chunk in 0..=254_u8 {
             for extension in ["index", "index2"] {
-                let index_file = format!("sqpack/{repo}/{category:02x}00{chunk:02}.win32.{extension}");
+                let index_file =
+                    format!("sqpack/{repo}/{category:02x}00{chunk:02}.win32.{extension}");
                 let dat_base = index_file
                     .strip_suffix(&format!(".{extension}"))
                     .expect("extension should match")
@@ -365,12 +396,15 @@ fn category_for_path(path: &str) -> Option<u8> {
 }
 
 fn repository_for_path(path: &str) -> String {
-    path.split('/').nth(1).and_then(|part| {
-        (part.len() == 3
-            && part.starts_with("ex")
-            && part.as_bytes().get(2).is_some_and(|b| b.is_ascii_digit()))
-        .then_some(part.to_string())
-    }).unwrap_or_else(|| "ffxiv".to_string())
+    path.split('/')
+        .nth(1)
+        .and_then(|part| {
+            (part.len() == 3
+                && part.starts_with("ex")
+                && part.as_bytes().get(2).is_some_and(|b| b.is_ascii_digit()))
+            .then_some(part.to_string())
+        })
+        .unwrap_or_else(|| "ffxiv".to_string())
 }
 
 async fn get_child_directory_handle(handle: &JsValue, name: &str) -> Option<JsValue> {
@@ -388,7 +422,8 @@ async fn directory_has_child_directory(handle: &JsValue, name: &str) -> bool {
 }
 
 fn call0(target: &JsValue, method: &str) -> Result<js_sys::Promise, String> {
-    let value = js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
+    let value =
+        js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
     let function = value
         .dyn_into::<js_sys::Function>()
         .map_err(|_| format!("{method} 不是函数"))?;
@@ -400,7 +435,8 @@ fn call0(target: &JsValue, method: &str) -> Result<js_sys::Promise, String> {
 }
 
 fn call1(target: &JsValue, method: &str, arg: &JsValue) -> Result<js_sys::Promise, String> {
-    let value = js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
+    let value =
+        js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
     let function = value
         .dyn_into::<js_sys::Function>()
         .map_err(|_| format!("{method} 不是函数"))?;
@@ -412,7 +448,8 @@ fn call1(target: &JsValue, method: &str, arg: &JsValue) -> Result<js_sys::Promis
 }
 
 fn call2(target: &JsValue, method: &str, a: &JsValue, b: &JsValue) -> Result<JsValue, String> {
-    let value = js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
+    let value =
+        js_sys::Reflect::get(target, &JsValue::from_str(method)).map_err(format_js_error)?;
     let function = value
         .dyn_into::<js_sys::Function>()
         .map_err(|_| format!("{method} 不是函数"))?;
@@ -446,6 +483,64 @@ struct TextureLodBlock {
     block_count: u32,
 }
 
+trait AnyNumberType<'a>:
+    BinRead<Args<'a> = ()> + BinWrite<Args<'a> = ()> + std::ops::AddAssign + Copy + Default + 'static
+{
+}
+
+impl<'a, T> AnyNumberType<'a> for T where
+    T: BinRead<Args<'a> = ()>
+        + BinWrite<Args<'a> = ()>
+        + std::ops::AddAssign
+        + Copy
+        + Default
+        + 'static
+{
+}
+
+#[binrw]
+#[derive(Debug)]
+struct ModelMemorySizes<T: for<'a> AnyNumberType<'a>> {
+    stack_size: T,
+    runtime_size: T,
+    vertex_buffer_size: [T; 3],
+    edge_geometry_vertex_buffer_size: [T; 3],
+    index_buffer_size: [T; 3],
+}
+
+impl<T: for<'a> AnyNumberType<'a>> ModelMemorySizes<T> {
+    fn total(&self) -> T {
+        let mut total = T::default();
+        total += self.stack_size;
+        total += self.runtime_size;
+        for i in 0..3 {
+            total += self.vertex_buffer_size[i];
+            total += self.edge_geometry_vertex_buffer_size[i];
+            total += self.index_buffer_size[i];
+        }
+        total
+    }
+}
+
+#[binrw]
+#[derive(Debug)]
+struct ModelFileBlock {
+    num_blocks: u32,
+    num_used_blocks: u32,
+    version: u32,
+    uncompressed_size: ModelMemorySizes<u32>,
+    compressed_size: ModelMemorySizes<u32>,
+    offset: ModelMemorySizes<u32>,
+    index: ModelMemorySizes<u16>,
+    num: ModelMemorySizes<u16>,
+    vertex_declaration_num: u16,
+    material_num: u16,
+    num_lods: u8,
+    index_buffer_streaming_enabled: u8,
+    #[brw(pad_after = 1)]
+    edge_geometry_enabled: u8,
+}
+
 #[binrw]
 #[derive(Debug)]
 struct TextureBlock {
@@ -463,6 +558,8 @@ struct FileInfo {
     file_size: u32,
     #[br(if(file_type == FileType::Standard))]
     standard_info: Option<StandardFileBlock>,
+    #[br(if(file_type == FileType::Model))]
+    model_info: Option<ModelFileBlock>,
     #[br(if(file_type == FileType::Texture))]
     texture_info: Option<TextureBlock>,
 }
@@ -510,8 +607,8 @@ fn read_sqpack_entry_from_reader<R: Read + Seek>(stream: &mut R) -> Option<Vec<u
     match file_info.file_type {
         FileType::Empty => None,
         FileType::Standard => read_standard_file(stream, &file_info),
+        FileType::Model => read_model_file(stream, &file_info),
         FileType::Texture => read_texture_file(stream, &file_info),
-        FileType::Model => None,
     }
 }
 
@@ -558,6 +655,131 @@ fn read_texture_file<R: Read + Seek>(stream: &mut R, file_info: &FileInfo) -> Op
     }
 
     Some(data)
+}
+
+fn read_model_file<R: Read + Seek>(stream: &mut R, file_info: &FileInfo) -> Option<Vec<u8>> {
+    let model = file_info.model_info.as_ref()?;
+    let mut buffer = Cursor::new(Vec::new());
+    let base_offset = file_info.size as u64;
+    let total_blocks = model.num.total();
+    let compressed_block_sizes: Vec<u16> = stream
+        .read_type_args(
+            Endian::Little,
+            VecArgs::builder().count(total_blocks as usize).finalize(),
+        )
+        .ok()?;
+    let mut current_block = 0_usize;
+    let mut vertex_offsets = [0_u32; 3];
+    let mut vertex_sizes = [0_u32; 3];
+    let mut index_offsets = [0_u32; 3];
+    let mut index_sizes = [0_u32; 3];
+
+    buffer.seek(SeekFrom::Start(0x44)).ok()?;
+
+    let mut read_model_blocks =
+        |stream: &mut R, offset: u64, size: usize, current_block: &mut usize| -> Option<u32> {
+            stream.seek(SeekFrom::Start(base_offset + offset)).ok()?;
+            let start = buffer.position();
+            for _ in 0..size {
+                let block_start = stream.stream_position().ok()?;
+                let data = read_data_block(stream, block_start)?;
+                buffer.write_all(&data).ok()?;
+                stream
+                    .seek(SeekFrom::Start(
+                        block_start + u64::from(compressed_block_sizes[*current_block]),
+                    ))
+                    .ok()?;
+                *current_block += 1;
+            }
+            Some((buffer.position() - start) as u32)
+        };
+
+    let stack_size = read_model_blocks(
+        stream,
+        model.offset.stack_size as u64,
+        model.num.stack_size as usize,
+        &mut current_block,
+    )?;
+    let runtime_size = read_model_blocks(
+        stream,
+        model.offset.runtime_size as u64,
+        model.num.runtime_size as usize,
+        &mut current_block,
+    )?;
+
+    let mut process_model_data = |stream: &mut R,
+                                  lod: usize,
+                                  block_count: u32,
+                                  offset: u32,
+                                  offsets: &mut [u32; 3],
+                                  sizes: &mut [u32; 3],
+                                  current_block: &mut usize|
+     -> Option<()> {
+        if block_count == 0 {
+            return Some(());
+        }
+
+        let current_offset = buffer.position() as u32;
+        if lod == 0 || current_offset != offsets[lod - 1] {
+            offsets[lod] = current_offset;
+        }
+
+        stream
+            .seek(SeekFrom::Start(base_offset + u64::from(offset)))
+            .ok()?;
+        for _ in 0..block_count {
+            let block_start = stream.stream_position().ok()?;
+            let data = read_data_block(stream, block_start)?;
+            buffer.write_all(&data).ok()?;
+            sizes[lod] += data.len() as u32;
+            stream
+                .seek(SeekFrom::Start(
+                    block_start + u64::from(compressed_block_sizes[*current_block]),
+                ))
+                .ok()?;
+            *current_block += 1;
+        }
+        Some(())
+    };
+
+    for lod in 0..3 {
+        process_model_data(
+            stream,
+            lod,
+            model.num.vertex_buffer_size[lod] as u32,
+            model.offset.vertex_buffer_size[lod],
+            &mut vertex_offsets,
+            &mut vertex_sizes,
+            &mut current_block,
+        )?;
+        process_model_data(
+            stream,
+            lod,
+            model.num.index_buffer_size[lod] as u32,
+            model.offset.index_buffer_size[lod],
+            &mut index_offsets,
+            &mut index_sizes,
+            &mut current_block,
+        )?;
+    }
+
+    let header = ModelFileHeader {
+        version: model.version,
+        stack_size,
+        runtime_size,
+        vertex_declaration_count: model.vertex_declaration_num,
+        material_count: model.material_num,
+        vertex_offsets,
+        index_offsets,
+        vertex_buffer_size: vertex_sizes,
+        index_buffer_size: index_sizes,
+        lod_count: model.num_lods,
+        index_buffer_streaming_enabled: model.index_buffer_streaming_enabled != 0,
+        has_edge_geometry: model.edge_geometry_enabled != 0,
+    };
+    buffer.seek(SeekFrom::Start(0)).ok()?;
+    header.write_options(&mut buffer, Endian::Little, ()).ok()?;
+    Some(buffer.into_inner())
 }
 
 fn read_data_block<R: Read + Seek>(stream: &mut R, starting_position: u64) -> Option<Vec<u8>> {

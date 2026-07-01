@@ -14,6 +14,7 @@ use physis::{
 use crate::{
     CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe, ItemSource,
     MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, is_weapon_equip_slot_category,
 };
 
 pub struct GameExcel<R: Resource> {
@@ -67,6 +68,24 @@ pub fn export_craft_data_from_resource<R: Resource>(
     })
 }
 
+pub fn export_weapon_catalog_from_resource<R: Resource>(
+    resource: R,
+    source_label: String,
+    game_version: String,
+    generated_at: String,
+) -> Result<WeaponCatalogPackage> {
+    let mut game = GameExcel::new(resource, source_label, game_version);
+    let items = game.load_weapon_catalog_items()?;
+
+    Ok(WeaponCatalogPackage {
+        generated_at,
+        game_version: game.game_version.clone(),
+        source: game.source_label.clone(),
+        counts: WeaponCatalogCounts { items: items.len() },
+        items,
+    })
+}
+
 impl<R: Resource> GameExcel<R> {
     pub fn new(resource: R, source_label: String, game_version: String) -> Self {
         Self {
@@ -108,6 +127,47 @@ impl<R: Resource> GameExcel<R> {
             );
         });
 
+        Ok(items)
+    }
+
+    pub fn load_weapon_catalog_items(&mut self) -> Result<Vec<WeaponCatalogItem>> {
+        let sheet = self.sheet("Item", Language::ChineseSimplified)?;
+        let mut items = Vec::new();
+
+        for_each_row(&sheet, |row_id, row| {
+            let Some(name) = string_value(row, 0) else {
+                return;
+            };
+            if name.is_empty() {
+                return;
+            }
+
+            let equip_slot_category = number_value(row, 17);
+            let model_main = model_id_value(row, 47);
+            if model_main == 0 || !is_weapon_equip_slot_category(equip_slot_category) {
+                return;
+            }
+
+            items.push(WeaponCatalogItem {
+                id: row_id,
+                name: name.to_owned(),
+                description: string_value(row, 8).unwrap_or_default().to_owned(),
+                icon: number_value(row, 10),
+                item_ui_category: number_value(row, 15),
+                item_search_category: number_value(row, 16),
+                equip_slot_category,
+                price_mid: number_value(row, 25),
+                price_low: number_value(row, 26),
+                model_main,
+                model_sub: model_id_value(row, 48),
+            });
+        });
+
+        items.sort_by(|a, b| {
+            a.item_ui_category
+                .cmp(&b.item_ui_category)
+                .then(a.id.cmp(&b.id))
+        });
         Ok(items)
     }
 
@@ -416,6 +476,14 @@ fn field_number_value(field: &Field) -> u32 {
         Field::Int16(value) if *value > 0 => *value as u32,
         Field::Int32(value) if *value > 0 => *value as u32,
         _ => 0,
+    }
+}
+
+fn model_id_value(row: &Row, col: usize) -> u64 {
+    match row.columns.get(col) {
+        Some(Field::UInt64(value)) => *value,
+        Some(field) => field_number_value(field) as u64,
+        None => 0,
     }
 }
 

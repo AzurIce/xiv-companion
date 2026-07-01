@@ -37,6 +37,13 @@ pub const APP_MODULES: &[AppModule] = &[
         group: ModuleGroup::Tools,
         status: ModuleStatus::Ready,
     },
+    AppModule {
+        id: "weapon-models",
+        label: "武器模型",
+        href: "/weapon-models",
+        group: ModuleGroup::Preview,
+        status: ModuleStatus::Ready,
+    },
 ];
 
 pub fn module_group_label(group: ModuleGroup) -> &'static str {

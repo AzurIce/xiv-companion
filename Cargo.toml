@@ -24,6 +24,10 @@ web = [
     "dep:urlencoding",
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
+    "dep:wgpu",
+    "dep:bytemuck",
+    "dep:glam",
+    "dep:raw-window-handle",
 ]
 wasm = [
     "dep:raphael-simulator",
@@ -48,6 +52,9 @@ dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true
 gloo-net = { version = "0.6.0", optional = true }
 indexed-db = { version = "0.4", optional = true }
 js-sys = { version = "0.3.83", optional = true }
+bytemuck = { version = "1.22", features = ["derive"], optional = true }
+glam = { version = "0.30", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 urlencoding = { version = "2.1.3", optional = true }
 wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = { version = "0.4.53", optional = true }
@@ -57,16 +64,23 @@ web-sys = { version = "0.3.83", features = [
     "console",
     "Crypto",
     "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
     "HtmlCanvasElement",
     "HtmlInputElement",
     "ImageData",
+    "MouseEvent",
     "Navigator",
     "ErrorEvent",
     "MessageEvent",
     "Storage",
+    "WheelEvent",
     "Window",
     "Worker",
 ], optional = true }
+wgpu = { version = "29", features = ["webgl"], optional = true }
 
 [dev-dependencies]
 futures-executor = "0.3.32"

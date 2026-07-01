@@ -1,29 +1,25 @@
 pub mod crafting;
 pub mod notes;
+pub mod weapon_models;
 
 use dioxus::prelude::*;
-use wasm_bindgen::{JsCast, JsValue};
 use js_sys::JsString;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use xiv_companion::{
     CraftDataId, CraftDataResource, ItemIconId, ItemIconResource, ResourceError, ResourceErrorKind,
     ResourceSource,
 };
 
-use crate::app::data::{
-    LoadedCraftData, clear_item_icon_cache, load_craft_data_with_source,
-};
+use crate::app::data::{LoadedCraftData, clear_item_icon_cache, load_craft_data_with_source};
 use crate::app::icons::{Icon, IconKind};
+use crate::app::load_progress::{self, CraftDataCacheStatus, CraftDataLoadProgress};
+use crate::app::log;
 use crate::app::modules::APP_MODULES;
 use crate::app::resource_settings::{
-    ResourceSettings, SourcePreference, configured_web_resource_hub_for,
-    is_user_local_path_usable, load_resource_settings, path_user_local_provider_available_for_runtime,
-    save_resource_settings,
+    ResourceSettings, SourcePreference, configured_web_resource_hub_for, is_user_local_path_usable,
+    load_resource_settings, path_user_local_provider_available_for_runtime, save_resource_settings,
 };
-use crate::app::load_progress::{
-    self, CraftDataCacheStatus, CraftDataLoadProgress,
-};
-use crate::app::log;
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent, CardHeader,
     CardTitle, input_class,
@@ -32,6 +28,7 @@ use crate::app::utils::{cx, format_integer};
 
 pub use crafting::CraftingPage;
 pub use notes::NotesPage;
+pub use weapon_models::WeaponModelsPage;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ResourceTestResult {
@@ -108,8 +105,8 @@ impl DirectoryPermission {
 
 async fn local_directory_db() -> Result<indexed_db::Database<String>, String> {
     log::info("local-dir", "opening IndexedDB for saved directory handle");
-    let factory = indexed_db::Factory::get()
-        .map_err(|error| format!("打开 IndexedDB 失败: {error}"))?;
+    let factory =
+        indexed_db::Factory::get().map_err(|error| format!("打开 IndexedDB 失败: {error}"))?;
     factory
         .open(LOCAL_DIRECTORY_DB, 1, |event| async move {
             let db = event.database();
@@ -178,7 +175,10 @@ async fn restore_user_local_directory() -> Result<Option<AuthorizedUserLocalDire
         "local-dir",
         format!("restored handle {name}; permission={}", permission.label()),
     );
-    if !matches!(permission, DirectoryPermission::Granted | DirectoryPermission::Unknown) {
+    if !matches!(
+        permission,
+        DirectoryPermission::Granted | DirectoryPermission::Unknown
+    ) {
         return Err(format!(
             "已恢复保存的目录 {name}，但浏览器读取权限是 {}；请重新选择游戏目录。",
             permission.label()
@@ -187,12 +187,18 @@ async fn restore_user_local_directory() -> Result<Option<AuthorizedUserLocalDire
 
     let layout = detect_authorized_directory_layout(&handle).await?;
     if layout == AuthorizedDirectoryLayout::MissingSqpack {
-        log::warn("local-dir", format!("restored handle {name} has no sqpack layout"));
+        log::warn(
+            "local-dir",
+            format!("restored handle {name} has no sqpack layout"),
+        );
         return Ok(Some(AuthorizedUserLocalDirectory { name, layout }));
     }
 
     set_window_user_local_directory_handle(&handle)?;
-    log::info("local-dir", format!("restored UserLocal directory {name}: {layout:?}"));
+    log::info(
+        "local-dir",
+        format!("restored UserLocal directory {name}: {layout:?}"),
+    );
     Ok(Some(AuthorizedUserLocalDirectory { name, layout }))
 }
 
@@ -218,11 +224,17 @@ async fn authorize_user_local_directory() -> Result<AuthorizedUserLocalDirectory
     let permission = query_directory_read_permission(&handle).await;
     log::info(
         "local-dir",
-        format!("selected directory {name}; permission={}", permission.label()),
+        format!(
+            "selected directory {name}; permission={}",
+            permission.label()
+        ),
     );
     let layout = detect_authorized_directory_layout(&handle).await?;
     set_window_user_local_directory_handle(&handle)?;
-    log::info("local-dir", format!("selected UserLocal directory {name}: {layout:?}"));
+    log::info(
+        "local-dir",
+        format!("selected UserLocal directory {name}: {layout:?}"),
+    );
     Ok(AuthorizedUserLocalDirectory { name, layout })
 }
 
@@ -236,8 +248,11 @@ fn directory_handle_name(handle: &JsValue) -> String {
 
 fn current_window_user_local_directory_handle() -> Result<JsValue, String> {
     let window = web_sys::window().ok_or_else(|| "当前运行环境没有 window".to_string())?;
-    let handle = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str(WINDOW_LOCAL_DIRECTORY_KEY))
-        .map_err(format_js_error)?;
+    let handle = js_sys::Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str(WINDOW_LOCAL_DIRECTORY_KEY),
+    )
+    .map_err(format_js_error)?;
     if handle.is_undefined() || handle.is_null() {
         Err("尚未选择游戏目录".to_string())
     } else {
@@ -264,14 +279,22 @@ async fn query_directory_read_permission(handle: &JsValue) -> DirectoryPermissio
         return DirectoryPermission::Unknown;
     };
     let options = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&options, &JsValue::from_str("mode"), &JsValue::from_str("read"));
+    let _ = js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("mode"),
+        &JsValue::from_str("read"),
+    );
     let Ok(promise) = method.call1(handle, &options) else {
         return DirectoryPermission::Unknown;
     };
     let Ok(promise) = promise.dyn_into::<js_sys::Promise>() else {
         return DirectoryPermission::Unknown;
     };
-    match JsFuture::from(promise).await.ok().and_then(|value| value.as_string()) {
+    match JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|value| value.as_string())
+    {
         Some(value) if value == "granted" => DirectoryPermission::Granted,
         Some(value) if value == "prompt" => DirectoryPermission::Prompt,
         Some(value) if value == "denied" => DirectoryPermission::Denied,
@@ -300,7 +323,10 @@ async fn directory_has_child_directory(handle: &JsValue, name: &str) -> Result<b
     Ok(get_child_directory_handle(handle, name).await?.is_some())
 }
 
-async fn get_child_directory_handle(handle: &JsValue, name: &str) -> Result<Option<JsValue>, String> {
+async fn get_child_directory_handle(
+    handle: &JsValue,
+    name: &str,
+) -> Result<Option<JsValue>, String> {
     let method = js_sys::Reflect::get(handle, &JsValue::from_str("getDirectoryHandle"))
         .map_err(format_js_error)?
         .dyn_into::<js_sys::Function>()
@@ -393,11 +419,11 @@ fn user_local_status_label(status: UserLocalStatus) -> &'static str {
 
 fn user_local_status_summary(status: UserLocalStatus) -> &'static str {
     match status {
-        UserLocalStatus::PathProviderUnavailable => {
-            "当前运行时还没有可用的本地 provider"
-        }
+        UserLocalStatus::PathProviderUnavailable => "当前运行时还没有可用的本地 provider",
         UserLocalStatus::MissingPath => "选择并保存游戏目录后即可作为 Local 数据源使用",
-        UserLocalStatus::IncompletePath => "Native 路径模式预留字段不完整；Web 下请优先选择游戏目录",
+        UserLocalStatus::IncompletePath => {
+            "Native 路径模式预留字段不完整；Web 下请优先选择游戏目录"
+        }
         UserLocalStatus::Configured => "Local 数据源已可用",
     }
 }
@@ -559,15 +585,15 @@ fn diagnose_resource_error(
         let (title, summary) = match status {
             UserLocalStatus::PathProviderUnavailable => (
                 "UserLocal provider 未接入",
-                "当前没有可用的浏览器目录 handle，UserLocal provider 不会匹配资源。"
+                "当前没有可用的浏览器目录 handle，UserLocal provider 不会匹配资源。",
             ),
             UserLocalStatus::MissingPath => (
                 "UserLocal 路径未配置",
-                "没有选择游戏目录时，浏览器本地 provider 不会注册为可用来源。"
+                "没有选择游戏目录时，浏览器本地 provider 不会注册为可用来源。",
             ),
             UserLocalStatus::IncompletePath => (
                 "UserLocal 路径不完整",
-                "当前 Native 路径像目录名或相对路径，不能注册为可用本地来源。"
+                "当前 Native 路径像目录名或相对路径，不能注册为可用本地来源。",
             ),
             UserLocalStatus::Configured => (
                 "UserLocal provider 未匹配该资源",
@@ -644,10 +670,7 @@ fn diagnose_resource_error(
     }
 }
 
-async fn test_craft_data(
-    settings: ResourceSettings,
-    source: ResourceSource,
-) -> ResourceTestResult {
+async fn test_craft_data(settings: ResourceSettings, source: ResourceSource) -> ResourceTestResult {
     let hub = configured_web_resource_hub_for(&settings);
     match hub
         .load_from::<CraftDataResource>(source, CraftDataId::Default)
@@ -784,10 +807,8 @@ pub fn WorkspacePage() -> Element {
     let applied_settings_snapshot = applied_settings();
     let settings_dirty = current_settings != applied_settings_snapshot || directory_dirty();
     let authorized_directory_snapshot = authorized_user_local_directory();
-    let validation = validate_resource_settings(
-        &current_settings,
-        authorized_directory_snapshot.as_ref(),
-    );
+    let validation =
+        validate_resource_settings(&current_settings, authorized_directory_snapshot.as_ref());
 
     rsx! {
         div { class: "mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8",
@@ -918,7 +939,11 @@ pub fn WorkspacePage() -> Element {
                                 CardHeader {
                                     div { class: "flex h-10 w-10 items-center justify-center rounded-lg border bg-background text-muted-foreground",
                                         Icon {
-                                            kind: if module.id == "notes" { IconKind::BookOpen } else { IconKind::Wrench },
+                                            kind: match module.id {
+                                                "notes" => IconKind::BookOpen,
+                                                "weapon-models" => IconKind::Sword,
+                                                _ => IconKind::Wrench,
+                                            },
                                             class: "h-5 w-5"
                                         }
                                     }
@@ -926,11 +951,7 @@ pub fn WorkspacePage() -> Element {
                                 CardContent { class: "space-y-2".to_string(),
                                     CardTitle { "{module.label}" }
                                     div { class: "text-sm text-muted-foreground",
-                                        if module.id == "crafting" {
-                                            "配方树、素材汇总、来源选择"
-                                        } else {
-                                            "目录页面、分栏卡片、材料汇总"
-                                        }
+                                        {module_description(module.id)}
                                     }
                                 }
                             }
@@ -939,6 +960,15 @@ pub fn WorkspacePage() -> Element {
                 }
             }
         }
+    }
+}
+
+fn module_description(id: &str) -> &'static str {
+    match id {
+        "crafting" => "配方树、素材汇总、来源选择",
+        "notes" => "目录页面、分栏卡片、材料汇总",
+        "weapon-models" => "本地 SqPack 武器检索和模型预览",
+        _ => "工作区模块",
     }
 }
 
@@ -972,7 +1002,11 @@ fn ResourcePanel(
     let craft_data_effective_sources = preference_sources(craft_data_effective);
     let loading = craft_data.read().is_none();
     let can_save = settings_dirty && validation.valid && !loading;
-    let save_label = if loading { "加载中" } else { "保存并应用" };
+    let save_label = if loading {
+        "加载中"
+    } else {
+        "保存并应用"
+    };
     let settings_for_path = settings.clone();
     let settings_for_global = settings.clone();
     let settings_for_craft_data = settings.clone();
@@ -1182,7 +1216,8 @@ fn UserLocalSourceCard(
     };
 
     let authorized_directory_state = authorized_directory.map(|directory| {
-        let layout_available = !matches!(directory.layout, AuthorizedDirectoryLayout::MissingSqpack);
+        let layout_available =
+            !matches!(directory.layout, AuthorizedDirectoryLayout::MissingSqpack);
         (directory, layout_available)
     });
 
@@ -1539,11 +1574,7 @@ fn CraftDataCacheStatusView(status: CraftDataCacheStatus) -> Element {
             "emerald",
             Some(format!("已命中 {} bytes", format_integer(bytes as f64))),
         ),
-        CraftDataCacheStatus::Miss { reason } => (
-            "缓存未命中",
-            "amber",
-            Some(reason),
-        ),
+        CraftDataCacheStatus::Miss { reason } => ("缓存未命中", "amber", Some(reason)),
         CraftDataCacheStatus::Saving { bytes } => (
             "保存缓存",
             "muted",
@@ -1558,8 +1589,12 @@ fn CraftDataCacheStatusView(status: CraftDataCacheStatus) -> Element {
     };
 
     let class_name = match tone {
-        "emerald" => "rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-900",
-        "amber" => "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900",
+        "emerald" => {
+            "rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-900"
+        }
+        "amber" => {
+            "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+        }
         "red" => "rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-900",
         _ => "rounded-md border bg-muted/30 px-2.5 py-2 text-xs text-muted-foreground",
     };
