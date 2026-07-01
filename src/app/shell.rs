@@ -1,8 +1,7 @@
 use dioxus::prelude::*;
 
-use crate::app::icons::{Icon, IconKind};
-use crate::app::modules::{APP_MODULES, ModuleGroup, module_group_label};
 use crate::app::pages::{CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
+use xiv_companion_render::{APP_MODULES, Icon, IconKind, ModuleGroup, module_group_label};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {

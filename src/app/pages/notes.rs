@@ -15,12 +15,11 @@ use crate::app::data::{
     craftable_recipes, create_craft_data_engine, get_item, get_item_name, load_craft_data,
     summarize_materials,
 };
-use crate::app::icons::{Icon, IconKind};
-use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
-};
-use crate::app::utils::{cx, format_integer};
 use xiv_companion::{CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummary, SourceChoice};
+use xiv_companion_render::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconKind, cx,
+    format_integer, input_class,
+};
 
 const NOTES_STORAGE_KEY: &str = "xiv-companion-notes-v1";
 const MARKET_WORLD_DC_REGION: &str = "中国";

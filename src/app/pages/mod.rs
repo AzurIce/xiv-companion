@@ -12,19 +12,17 @@ use xiv_companion::{
 };
 
 use crate::app::data::{LoadedCraftData, clear_item_icon_cache, load_craft_data_with_source};
-use crate::app::icons::{Icon, IconKind};
 use crate::app::load_progress::{self, CraftDataCacheStatus, CraftDataLoadProgress};
 use crate::app::log;
-use crate::app::modules::APP_MODULES;
 use crate::app::resource_settings::{
     ResourceSettings, SourcePreference, configured_web_resource_hub_for, is_user_local_path_usable,
     load_resource_settings, path_user_local_provider_available_for_runtime, save_resource_settings,
 };
-use crate::app::ui::{
+use xiv_companion_render::{
+    APP_MODULES, Icon, IconKind, cx, format_integer,
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent, CardHeader,
     CardTitle, input_class,
 };
-use crate::app::utils::{cx, format_integer};
 
 pub use crafting::CraftingPage;
 pub use notes::NotesPage;
