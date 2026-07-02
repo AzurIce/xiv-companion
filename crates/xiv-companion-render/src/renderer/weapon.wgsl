@@ -105,10 +105,13 @@ fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
-    let material_emissive = material.emissive_color.rgb * (0.65 + vertex_alpha * 0.35);
-    let texture_emissive = emissive_tex * material.emissive_color.a;
-    let mask_hint = smoothstep(0.72, 1.0, mask.b) * material.params.w * 0.35;
-    return material_emissive + texture_emissive + material_emissive * mask_hint;
+    let material_emissive = clamp(material.emissive_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+    let texture_strength = material.emissive_color.a;
+    let texture_luma = dot(emissive_tex, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let texture_gate = smoothstep(0.02, 0.28, texture_luma) * texture_strength;
+    let mask_gate = smoothstep(0.88, 1.0, mask.b) * material.params.w * 0.18;
+    let vertex_gate = 0.35 + clamp(vertex_alpha, 0.0, 1.0) * 0.65;
+    return emissive_tex * texture_strength + material_emissive * (texture_gate + mask_gate) * vertex_gate;
 }
 
 fn resolve_normal(input: VertexOutput) -> vec3<f32> {

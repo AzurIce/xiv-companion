@@ -468,6 +468,13 @@ async fn load_weapon_material(
         )
         .await;
 
+        let diffuse_color = if texture_set.base_color.is_some() {
+            [1.0, 1.0, 1.0]
+        } else {
+            summary.diffuse
+        };
+        let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
+
         return WeaponModelMaterial {
             slot,
             material_index,
@@ -475,9 +482,9 @@ async fn load_weapon_material(
             path: Some(path),
             shader_package_name: Some(material.shader_package_name),
             fallback_color: fallback,
-            diffuse_color: summary.diffuse,
+            diffuse_color,
             specular_color: summary.specular,
-            emissive_color: summary.emissive,
+            emissive_color,
             roughness: summary.roughness,
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
@@ -539,17 +546,7 @@ async fn load_weapon_material_textures(
     }
 
     if set.base_color.is_none() {
-        set.base_color = set
-            .indices
-            .iter()
-            .copied()
-            .find(|index| {
-                matches!(
-                    textures[*index].kind,
-                    WeaponModelTextureKind::Other | WeaponModelTextureKind::Emissive
-                )
-            })
-            .or_else(|| set.indices.first().copied());
+        set.base_color = choose_fallback_base_texture(&set.indices, textures);
     }
 
     set
@@ -615,6 +612,32 @@ struct MaterialColorSummary {
     emissive: [f32; 3],
     roughness: f32,
     metalness: f32,
+}
+
+fn choose_fallback_base_texture(
+    indices: &[usize],
+    textures: &[WeaponModelTexture],
+) -> Option<usize> {
+    indices.iter().copied().find(|index| {
+        textures
+            .get(*index)
+            .is_some_and(|texture| texture.kind == WeaponModelTextureKind::Other)
+    })
+}
+
+fn preview_emissive_color(emissive: [f32; 3], texture_set: &WeaponTextureSet) -> [f32; 3] {
+    let scale = if texture_set.emissive.is_some() {
+        1.0
+    } else if texture_set.mask.is_some() {
+        0.25
+    } else {
+        0.0
+    };
+    [
+        emissive[0].clamp(0.0, 4.0) * scale,
+        emissive[1].clamp(0.0, 4.0) * scale,
+        emissive[2].clamp(0.0, 4.0) * scale,
+    ]
 }
 
 fn summarize_material_colors(
@@ -963,8 +986,11 @@ fn classify_weapon_texture(
         WeaponModelTextureKind::Mask
     } else if stem.ends_with("_e") || stem.contains("_e_") || stem.contains("emit") {
         WeaponModelTextureKind::Emissive
-    } else if stem.ends_with("_d")
+    } else if stem.ends_with("_a")
+        || stem.contains("_a_")
+        || stem.ends_with("_d")
         || stem.contains("_d_")
+        || stem.contains("albedo")
         || stem.contains("diff")
         || stem.contains("base")
     {
@@ -1024,6 +1050,47 @@ mod weapon_material_tests {
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 1);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
+    }
+
+    #[test]
+    fn classify_weapon_texture_recognizes_ffxiv_albedo_suffix() {
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w1758/obj/body/b0001/texture/w1758b0001_a.tex",
+                None
+            ),
+            WeaponModelTextureKind::BaseColor
+        );
+    }
+
+    #[test]
+    fn fallback_base_texture_ignores_specialized_maps() {
+        let textures = vec![
+            test_texture("emissive.tex", WeaponModelTextureKind::Emissive),
+            test_texture("normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("mask.tex", WeaponModelTextureKind::Mask),
+            test_texture("specular.tex", WeaponModelTextureKind::Specular),
+        ];
+        assert_eq!(choose_fallback_base_texture(&[0, 1, 2, 3], &textures), None);
+    }
+
+    #[test]
+    fn fallback_base_texture_allows_unknown_maps() {
+        let textures = vec![
+            test_texture("normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("unknown.tex", WeaponModelTextureKind::Other),
+        ];
+        assert_eq!(choose_fallback_base_texture(&[0, 1], &textures), Some(1));
+    }
+
+    fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
+        WeaponModelTexture {
+            path: path.to_string(),
+            kind,
+            width: 1,
+            height: 1,
+            rgba: vec![255, 255, 255, 255],
+        }
     }
 }
 
