@@ -3,12 +3,12 @@ use js_sys::JsString;
 use physis::ReadableFile;
 use wasm_bindgen::JsValue;
 use xiv_companion::{
-    BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage, PackedModelId,
-    ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceProvider, ResourceSource, WeaponModelData, WeaponModelMaterial, WeaponModelTexture,
-    WeaponModelTextureKind, calculate_model_bounds, item_icon_tex_path, material_color,
-    meshes_from_mdl_bytes, register_craft_data_resource, register_item_icon_resource,
-    register_weapon_model_resources,
+    BuiltinItemIconProvider, ColorTableRowColors, ItemIconResourceInfo, LocalItemIconImage,
+    PackedModelId, ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture,
+    ResourceHub, ResourceProvider, ResourceSource, WeaponMaterialRenderMode, WeaponModelData,
+    WeaponModelMaterial, WeaponModelTexture, WeaponModelTextureKind, bake_color_table_maps,
+    calculate_model_bounds, item_icon_tex_path, material_color, meshes_from_mdl_bytes,
+    register_craft_data_resource, register_item_icon_resource, register_weapon_model_resources,
     resources::{
         craft_data::CraftDataKind,
         item_icon::ItemIconKind,
@@ -358,7 +358,7 @@ async fn load_weapon_model_meshes(
 ) -> Result<(), String> {
     let mut errors = Vec::new();
     for path in weapon_model_candidate_paths(model) {
-        match sqpack.read_game_file(&path).await {
+        match sqpack.try_read_game_file(&path).await {
             Ok(bytes) => {
                 let mut path_meshes =
                     meshes_from_mdl_bytes(&path, &bytes).map_err(|error| format!("{error:#}"))?;
@@ -447,7 +447,7 @@ async fn load_weapon_material(
     let fallback = material_color(material_index);
     let candidates = weapon_material_candidate_paths(model, model_path, &material_name);
     for path in candidates {
-        let Ok(bytes) = sqpack.read_game_file(&path).await else {
+        let Ok(bytes) = sqpack.try_read_game_file(&path).await else {
             continue;
         };
         let Some(material) = physis::mtrl::Material::from_existing(physis::Platform::Win32, &bytes)
@@ -458,6 +458,7 @@ async fn load_weapon_material(
         push_loaded_path(loaded_paths, path.clone());
         let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
         let sampler_roles = parse_material_sampler_roles(&bytes);
+        let shader_flags = parse_material_shader_flags(&bytes);
         let texture_set = load_weapon_material_textures(
             sqpack,
             &path,
@@ -468,6 +469,9 @@ async fn load_weapon_material(
         )
         .await;
 
+        let render_mode =
+            weapon_material_render_mode(&material.shader_package_name, shader_flags, &texture_set);
+        let opacity = weapon_material_opacity(render_mode);
         let diffuse_color = if texture_set.base_color.is_some() {
             [1.0, 1.0, 1.0]
         } else {
@@ -481,6 +485,8 @@ async fn load_weapon_material(
             name: material_name,
             path: Some(path),
             shader_package_name: Some(material.shader_package_name),
+            render_mode,
+            opacity,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -527,6 +533,9 @@ async fn load_weapon_material_textures(
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
+        if texture_has_alpha(&textures[texture_index]) {
+            set.has_alpha = true;
+        }
 
         match textures[texture_index].kind {
             WeaponModelTextureKind::BaseColor => {
@@ -541,7 +550,47 @@ async fn load_weapon_material_textures(
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
             }
+            WeaponModelTextureKind::Index => {
+                set.index.get_or_insert(texture_index);
+            }
             WeaponModelTextureKind::Other => {}
+        }
+    }
+
+    if let Some(baked) = bake_weapon_color_table_textures(
+        material_path,
+        material.color_table.as_ref(),
+        set.index,
+        set.emissive.is_none(),
+        shader_opacity_override(&material.shader_package_name),
+        textures,
+    ) {
+        if let Some(base_color) = set.base_color {
+            if let Some(combined) = combine_base_with_colorset_texture(
+                material_path,
+                base_color,
+                baked.base_color,
+                textures,
+            ) {
+                set.base_color = Some(combined);
+                add_unique_index(&mut set.indices, combined);
+                if texture_has_alpha(&textures[combined]) {
+                    set.has_alpha = true;
+                }
+            }
+        } else {
+            set.base_color = Some(baked.base_color);
+            add_unique_index(&mut set.indices, baked.base_color);
+            if texture_has_alpha(&textures[baked.base_color]) {
+                set.has_alpha = true;
+            }
+        }
+
+        if set.emissive.is_none() {
+            if let Some(emissive) = baked.emissive {
+                set.emissive = Some(emissive);
+                add_unique_index(&mut set.indices, emissive);
+            }
         }
     }
 
@@ -566,7 +615,7 @@ async fn load_weapon_texture(
             return Some(index);
         }
 
-        let Ok(bytes) = sqpack.read_game_file(&path).await else {
+        let Ok(bytes) = sqpack.try_read_game_file(&path).await else {
             continue;
         };
         let Some(texture) = physis::tex::Texture::from_existing(physis::Platform::Win32, &bytes)
@@ -598,6 +647,17 @@ struct WeaponTextureSet {
     normal: Option<usize>,
     mask: Option<usize>,
     emissive: Option<usize>,
+    index: Option<usize>,
+    has_alpha: bool,
+}
+
+struct BakedWeaponTextureIndices {
+    base_color: usize,
+    emissive: Option<usize>,
+}
+
+fn texture_has_alpha(texture: &WeaponModelTexture) -> bool {
+    texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -612,6 +672,193 @@ struct MaterialColorSummary {
     emissive: [f32; 3],
     roughness: f32,
     metalness: f32,
+}
+
+fn add_unique_index(indices: &mut Vec<usize>, index: usize) {
+    if !indices.contains(&index) {
+        indices.push(index);
+    }
+}
+
+fn bake_weapon_color_table_textures(
+    material_path: &str,
+    color_table: Option<&physis::mtrl::ColorTable>,
+    index_texture: Option<usize>,
+    bake_emissive: bool,
+    opacity_override: Option<f32>,
+    textures: &mut Vec<WeaponModelTexture>,
+) -> Option<BakedWeaponTextureIndices> {
+    let rows = weapon_color_table_rows(color_table?)?;
+    let index_texture = textures.get(index_texture?)?;
+    let width = index_texture.width;
+    let height = index_texture.height;
+    let id_rgba = index_texture.rgba.clone();
+    let mut baked = bake_color_table_maps(&rows, &id_rgba)?;
+    if let Some(opacity) = opacity_override {
+        apply_alpha_override(&mut baked.diffuse_rgba, opacity);
+    }
+    let material_key = normalize_game_resource_path(material_path);
+
+    let base_path = format!("baked://{material_key}#colorset-diffuse");
+    let base_color = push_or_replace_baked_texture(
+        textures,
+        base_path,
+        WeaponModelTextureKind::BaseColor,
+        width,
+        height,
+        baked.diffuse_rgba,
+    );
+
+    let emissive = if bake_emissive {
+        baked.emissive_rgba.map(|rgba| {
+            push_or_replace_baked_texture(
+                textures,
+                format!("baked://{material_key}#colorset-emissive"),
+                WeaponModelTextureKind::Emissive,
+                width,
+                height,
+                rgba,
+            )
+        })
+    } else {
+        None
+    };
+
+    Some(BakedWeaponTextureIndices {
+        base_color,
+        emissive,
+    })
+}
+
+fn weapon_material_render_mode(
+    shader_package_name: &str,
+    shader_flags: u32,
+    texture_set: &WeaponTextureSet,
+) -> WeaponMaterialRenderMode {
+    const ENABLE_TRANSLUCENCY: u32 = 0x10;
+    let shader = shader_package_name.to_ascii_lowercase();
+    if shader.contains("glass") {
+        WeaponMaterialRenderMode::Glass
+    } else if texture_set.has_alpha || shader_flags & ENABLE_TRANSLUCENCY != 0 {
+        WeaponMaterialRenderMode::Transparent
+    } else {
+        WeaponMaterialRenderMode::Opaque
+    }
+}
+
+fn weapon_material_opacity(mode: WeaponMaterialRenderMode) -> f32 {
+    match mode {
+        WeaponMaterialRenderMode::Opaque => 1.0,
+        WeaponMaterialRenderMode::Transparent => 1.0,
+        WeaponMaterialRenderMode::Glass => 0.28,
+    }
+}
+
+fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
+    let mode = weapon_material_render_mode(shader_package_name, 0, &WeaponTextureSet::default());
+    (mode == WeaponMaterialRenderMode::Glass).then_some(weapon_material_opacity(mode))
+}
+
+fn apply_alpha_override(rgba: &mut [u8], opacity: f32) {
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[3] = pixel[3].min(alpha);
+    }
+}
+
+fn combine_base_with_colorset_texture(
+    material_path: &str,
+    base_index: usize,
+    colorset_index: usize,
+    textures: &mut Vec<WeaponModelTexture>,
+) -> Option<usize> {
+    let base = textures.get(base_index)?.clone();
+    let colorset = textures.get(colorset_index)?.clone();
+    let width = colorset.width.max(1) as usize;
+    let height = colorset.height.max(1) as usize;
+    let base_width = base.width.max(1) as usize;
+    let base_height = base.height.max(1) as usize;
+
+    let mut rgba = Vec::with_capacity(colorset.rgba.len());
+    for y in 0..height {
+        let base_y = y * base_height / height;
+        for x in 0..width {
+            let base_x = x * base_width / width;
+            let base_offset = (base_y * base_width + base_x) * 4;
+            let colorset_offset = (y * width + x) * 4;
+            let base = base.rgba.get(base_offset..base_offset + 4)?;
+            let colorset = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
+            rgba.push(multiply_srgb_channel(base[0], colorset[0]));
+            rgba.push(multiply_srgb_channel(base[1], colorset[1]));
+            rgba.push(multiply_srgb_channel(base[2], colorset[2]));
+            rgba.push(((u16::from(base[3]) * u16::from(colorset[3])) / 255) as u8);
+        }
+    }
+
+    Some(push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_path}#base-times-colorset"),
+        WeaponModelTextureKind::BaseColor,
+        colorset.width,
+        colorset.height,
+        rgba,
+    ))
+}
+
+fn multiply_srgb_channel(a: u8, b: u8) -> u8 {
+    ((u16::from(a) * u16::from(b)) / 255) as u8
+}
+
+fn push_or_replace_baked_texture(
+    textures: &mut Vec<WeaponModelTexture>,
+    path: String,
+    kind: WeaponModelTextureKind,
+    width: u16,
+    height: u16,
+    rgba: Vec<u8>,
+) -> usize {
+    if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+        textures[index] = WeaponModelTexture {
+            path,
+            kind,
+            width,
+            height,
+            rgba,
+        };
+        return index;
+    }
+
+    let index = textures.len();
+    textures.push(WeaponModelTexture {
+        path,
+        kind,
+        width,
+        height,
+        rgba,
+    });
+    index
+}
+
+fn weapon_color_table_rows(
+    color_table: &physis::mtrl::ColorTable,
+) -> Option<Vec<ColorTableRowColors>> {
+    match color_table {
+        physis::mtrl::ColorTable::DawntrailColorTable(table) => Some(
+            table
+                .rows
+                .iter()
+                .map(|row| ColorTableRowColors {
+                    diffuse: row.diffuse_color,
+                    emissive: row.emissive_color,
+                    alpha: row.tile_alpha,
+                })
+                .collect(),
+        ),
+        // 当前 `_id.tex` 烘焙实现针对 Dawntrail 32 行 ColorTable。
+        // 旧 16 行格式的行索引编码不同，先继续使用平均色回退，避免误烘焙。
+        physis::mtrl::ColorTable::LegacyColorTable(_)
+        | physis::mtrl::ColorTable::OpaqueColorTable(_) => None,
+    }
 }
 
 fn choose_fallback_base_texture(
@@ -730,6 +977,8 @@ fn fallback_weapon_material(
         name,
         path: None,
         shader_package_name: None,
+        render_mode: WeaponMaterialRenderMode::Opaque,
+        opacity: 1.0,
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -861,6 +1110,72 @@ fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
     roles
 }
 
+fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
+    let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
+        return 0;
+    };
+    let Some(uv_set_count) = bytes.get(13).copied().map(usize::from) else {
+        return 0;
+    };
+    let Some(color_set_count) = bytes.get(14).copied().map(usize::from) else {
+        return 0;
+    };
+    let Some(additional_data_size) = bytes.get(15).copied().map(usize::from) else {
+        return 0;
+    };
+    let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
+        return 0;
+    };
+
+    let mut offset = 16_usize;
+    for byte_count in [
+        texture_count.saturating_mul(4),
+        uv_set_count.saturating_mul(4),
+        color_set_count.saturating_mul(4),
+        string_table_size,
+    ] {
+        let Some(next) = checked_advance(offset, byte_count, bytes.len()) else {
+            return 0;
+        };
+        offset = next;
+    }
+
+    let additional_data_offset = offset;
+    let table_flags = if additional_data_size >= 4 {
+        read_u32_le(bytes, additional_data_offset).unwrap_or(0)
+    } else {
+        0
+    };
+    let Some(next) = checked_advance(offset, additional_data_size, bytes.len()) else {
+        return 0;
+    };
+    offset = next;
+
+    let table_dimension_logs = (table_flags >> 4) as u8;
+    if table_flags & 0x4 != 0 {
+        let Some(next) = checked_advance(
+            offset,
+            material_color_table_byte_len(table_dimension_logs),
+            bytes.len(),
+        ) else {
+            return 0;
+        };
+        offset = next;
+    }
+    if table_flags & 0x8 != 0 {
+        let Some(next) = checked_advance(
+            offset,
+            material_color_dye_table_byte_len(table_dimension_logs),
+            bytes.len(),
+        ) else {
+            return 0;
+        };
+        offset = next;
+    }
+
+    read_u32_le(bytes, offset + 8).unwrap_or(0)
+}
+
 fn material_color_table_byte_len(table_dimension_logs: u8) -> usize {
     match table_dimension_logs {
         0 | 0x42 => 16 * 32,
@@ -910,6 +1225,8 @@ fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> 
         ],
     ) {
         Some(WeaponModelTextureKind::Emissive)
+    } else if sampler_usage_matches(texture_usage, &["g_SamplerIndex", "g_IndexSampler"]) {
+        Some(WeaponModelTextureKind::Index)
     } else if sampler_usage_matches(
         texture_usage,
         &[
@@ -919,8 +1236,6 @@ fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> 
             "g_MaterialSampler",
             "g_SamplerMulti",
             "g_MultiSampler",
-            "g_SamplerIndex",
-            "g_IndexSampler",
         ],
     ) {
         Some(WeaponModelTextureKind::Mask)
@@ -967,16 +1282,20 @@ fn classify_weapon_texture(
     path: &str,
     sampler_kind: Option<WeaponModelTextureKind>,
 ) -> WeaponModelTextureKind {
-    if let Some(kind) = sampler_kind {
-        return kind;
-    }
-
     let path = path.to_ascii_lowercase();
     let stem = path
         .rsplit('/')
         .next()
         .unwrap_or(path.as_str())
         .trim_end_matches(".tex");
+
+    if stem.ends_with("_id") || stem.contains("_id_") || stem.contains("index") {
+        return WeaponModelTextureKind::Index;
+    }
+
+    if let Some(kind) = sampler_kind {
+        return kind;
+    }
 
     if stem.ends_with("_n") || stem.contains("_n_") || stem.contains("normal") {
         WeaponModelTextureKind::Normal
@@ -1007,6 +1326,12 @@ fn merge_texture_kind(
     match (existing, incoming) {
         (WeaponModelTextureKind::Other, kind) => kind,
         (kind, WeaponModelTextureKind::Other) => kind,
+        (WeaponModelTextureKind::Mask, WeaponModelTextureKind::Index) => {
+            WeaponModelTextureKind::Index
+        }
+        (WeaponModelTextureKind::Index, WeaponModelTextureKind::Mask) => {
+            WeaponModelTextureKind::Index
+        }
         (kind, _) => kind,
     }
 }
@@ -1064,12 +1389,24 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn classify_weapon_texture_recognizes_colorset_index_map() {
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0525/obj/body/b0001/texture/v01_w0525b0001_id.tex",
+                None
+            ),
+            WeaponModelTextureKind::Index
+        );
+    }
+
+    #[test]
     fn fallback_base_texture_ignores_specialized_maps() {
         let textures = vec![
             test_texture("emissive.tex", WeaponModelTextureKind::Emissive),
             test_texture("normal.tex", WeaponModelTextureKind::Normal),
             test_texture("mask.tex", WeaponModelTextureKind::Mask),
             test_texture("specular.tex", WeaponModelTextureKind::Specular),
+            test_texture("id.tex", WeaponModelTextureKind::Index),
         ];
         assert_eq!(choose_fallback_base_texture(&[0, 1, 2, 3], &textures), None);
     }

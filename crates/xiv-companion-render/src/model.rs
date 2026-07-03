@@ -56,8 +56,10 @@ impl PackedModelId {
         Self {
             raw,
             model_id: (raw & 0xffff) as u16,
-            variant_id: ((raw >> 16) & 0xffff) as u16,
-            body_id: ((raw >> 32) & 0xffff) as u16,
+            // Weapon Model{Main/Sub} 三段为 (model_id, body_id, variant_id)。
+            // 例如 "w2001 b0102 v0001" 的 CSV 为 "2001, 102, 1, 0"。
+            body_id: ((raw >> 16) & 0xffff) as u16,
+            variant_id: ((raw >> 32) & 0xffff) as u16,
         }
     }
 }
@@ -135,6 +137,10 @@ pub struct WeaponModelMaterial {
     pub name: String,
     pub path: Option<String>,
     pub shader_package_name: Option<String>,
+    #[serde(default)]
+    pub render_mode: WeaponMaterialRenderMode,
+    #[serde(default = "default_material_opacity")]
+    pub opacity: f32,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -151,6 +157,19 @@ pub struct WeaponModelMaterial {
     pub mask_texture: Option<usize>,
     #[serde(default)]
     pub emissive_texture: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeaponMaterialRenderMode {
+    #[default]
+    Opaque,
+    Transparent,
+    Glass,
+}
+
+fn default_material_opacity() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -171,7 +190,103 @@ pub enum WeaponModelTextureKind {
     Mask,
     Specular,
     Emissive,
+    /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
+    Index,
     Other,
+}
+
+/// ColorTable 单行中参与烘焙的颜色（线性空间）
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorTableRowColors {
+    pub diffuse: [f32; 3],
+    pub emissive: [f32; 3],
+    /// ColorTable Tile Alpha，用于玻璃/半透明材质。
+    pub alpha: f32,
+}
+
+impl Default for ColorTableRowColors {
+    fn default() -> Self {
+        Self {
+            diffuse: [0.0; 3],
+            emissive: [0.0; 3],
+            alpha: 1.0,
+        }
+    }
+}
+
+/// 由 ColorTable + 索引贴图烘焙出的贴图（RGBA8，sRGB 编码，与索引贴图同尺寸）
+#[derive(Clone, Debug, PartialEq)]
+pub struct BakedColorTableMaps {
+    pub diffuse_rgba: Vec<u8>,
+    /// 所有行 emissive 全黑时为 None
+    pub emissive_rgba: Option<Vec<u8>>,
+}
+
+/// 按 `_id.tex` 逐像素查 ColorTable 烘焙 diffuse / emissive 贴图。
+///
+/// Dawntrail 索引贴图编码: R 通道选择行对 (0..=15, 值为 17 的倍数)，
+/// 行对 i 对应表中第 2i 与 2i+1 行；G 通道在两行之间线性混合。
+/// `rows` 为 ColorTable 全部行（Dawntrail 32 行）；`id_rgba` 为索引贴图 RGBA8 数据。
+pub fn bake_color_table_maps(
+    rows: &[ColorTableRowColors],
+    id_rgba: &[u8],
+) -> Option<BakedColorTableMaps> {
+    if rows.len() < 2 || rows.len() % 2 != 0 || id_rgba.len() % 4 != 0 {
+        return None;
+    }
+
+    let pair_count = rows.len() / 2;
+    let pixel_count = id_rgba.len() / 4;
+    let mut diffuse_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut has_emissive = false;
+
+    for pixel in id_rgba.chunks_exact(4) {
+        let pair = ((pixel[0] as f32 / 255.0) * (pair_count - 1) as f32).round() as usize;
+        let pair = pair.min(pair_count - 1);
+        let blend = pixel[1] as f32 / 255.0;
+        let row_a = rows[pair * 2];
+        let row_b = rows[pair * 2 + 1];
+
+        let diffuse = lerp_color(row_a.diffuse, row_b.diffuse, blend);
+        let emissive = lerp_color(row_a.emissive, row_b.emissive, blend);
+        let alpha = row_a.alpha + (row_b.alpha - row_a.alpha) * blend;
+        if emissive.iter().any(|value| *value > 0.001) {
+            has_emissive = true;
+        }
+
+        push_srgb_pixel(&mut diffuse_rgba, diffuse, alpha);
+        push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
+    }
+
+    Some(BakedColorTableMaps {
+        diffuse_rgba,
+        emissive_rgba: has_emissive.then_some(emissive_rgba),
+    })
+}
+
+fn lerp_color(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn push_srgb_pixel(rgba: &mut Vec<u8>, linear: [f32; 3], alpha: f32) {
+    for value in linear {
+        rgba.push((linear_to_srgb(value).clamp(0.0, 1.0) * 255.0).round() as u8);
+    }
+    rgba.push((alpha.clamp(0.0, 1.0) * 255.0).round() as u8);
+}
+
+fn linear_to_srgb(value: f32) -> f32 {
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 pub fn is_weapon_equip_slot_category(category: u32) -> bool {
@@ -236,6 +351,18 @@ pub fn weapon_material_candidate_paths(
         .rsplit('/')
         .next()
         .unwrap_or(normalized_name.as_str());
+    let mut material_roots = vec![material_root];
+    if let Some((material_model_id, material_body_id)) =
+        weapon_ids_from_material_file(material_file)
+    {
+        push_unique_path(
+            &mut material_roots,
+            format!(
+                "chara/weapon/w{material_model_id:04}/obj/body/b{material_body_id:04}/material"
+            ),
+        );
+    }
+
     let mut versions = Vec::new();
     for version in [model.variant_id, model.body_id, 1, 101, 201] {
         if version != 0 && !versions.contains(&version) {
@@ -243,14 +370,24 @@ pub fn weapon_material_candidate_paths(
         }
     }
 
-    for version in versions {
-        push_unique_path(
-            &mut candidates,
-            format!("{material_root}/v{version:04}/{material_file}"),
-        );
+    for material_root in material_roots {
+        for version in &versions {
+            push_unique_path(
+                &mut candidates,
+                format!("{material_root}/v{version:04}/{material_file}"),
+            );
+        }
+        push_unique_path(&mut candidates, format!("{material_root}/{material_file}"));
     }
-    push_unique_path(&mut candidates, format!("{material_root}/{material_file}"));
     candidates
+}
+
+fn weapon_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> {
+    let tail = material_file.strip_prefix("mt_w")?;
+    let (model_id, tail) = tail.split_at_checked(4)?;
+    let tail = tail.strip_prefix('b')?;
+    let (body_id, _) = tail.split_at_checked(4)?;
+    Some((model_id.parse().ok()?, body_id.parse().ok()?))
 }
 
 pub fn weapon_slot_label(category: u32) -> &'static str {
@@ -337,5 +474,121 @@ fn normalize_resource_path(path: &str) -> String {
 fn push_unique_path(paths: &mut Vec<String>, path: String) {
     if !path.is_empty() && !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
+    }
+}
+
+#[cfg(test)]
+mod color_table_bake_tests {
+    use super::*;
+
+    fn rows_with_two_pairs() -> Vec<ColorTableRowColors> {
+        // 行对 0: 纯红 <-> 纯绿；行对 1: 纯蓝 <-> 纯蓝（带 emissive）
+        vec![
+            ColorTableRowColors {
+                diffuse: [1.0, 0.0, 0.0],
+                emissive: [0.0, 0.0, 0.0],
+                alpha: 1.0,
+            },
+            ColorTableRowColors {
+                diffuse: [0.0, 1.0, 0.0],
+                emissive: [0.0, 0.0, 0.0],
+                alpha: 0.5,
+            },
+            ColorTableRowColors {
+                diffuse: [0.0, 0.0, 1.0],
+                emissive: [1.0, 0.0, 0.0],
+                alpha: 1.0,
+            },
+            ColorTableRowColors {
+                diffuse: [0.0, 0.0, 1.0],
+                emissive: [1.0, 0.0, 0.0],
+                alpha: 1.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn bake_selects_row_pair_from_red_channel() {
+        // 两个像素: R=0 → 行对 0, R=255 → 行对 1；G=0 → 不混合
+        let id_rgba = [0, 0, 0, 255, 255, 0, 0, 255];
+        let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
+
+        // 像素 0: 纯红 (sRGB 255,0,0)
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
+        // 像素 1: 纯蓝
+        assert_eq!(&baked.diffuse_rgba[4..8], &[0, 0, 255, 255]);
+        // 行对 1 有 emissive → 生成 emissive 贴图
+        let emissive = baked.emissive_rgba.expect("emissive map");
+        assert_eq!(&emissive[4..8], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn bake_blends_rows_with_green_channel() {
+        // R=0 → 行对 0；G=255 → 完全取第二行 (纯绿)
+        let id_rgba = [0, 255, 0, 255];
+        let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
+        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 128]);
+        // 全部像素 emissive 为 0 → 无 emissive 贴图
+        assert!(baked.emissive_rgba.is_none());
+    }
+
+    #[test]
+    fn bake_maps_dawntrail_pair_steps() {
+        // 32 行 = 16 个行对，R 通道以 17 为步长；第 8 对应取行 16
+        let mut rows = vec![ColorTableRowColors::default(); 32];
+        rows[16] = ColorTableRowColors {
+            diffuse: [1.0, 1.0, 1.0],
+            emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
+        };
+        rows[17] = rows[16];
+        let id_rgba = [8 * 17, 0, 0, 255];
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn bake_rejects_invalid_input() {
+        assert!(bake_color_table_maps(&[], &[0, 0, 0, 255]).is_none());
+        let rows = rows_with_two_pairs();
+        assert!(bake_color_table_maps(&rows, &[0, 0, 0]).is_none());
+    }
+
+    #[test]
+    fn packed_weapon_model_uses_body_then_variant_order() {
+        let model = PackedModelId::from_raw(4_301_653_969);
+        assert_eq!(model.model_id, 2001);
+        assert_eq!(model.body_id, 102);
+        assert_eq!(model.variant_id, 1);
+        assert_eq!(
+            weapon_model_candidate_paths(model)
+                .first()
+                .map(String::as_str),
+            Some("chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl")
+        );
+    }
+
+    #[test]
+    fn weapon_material_candidates_include_material_name_weapon_root() {
+        // 有些双手武器的副手 MDL 放在 w0387，但材质名仍引用主手 w0337 的文件。
+        // 不能只在副手自身 material 目录里查，否则会 fallback 成米色。
+        let model = PackedModelId {
+            raw: 0,
+            model_id: 387,
+            variant_id: 1,
+            body_id: 1,
+        };
+        let candidates = weapon_material_candidate_paths(
+            model,
+            "chara/weapon/w0387/obj/body/b0001/model/w0387b0001.mdl",
+            "/mt_w0337b0001_a.mtrl",
+        );
+
+        assert!(candidates.contains(
+            &"chara/weapon/w0387/obj/body/b0001/material/v0001/mt_w0337b0001_a.mtrl".to_string()
+        ));
+        assert!(candidates.contains(
+            &"chara/weapon/w0337/obj/body/b0001/material/v0001/mt_w0337b0001_a.mtrl".to_string()
+        ));
     }
 }

@@ -6,7 +6,7 @@ use std::{cell::RefCell, rc::Rc as WasmRc};
 use dioxus::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::{JsCast, closure::Closure};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
@@ -39,6 +39,29 @@ enum WeaponSlotFilter {
 }
 
 impl WeaponSlotFilter {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Main => "main",
+            Self::Off => "off",
+            Self::TwoHanded => "two",
+            Self::Dual => "dual",
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn from_key(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::All),
+            "main" => Some(Self::Main),
+            "off" => Some(Self::Off),
+            "two" | "two-handed" | "twohanded" => Some(Self::TwoHanded),
+            "dual" => Some(Self::Dual),
+            _ => None,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::All => "全部",
@@ -66,11 +89,24 @@ struct WeaponSearchResult {
     items: Vec<WeaponCatalogItem>,
 }
 
+#[derive(Clone, Debug)]
+struct WeaponUrlState {
+    query: String,
+    filter: WeaponSlotFilter,
+    item_id: Option<u32>,
+}
+
 #[component]
 pub fn WeaponModelsPage() -> Element {
+    let initial_url_state = initial_weapon_url_state();
+    let initial_query = initial_url_state.query;
+    let initial_filter = initial_url_state.filter;
+    let initial_item_id = initial_url_state.item_id;
+
     let catalog = use_resource(load_weapon_catalog);
-    let mut query = use_signal(String::new);
-    let mut slot_filter = use_signal(|| WeaponSlotFilter::All);
+    let mut query = use_signal(move || initial_query.clone());
+    let mut slot_filter = use_signal(move || initial_filter);
+    let mut selected_id = use_signal(move || initial_item_id);
     let mut selected_item = use_signal(|| None::<WeaponCatalogItem>);
     let model = use_resource(move || {
         let item = selected_item();
@@ -82,8 +118,33 @@ pub fn WeaponModelsPage() -> Element {
         }
     });
 
+    use_effect(move || {
+        let id = selected_id();
+        if selected_item().as_ref().map(|item| item.id) == id {
+            return;
+        }
+
+        let Some(id) = id else {
+            if selected_item().is_some() {
+                selected_item.set(None);
+            }
+            return;
+        };
+
+        if let Some(Ok(catalog)) = catalog.read().as_ref() {
+            if let Some(item) = catalog.items.iter().find(|item| item.id == id).cloned() {
+                selected_item.set(Some(item));
+            }
+        }
+    });
+
+    use_effect(move || {
+        sync_weapon_url_state(&query(), slot_filter(), selected_id());
+    });
+
     let catalog_snapshot = catalog.read().as_ref().cloned();
     let selected_snapshot = selected_item();
+    let selected_id_snapshot = selected_id();
     let query_snapshot = query();
     let slot_filter_snapshot = slot_filter();
 
@@ -142,10 +203,13 @@ pub fn WeaponModelsPage() -> Element {
                                 query: query_snapshot,
                                 filter: slot_filter_snapshot,
                                 result: search,
-                                selected_id: selected_snapshot.as_ref().map(|item| item.id),
+                                selected_id: selected_id_snapshot,
                                 on_query_change: move |value| query.set(value),
                                 on_filter_change: move |value| slot_filter.set(value),
-                                on_select: move |item| selected_item.set(Some(item)),
+                                on_select: move |item: WeaponCatalogItem| {
+                                    selected_id.set(Some(item.id));
+                                    selected_item.set(Some(item));
+                                },
                             }
                             WeaponModelPane {
                                 selected: selected_snapshot,
@@ -384,6 +448,7 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
+                    StatRow { label: "Index", value: texture_counts.index.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
                 }
             }
@@ -424,6 +489,7 @@ struct TextureKindCounts {
     mask: usize,
     specular: usize,
     emissive: usize,
+    index: usize,
     other: usize,
 }
 
@@ -437,6 +503,7 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::Mask => counts.mask += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
+                WeaponModelTextureKind::Index => counts.index += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
             }
         }
@@ -683,6 +750,108 @@ fn weapon_matches_query(item: &WeaponCatalogItem, needle: &str) -> bool {
             .unwrap_or(false)
 }
 
+fn initial_weapon_url_state() -> WeaponUrlState {
+    #[cfg(target_arch = "wasm32")]
+    {
+        weapon_url_state_from_hash(
+            web_sys::window()
+                .and_then(|window| window.location().hash().ok())
+                .unwrap_or_default()
+                .as_str(),
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        WeaponUrlState {
+            query: String::new(),
+            filter: WeaponSlotFilter::All,
+            item_id: None,
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
+    let mut state = WeaponUrlState {
+        query: String::new(),
+        filter: WeaponSlotFilter::All,
+        item_id: None,
+    };
+
+    let route = hash.trim_start_matches('#');
+    let Some((_, query)) = route.split_once('?') else {
+        return state;
+    };
+
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = decode_query_value(value);
+        match key {
+            "q" | "query" | "search" => state.query = value,
+            "f" | "filter" | "slot" => {
+                if let Some(filter) = WeaponSlotFilter::from_key(&value) {
+                    state.filter = filter;
+                }
+            }
+            "item" | "itemId" | "id" => {
+                state.item_id = value.parse::<u32>().ok();
+            }
+            _ => {}
+        }
+    }
+
+    state
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn decode_query_value(value: &str) -> String {
+    urlencoding::decode(value)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| value.to_string())
+}
+
+#[allow(unused_variables)]
+fn sync_weapon_url_state(query: &str, filter: WeaponSlotFilter, item_id: Option<u32>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+
+        let mut params = Vec::new();
+        let trimmed_query = query.trim();
+        if !trimmed_query.is_empty() {
+            params.push(format!("q={}", urlencoding::encode(trimmed_query)));
+        }
+        if filter != WeaponSlotFilter::All {
+            params.push(format!("f={}", filter.key()));
+        }
+        if let Some(item_id) = item_id {
+            params.push(format!("item={item_id}"));
+        }
+
+        let hash = if params.is_empty() {
+            "#/weapon-models".to_string()
+        } else {
+            format!("#/weapon-models?{}", params.join("&"))
+        };
+
+        if window.location().hash().ok().as_deref() == Some(hash.as_str()) {
+            return;
+        }
+
+        match window.history() {
+            Ok(history) => {
+                let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&hash));
+            }
+            Err(_) => {
+                let _ = window.location().set_hash(hash.trim_start_matches('#'));
+            }
+        }
+    }
+}
+
 fn segment_button_class(active: bool) -> &'static str {
     if active {
         "flex h-8 items-center justify-center rounded bg-background text-xs font-medium text-foreground shadow-sm transition-colors"
@@ -709,4 +878,31 @@ fn model_canvas_key(model: &WeaponModelData) -> String {
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
     )
+}
+
+#[cfg(test)]
+mod weapon_url_tests {
+    use super::*;
+
+    #[test]
+    fn parses_weapon_url_state_from_hash() {
+        let state =
+            weapon_url_state_from_hash("#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058");
+        assert_eq!(state.query, "浪漫");
+        assert_eq!(state.filter, WeaponSlotFilter::TwoHanded);
+        assert_eq!(state.item_id, Some(45058));
+    }
+
+    #[test]
+    fn weapon_slot_filter_keys_round_trip() {
+        for filter in [
+            WeaponSlotFilter::All,
+            WeaponSlotFilter::Main,
+            WeaponSlotFilter::Off,
+            WeaponSlotFilter::TwoHanded,
+            WeaponSlotFilter::Dual,
+        ] {
+            assert_eq!(WeaponSlotFilter::from_key(filter.key()), Some(filter));
+        }
+    }
 }

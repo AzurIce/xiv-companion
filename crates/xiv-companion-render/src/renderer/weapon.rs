@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 
-use crate::{WeaponModelData, WeaponModelMaterial};
+use crate::{WeaponMaterialRenderMode, WeaponModelData, WeaponModelMaterial};
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
@@ -48,6 +48,7 @@ pub struct WeaponRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    transparent_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -282,52 +283,20 @@ impl WeaponRenderer {
                 immediate_size: 0,
             });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("weapon model pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[GpuVertex::layout()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: POST_FORMAT,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: POST_FORMAT,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = create_weapon_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon model pipeline",
+            false,
+        );
+        let transparent_pipeline = create_weapon_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon transparent model pipeline",
+            true,
+        );
 
         let blur_pipeline = create_post_pipeline(
             &device,
@@ -381,6 +350,7 @@ impl WeaponRenderer {
             device,
             queue,
             pipeline,
+            transparent_pipeline,
             blur_pipeline,
             compose_pipeline,
             vertex_buffer,
@@ -484,23 +454,18 @@ impl WeaponRenderer {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in &self.draw_batches {
-                if let Some(bind_group) = self
-                    .material_bind_groups
-                    .get(batch.material_slot)
-                    .or_else(|| self.material_bind_groups.first())
-                {
-                    render_pass.set_bind_group(1, bind_group, &[]);
-                    render_pass.draw_indexed(
-                        batch.index_start..batch.index_start + batch.index_count,
-                        0,
-                        0..1,
-                    );
-                }
+
+            render_pass.set_pipeline(&self.pipeline);
+            for batch in self.draw_batches.iter().filter(|batch| !batch.transparent) {
+                draw_weapon_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            render_pass.set_pipeline(&self.transparent_pipeline);
+            for batch in self.draw_batches.iter().filter(|batch| batch.transparent) {
+                draw_weapon_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
         }
 
@@ -712,10 +677,97 @@ fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>, Vec<Draw
             material_slot: mesh.material_slot,
             index_start,
             index_count: mesh.indices.len() as u32,
+            transparent: material_is_transparent(model, mesh.material_slot),
         });
     }
 
     (vertices, indices, draw_batches)
+}
+
+fn material_is_transparent(model: &WeaponModelData, material_slot: usize) -> bool {
+    let Some(material) = model.materials.get(material_slot) else {
+        return false;
+    };
+
+    material.render_mode != WeaponMaterialRenderMode::Opaque
+        || material
+            .base_color_texture
+            .and_then(|index| model.textures.get(index))
+            .is_some_and(|texture| texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250))
+}
+
+fn draw_weapon_batch<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    material_bind_groups: &'a [wgpu::BindGroup],
+    batch: &DrawBatch,
+) {
+    if let Some(bind_group) = material_bind_groups
+        .get(batch.material_slot)
+        .or_else(|| material_bind_groups.first())
+    {
+        render_pass.set_bind_group(1, bind_group, &[]);
+        render_pass.draw_indexed(
+            batch.index_start..batch.index_start + batch.index_count,
+            0,
+            0..1,
+        );
+    }
+}
+
+fn create_weapon_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+    transparent: bool,
+) -> wgpu::RenderPipeline {
+    let blend = transparent.then_some(wgpu::BlendState::ALPHA_BLENDING);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[GpuVertex::layout()],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[
+                Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(!transparent),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn create_post_pipeline(
@@ -853,7 +905,7 @@ fn create_material_bind_group(
             material.diffuse_color[0],
             material.diffuse_color[1],
             material.diffuse_color[2],
-            1.0,
+            material.opacity.clamp(0.0, 1.0),
         ],
         emissive_color: [
             material.emissive_color[0],
@@ -888,6 +940,12 @@ fn create_material_bind_group(
                 .and_then(|index| model.textures.get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
+        ],
+        render: [
+            render_mode_value(material.render_mode),
+            material.opacity,
+            0.0,
+            0.0,
         ],
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1108,6 +1166,8 @@ fn fallback_material() -> WeaponModelMaterial {
         name: "fallback".to_string(),
         path: None,
         shader_package_name: None,
+        render_mode: WeaponMaterialRenderMode::Opaque,
+        opacity: 1.0,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],
@@ -1119,6 +1179,14 @@ fn fallback_material() -> WeaponModelMaterial {
         normal_texture: None,
         mask_texture: None,
         emissive_texture: None,
+    }
+}
+
+fn render_mode_value(mode: WeaponMaterialRenderMode) -> f32 {
+    match mode {
+        WeaponMaterialRenderMode::Opaque => 0.0,
+        WeaponMaterialRenderMode::Transparent => 1.0,
+        WeaponMaterialRenderMode::Glass => 2.0,
     }
 }
 
@@ -1193,6 +1261,7 @@ struct MaterialUniform {
     emissive_color: [f32; 4],
     specular_color: [f32; 4],
     params: [f32; 4],
+    render: [f32; 4],
 }
 
 #[repr(C)]
@@ -1206,6 +1275,7 @@ struct DrawBatch {
     material_slot: usize,
     index_start: u32,
     index_count: u32,
+    transparent: bool,
 }
 
 #[repr(C)]

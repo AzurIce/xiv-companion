@@ -91,13 +91,31 @@ impl BrowserSqPack {
             .await
     }
 
+    /// 尝试读取候选资源路径；未命中 SqPack 索引时不输出 warn。
+    ///
+    /// 模型材质/贴图解析会按多个可能路径探测，前几个候选缺失是正常情况。
+    pub async fn try_read_game_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        self.read_game_file_with_window_and_log_mode(path, SQPACK_READ_WINDOW, false)
+            .await
+    }
+
     pub async fn read_game_file_with_window(
         &mut self,
         path: &str,
         read_window: u64,
     ) -> Result<Vec<u8>, String> {
+        self.read_game_file_with_window_and_log_mode(path, read_window, true)
+            .await
+    }
+
+    async fn read_game_file_with_window_and_log_mode(
+        &mut self,
+        path: &str,
+        read_window: u64,
+        warn_missing: bool,
+    ) -> Result<Vec<u8>, String> {
         log::debug("sqpack", format!("reading game file: {path}"));
-        let (index_path, dat_base) = self.find_entry_location(path).await?;
+        let (index_path, dat_base) = self.find_entry_location(path, warn_missing).await?;
         let index = self.index_cache.get(&index_path).ok_or_else(|| {
             format!("internal error: index {index_path} was not cached while reading {path}")
         })?;
@@ -255,7 +273,11 @@ impl BrowserSqPack {
         Ok(())
     }
 
-    async fn find_entry_location(&mut self, path: &str) -> Result<(String, String), String> {
+    async fn find_entry_location(
+        &mut self,
+        path: &str,
+        warn_missing: bool,
+    ) -> Result<(String, String), String> {
         let category = category_for_path(path)
             .ok_or_else(|| format!("不支持的本地 SqPack 资源路径: {path}"))?;
         let repo = repository_for_path(path);
@@ -293,7 +315,9 @@ impl BrowserSqPack {
             }
         }
 
-        log::warn("sqpack", format!("missing in SqPack index: {path}"));
+        if warn_missing {
+            log::warn("sqpack", format!("missing in SqPack index: {path}"));
+        }
         Err(format!("本地 SqPack 索引中没有 {path}"))
     }
 

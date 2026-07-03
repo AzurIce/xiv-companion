@@ -9,6 +9,7 @@ struct Material {
     emissive_color: vec4<f32>, // a: has emissive texture
     specular_color: vec4<f32>,
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
+    render: vec4<f32>, // x: mode 0=opaque 1=transparent 2=glass, y: opacity
 };
 
 struct VertexInput {
@@ -76,15 +77,29 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     let specular_scale = mix(1.0, mask.r * 1.35, material.params.w);
     let specular_power = mix(80.0, 12.0, roughness);
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
-    let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0).rgb;
-    let texture_mix = select(vec3<f32>(1.0), sampled_base, material.params.x > 0.5);
+    let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0);
+    let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
+    let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let vertex_tint = select(input.color.rgb, vec3<f32>(1.0), dot(abs(input.color.rgb), vec3<f32>(1.0)) <= 0.0003);
+    let is_glass = material.render.x > 1.5;
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
-    let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * 0.16;
+    var alpha = clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0);
+    if is_glass {
+        alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
+    }
+    if alpha < 0.01 {
+        discard;
+    }
+    let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
     let specular_tint = mix(material.specular_color.rgb, base, metalness * 0.35);
-    let lit = base * (0.22 + diffuse * 0.74)
+    let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55);
+    let opaque_lit = base * (0.22 + diffuse * 0.74)
         + specular_tint * specular * specular_scale * 0.24
         + vec3<f32>(rim);
+    let glass_lit = glass_tint * (0.10 + diffuse * 0.18)
+        + material.specular_color.rgb * specular * 0.65
+        + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0);
+    let lit = select(opaque_lit, glass_lit, is_glass);
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, input.uv0).rgb;
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     let color = lit + emissive;
@@ -92,7 +107,7 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0)) * smoothstep(0.72, 1.0, luma);
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(color, input.color.a);
+    out.color = vec4<f32>(color, alpha);
     out.bright = vec4<f32>(emissive * 1.15 + highlight * 0.65, 1.0);
     return out;
 }

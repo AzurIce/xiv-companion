@@ -1,7 +1,8 @@
 pub use xiv_companion_render::{
-    PackedModelId, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelBounds,
+    BakedColorTableMaps, ColorTableRowColors, PackedModelId, WeaponCatalogCounts,
+    WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialRenderMode, WeaponModelBounds,
     WeaponModelData, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, calculate_model_bounds,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, weapon_material_candidate_paths,
     weapon_model_candidate_paths, weapon_slot_label,
 };
