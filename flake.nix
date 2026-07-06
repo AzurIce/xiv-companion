@@ -49,6 +49,7 @@
               dioxus-cli
               just
               lld
+              tailwindcss_4
             ]
             ++ [
               (pkgs.callPackage ./wasm-bindgen-cli.nix { })
