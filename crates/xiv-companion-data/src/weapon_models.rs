@@ -19,6 +19,10 @@ const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
+#[cfg(feature = "game-data")]
+const APPLY_VERTEX_COLOR: u32 = 0x4F4F_0636;
+#[cfg(feature = "game-data")]
+const APPLY_VERTEX_COLOR_ON: u32 = 0xBD94_649A;
 
 #[cfg(feature = "game-data")]
 pub use crate::game_data::normalize_game_dir;
@@ -695,6 +699,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let sampler_roles = parse_material_sampler_roles(&bytes, &semantics);
         let shader_flags = parse_material_shader_flags(&bytes);
         let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
+        let apply_vertex_color =
+            semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
@@ -734,6 +740,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             alpha_threshold,
             opacity,
             render_backfaces,
+            apply_vertex_color,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -1083,6 +1090,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let sampler_roles = parse_material_sampler_roles(&bytes, &semantics);
         let shader_flags = parse_material_shader_flags(&bytes);
         let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
+        let apply_vertex_color =
+            semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
@@ -1123,6 +1132,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             alpha_threshold,
             opacity,
             render_backfaces,
+            apply_vertex_color,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -1858,6 +1868,7 @@ fn fallback_weapon_material(
         alpha_threshold: 0.0,
         opacity: 1.0,
         render_backfaces: true,
+        apply_vertex_color: false,
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],

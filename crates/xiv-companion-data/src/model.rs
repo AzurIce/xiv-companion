@@ -175,6 +175,8 @@ pub struct ModelMaterial {
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
     pub render_backfaces: bool,
+    #[serde(default)]
+    pub apply_vertex_color: bool,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],

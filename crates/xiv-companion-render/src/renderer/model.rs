@@ -1067,7 +1067,11 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
-            0.0,
+            if material.apply_vertex_color {
+                1.0
+            } else {
+                0.0
+            },
             0.0,
         ],
         render: [
@@ -1384,6 +1388,7 @@ fn fallback_material() -> ModelMaterial {
         alpha_threshold: 0.0,
         opacity: 1.0,
         render_backfaces: true,
+        apply_vertex_color: false,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],

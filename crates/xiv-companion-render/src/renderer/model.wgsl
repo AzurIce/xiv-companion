@@ -9,7 +9,7 @@ struct Material {
     emissive_color: vec4<f32>, // a: has emissive texture
     specular_color: vec4<f32>,
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
-    properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture
+    properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
 };
 
@@ -92,7 +92,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5);
-    let vertex_tint = select(input.color.rgb, vec3<f32>(1.0), dot(abs(input.color.rgb), vec3<f32>(1.0)) <= 0.0003);
+    let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
