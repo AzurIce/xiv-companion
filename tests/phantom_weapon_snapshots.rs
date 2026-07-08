@@ -13,6 +13,7 @@ use xiv_companion::{
     ModelBounds, ModelMaterial, ModelMesh, ModelTexture, WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
+    mdl_metadata_from_mdl_bytes,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
@@ -60,6 +61,7 @@ struct ModelDebugSummary {
     material_count: usize,
     texture_count: usize,
     meshes: Vec<MeshSummary>,
+    model_debug_files: Vec<ModelDebugFileSummary>,
     materials: Vec<MaterialSummary>,
     material_debug_files: Vec<MaterialDebugFileSummary>,
     textures: Vec<TextureSummary>,
@@ -117,6 +119,19 @@ struct MaterialDebugFileSummary {
     material_name: String,
     resource_path: Option<String>,
     debug_file: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelDebugFileSummary {
+    resource_path: String,
+    debug_file: Option<String>,
+    mesh_count: Option<usize>,
+    submesh_count: Option<usize>,
+    material_count: Option<usize>,
+    attribute_count: Option<usize>,
+    has_extra_lods: Option<bool>,
     error: Option<String>,
 }
 
@@ -284,6 +299,7 @@ fn render_case(
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
 
     let raw_files = dump_raw_files(resource, &model, &case_dir)?;
+    let model_debug_files = dump_model_debug(resource, &model, &case_dir)?;
     let material_debug_files = dump_material_debug(resource, &model, &case_dir)?;
     let material_debug_by_slot = material_debug_files
         .iter()
@@ -318,6 +334,7 @@ fn render_case(
         material_count: model.materials.len(),
         texture_count: model.textures.len(),
         meshes: mesh_summaries,
+        model_debug_files,
         materials: material_summaries,
         material_debug_files,
         textures: texture_summaries,
@@ -405,6 +422,68 @@ fn dump_raw_files(
     }
 
     Ok(files)
+}
+
+fn dump_model_debug(
+    resource: &mut SqPackResource,
+    model: &WeaponModelData,
+    case_dir: &Path,
+) -> Result<Vec<ModelDebugFileSummary>> {
+    let model_dir = case_dir.join("models");
+    fs::create_dir_all(&model_dir)
+        .with_context(|| format!("failed to create {}", model_dir.display()))?;
+
+    let mut summaries = Vec::new();
+    for resource_path in model
+        .loaded_paths
+        .iter()
+        .filter(|path| path.ends_with(".mdl"))
+    {
+        let Some(bytes) = resource.read(resource_path) else {
+            summaries.push(ModelDebugFileSummary {
+                resource_path: resource_path.clone(),
+                debug_file: None,
+                mesh_count: None,
+                submesh_count: None,
+                material_count: None,
+                attribute_count: None,
+                has_extra_lods: None,
+                error: Some("model could not be read again from SqPack".to_string()),
+            });
+            continue;
+        };
+
+        match mdl_metadata_from_mdl_bytes(resource_path, &bytes) {
+            Ok(metadata) => {
+                let debug_path =
+                    model_dir.join(format!("{}.json", safe_resource_file(resource_path)));
+                let summary = ModelDebugFileSummary {
+                    resource_path: resource_path.clone(),
+                    debug_file: Some(path_relative_to_case(&debug_path, case_dir)),
+                    mesh_count: Some(metadata.meshes.len()),
+                    submesh_count: Some(metadata.submeshes.len()),
+                    material_count: Some(metadata.materials.len()),
+                    attribute_count: Some(metadata.attributes.len()),
+                    has_extra_lods: Some(metadata.model_header.has_extra_lods),
+                    error: None,
+                };
+                write_json(&debug_path, &metadata)?;
+                summaries.push(summary);
+            }
+            Err(error) => summaries.push(ModelDebugFileSummary {
+                resource_path: resource_path.clone(),
+                debug_file: None,
+                mesh_count: None,
+                submesh_count: None,
+                material_count: None,
+                attribute_count: None,
+                has_extra_lods: None,
+                error: Some(format!("{error:#}")),
+            }),
+        }
+    }
+
+    Ok(summaries)
 }
 
 fn dump_material_debug(
@@ -700,4 +779,8 @@ fn safe_stem(value: &str) -> String {
     } else {
         stem.to_string()
     }
+}
+
+fn safe_resource_file(resource_path: &str) -> String {
+    safe_stem(resource_path.trim_end_matches(".mdl"))
 }
