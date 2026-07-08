@@ -114,7 +114,10 @@ impl BrowserSqPack {
         read_window: u64,
         warn_missing: bool,
     ) -> Result<Vec<u8>, String> {
-        log::debug("sqpack", format!("reading game file: {path}"));
+        log::debug(
+            "sqpack",
+            format!("reading game file: {path} (read_window={read_window} bytes)"),
+        );
         let (index_path, dat_base) = self.find_entry_location(path, warn_missing).await?;
         let index = self.index_cache.get(&index_path).ok_or_else(|| {
             format!("internal error: index {index_path} was not cached while reading {path}")
@@ -132,14 +135,29 @@ impl BrowserSqPack {
         log::debug(
             "sqpack",
             format!(
-                "read game file: {path} from {dat_path} ({} bytes)",
-                decoded.len()
+                "read game file: {path} from {dat_path} (read_window={read_window} bytes, slice={} bytes, decoded={} bytes)",
+                cursor.get_ref().len(),
+                decoded.len(),
             ),
         );
         Ok(decoded)
     }
 
     pub async fn craft_data_cache_fingerprint(&self) -> Result<String, String> {
+        self.exd_index_cache_fingerprint("craft-data", "CraftData")
+            .await
+    }
+
+    pub async fn weapon_catalog_cache_fingerprint(&self) -> Result<String, String> {
+        self.exd_index_cache_fingerprint("weapon-catalog", "WeaponCatalog")
+            .await
+    }
+
+    async fn exd_index_cache_fingerprint(
+        &self,
+        cache_name: &str,
+        label: &str,
+    ) -> Result<String, String> {
         let mut parts = Vec::new();
         for path in [
             "sqpack/ffxiv/0a0000.win32.index",
@@ -159,9 +177,14 @@ impl BrowserSqPack {
         }
 
         if parts.is_empty() {
-            Err("无法读取 EXD SqPack 索引元数据，不能校验本地 CraftData 缓存".to_string())
+            Err(format!(
+                "无法读取 EXD SqPack 索引元数据，不能校验本地 {label} 缓存"
+            ))
         } else {
-            Ok(format!("browser-sqpack-craft-data-v1|{}", parts.join("|")))
+            Ok(format!(
+                "browser-sqpack-{cache_name}-v1|{}",
+                parts.join("|")
+            ))
         }
     }
 
