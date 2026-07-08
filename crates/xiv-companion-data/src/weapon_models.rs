@@ -10,6 +10,17 @@ pub use crate::model::{
 };
 
 #[cfg(feature = "game-data")]
+use std::collections::HashMap;
+
+#[cfg(feature = "game-data")]
+const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
+#[cfg(feature = "game-data")]
+const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
+#[cfg(feature = "game-data")]
+#[cfg(test)]
+const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
+
+#[cfg(feature = "game-data")]
 pub use crate::game_data::normalize_game_dir;
 
 #[cfg(feature = "game-data")]
@@ -270,7 +281,8 @@ pub fn material_debug_info_from_mtrl_bytes(
 
     let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, bytes)
         .ok_or_else(|| anyhow!("failed to parse material {path}"))?;
-    let sampler_records = parse_material_sampler_records(bytes);
+    let sampler_records =
+        parse_material_sampler_records(bytes, &ComposedMaterialSemantics::default());
     let shader_flags = parse_material_shader_flags(bytes);
 
     Ok(MaterialDebugInfo {
@@ -525,9 +537,15 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
         let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
-        let sampler_roles = parse_material_sampler_roles(&bytes);
+        let semantics = load_composed_material_semantics_from_resource(
+            resource,
+            &shader_package_name,
+            &material,
+            loaded_paths,
+        );
+        let sampler_roles = parse_material_sampler_roles(&bytes, &semantics);
         let shader_flags = parse_material_shader_flags(&bytes);
-        let alpha_test = material_has_alpha_test(&material);
+        let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
@@ -912,9 +930,16 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
         let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
-        let sampler_roles = parse_material_sampler_roles(&bytes);
+        let semantics = load_composed_material_semantics_from_async_resource(
+            resource,
+            &shader_package_name,
+            &material,
+            loaded_paths,
+        )
+        .await;
+        let sampler_roles = parse_material_sampler_roles(&bytes, &semantics);
         let shader_flags = parse_material_shader_flags(&bytes);
-        let alpha_test = material_has_alpha_test(&material);
+        let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
@@ -1172,6 +1197,119 @@ struct MaterialSamplerRecord {
 }
 
 #[cfg(feature = "game-data")]
+#[derive(Default)]
+struct ComposedMaterialSemantics {
+    material_keys: HashMap<u32, u32>,
+    resource_names: HashMap<u32, String>,
+}
+
+#[cfg(feature = "game-data")]
+impl ComposedMaterialSemantics {
+    fn has_material_key(&self, key: u32, value: u32) -> bool {
+        self.material_keys.get(&key).copied() == Some(value)
+    }
+
+    fn sampler_kind(&self, texture_usage: u32) -> Option<WeaponModelTextureKind> {
+        self.resource_names
+            .get(&texture_usage)
+            .and_then(|name| classify_sampler_name(name))
+            .or_else(|| classify_sampler_usage(texture_usage))
+    }
+
+    fn apply_shader_package(&mut self, shader_package: &physis::shpk::ShaderPackage) {
+        for key in shader_package
+            .material_keys
+            .iter()
+            .chain(shader_package.system_keys.iter())
+            .chain(shader_package.scene_keys.iter())
+        {
+            self.apply_shader_package_key_default(key.id, key.default_value);
+        }
+
+        for parameter in shader_package
+            .sampler_parameters
+            .iter()
+            .chain(shader_package.scalar_parameters.iter())
+            .chain(shader_package.texture_parameters.iter())
+            .chain(shader_package.uav_parameters.iter())
+        {
+            self.register_resource_parameter(parameter);
+        }
+    }
+
+    fn apply_material(&mut self, material: &physis::mtrl::Material) {
+        for key in &material.shader_keys {
+            self.apply_material_key(key.category, key.value);
+        }
+    }
+
+    fn apply_shader_package_key_default(&mut self, key: u32, value: u32) {
+        self.material_keys.entry(key).or_insert(value);
+    }
+
+    fn apply_material_key(&mut self, key: u32, value: u32) {
+        self.material_keys.insert(key, value);
+    }
+
+    fn register_resource_parameter(&mut self, parameter: &physis::shpk::ResourceParameter) {
+        if parameter.slot == 2 {
+            self.register_resource_name(parameter.name.clone());
+        }
+    }
+
+    fn register_resource_name(&mut self, name: String) {
+        let id = physis::shpk::ShaderPackage::crc(&name);
+        self.resource_names.insert(id, name);
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn load_composed_material_semantics_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    shader_package_name: &str,
+    material: &physis::mtrl::Material,
+    loaded_paths: &mut Vec<String>,
+) -> ComposedMaterialSemantics {
+    use physis::ReadableFile;
+
+    let mut semantics = ComposedMaterialSemantics::default();
+    let path = normalize_game_resource_path(&format!("shader/sm5/shpk/{shader_package_name}"));
+    if let Some(bytes) = resource.read(&path) {
+        if let Some(shader_package) =
+            physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
+        {
+            semantics.apply_shader_package(&shader_package);
+            push_loaded_path(loaded_paths, path);
+        }
+    }
+    semantics.apply_material(material);
+    semantics
+}
+
+#[cfg(feature = "game-data")]
+async fn load_composed_material_semantics_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    shader_package_name: &str,
+    material: &physis::mtrl::Material,
+    loaded_paths: &mut Vec<String>,
+) -> ComposedMaterialSemantics {
+    use physis::ReadableFile;
+
+    let mut semantics = ComposedMaterialSemantics::default();
+    let path = normalize_game_resource_path(&format!("shader/sm5/shpk/{shader_package_name}"));
+    if let Ok(bytes) = resource.read(&path).await {
+        if let Some(shader_package) =
+            physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
+        {
+            semantics.apply_shader_package(&shader_package);
+            push_loaded_path(loaded_paths, path);
+        }
+    }
+    semantics.apply_material(material);
+    semantics
+}
+
+#[cfg(feature = "game-data")]
 struct MaterialColorSummary {
     diffuse: [f32; 3],
     specular: [f32; 3],
@@ -1307,16 +1445,6 @@ fn material_render_backfaces(shader_flags: u32) -> bool {
 #[cfg(feature = "game-data")]
 fn default_alpha_threshold(_mode: WeaponMaterialAlphaMode) -> f32 {
     0.0
-}
-
-#[cfg(feature = "game-data")]
-fn material_has_alpha_test(material: &physis::mtrl::Material) -> bool {
-    const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
-    const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
-    material
-        .shader_keys
-        .iter()
-        .any(|key| key.category == APPLY_ALPHA_TEST && key.value == APPLY_ALPHA_TEST_ON)
 }
 
 #[cfg(feature = "game-data")]
@@ -1621,8 +1749,11 @@ fn brighter_color(current: [f32; 3], candidate: [f32; 3]) -> [f32; 3] {
 }
 
 #[cfg(feature = "game-data")]
-fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
-    parse_material_sampler_records(bytes)
+fn parse_material_sampler_roles(
+    bytes: &[u8],
+    semantics: &ComposedMaterialSemantics,
+) -> Vec<MaterialSamplerRole> {
+    parse_material_sampler_records(bytes, semantics)
         .into_iter()
         .filter_map(|record| {
             record.kind.map(|kind| MaterialSamplerRole {
@@ -1634,7 +1765,10 @@ fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
 }
 
 #[cfg(feature = "game-data")]
-fn parse_material_sampler_records(bytes: &[u8]) -> Vec<MaterialSamplerRecord> {
+fn parse_material_sampler_records(
+    bytes: &[u8],
+    semantics: &ComposedMaterialSemantics,
+) -> Vec<MaterialSamplerRecord> {
     let Some(layout) = material_shader_table_layout(bytes) else {
         return Vec::new();
     };
@@ -1652,7 +1786,7 @@ fn parse_material_sampler_records(bytes: &[u8]) -> Vec<MaterialSamplerRecord> {
             records.push(MaterialSamplerRecord {
                 texture_index,
                 texture_usage,
-                kind: classify_sampler_usage(texture_usage),
+                kind: semantics.sampler_kind(texture_usage),
             });
         }
         let Some(next) = checked_advance(sampler_offset, 12, bytes.len()) else {
@@ -1786,80 +1920,66 @@ fn sampler_kind_for_texture(
 
 #[cfg(feature = "game-data")]
 fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> {
-    if sampler_usage_matches(
-        texture_usage,
-        &[
-            "g_SamplerNormal",
-            "g_NormalSampler",
-            "g_SamplerNormalMap",
-            "g_NormalMapSampler",
-        ],
-    ) {
-        Some(WeaponModelTextureKind::Normal)
-    } else if sampler_usage_matches(
-        texture_usage,
-        &[
-            "g_SamplerEmissive",
-            "g_EmissiveSampler",
-            "g_SamplerEmission",
-            "g_EmissionSampler",
-            "g_SamplerLight",
-            "g_LightSampler",
-        ],
-    ) {
-        Some(WeaponModelTextureKind::Emissive)
-    } else if sampler_usage_matches(texture_usage, &["g_SamplerIndex", "g_IndexSampler"]) {
-        Some(WeaponModelTextureKind::Index)
-    } else if sampler_usage_matches(
-        texture_usage,
-        &[
-            "g_SamplerMask",
-            "g_MaskSampler",
-            "g_SamplerMaterial",
-            "g_MaterialSampler",
-            "g_SamplerMulti",
-            "g_MultiSampler",
-        ],
-    ) {
-        Some(WeaponModelTextureKind::Mask)
-    } else if sampler_usage_matches(
-        texture_usage,
-        &[
-            "g_SamplerSpecular",
-            "g_SpecularSampler",
-            "g_SamplerSpecularMap",
-            "g_SpecularMapSampler",
-            "g_SamplerReflect",
-            "g_ReflectSampler",
-        ],
-    ) {
-        Some(WeaponModelTextureKind::Specular)
-    } else if sampler_usage_matches(
-        texture_usage,
-        &[
-            "g_SamplerDiffuse",
-            "g_DiffuseSampler",
-            "g_SamplerColor",
-            "g_ColorSampler",
-            "g_SamplerColorMap",
-            "g_ColorMapSampler",
-            "g_SamplerAlbedo",
-            "g_AlbedoSampler",
-            "g_SamplerBaseColor",
-            "g_BaseColorSampler",
-        ],
-    ) {
-        Some(WeaponModelTextureKind::BaseColor)
-    } else {
-        None
-    }
+    known_sampler_names()
+        .iter()
+        .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
+        .map(|(_, kind)| *kind)
 }
 
 #[cfg(feature = "game-data")]
-fn sampler_usage_matches(texture_usage: u32, names: &[&str]) -> bool {
-    names
+fn classify_sampler_name(name: &str) -> Option<WeaponModelTextureKind> {
+    known_sampler_names()
         .iter()
-        .any(|name| physis::shpk::ShaderPackage::crc(name) == texture_usage)
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, kind)| *kind)
+}
+
+#[cfg(feature = "game-data")]
+fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
+    &[
+        ("g_SamplerNormal", WeaponModelTextureKind::Normal),
+        ("g_NormalSampler", WeaponModelTextureKind::Normal),
+        ("g_SamplerNormalMap", WeaponModelTextureKind::Normal),
+        ("g_NormalMapSampler", WeaponModelTextureKind::Normal),
+        ("g_SamplerNormalMap0", WeaponModelTextureKind::Normal),
+        ("g_SamplerNormalMap1", WeaponModelTextureKind::Normal),
+        ("g_SamplerEmissive", WeaponModelTextureKind::Emissive),
+        ("g_EmissiveSampler", WeaponModelTextureKind::Emissive),
+        ("g_SamplerEmission", WeaponModelTextureKind::Emissive),
+        ("g_EmissionSampler", WeaponModelTextureKind::Emissive),
+        ("g_SamplerLight", WeaponModelTextureKind::Emissive),
+        ("g_LightSampler", WeaponModelTextureKind::Emissive),
+        ("g_SamplerIndex", WeaponModelTextureKind::Index),
+        ("g_IndexSampler", WeaponModelTextureKind::Index),
+        ("g_SamplerMask", WeaponModelTextureKind::Mask),
+        ("g_MaskSampler", WeaponModelTextureKind::Mask),
+        ("g_SamplerMaterial", WeaponModelTextureKind::Mask),
+        ("g_MaterialSampler", WeaponModelTextureKind::Mask),
+        ("g_SamplerMulti", WeaponModelTextureKind::Mask),
+        ("g_MultiSampler", WeaponModelTextureKind::Mask),
+        ("g_SamplerSpecular", WeaponModelTextureKind::Specular),
+        ("g_SpecularSampler", WeaponModelTextureKind::Specular),
+        ("g_SamplerSpecularMap", WeaponModelTextureKind::Specular),
+        ("g_SpecularMapSampler", WeaponModelTextureKind::Specular),
+        ("g_SamplerSpecularMap0", WeaponModelTextureKind::Specular),
+        ("g_SamplerReflect", WeaponModelTextureKind::Specular),
+        ("g_ReflectSampler", WeaponModelTextureKind::Specular),
+        ("g_SamplerDiffuse", WeaponModelTextureKind::BaseColor),
+        ("g_DiffuseSampler", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerColor", WeaponModelTextureKind::BaseColor),
+        ("g_ColorSampler", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerColorMap", WeaponModelTextureKind::BaseColor),
+        ("g_ColorMapSampler", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerColorMap0", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerColorMap1", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerAlbedo", WeaponModelTextureKind::BaseColor),
+        ("g_AlbedoSampler", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerBaseColor", WeaponModelTextureKind::BaseColor),
+        ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
+        ("g_Sampler0", WeaponModelTextureKind::BaseColor),
+        ("g_Sampler1", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerEnvMap", WeaponModelTextureKind::Specular),
+    ]
 }
 
 #[cfg(feature = "game-data")]
@@ -2037,11 +2157,51 @@ mod weapon_material_tests {
         bytes.push(1);
         bytes.extend_from_slice(&[0; 3]);
 
-        let roles = parse_material_sampler_roles(&bytes);
+        let roles = parse_material_sampler_roles(&bytes, &ComposedMaterialSemantics::default());
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 1);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
+    }
+
+    #[test]
+    fn composed_material_semantics_material_key_overrides_shader_package_default() {
+        let mut semantics = ComposedMaterialSemantics::default();
+
+        semantics.apply_shader_package_key_default(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_OFF);
+        assert!(!semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON));
+
+        semantics.apply_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
+        assert!(semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON));
+    }
+
+    #[test]
+    fn parse_material_sampler_roles_uses_composed_resource_names() {
+        let sampler_name = "G_SAMPLERINDEX";
+        let texture_usage = physis::shpk::ShaderPackage::crc(sampler_name);
+        assert_eq!(classify_sampler_usage(texture_usage), None);
+
+        let mut semantics = ComposedMaterialSemantics::default();
+        semantics.register_resource_name(sampler_name.to_string());
+
+        let mut bytes = vec![0; 16];
+        bytes[12] = 1;
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&texture_usage.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 3]);
+
+        let roles = parse_material_sampler_roles(&bytes, &semantics);
+
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].texture_index, 0);
+        assert_eq!(roles[0].kind, WeaponModelTextureKind::Index);
     }
 
     #[test]
