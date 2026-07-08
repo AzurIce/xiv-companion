@@ -131,10 +131,15 @@ pub struct MaterialColorTableRowDebug {
     pub roughness: Option<f32>,
     pub metalness: Option<f32>,
     pub anisotropy: Option<f32>,
-    pub alpha: Option<f32>,
+    pub tile_alpha: Option<f32>,
+    pub sheen_rate: Option<f32>,
+    pub sheen_tint: Option<f32>,
+    pub sheen_aperture: Option<f32>,
+    pub sphere_mask: Option<f32>,
     pub tile_set: Option<u16>,
     pub shader_index: Option<u16>,
     pub sphere_index: Option<u16>,
+    pub tile_matrix: Option<[f32; 4]>,
     pub material_repeat: Option<[f32; 2]>,
     pub material_skew: Option<[f32; 2]>,
 }
@@ -533,10 +538,20 @@ fn material_color_table_debug(
                     roughness: None,
                     metalness: None,
                     anisotropy: None,
-                    alpha: None,
+                    tile_alpha: None,
+                    sheen_rate: None,
+                    sheen_tint: None,
+                    sheen_aperture: None,
+                    sphere_mask: None,
                     tile_set: Some(row.tile_set),
                     shader_index: None,
                     sphere_index: None,
+                    tile_matrix: Some([
+                        row.material_repeat_x,
+                        row.material_skew[0],
+                        row.material_skew[1],
+                        row.material_repeat_y,
+                    ]),
                     material_repeat: Some([row.material_repeat_x, row.material_repeat_y]),
                     material_skew: Some(row.material_skew),
                 })
@@ -559,10 +574,20 @@ fn material_color_table_debug(
                     roughness: Some(row.roughness),
                     metalness: Some(row.metalness),
                     anisotropy: Some(row.anisotropy),
-                    alpha: Some(row.tile_alpha),
+                    tile_alpha: Some(row.tile_alpha),
+                    sheen_rate: Some(row.sheen_rate),
+                    sheen_tint: Some(row.sheen_tint),
+                    sheen_aperture: Some(row.sheen_aperture),
+                    sphere_mask: Some(row.sphere_mask),
                     tile_set: Some(row.tile_set),
                     shader_index: Some(row.shader_index),
                     sphere_index: Some(row.sphere_index),
+                    tile_matrix: Some([
+                        row.material_repeat[0],
+                        row.material_repeat[1],
+                        row.material_skew[0],
+                        row.material_skew[1],
+                    ]),
                     material_repeat: Some(row.material_repeat),
                     material_skew: Some(row.material_skew),
                 })
@@ -2569,6 +2594,49 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn dawntrail_color_table_rows_use_meddle_strength_names() {
+        let row = test_dawntrail_color_table_row();
+        let color_table =
+            physis::mtrl::ColorTable::DawntrailColorTable(physis::mtrl::DawntrailColorTableData {
+                rows: vec![row],
+            });
+
+        let rows = weapon_color_table_rows(&color_table).expect("dawntrail rows");
+
+        assert_eq!(rows[0].gloss_strength, row.unknown1);
+        assert_eq!(rows[0].specular_strength, row.unknown2);
+        assert_eq!(rows[0].anisotropy, row.anisotropy);
+        assert_eq!(rows[0].tile_alpha, row.tile_alpha);
+    }
+
+    #[test]
+    fn dawntrail_color_table_debug_exposes_tile_properties() {
+        let row = test_dawntrail_color_table_row();
+        let color_table =
+            physis::mtrl::ColorTable::DawntrailColorTable(physis::mtrl::DawntrailColorTableData {
+                rows: vec![row],
+            });
+
+        let debug = material_color_table_debug(Some(&color_table)).expect("debug");
+
+        assert_eq!(debug.kind, "Dawntrail");
+        assert_eq!(debug.rows[0].tile_alpha, Some(row.tile_alpha));
+        assert_eq!(debug.rows[0].sheen_rate, Some(row.sheen_rate));
+        assert_eq!(debug.rows[0].sheen_tint, Some(row.sheen_tint));
+        assert_eq!(debug.rows[0].sheen_aperture, Some(row.sheen_aperture));
+        assert_eq!(debug.rows[0].sphere_mask, Some(row.sphere_mask));
+        assert_eq!(
+            debug.rows[0].tile_matrix,
+            Some([
+                row.material_repeat[0],
+                row.material_repeat[1],
+                row.material_skew[0],
+                row.material_skew[1],
+            ])
+        );
+    }
+
+    #[test]
     fn shader_package_material_defaults_read_default_constants() {
         let bytes = test_shpk_with_material_defaults(&[(G_ALPHA_THRESHOLD, &[0.35])]);
 
@@ -2851,6 +2919,35 @@ mod weapon_material_tests {
             width: 1,
             height: 1,
             rgba: vec![255, 255, 255, alpha],
+        }
+    }
+
+    fn test_dawntrail_color_table_row() -> physis::mtrl::DawntrailColorTableRow {
+        physis::mtrl::DawntrailColorTableRow {
+            diffuse_color: [0.1, 0.2, 0.3],
+            unknown1: 0.31,
+            specular_color: [0.4, 0.5, 0.6],
+            unknown2: 0.62,
+            emissive_color: [0.7, 0.8, 0.9],
+            unknown3: 0.0,
+            sheen_rate: 0.11,
+            sheen_tint: 0.22,
+            sheen_aperture: 0.33,
+            unknown4: 0.0,
+            roughness: 0.44,
+            unknown5: 0.0,
+            metalness: 0.55,
+            anisotropy: 0.66,
+            unknown6: 0.0,
+            sphere_mask: 0.77,
+            unknown7: 0.0,
+            unknown8: 0.0,
+            shader_index: 3,
+            tile_set: 4,
+            tile_alpha: 0.88,
+            sphere_index: 5,
+            material_repeat: [1.25, 1.5],
+            material_skew: [0.25, 0.5],
         }
     }
 

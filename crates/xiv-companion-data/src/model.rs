@@ -773,6 +773,22 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn bake_accepts_noisy_dawntrail_pair_steps() {
+        let mut rows = vec![ColorTableRowColors::default(); 32];
+        rows[4] = ColorTableRowColors {
+            diffuse: [1.0, 1.0, 1.0],
+            ..Default::default()
+        };
+        rows[5] = rows[4];
+
+        let id_rgba = [30, 0, 0, 255, 34, 0, 0, 255];
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
+        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 255, 255, 255]);
+    }
+
+    #[test]
     fn bake_rejects_invalid_input() {
         assert!(bake_color_table_maps(&[], &[0, 0, 0, 255]).is_none());
         let rows = rows_with_two_pairs();
