@@ -14,5 +14,6 @@ pub use xiv_companion_data::game_data::normalize_game_dir;
 pub use xiv_companion_data::weapon_models::{
     AsyncGameResource, WeaponModelLoadRequest, load_weapon_model_from_async_resource,
     load_weapon_model_from_game_dir, load_weapon_model_from_resource,
-    load_weapon_model_from_resource_request, meshes_from_mdl_bytes,
+    load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
+    meshes_from_mdl_bytes,
 };

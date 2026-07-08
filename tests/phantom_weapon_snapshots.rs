@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use xiv_companion::{
     ModelBounds, ModelMaterial, ModelMesh, ModelTexture, WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
-    load_weapon_model_from_resource,
+    load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
@@ -61,6 +61,7 @@ struct ModelDebugSummary {
     texture_count: usize,
     meshes: Vec<MeshSummary>,
     materials: Vec<MaterialSummary>,
+    material_debug_files: Vec<MaterialDebugFileSummary>,
     textures: Vec<TextureSummary>,
     raw_files: Vec<RawFileSummary>,
 }
@@ -100,6 +101,18 @@ struct MaterialSummary {
     normal_texture: Option<usize>,
     mask_texture: Option<usize>,
     emissive_texture: Option<usize>,
+    debug_file: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterialDebugFileSummary {
+    slot: usize,
+    material_index: u16,
+    material_name: String,
+    resource_path: Option<String>,
+    debug_file: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,6 +125,20 @@ struct TextureSummary {
     height: u16,
     rgba_bytes: usize,
     decoded_png: Option<String>,
+    pixel_stats: Option<TexturePixelStats>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TexturePixelStats {
+    pixel_count: usize,
+    alpha_min: u8,
+    alpha_max: u8,
+    alpha_average: f32,
+    transparent_pixels: usize,
+    translucent_pixels: usize,
+    opaque_pixels: usize,
+    average_rgb: [f32; 3],
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -241,9 +268,22 @@ fn render_case(
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
 
     let raw_files = dump_raw_files(resource, &model, &case_dir)?;
+    let material_debug_files = dump_material_debug(resource, &model, &case_dir)?;
+    let material_debug_by_slot = material_debug_files
+        .iter()
+        .filter_map(|file| {
+            file.debug_file
+                .clone()
+                .map(|debug_file| (file.slot, debug_file))
+        })
+        .collect::<HashMap<_, _>>();
     let texture_summaries = dump_decoded_textures(&model, &case_dir)?;
     let mesh_summaries = dump_meshes(&model, &case_dir)?;
-    let material_summaries = model.materials.iter().map(material_summary).collect();
+    let material_summaries = model
+        .materials
+        .iter()
+        .map(|material| material_summary(material, &material_debug_by_slot))
+        .collect();
     let summary_path = case_dir.join("model-summary.json");
     let raw_manifest_path = case_dir.join("raw-manifest.json");
 
@@ -263,6 +303,7 @@ fn render_case(
         texture_count: model.textures.len(),
         meshes: mesh_summaries,
         materials: material_summaries,
+        material_debug_files,
         textures: texture_summaries,
         raw_files: raw_files.clone(),
     };
@@ -330,6 +371,73 @@ fn dump_raw_files(
     Ok(files)
 }
 
+fn dump_material_debug(
+    resource: &mut SqPackResource,
+    model: &WeaponModelData,
+    case_dir: &Path,
+) -> Result<Vec<MaterialDebugFileSummary>> {
+    let material_dir = case_dir.join("materials");
+    fs::create_dir_all(&material_dir)
+        .with_context(|| format!("failed to create {}", material_dir.display()))?;
+
+    let mut summaries = Vec::new();
+    for material in &model.materials {
+        let Some(resource_path) = material.path.as_ref() else {
+            summaries.push(MaterialDebugFileSummary {
+                slot: material.slot,
+                material_index: material.material_index,
+                material_name: material.name.clone(),
+                resource_path: None,
+                debug_file: None,
+                error: Some("fallback material has no .mtrl path".to_string()),
+            });
+            continue;
+        };
+
+        let Some(bytes) = resource.read(resource_path) else {
+            summaries.push(MaterialDebugFileSummary {
+                slot: material.slot,
+                material_index: material.material_index,
+                material_name: material.name.clone(),
+                resource_path: Some(resource_path.clone()),
+                debug_file: None,
+                error: Some("material could not be read again from SqPack".to_string()),
+            });
+            continue;
+        };
+
+        match material_debug_info_from_mtrl_bytes(resource_path, &bytes) {
+            Ok(debug) => {
+                let debug_path = material_dir.join(format!(
+                    "{:03}-m{:04}-{}.json",
+                    material.slot,
+                    material.material_index,
+                    safe_stem(&material.name)
+                ));
+                write_json(&debug_path, &debug)?;
+                summaries.push(MaterialDebugFileSummary {
+                    slot: material.slot,
+                    material_index: material.material_index,
+                    material_name: material.name.clone(),
+                    resource_path: Some(resource_path.clone()),
+                    debug_file: Some(path_relative_to_case(&debug_path, case_dir)),
+                    error: None,
+                });
+            }
+            Err(error) => summaries.push(MaterialDebugFileSummary {
+                slot: material.slot,
+                material_index: material.material_index,
+                material_name: material.name.clone(),
+                resource_path: Some(resource_path.clone()),
+                debug_file: None,
+                error: Some(format!("{error:#}")),
+            }),
+        }
+    }
+
+    Ok(summaries)
+}
+
 fn dump_decoded_textures(model: &WeaponModelData, case_dir: &Path) -> Result<Vec<TextureSummary>> {
     let texture_dir = case_dir.join("textures");
     fs::create_dir_all(&texture_dir)
@@ -364,10 +472,60 @@ fn dump_decoded_textures(model: &WeaponModelData, case_dir: &Path) -> Result<Vec
             height: texture.height,
             rgba_bytes: texture.rgba.len(),
             decoded_png,
+            pixel_stats: texture_pixel_stats(texture),
         });
     }
 
     Ok(summaries)
+}
+
+fn texture_pixel_stats(texture: &ModelTexture) -> Option<TexturePixelStats> {
+    if texture.rgba.len() != texture.width as usize * texture.height as usize * 4 {
+        return None;
+    }
+
+    let pixel_count = texture.rgba.len() / 4;
+    if pixel_count == 0 {
+        return None;
+    }
+
+    let mut alpha_min = u8::MAX;
+    let mut alpha_max = u8::MIN;
+    let mut alpha_total = 0_u64;
+    let mut rgb_total = [0_u64; 3];
+    let mut transparent_pixels = 0_usize;
+    let mut translucent_pixels = 0_usize;
+    let mut opaque_pixels = 0_usize;
+
+    for pixel in texture.rgba.chunks_exact(4) {
+        let alpha = pixel[3];
+        alpha_min = alpha_min.min(alpha);
+        alpha_max = alpha_max.max(alpha);
+        alpha_total += u64::from(alpha);
+        for channel in 0..3 {
+            rgb_total[channel] += u64::from(pixel[channel]);
+        }
+        match alpha {
+            0 => transparent_pixels += 1,
+            255 => opaque_pixels += 1,
+            _ => translucent_pixels += 1,
+        }
+    }
+
+    Some(TexturePixelStats {
+        pixel_count,
+        alpha_min,
+        alpha_max,
+        alpha_average: alpha_total as f32 / pixel_count as f32 / 255.0,
+        transparent_pixels,
+        translucent_pixels,
+        opaque_pixels,
+        average_rgb: [
+            rgb_total[0] as f32 / pixel_count as f32 / 255.0,
+            rgb_total[1] as f32 / pixel_count as f32 / 255.0,
+            rgb_total[2] as f32 / pixel_count as f32 / 255.0,
+        ],
+    })
 }
 
 fn dump_meshes(model: &WeaponModelData, case_dir: &Path) -> Result<Vec<MeshSummary>> {
@@ -405,7 +563,10 @@ fn mesh_summary(mesh: &ModelMesh, mesh_file: String) -> MeshSummary {
     }
 }
 
-fn material_summary(material: &ModelMaterial) -> MaterialSummary {
+fn material_summary(
+    material: &ModelMaterial,
+    debug_file_by_slot: &HashMap<usize, String>,
+) -> MaterialSummary {
     MaterialSummary {
         slot: material.slot,
         material_index: material.material_index,
@@ -425,6 +586,7 @@ fn material_summary(material: &ModelMaterial) -> MaterialSummary {
         normal_texture: material.normal_texture,
         mask_texture: material.mask_texture,
         emissive_texture: material.emissive_texture,
+        debug_file: debug_file_by_slot.get(&material.slot).cloned(),
     }
 }
 

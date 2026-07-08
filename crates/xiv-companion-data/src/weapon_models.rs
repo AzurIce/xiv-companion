@@ -55,6 +55,72 @@ pub trait AsyncGameResource {
 }
 
 #[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialDebugInfo {
+    pub path: String,
+    pub shader_package_name: String,
+    pub shader_flags: u32,
+    pub shader_flags_hex: String,
+    pub texture_paths: Vec<String>,
+    pub shader_keys: Vec<MaterialShaderKeyDebug>,
+    pub constants_debug: Vec<String>,
+    pub samplers: Vec<MaterialSamplerDebug>,
+    pub color_table: Option<MaterialColorTableDebug>,
+    pub color_dye_table_kind: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialShaderKeyDebug {
+    pub category: u32,
+    pub category_hex: String,
+    pub value: u32,
+    pub value_hex: String,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialSamplerDebug {
+    pub texture_index: usize,
+    pub texture_path: Option<String>,
+    pub texture_usage: u32,
+    pub texture_usage_hex: String,
+    pub kind: Option<WeaponModelTextureKind>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialColorTableDebug {
+    pub kind: String,
+    pub row_count: usize,
+    pub rows: Vec<MaterialColorTableRowDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialColorTableRowDebug {
+    pub index: usize,
+    pub diffuse_color: Option<[f32; 3]>,
+    pub specular_color: Option<[f32; 3]>,
+    pub emissive_color: Option<[f32; 3]>,
+    pub specular_strength: Option<f32>,
+    pub gloss_strength: Option<f32>,
+    pub roughness: Option<f32>,
+    pub metalness: Option<f32>,
+    pub alpha: Option<f32>,
+    pub tile_set: Option<u16>,
+    pub shader_index: Option<u16>,
+    pub sphere_index: Option<u16>,
+    pub material_repeat: Option<[f32; 2]>,
+    pub material_skew: Option<[f32; 2]>,
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_game_dir(
     game_dir: &std::path::Path,
     item: &WeaponCatalogItem,
@@ -194,6 +260,58 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
 }
 
 #[cfg(feature = "game-data")]
+pub fn material_debug_info_from_mtrl_bytes(
+    path: &str,
+    bytes: &[u8],
+) -> anyhow::Result<MaterialDebugInfo> {
+    use anyhow::anyhow;
+    use physis::ReadableFile;
+
+    let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, bytes)
+        .ok_or_else(|| anyhow!("failed to parse material {path}"))?;
+    let sampler_records = parse_material_sampler_records(bytes);
+    let shader_flags = parse_material_shader_flags(bytes);
+
+    Ok(MaterialDebugInfo {
+        path: path.to_string(),
+        shader_package_name: material.shader_package_name.clone(),
+        shader_flags,
+        shader_flags_hex: hex_u32(shader_flags),
+        texture_paths: material.texture_paths.clone(),
+        shader_keys: material
+            .shader_keys
+            .iter()
+            .map(|key| MaterialShaderKeyDebug {
+                category: key.category,
+                category_hex: hex_u32(key.category),
+                value: key.value,
+                value_hex: hex_u32(key.value),
+            })
+            .collect(),
+        constants_debug: material
+            .constants
+            .iter()
+            .map(|constant| format!("{constant:?}"))
+            .collect(),
+        samplers: sampler_records
+            .into_iter()
+            .map(|record| MaterialSamplerDebug {
+                texture_index: record.texture_index,
+                texture_path: material.texture_paths.get(record.texture_index).cloned(),
+                texture_usage: record.texture_usage,
+                texture_usage_hex: hex_u32(record.texture_usage),
+                kind: record.kind,
+            })
+            .collect(),
+        color_table: material_color_table_debug(material.color_table.as_ref()),
+        color_dye_table_kind: material
+            .color_dye_table
+            .as_ref()
+            .map(material_color_dye_table_kind),
+    })
+}
+
+#[cfg(feature = "game-data")]
 fn normalized_or_fallback(normal: [f32; 3]) -> [f32; 3] {
     let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
     if length > 0.0001 {
@@ -211,6 +329,83 @@ fn vertex_color_or_fallback(color: [f32; 4]) -> [f32; 4] {
         [1.0, 1.0, 1.0, color[3]]
     } else {
         [1.0, 1.0, 1.0, 1.0]
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn hex_u32(value: u32) -> String {
+    format!("0x{value:08x}")
+}
+
+#[cfg(feature = "game-data")]
+fn material_color_table_debug(
+    color_table: Option<&physis::mtrl::ColorTable>,
+) -> Option<MaterialColorTableDebug> {
+    match color_table? {
+        physis::mtrl::ColorTable::LegacyColorTable(table) => Some(MaterialColorTableDebug {
+            kind: "Legacy".to_string(),
+            row_count: table.rows.len(),
+            rows: table
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorTableRowDebug {
+                    index,
+                    diffuse_color: Some(row.diffuse_color),
+                    specular_color: Some(row.specular_color),
+                    emissive_color: Some(row.emissive_color),
+                    specular_strength: Some(row.specular_strength),
+                    gloss_strength: Some(row.gloss_strength),
+                    roughness: None,
+                    metalness: None,
+                    alpha: None,
+                    tile_set: Some(row.tile_set),
+                    shader_index: None,
+                    sphere_index: None,
+                    material_repeat: Some([row.material_repeat_x, row.material_repeat_y]),
+                    material_skew: Some(row.material_skew),
+                })
+                .collect(),
+        }),
+        physis::mtrl::ColorTable::DawntrailColorTable(table) => Some(MaterialColorTableDebug {
+            kind: "Dawntrail".to_string(),
+            row_count: table.rows.len(),
+            rows: table
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorTableRowDebug {
+                    index,
+                    diffuse_color: Some(row.diffuse_color),
+                    specular_color: Some(row.specular_color),
+                    emissive_color: Some(row.emissive_color),
+                    specular_strength: None,
+                    gloss_strength: None,
+                    roughness: Some(row.roughness),
+                    metalness: Some(row.metalness),
+                    alpha: Some(row.tile_alpha),
+                    tile_set: Some(row.tile_set),
+                    shader_index: Some(row.shader_index),
+                    sphere_index: Some(row.sphere_index),
+                    material_repeat: Some(row.material_repeat),
+                    material_skew: Some(row.material_skew),
+                })
+                .collect(),
+        }),
+        physis::mtrl::ColorTable::OpaqueColorTable(_) => Some(MaterialColorTableDebug {
+            kind: "Opaque".to_string(),
+            row_count: 0,
+            rows: Vec::new(),
+        }),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn material_color_dye_table_kind(color_dye_table: &physis::mtrl::ColorDyeTable) -> String {
+    match color_dye_table {
+        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(_) => "Legacy".to_string(),
+        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(_) => "Dawntrail".to_string(),
+        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => "Opaque".to_string(),
     }
 }
 
@@ -910,6 +1105,14 @@ struct MaterialSamplerRole {
 }
 
 #[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug)]
+struct MaterialSamplerRecord {
+    texture_index: usize,
+    texture_usage: u32,
+    kind: Option<WeaponModelTextureKind>,
+}
+
+#[cfg(feature = "game-data")]
 struct MaterialColorSummary {
     diffuse: [f32; 3],
     specular: [f32; 3],
@@ -1285,6 +1488,19 @@ fn brighter_color(current: [f32; 3], candidate: [f32; 3]) -> [f32; 3] {
 
 #[cfg(feature = "game-data")]
 fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
+    parse_material_sampler_records(bytes)
+        .into_iter()
+        .filter_map(|record| {
+            record.kind.map(|kind| MaterialSamplerRole {
+                texture_index: record.texture_index,
+                kind,
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "game-data")]
+fn parse_material_sampler_records(bytes: &[u8]) -> Vec<MaterialSamplerRecord> {
     let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
         return Vec::new();
     };
@@ -1366,29 +1582,28 @@ fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
         return Vec::new();
     };
 
-    let mut roles = Vec::new();
+    let mut records = Vec::new();
     for _ in 0..sampler_count {
         let Some(texture_usage) = read_u32_le(bytes, sampler_offset) else {
-            return roles;
+            return records;
         };
         let Some(texture_index) = bytes.get(sampler_offset + 8).copied().map(usize::from) else {
-            return roles;
+            return records;
         };
         if texture_index < texture_count {
-            if let Some(kind) = classify_sampler_usage(texture_usage) {
-                roles.push(MaterialSamplerRole {
-                    texture_index,
-                    kind,
-                });
-            }
+            records.push(MaterialSamplerRecord {
+                texture_index,
+                texture_usage,
+                kind: classify_sampler_usage(texture_usage),
+            });
         }
         let Some(next) = checked_advance(sampler_offset, 12, bytes.len()) else {
-            return roles;
+            return records;
         };
         sampler_offset = next;
     }
 
-    roles
+    records
 }
 
 #[cfg(feature = "game-data")]
