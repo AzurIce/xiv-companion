@@ -533,13 +533,12 @@ async fn load_weapon_material_textures(
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
-        if texture_has_alpha(&textures[texture_index]) {
-            set.has_alpha = true;
-        }
-
         match textures[texture_index].kind {
             WeaponModelTextureKind::BaseColor => {
                 set.base_color.get_or_insert(texture_index);
+                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
+                    set.has_alpha = true;
+                }
             }
             WeaponModelTextureKind::Normal => {
                 set.normal.get_or_insert(texture_index);
@@ -574,14 +573,14 @@ async fn load_weapon_material_textures(
             ) {
                 set.base_color = Some(combined);
                 add_unique_index(&mut set.indices, combined);
-                if texture_has_alpha(&textures[combined]) {
+                if texture_alpha_affects_material_transparency(&textures[combined]) {
                     set.has_alpha = true;
                 }
             }
         } else {
             set.base_color = Some(baked.base_color);
             add_unique_index(&mut set.indices, baked.base_color);
-            if texture_has_alpha(&textures[baked.base_color]) {
+            if texture_alpha_affects_material_transparency(&textures[baked.base_color]) {
                 set.has_alpha = true;
             }
         }
@@ -658,6 +657,10 @@ struct BakedWeaponTextureIndices {
 
 fn texture_has_alpha(texture: &WeaponModelTexture) -> bool {
     texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250)
+}
+
+fn texture_alpha_affects_material_transparency(texture: &WeaponModelTexture) -> bool {
+    texture.kind == WeaponModelTextureKind::BaseColor && texture_has_alpha(texture)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -788,9 +791,9 @@ fn combine_base_with_colorset_texture(
             let colorset_offset = (y * width + x) * 4;
             let base = base.rgba.get(base_offset..base_offset + 4)?;
             let colorset = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
-            rgba.push(multiply_srgb_channel(base[0], colorset[0]));
-            rgba.push(multiply_srgb_channel(base[1], colorset[1]));
-            rgba.push(multiply_srgb_channel(base[2], colorset[2]));
+            rgba.push(multiply_srgb_channels(base[0], colorset[0]));
+            rgba.push(multiply_srgb_channels(base[1], colorset[1]));
+            rgba.push(multiply_srgb_channels(base[2], colorset[2]));
             rgba.push(((u16::from(base[3]) * u16::from(colorset[3])) / 255) as u8);
         }
     }
@@ -805,8 +808,27 @@ fn combine_base_with_colorset_texture(
     ))
 }
 
-fn multiply_srgb_channel(a: u8, b: u8) -> u8 {
-    ((u16::from(a) * u16::from(b)) / 255) as u8
+fn multiply_srgb_channels(a: u8, b: u8) -> u8 {
+    linear_to_srgb_u8(srgb_u8_to_linear(a) * srgb_u8_to_linear(b))
+}
+
+fn srgb_u8_to_linear(value: u8) -> f32 {
+    let srgb = f32::from(value) / 255.0;
+    if srgb <= 0.04045 {
+        srgb / 12.92
+    } else {
+        ((srgb + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_u8(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let srgb = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn push_or_replace_baked_texture(
@@ -1420,13 +1442,50 @@ mod weapon_material_tests {
         assert_eq!(choose_fallback_base_texture(&[0, 1], &textures), Some(1));
     }
 
+    #[test]
+    fn only_base_texture_alpha_affects_material_transparency() {
+        for kind in [
+            WeaponModelTextureKind::Normal,
+            WeaponModelTextureKind::Mask,
+            WeaponModelTextureKind::Specular,
+            WeaponModelTextureKind::Emissive,
+            WeaponModelTextureKind::Index,
+            WeaponModelTextureKind::Other,
+        ] {
+            let texture = test_texture_with_alpha("non-base-alpha.tex", kind, 0);
+            assert!(!texture_alpha_affects_material_transparency(&texture));
+        }
+
+        let opaque_base =
+            test_texture_with_alpha("base-opaque.tex", WeaponModelTextureKind::BaseColor, 255);
+        assert!(!texture_alpha_affects_material_transparency(&opaque_base));
+
+        let alpha_base =
+            test_texture_with_alpha("base-alpha.tex", WeaponModelTextureKind::BaseColor, 128);
+        assert!(texture_alpha_affects_material_transparency(&alpha_base));
+    }
+
+    #[test]
+    fn srgb_multiply_uses_linear_space() {
+        assert_eq!(multiply_srgb_channels(255, 128), 128);
+        assert_ne!(multiply_srgb_channels(128, 128), 64);
+    }
+
     fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
+        test_texture_with_alpha(path, kind, 255)
+    }
+
+    fn test_texture_with_alpha(
+        path: &str,
+        kind: WeaponModelTextureKind,
+        alpha: u8,
+    ) -> WeaponModelTexture {
         WeaponModelTexture {
             path: path.to_string(),
             kind,
             width: 1,
             height: 1,
-            rgba: vec![255, 255, 255, 255],
+            rgba: vec![255, 255, 255, alpha],
         }
     }
 }

@@ -66,8 +66,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> FragmentOutput {
-    let normal = resolve_normal(input);
+fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+    let normal = resolve_normal(input, front_facing);
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
@@ -129,8 +129,9 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
     return emissive_tex * texture_strength + material_emissive * (texture_gate + mask_gate) * vertex_gate;
 }
 
-fn resolve_normal(input: VertexOutput) -> vec3<f32> {
-    let geometric_normal = normalize(input.normal);
+fn resolve_normal(input: VertexOutput, front_facing: bool) -> vec3<f32> {
+    let face_sign = select(-1.0, 1.0, front_facing);
+    let geometric_normal = normalize(input.normal) * face_sign;
     let sampled = textureSample(normal_texture, base_color_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
     if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
         return geometric_normal;
