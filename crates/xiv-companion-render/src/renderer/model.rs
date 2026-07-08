@@ -1402,6 +1402,10 @@ fn fallback_material() -> ModelMaterial {
         specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
+        tile_properties_texture: None,
+        sheen_properties_texture: None,
+        sphere_properties_texture: None,
+        tile_matrix_texture: None,
     }
 }
 

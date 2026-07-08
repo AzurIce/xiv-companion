@@ -132,6 +132,7 @@ pub struct MaterialColorTableRowDebug {
     pub metalness: Option<f32>,
     pub anisotropy: Option<f32>,
     pub tile_alpha: Option<f32>,
+    pub tile_index: Option<f32>,
     pub sheen_rate: Option<f32>,
     pub sheen_tint: Option<f32>,
     pub sheen_aperture: Option<f32>,
@@ -540,6 +541,7 @@ fn material_color_table_debug(
                     metalness: None,
                     anisotropy: None,
                     tile_alpha: None,
+                    tile_index: Some(f32::from(row.tile_set)),
                     sheen_rate: None,
                     sheen_tint: None,
                     sheen_aperture: None,
@@ -576,6 +578,7 @@ fn material_color_table_debug(
                     metalness: Some(row.metalness),
                     anisotropy: Some(row.anisotropy),
                     tile_alpha: Some(row.tile_alpha),
+                    tile_index: Some(dawntrail_tile_index(row.tile_set)),
                     sheen_rate: Some(row.sheen_rate),
                     sheen_tint: Some(row.sheen_tint),
                     sheen_aperture: Some(row.sheen_aperture),
@@ -791,6 +794,10 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
+            tile_properties_texture: texture_set.tile_properties,
+            sheen_properties_texture: texture_set.sheen_properties,
+            sphere_properties_texture: texture_set.sphere_properties,
+            tile_matrix_texture: texture_set.tile_matrix,
         };
     }
 
@@ -847,6 +854,18 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             WeaponModelTextureKind::MaterialProperties => {
                 set.material_properties.get_or_insert(texture_index);
             }
+            WeaponModelTextureKind::TileProperties => {
+                set.tile_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SheenProperties => {
+                set.sheen_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SphereProperties => {
+                set.sphere_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::TileMatrixProperties => {
+                set.tile_matrix.get_or_insert(texture_index);
+            }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
             }
@@ -889,6 +908,14 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         set.material_properties
             .get_or_insert(baked.material_properties);
         add_unique_index(&mut set.indices, baked.material_properties);
+        set.tile_properties.get_or_insert(baked.tile_properties);
+        add_unique_index(&mut set.indices, baked.tile_properties);
+        set.sheen_properties.get_or_insert(baked.sheen_properties);
+        add_unique_index(&mut set.indices, baked.sheen_properties);
+        set.sphere_properties.get_or_insert(baked.sphere_properties);
+        add_unique_index(&mut set.indices, baked.sphere_properties);
+        set.tile_matrix.get_or_insert(baked.tile_matrix);
+        add_unique_index(&mut set.indices, baked.tile_matrix);
     }
 
     if set.base_color.is_none() {
@@ -1185,6 +1212,10 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
+            tile_properties_texture: texture_set.tile_properties,
+            sheen_properties_texture: texture_set.sheen_properties,
+            sphere_properties_texture: texture_set.sphere_properties,
+            tile_matrix_texture: texture_set.tile_matrix,
         };
     }
 
@@ -1243,6 +1274,18 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             WeaponModelTextureKind::MaterialProperties => {
                 set.material_properties.get_or_insert(texture_index);
             }
+            WeaponModelTextureKind::TileProperties => {
+                set.tile_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SheenProperties => {
+                set.sheen_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SphereProperties => {
+                set.sphere_properties.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::TileMatrixProperties => {
+                set.tile_matrix.get_or_insert(texture_index);
+            }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
             }
@@ -1285,6 +1328,14 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         set.material_properties
             .get_or_insert(baked.material_properties);
         add_unique_index(&mut set.indices, baked.material_properties);
+        set.tile_properties.get_or_insert(baked.tile_properties);
+        add_unique_index(&mut set.indices, baked.tile_properties);
+        set.sheen_properties.get_or_insert(baked.sheen_properties);
+        add_unique_index(&mut set.indices, baked.sheen_properties);
+        set.sphere_properties.get_or_insert(baked.sphere_properties);
+        add_unique_index(&mut set.indices, baked.sphere_properties);
+        set.tile_matrix.get_or_insert(baked.tile_matrix);
+        add_unique_index(&mut set.indices, baked.tile_matrix);
     }
 
     if set.base_color.is_none() {
@@ -1346,6 +1397,10 @@ struct WeaponTextureSet {
     specular: Option<usize>,
     emissive: Option<usize>,
     material_properties: Option<usize>,
+    tile_properties: Option<usize>,
+    sheen_properties: Option<usize>,
+    sphere_properties: Option<usize>,
+    tile_matrix: Option<usize>,
     index: Option<usize>,
     has_alpha: bool,
 }
@@ -1355,6 +1410,10 @@ struct BakedWeaponTextureIndices {
     base_color: usize,
     specular: usize,
     material_properties: usize,
+    tile_properties: usize,
+    sheen_properties: usize,
+    sphere_properties: usize,
+    tile_matrix: usize,
     emissive: Option<usize>,
 }
 
@@ -1594,6 +1653,42 @@ fn bake_weapon_color_table_textures(
         baked.material_rgba,
     );
 
+    let tile_properties = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-tile-properties"),
+        WeaponModelTextureKind::TileProperties,
+        width,
+        height,
+        baked.tile_properties_rgba,
+    );
+
+    let sheen_properties = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-sheen-properties"),
+        WeaponModelTextureKind::SheenProperties,
+        width,
+        height,
+        baked.sheen_properties_rgba,
+    );
+
+    let sphere_properties = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-sphere-properties"),
+        WeaponModelTextureKind::SphereProperties,
+        width,
+        height,
+        baked.sphere_properties_rgba,
+    );
+
+    let tile_matrix = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-tile-matrix"),
+        WeaponModelTextureKind::TileMatrixProperties,
+        width,
+        height,
+        baked.tile_matrix_rgba,
+    );
+
     let emissive = if bake_emissive {
         baked.emissive_rgba.map(|rgba| {
             push_or_replace_baked_texture(
@@ -1613,6 +1708,10 @@ fn bake_weapon_color_table_textures(
         base_color,
         specular,
         material_properties,
+        tile_properties,
+        sheen_properties,
+        sphere_properties,
+        tile_matrix,
         emissive,
     })
 }
@@ -1812,12 +1911,59 @@ fn weapon_color_table_rows(
                     metalness: row.metalness,
                     anisotropy: row.anisotropy,
                     tile_alpha: row.tile_alpha,
+                    tile_index: dawntrail_tile_index(row.tile_set),
+                    sheen_rate: row.sheen_rate,
+                    sheen_tint: row.sheen_tint,
+                    sheen_aperture: row.sheen_aperture,
+                    sphere_index: f32::from(row.sphere_index),
+                    sphere_mask: row.sphere_mask,
+                    tile_matrix: [
+                        row.material_repeat[0],
+                        row.material_repeat[1],
+                        row.material_skew[0],
+                        row.material_skew[1],
+                    ],
                 })
                 .collect(),
         ),
         physis::mtrl::ColorTable::LegacyColorTable(_)
         | physis::mtrl::ColorTable::OpaqueColorTable(_) => None,
     }
+}
+
+#[cfg(feature = "game-data")]
+fn dawntrail_tile_index(tile_set: u16) -> f32 {
+    half_to_f32(tile_set) * 64.0
+}
+
+#[cfg(feature = "game-data")]
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits & 0x8000) << 16;
+    let exponent = (bits >> 10) & 0x1f;
+    let mantissa = u32::from(bits & 0x03ff);
+    let value = match exponent {
+        0 => {
+            if mantissa == 0 {
+                sign
+            } else {
+                let mut mantissa = mantissa;
+                let mut exponent = -14_i32;
+                while (mantissa & 0x0400) == 0 {
+                    mantissa <<= 1;
+                    exponent -= 1;
+                }
+                mantissa &= 0x03ff;
+                let exponent = u32::try_from(exponent + 127).unwrap_or(0);
+                sign | (exponent << 23) | (mantissa << 13)
+            }
+        }
+        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
+        _ => {
+            let exponent = u32::from(exponent) + 112;
+            sign | (exponent << 23) | (mantissa << 13)
+        }
+    };
+    f32::from_bits(value)
 }
 
 #[cfg(feature = "game-data")]
@@ -1961,6 +2107,10 @@ fn fallback_weapon_material(
         specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
+        tile_properties_texture: None,
+        sheen_properties_texture: None,
+        sphere_properties_texture: None,
+        tile_matrix_texture: None,
     }
 }
 
@@ -2608,6 +2758,21 @@ mod weapon_material_tests {
         assert_eq!(rows[0].specular_strength, row.unknown2);
         assert_eq!(rows[0].anisotropy, row.anisotropy);
         assert_eq!(rows[0].tile_alpha, row.tile_alpha);
+        assert_eq!(rows[0].tile_index, dawntrail_tile_index(row.tile_set));
+        assert_eq!(rows[0].sheen_rate, row.sheen_rate);
+        assert_eq!(rows[0].sheen_tint, row.sheen_tint);
+        assert_eq!(rows[0].sheen_aperture, row.sheen_aperture);
+        assert_eq!(rows[0].sphere_index, f32::from(row.sphere_index));
+        assert_eq!(rows[0].sphere_mask, row.sphere_mask);
+        assert_eq!(
+            rows[0].tile_matrix,
+            [
+                row.material_repeat[0],
+                row.material_repeat[1],
+                row.material_skew[0],
+                row.material_skew[1],
+            ]
+        );
     }
 
     #[test]
@@ -2622,6 +2787,10 @@ mod weapon_material_tests {
 
         assert_eq!(debug.kind, "Dawntrail");
         assert_eq!(debug.rows[0].tile_alpha, Some(row.tile_alpha));
+        assert_eq!(
+            debug.rows[0].tile_index,
+            Some(dawntrail_tile_index(row.tile_set))
+        );
         assert_eq!(debug.rows[0].sheen_rate, Some(row.sheen_rate));
         assert_eq!(debug.rows[0].sheen_tint, Some(row.sheen_tint));
         assert_eq!(debug.rows[0].sheen_aperture, Some(row.sheen_aperture));
@@ -2710,6 +2879,11 @@ mod weapon_material_tests {
             WeaponModelTextureKind::Mask,
             WeaponModelTextureKind::Specular,
             WeaponModelTextureKind::Emissive,
+            WeaponModelTextureKind::MaterialProperties,
+            WeaponModelTextureKind::TileProperties,
+            WeaponModelTextureKind::SheenProperties,
+            WeaponModelTextureKind::SphereProperties,
+            WeaponModelTextureKind::TileMatrixProperties,
             WeaponModelTextureKind::Index,
             WeaponModelTextureKind::Other,
         ] {
@@ -2965,7 +3139,7 @@ mod weapon_material_tests {
             unknown7: 0.0,
             unknown8: 0.0,
             shader_index: 3,
-            tile_set: 4,
+            tile_set: 0x3400,
             tile_alpha: 0.88,
             sphere_index: 5,
             material_repeat: [1.25, 1.5],

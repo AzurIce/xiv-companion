@@ -110,6 +110,10 @@ struct MaterialSummary {
     specular_texture: Option<usize>,
     emissive_texture: Option<usize>,
     material_properties_texture: Option<usize>,
+    tile_properties_texture: Option<usize>,
+    sheen_properties_texture: Option<usize>,
+    sphere_properties_texture: Option<usize>,
+    tile_matrix_texture: Option<usize>,
     debug_file: Option<String>,
 }
 
@@ -710,6 +714,10 @@ fn material_summary(
         specular_texture: material.specular_texture,
         emissive_texture: material.emissive_texture,
         material_properties_texture: material.material_properties_texture,
+        tile_properties_texture: material.tile_properties_texture,
+        sheen_properties_texture: material.sheen_properties_texture,
+        sphere_properties_texture: material.sphere_properties_texture,
+        tile_matrix_texture: material.tile_matrix_texture,
         debug_file: debug_file_by_slot.get(&material.slot).cloned(),
     }
 }

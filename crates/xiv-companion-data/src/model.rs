@@ -203,6 +203,14 @@ pub struct ModelMaterial {
     pub emissive_texture: Option<usize>,
     #[serde(default)]
     pub material_properties_texture: Option<usize>,
+    #[serde(default)]
+    pub tile_properties_texture: Option<usize>,
+    #[serde(default)]
+    pub sheen_properties_texture: Option<usize>,
+    #[serde(default)]
+    pub sphere_properties_texture: Option<usize>,
+    #[serde(default)]
+    pub tile_matrix_texture: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -252,6 +260,14 @@ pub enum ModelTextureKind {
     Emissive,
     /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。
     MaterialProperties,
+    /// ColorTable 派生出的 tile 参数贴图，通道为 tile index / tile alpha / 1 / 1。
+    TileProperties,
+    /// ColorTable 派生出的 sheen 参数贴图，通道为 sheen rate / tint / aperture / 1。
+    SheenProperties,
+    /// ColorTable 派生出的 sphere map 参数贴图，通道为 sphere index / sphere mask / 1 / 1。
+    SphereProperties,
+    /// ColorTable 派生出的 tile matrix 参数贴图，通道为 UU / UV / VU / VV。
+    TileMatrixProperties,
     /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
     Index,
     Other,
@@ -358,6 +374,15 @@ pub struct ColorTableRowColors {
     pub anisotropy: f32,
     /// ColorTable Tile Alpha，属于 tile 属性，不等同于材质整体透明度。
     pub tile_alpha: f32,
+    /// Meddle 的 TileIndex 语义值。Dawntrail 行来自 half(tile_set) * 64。
+    pub tile_index: f32,
+    pub sheen_rate: f32,
+    pub sheen_tint: f32,
+    pub sheen_aperture: f32,
+    pub sphere_index: f32,
+    pub sphere_mask: f32,
+    /// Meddle TileMatrix 顺序: UU / UV / VU / VV。
+    pub tile_matrix: [f32; 4],
 }
 
 impl Default for ColorTableRowColors {
@@ -372,6 +397,13 @@ impl Default for ColorTableRowColors {
             metalness: 0.0,
             anisotropy: 0.0,
             tile_alpha: 1.0,
+            tile_index: 0.0,
+            sheen_rate: 0.0,
+            sheen_tint: 0.0,
+            sheen_aperture: 0.0,
+            sphere_index: 0.0,
+            sphere_mask: 0.0,
+            tile_matrix: [1.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -383,11 +415,18 @@ impl Default for ColorTableRowColors {
 /// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
 /// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
 /// metalness / roughness / gloss strength / specular strength。
+/// 额外的 ColorTable 语义贴图同样为线性 unorm，用于保留 MeddleTools 中的
+/// TileProperties / SheenProperties / SphereProperties / TileMatrixProperties ramp。
+/// TileIndex 按 0..64 归一化，SphereIndex 按 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
     pub diffuse_rgba: Vec<u8>,
     pub specular_rgba: Vec<u8>,
     pub material_rgba: Vec<u8>,
+    pub tile_properties_rgba: Vec<u8>,
+    pub sheen_properties_rgba: Vec<u8>,
+    pub sphere_properties_rgba: Vec<u8>,
+    pub tile_matrix_rgba: Vec<u8>,
     /// 所有行 emissive 全黑时为 None
     pub emissive_rgba: Option<Vec<u8>>,
 }
@@ -410,6 +449,10 @@ pub fn bake_color_table_maps(
     let mut diffuse_rgba = Vec::with_capacity(pixel_count * 4);
     let mut specular_rgba = Vec::with_capacity(pixel_count * 4);
     let mut material_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut tile_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sheen_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sphere_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut tile_matrix_rgba = Vec::with_capacity(pixel_count * 4);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
     let mut has_emissive = false;
 
@@ -428,6 +471,14 @@ pub fn bake_color_table_maps(
         let gloss_strength = lerp_value(row_a.gloss_strength, row_b.gloss_strength, blend);
         let specular_strength = lerp_value(row_a.specular_strength, row_b.specular_strength, blend);
         let anisotropy = lerp_value(row_a.anisotropy, row_b.anisotropy, blend);
+        let tile_index = lerp_value(row_a.tile_index, row_b.tile_index, blend);
+        let tile_alpha = lerp_value(row_a.tile_alpha, row_b.tile_alpha, blend);
+        let sheen_rate = lerp_value(row_a.sheen_rate, row_b.sheen_rate, blend);
+        let sheen_tint = lerp_value(row_a.sheen_tint, row_b.sheen_tint, blend);
+        let sheen_aperture = lerp_value(row_a.sheen_aperture, row_b.sheen_aperture, blend);
+        let sphere_index = lerp_value(row_a.sphere_index, row_b.sphere_index, blend);
+        let sphere_mask = lerp_value(row_a.sphere_mask, row_b.sphere_mask, blend);
+        let tile_matrix = lerp_color4(row_a.tile_matrix, row_b.tile_matrix, blend);
         if emissive.iter().any(|value| *value > 0.001) {
             has_emissive = true;
         }
@@ -438,6 +489,19 @@ pub fn bake_color_table_maps(
             &mut material_rgba,
             [metalness, roughness, gloss_strength, specular_strength],
         );
+        push_unorm_pixel(
+            &mut tile_properties_rgba,
+            [tile_index / 64.0, tile_alpha, 1.0, 1.0],
+        );
+        push_unorm_pixel(
+            &mut sheen_properties_rgba,
+            [sheen_rate, sheen_tint, sheen_aperture, 1.0],
+        );
+        push_unorm_pixel(
+            &mut sphere_properties_rgba,
+            [sphere_index / 255.0, sphere_mask, 1.0, 1.0],
+        );
+        push_unorm_pixel(&mut tile_matrix_rgba, tile_matrix);
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
     }
 
@@ -445,6 +509,10 @@ pub fn bake_color_table_maps(
         diffuse_rgba,
         specular_rgba,
         material_rgba,
+        tile_properties_rgba,
+        sheen_properties_rgba,
+        sphere_properties_rgba,
+        tile_matrix_rgba,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
     })
 }
@@ -461,6 +529,16 @@ fn lerp_color(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 fn lerp_value(a: f32, b: f32, t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     a + (b - a) * t
+}
+
+fn lerp_color4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }
 
 fn push_srgb_pixel(rgba: &mut Vec<u8>, linear: [f32; 3], alpha: f32) {
@@ -760,6 +838,41 @@ mod color_table_bake_tests {
 
         assert_eq!(baked.specular_rgba[3], 64);
         assert_eq!(baked.material_rgba[3], 191);
+    }
+
+    #[test]
+    fn bake_preserves_meddletools_extra_color_table_ramps() {
+        let rows = vec![
+            ColorTableRowColors {
+                tile_index: 8.0,
+                tile_alpha: 0.25,
+                sheen_rate: 0.1,
+                sheen_tint: 0.2,
+                sheen_aperture: 0.3,
+                sphere_index: 32.0,
+                sphere_mask: 0.4,
+                tile_matrix: [0.1, 0.2, 0.3, 0.4],
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                tile_index: 16.0,
+                tile_alpha: 0.75,
+                sheen_rate: 0.25,
+                sheen_tint: 0.5,
+                sheen_aperture: 0.75,
+                sphere_index: 128.0,
+                sphere_mask: 0.25,
+                tile_matrix: [1.0, 0.75, 0.5, 0.25],
+                ..Default::default()
+            },
+        ];
+        let id_rgba = [0, 255, 0, 255];
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+
+        assert_eq!(&baked.tile_properties_rgba[0..4], &[64, 191, 255, 255]);
+        assert_eq!(&baked.sheen_properties_rgba[0..4], &[64, 128, 191, 255]);
+        assert_eq!(&baked.sphere_properties_rgba[0..4], &[128, 64, 255, 255]);
+        assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 191, 128, 64]);
     }
 
     #[test]

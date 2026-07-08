@@ -449,6 +449,10 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
                     StatRow { label: "Material Props", value: texture_counts.material_properties.to_string() }
+                    StatRow { label: "Tile Props", value: texture_counts.tile_properties.to_string() }
+                    StatRow { label: "Sheen Props", value: texture_counts.sheen_properties.to_string() }
+                    StatRow { label: "Sphere Props", value: texture_counts.sphere_properties.to_string() }
+                    StatRow { label: "Tile Matrix", value: texture_counts.tile_matrix.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
                     StatRow { label: "Index", value: texture_counts.index.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
@@ -491,6 +495,10 @@ struct TextureKindCounts {
     mask: usize,
     specular: usize,
     material_properties: usize,
+    tile_properties: usize,
+    sheen_properties: usize,
+    sphere_properties: usize,
+    tile_matrix: usize,
     emissive: usize,
     index: usize,
     other: usize,
@@ -506,6 +514,10 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::Mask => counts.mask += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
                 WeaponModelTextureKind::MaterialProperties => counts.material_properties += 1,
+                WeaponModelTextureKind::TileProperties => counts.tile_properties += 1,
+                WeaponModelTextureKind::SheenProperties => counts.sheen_properties += 1,
+                WeaponModelTextureKind::SphereProperties => counts.sphere_properties += 1,
+                WeaponModelTextureKind::TileMatrixProperties => counts.tile_matrix += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
                 WeaponModelTextureKind::Index => counts.index += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
