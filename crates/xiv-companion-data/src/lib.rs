@@ -2,6 +2,8 @@ pub mod craft_data;
 #[cfg(feature = "game-data")]
 pub mod game_data;
 #[cfg(feature = "game-data")]
+mod mdl_geometry;
+#[cfg(feature = "game-data")]
 pub mod mdl_metadata;
 pub mod model;
 #[cfg(feature = "game-data")]

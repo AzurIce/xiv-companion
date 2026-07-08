@@ -226,50 +226,28 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
 #[cfg(feature = "game-data")]
 pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<WeaponModelMesh>> {
     use anyhow::{Context, anyhow};
-    use physis::{Platform, ReadableFile};
 
-    let mdl = physis::model::MDL::from_existing(Platform::Win32, bytes)
-        .ok_or_else(|| anyhow!("failed to parse model {path}"))?;
-    let lod = mdl
-        .lods
-        .first()
-        .ok_or_else(|| anyhow!("model {path} has no LODs"))?;
+    let raw_meshes = crate::mdl_geometry::extract_mdl_lod0_geometry(path, bytes)
+        .with_context(|| format!("failed to extract raw geometry from {path}"))?;
 
     let mut meshes = Vec::new();
-    for (part_index, part) in lod.parts.iter().enumerate() {
-        if part.vertices.is_empty() || part.indices.is_empty() {
+    for mesh in raw_meshes {
+        if mesh.vertices.is_empty() || mesh.indices.is_empty() {
             continue;
         }
 
-        let material_name = mdl
-            .material_names
-            .get(part.material_index as usize)
-            .cloned()
-            .unwrap_or_else(|| format!("material-{}", part.material_index));
-        let color = material_color(part.material_index);
-        let part_vertices = part
-            .vertices
-            .iter()
-            .map(|vertex| WeaponModelVertex {
-                position: vertex.position,
-                normal: normalized_or_fallback(vertex.normal),
-                uv0: vertex.uv0,
-                uv1: vertex.uv1,
-                bitangent: sanitized_bitangent(vertex.bitangent),
-                color: vertex_color_or_fallback(vertex.color),
-            })
-            .collect::<Vec<_>>();
-        for range in mesh_index_ranges(part.indices.len(), &part.submeshes) {
-            let raw_indices = &part.indices[range.start..range.end];
-            let Some((vertices, indices)) = remap_mesh_vertices(&part_vertices, raw_indices) else {
+        let color = material_color(mesh.material_index);
+        for range in mesh_index_ranges(mesh.indices.len(), &mesh.submeshes) {
+            let raw_indices = &mesh.indices[range.start..range.end];
+            let Some((vertices, indices)) = remap_mesh_vertices(&mesh.vertices, raw_indices) else {
                 continue;
             };
             meshes.push(WeaponModelMesh {
-                path: mesh_path_with_submesh(path, part_index, range.submesh_index),
-                part_index: part_index as u32,
-                material_index: part.material_index,
-                material_slot: part.material_index as usize,
-                material_name: material_name.clone(),
+                path: mesh_path_with_submesh(path, mesh.mesh_index, range.submesh_index),
+                part_index: mesh.mesh_index as u32,
+                material_index: mesh.material_index,
+                material_slot: mesh.material_index as usize,
+                material_name: mesh.material_name.clone(),
                 color,
                 vertices,
                 indices,
@@ -294,7 +272,7 @@ struct MeshIndexRange {
 #[cfg(feature = "game-data")]
 fn mesh_index_ranges(
     index_count: usize,
-    submeshes: &[physis::model::SubMesh],
+    submeshes: &[crate::mdl_geometry::MdlGeometrySubmesh],
 ) -> Vec<MeshIndexRange> {
     normalize_submesh_index_ranges(
         index_count,
@@ -526,52 +504,6 @@ pub fn material_debug_info_from_mtrl_bytes(
             .as_ref()
             .map(material_color_dye_table_kind),
     })
-}
-
-#[cfg(feature = "game-data")]
-fn normalized_or_fallback(normal: [f32; 3]) -> [f32; 3] {
-    let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if length > 0.0001 {
-        [normal[0] / length, normal[1] / length, normal[2] / length]
-    } else {
-        [0.0, 1.0, 0.0]
-    }
-}
-
-#[cfg(feature = "game-data")]
-fn sanitized_bitangent(bitangent: [f32; 4]) -> [f32; 4] {
-    let length =
-        (bitangent[0] * bitangent[0] + bitangent[1] * bitangent[1] + bitangent[2] * bitangent[2])
-            .sqrt();
-    let xyz = if length.is_finite()
-        && length > 0.0001
-        && bitangent[..3].iter().all(|value| value.is_finite())
-    {
-        [
-            bitangent[0] / length,
-            bitangent[1] / length,
-            bitangent[2] / length,
-        ]
-    } else {
-        [1.0, 0.0, 0.0]
-    };
-    let sign = if bitangent[3].is_nan() || bitangent[3] > 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
-    [xyz[0], xyz[1], xyz[2], sign]
-}
-
-#[cfg(feature = "game-data")]
-fn vertex_color_or_fallback(color: [f32; 4]) -> [f32; 4] {
-    if color[..3].iter().any(|value| value.abs() > 0.0001) {
-        color
-    } else if color[3].abs() > 0.0001 {
-        [1.0, 1.0, 1.0, color[3]]
-    } else {
-        [1.0, 1.0, 1.0, 1.0]
-    }
 }
 
 #[cfg(feature = "game-data")]
@@ -2872,20 +2804,6 @@ mod weapon_material_tests {
         let vertices = vec![test_vertex(0.0), test_vertex(1.0), test_vertex(2.0)];
 
         assert!(remap_mesh_vertices(&vertices, &[0, 1]).is_none());
-    }
-
-    #[test]
-    fn sanitized_bitangent_normalizes_xyz_and_sign() {
-        let bitangent = sanitized_bitangent([0.0, 3.0, 4.0, 0.0]);
-
-        assert_eq!(bitangent, [0.0, 0.6, 0.8, -1.0]);
-    }
-
-    #[test]
-    fn sanitized_bitangent_falls_back_for_invalid_xyz() {
-        let bitangent = sanitized_bitangent([0.0, 0.0, 0.0, f32::NAN]);
-
-        assert_eq!(bitangent, [1.0, 0.0, 0.0, 1.0]);
     }
 
     fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
