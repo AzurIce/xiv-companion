@@ -464,7 +464,9 @@ impl WeaponRenderer {
             }
 
             render_pass.set_pipeline(&self.transparent_pipeline);
-            for batch in self.draw_batches.iter().filter(|batch| batch.transparent) {
+            let sorted_transparent_batches =
+                sorted_transparent_batches(&self.draw_batches, yaw, pitch);
+            for batch in sorted_transparent_batches {
                 draw_weapon_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
         }
@@ -678,10 +680,32 @@ fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>, Vec<Draw
             index_start,
             index_count: mesh.indices.len() as u32,
             transparent: material_is_transparent(model, mesh.material_slot),
+            center: mesh_bounds_center(mesh),
         });
     }
 
     (vertices, indices, draw_batches)
+}
+
+fn mesh_bounds_center(mesh: &crate::WeaponModelMesh) -> [f32; 3] {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for vertex in &mesh.vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(vertex.position[axis]);
+            max[axis] = max[axis].max(vertex.position[axis]);
+        }
+    }
+
+    if min.iter().any(|value| !value.is_finite()) || max.iter().any(|value| !value.is_finite()) {
+        return [0.0; 3];
+    }
+
+    [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ]
 }
 
 fn material_is_transparent(model: &WeaponModelData, material_slot: usize) -> bool {
@@ -694,6 +718,32 @@ fn material_is_transparent(model: &WeaponModelData, material_slot: usize) -> boo
             .base_color_texture
             .and_then(|index| model.textures.get(index))
             .is_some_and(|texture| texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250))
+}
+
+fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
+    let sort_dir = transparent_sort_direction(yaw, pitch);
+    let mut batches = draw_batches
+        .iter()
+        .filter(|batch| batch.transparent)
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| {
+        let left_depth = glam::Vec3::from(left.center).dot(sort_dir);
+        let right_depth = glam::Vec3::from(right.center).dot(sort_dir);
+        right_depth
+            .partial_cmp(&left_depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    batches
+}
+
+fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
+    let pitch = pitch.clamp(-1.35, 1.35);
+    glam::Vec3::new(
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    )
+    .normalize_or_zero()
 }
 
 fn draw_weapon_batch<'a>(
@@ -1276,6 +1326,7 @@ struct DrawBatch {
     index_start: u32,
     index_count: u32,
     transparent: bool,
+    center: [f32; 3],
 }
 
 #[repr(C)]
@@ -1324,6 +1375,40 @@ impl GpuVertex {
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparent_batches_sort_back_to_front_without_moving_opaque() {
+        let batches = vec![
+            test_batch(0, false, [0.0, 0.0, 100.0]),
+            test_batch(1, true, [0.0, 0.0, -2.0]),
+            test_batch(2, true, [0.0, 0.0, 3.0]),
+        ];
+
+        let sorted = sorted_transparent_batches(&batches, 0.0, 0.0);
+
+        assert_eq!(
+            sorted
+                .iter()
+                .map(|batch| batch.material_slot)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    fn test_batch(material_slot: usize, transparent: bool, center: [f32; 3]) -> DrawBatch {
+        DrawBatch {
+            material_slot,
+            index_start: 0,
+            index_count: 3,
+            transparent,
+            center,
         }
     }
 }
