@@ -186,6 +186,16 @@ impl ModelRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1052,7 +1062,11 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
-            0.0,
+            material
+                .specular_texture
+                .and_then(|index| model.textures().get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
             0.0,
             0.0,
         ],
@@ -1204,6 +1218,37 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let specular_texture_view = material
+        .specular_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon specular texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral specular texture",
+                1,
+                1,
+                &[
+                    srgb_byte(material.specular_color[0]),
+                    srgb_byte(material.specular_color[1]),
+                    srgb_byte(material.specular_color[2]),
+                    255,
+                ],
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("weapon material sampler"),
@@ -1247,6 +1292,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: wgpu::BindingResource::TextureView(&material_properties_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&specular_texture_view),
             },
         ],
     })
@@ -1311,6 +1360,16 @@ fn create_rgba_texture(
 
 fn unorm_byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn srgb_byte(linear: f32) -> u8 {
+    let value = linear.clamp(0.0, 1.0);
+    let srgb = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    unorm_byte(srgb)
 }
 
 fn fallback_material() -> ModelMaterial {
