@@ -199,6 +199,8 @@ fn read_mesh_vertices(
     for vertex in &mut vertices {
         vertex.normal = normalized_or_fallback(vertex.normal);
         vertex.bitangent = sanitized_bitangent(vertex.bitangent);
+        vertex.normal1 = vertex.normal1.map(normalized_or_fallback);
+        vertex.bitangent1 = vertex.bitangent1.map(sanitized_bitangent);
     }
     Ok(vertices)
 }
@@ -214,8 +216,15 @@ fn apply_vertex_element(
             vertex.position = read_vec3(bytes, offset, element.vertex_type)?;
         }
         3 => {
-            if element.usage_index == 0 {
-                vertex.normal = read_vec3(bytes, offset, element.vertex_type)?;
+            let normal = read_vec3(bytes, offset, element.vertex_type)?;
+            match element.usage_index {
+                0 => {
+                    vertex.normal = normal;
+                }
+                1 => {
+                    vertex.normal1 = Some(normal);
+                }
+                _ => {}
             }
         }
         4 => {
@@ -235,8 +244,15 @@ fn apply_vertex_element(
             }
         }
         6 => {
-            if element.usage_index == 0 {
-                vertex.bitangent = read_tangent(bytes, offset)?;
+            let bitangent = read_tangent(bytes, offset)?;
+            match element.usage_index {
+                0 => {
+                    vertex.bitangent = bitangent;
+                }
+                1 => {
+                    vertex.bitangent1 = Some(bitangent);
+                }
+                _ => {}
             }
         }
         7 => {
@@ -283,6 +299,8 @@ fn default_model_vertex() -> ModelVertex {
         uv2: [0.0; 2],
         uv3: [0.0; 2],
         bitangent: [0.0; 4],
+        normal1: None,
+        bitangent1: None,
         color: [1.0; 4],
         color1: None,
         flow0: None,
@@ -638,8 +656,54 @@ mod tests {
     }
 
     #[test]
+    fn secondary_normal_and_bitangent_are_preserved() {
+        let mut vertex = default_model_vertex();
+        apply_vertex_element(
+            &mut vertex,
+            &f32_bytes(&[0.0, 3.0, 4.0]),
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 2,
+                usage: 3,
+                usage_index: 1,
+            },
+        )
+        .expect("secondary normal");
+        apply_vertex_element(
+            &mut vertex,
+            &[128, 255, 128, 127],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 8,
+                usage: 6,
+                usage_index: 1,
+            },
+        )
+        .expect("secondary bitangent");
+
+        assert_eq!(vertex.normal, [0.0, 0.0, 0.0]);
+        assert_eq!(vertex.normal1, Some([0.0, 3.0, 4.0]));
+        assert_eq!(vertex.bitangent, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            vertex.bitangent1,
+            Some([
+                128.0 * 2.0 / 255.0 - 1.0,
+                1.0,
+                128.0 * 2.0 / 255.0 - 1.0,
+                -1.0,
+            ])
+        );
+    }
+
+    #[test]
     fn missing_vertex_color_defaults_to_white() {
         assert_eq!(default_model_vertex().color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(default_model_vertex().normal1, None);
+        assert_eq!(default_model_vertex().bitangent1, None);
         assert_eq!(default_model_vertex().color1, None);
         assert_eq!(default_model_vertex().flow0, None);
         assert_eq!(default_model_vertex().flow1, None);

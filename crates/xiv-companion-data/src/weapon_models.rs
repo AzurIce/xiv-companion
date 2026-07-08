@@ -3401,6 +3401,8 @@ mod weapon_material_tests {
             uv2: [0.0, 0.0],
             uv3: [0.0, 0.0],
             bitangent: [1.0, 0.0, 0.0, 1.0],
+            normal1: None,
+            bitangent1: None,
             color: [1.0, 1.0, 1.0, 1.0],
             color1: None,
             flow0: None,

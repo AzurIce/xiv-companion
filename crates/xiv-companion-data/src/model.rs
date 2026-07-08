@@ -159,6 +159,10 @@ pub struct ModelVertex {
     pub uv3: [f32; 2],
     #[serde(default)]
     pub bitangent: [f32; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal1: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitangent1: Option<[f32; 4]>,
     #[serde(default)]
     pub color: [f32; 4],
     #[serde(default, skip_serializing_if = "Option::is_none")]
