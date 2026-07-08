@@ -86,6 +86,7 @@ pub struct MaterialDebugInfo {
     pub samplers: Vec<MaterialSamplerDebug>,
     pub color_table: Option<MaterialColorTableDebug>,
     pub color_dye_table_kind: Option<String>,
+    pub color_dye_table: Option<MaterialColorDyeTableDebug>,
 }
 
 #[cfg(feature = "game-data")]
@@ -143,6 +144,38 @@ pub struct MaterialColorTableRowDebug {
     pub tile_matrix: Option<[f32; 4]>,
     pub material_repeat: Option<[f32; 2]>,
     pub material_skew: Option<[f32; 2]>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialColorDyeTableDebug {
+    pub kind: String,
+    pub row_count: usize,
+    pub rows: Vec<MaterialColorDyeTableRowDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialColorDyeTableRowDebug {
+    pub index: usize,
+    pub template: u16,
+    pub channel: Option<u8>,
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub gloss: Option<bool>,
+    pub specular_strength: Option<bool>,
+    pub scalar3: Option<bool>,
+    pub metalness: Option<bool>,
+    pub roughness: Option<bool>,
+    pub sheen_rate: Option<bool>,
+    pub sheen_tint_rate: Option<bool>,
+    pub sheen_aperture: Option<bool>,
+    pub anisotropy: Option<bool>,
+    pub sphere_map_index: Option<bool>,
+    pub sphere_map_mask: Option<bool>,
 }
 
 #[cfg(feature = "game-data")]
@@ -510,6 +543,7 @@ pub fn material_debug_info_from_mtrl_bytes(
             .color_dye_table
             .as_ref()
             .map(material_color_dye_table_kind),
+        color_dye_table: material_color_dye_table_debug(material.color_dye_table.as_ref()),
     })
 }
 
@@ -611,6 +645,79 @@ fn material_color_dye_table_kind(color_dye_table: &physis::mtrl::ColorDyeTable) 
         physis::mtrl::ColorDyeTable::LegacyColorDyeTable(_) => "Legacy".to_string(),
         physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(_) => "Dawntrail".to_string(),
         physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => "Opaque".to_string(),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn material_color_dye_table_debug(
+    color_dye_table: Option<&physis::mtrl::ColorDyeTable>,
+) -> Option<MaterialColorDyeTableDebug> {
+    match color_dye_table? {
+        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(table) => {
+            Some(MaterialColorDyeTableDebug {
+                kind: "Legacy".to_string(),
+                row_count: table.rows.len(),
+                rows: table
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                        index,
+                        template: row.template,
+                        channel: None,
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        gloss: Some(row.gloss),
+                        specular_strength: Some(row.specular_strength),
+                        scalar3: None,
+                        metalness: None,
+                        roughness: None,
+                        sheen_rate: None,
+                        sheen_tint_rate: None,
+                        sheen_aperture: None,
+                        anisotropy: None,
+                        sphere_map_index: None,
+                        sphere_map_mask: None,
+                    })
+                    .collect(),
+            })
+        }
+        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(table) => {
+            Some(MaterialColorDyeTableDebug {
+                kind: "Dawntrail".to_string(),
+                row_count: table.rows.len(),
+                rows: table
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                        index,
+                        template: row.template,
+                        channel: Some(row.channel),
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        gloss: None,
+                        specular_strength: None,
+                        scalar3: Some(row.scalar3),
+                        metalness: Some(row.metalness),
+                        roughness: Some(row.roughness),
+                        sheen_rate: Some(row.sheen_rate),
+                        sheen_tint_rate: Some(row.sheen_tint_rate),
+                        sheen_aperture: Some(row.sheen_aperture),
+                        anisotropy: Some(row.anisotropy),
+                        sphere_map_index: Some(row.sphere_map_index),
+                        sphere_map_mask: Some(row.sphere_map_mask),
+                    })
+                    .collect(),
+            })
+        }
+        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => Some(MaterialColorDyeTableDebug {
+            kind: "Opaque".to_string(),
+            row_count: 0,
+            rows: Vec::new(),
+        }),
     }
 }
 
@@ -2824,6 +2931,83 @@ mod weapon_material_tests {
                 row.material_skew[1],
             ])
         );
+    }
+
+    #[test]
+    fn color_dye_table_debug_preserves_legacy_rows() {
+        let color_dye_table = physis::mtrl::ColorDyeTable::LegacyColorDyeTable(
+            physis::mtrl::LegacyColorDyeTableData {
+                rows: vec![physis::mtrl::LegacyColorDyeTableRow {
+                    template: 42,
+                    diffuse: true,
+                    specular: false,
+                    emissive: true,
+                    gloss: true,
+                    specular_strength: false,
+                }],
+            },
+        );
+
+        let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+
+        assert_eq!(debug.kind, "Legacy");
+        assert_eq!(debug.row_count, 1);
+        assert_eq!(debug.rows[0].index, 0);
+        assert_eq!(debug.rows[0].template, 42);
+        assert_eq!(debug.rows[0].channel, None);
+        assert!(debug.rows[0].diffuse);
+        assert!(!debug.rows[0].specular);
+        assert!(debug.rows[0].emissive);
+        assert_eq!(debug.rows[0].gloss, Some(true));
+        assert_eq!(debug.rows[0].specular_strength, Some(false));
+        assert_eq!(debug.rows[0].metalness, None);
+        assert_eq!(debug.rows[0].sphere_map_mask, None);
+    }
+
+    #[test]
+    fn color_dye_table_debug_preserves_dawntrail_rows() {
+        let color_dye_table = physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(
+            physis::mtrl::DawntrailColorDyeTableData {
+                rows: vec![physis::mtrl::DawntrailColorDyeTableRow {
+                    template: 77,
+                    channel: 2,
+                    diffuse: true,
+                    specular: true,
+                    emissive: false,
+                    scalar3: true,
+                    metalness: false,
+                    roughness: true,
+                    sheen_rate: true,
+                    sheen_tint_rate: false,
+                    sheen_aperture: true,
+                    anisotropy: false,
+                    sphere_map_index: true,
+                    sphere_map_mask: true,
+                }],
+            },
+        );
+
+        let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+
+        assert_eq!(debug.kind, "Dawntrail");
+        assert_eq!(debug.row_count, 1);
+        assert_eq!(debug.rows[0].index, 0);
+        assert_eq!(debug.rows[0].template, 77);
+        assert_eq!(debug.rows[0].channel, Some(2));
+        assert!(debug.rows[0].diffuse);
+        assert!(debug.rows[0].specular);
+        assert!(!debug.rows[0].emissive);
+        assert_eq!(debug.rows[0].gloss, None);
+        assert_eq!(debug.rows[0].specular_strength, None);
+        assert_eq!(debug.rows[0].scalar3, Some(true));
+        assert_eq!(debug.rows[0].metalness, Some(false));
+        assert_eq!(debug.rows[0].roughness, Some(true));
+        assert_eq!(debug.rows[0].sheen_rate, Some(true));
+        assert_eq!(debug.rows[0].sheen_tint_rate, Some(false));
+        assert_eq!(debug.rows[0].sheen_aperture, Some(true));
+        assert_eq!(debug.rows[0].anisotropy, Some(false));
+        assert_eq!(debug.rows[0].sphere_map_index, Some(true));
+        assert_eq!(debug.rows[0].sphere_map_mask, Some(true));
     }
 
     #[test]
