@@ -310,16 +310,16 @@ where
     let base_index_offset = raw[0].1;
     let mut ranges = Vec::new();
     for (submesh_index, index_offset, count) in raw {
+        let direct_start = (index_offset
+            .checked_add(count)
+            .is_some_and(|end| end <= index_count))
+        .then_some(index_offset);
         let relative_start = index_offset.checked_sub(base_index_offset).filter(|start| {
             start
                 .checked_add(count)
                 .is_some_and(|end| end <= index_count)
         });
-        let direct_start = (index_offset
-            .checked_add(count)
-            .is_some_and(|end| end <= index_count))
-        .then_some(index_offset);
-        let Some(start) = relative_start.or(direct_start) else {
+        let Some(start) = direct_start.or(relative_start) else {
             continue;
         };
         ranges.push(MeshIndexRange {
@@ -2841,6 +2841,27 @@ mod weapon_material_tests {
                 MeshIndexRange {
                     submesh_index: Some(1),
                     start: 3,
+                    end: 12,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn submesh_index_ranges_keep_nonzero_local_offsets() {
+        let ranges = normalize_submesh_index_ranges(12, [(0, 3, 3), (1, 6, 6)]);
+
+        assert_eq!(
+            ranges,
+            vec![
+                MeshIndexRange {
+                    submesh_index: Some(0),
+                    start: 3,
+                    end: 6,
+                },
+                MeshIndexRange {
+                    submesh_index: Some(1),
+                    start: 6,
                     end: 12,
                 },
             ]
