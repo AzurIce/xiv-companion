@@ -1714,6 +1714,9 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
     let Some(additional_data_size) = bytes.get(15).copied().map(usize::from) else {
         return None;
     };
+    let Some(data_set_size) = read_u16_le(bytes, 6).map(usize::from) else {
+        return None;
+    };
     let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
         return None;
     };
@@ -1731,38 +1734,15 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
         offset = next;
     }
 
-    let additional_data_offset = offset;
-    let table_flags = if additional_data_size >= 4 {
-        read_u32_le(bytes, additional_data_offset).unwrap_or(0)
-    } else {
-        0
-    };
     let Some(next) = checked_advance(offset, additional_data_size, bytes.len()) else {
         return None;
     };
     offset = next;
 
-    let table_dimension_logs = (table_flags >> 4) as u8;
-    if table_flags & 0x4 != 0 {
-        let Some(next) = checked_advance(
-            offset,
-            material_color_table_byte_len(table_dimension_logs),
-            bytes.len(),
-        ) else {
-            return None;
-        };
-        offset = next;
-    }
-    if table_flags & 0x8 != 0 {
-        let Some(next) = checked_advance(
-            offset,
-            material_color_dye_table_byte_len(table_dimension_logs),
-            bytes.len(),
-        ) else {
-            return None;
-        };
-        offset = next;
-    }
+    let Some(next) = checked_advance(offset, data_set_size, bytes.len()) else {
+        return None;
+    };
+    offset = next;
 
     let shader_value_list_size = read_u16_le(bytes, offset).map(usize::from)?;
     let shader_key_count = read_u16_le(bytes, offset + 2).map(usize::from)?;
@@ -1791,24 +1771,6 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
         constant_count,
         sampler_count,
     })
-}
-
-#[cfg(feature = "game-data")]
-fn material_color_table_byte_len(table_dimension_logs: u8) -> usize {
-    match table_dimension_logs {
-        0 | 0x42 => 16 * 32,
-        0x53 => 32 * 64,
-        _ => 0,
-    }
-}
-
-#[cfg(feature = "game-data")]
-fn material_color_dye_table_byte_len(table_dimension_logs: u8) -> usize {
-    match table_dimension_logs {
-        0 => 16 * 2,
-        0x50..=0x5f => 32 * 4,
-        _ => 0,
-    }
 }
 
 #[cfg(feature = "game-data")]
@@ -2096,6 +2058,25 @@ mod weapon_material_tests {
         bytes.extend_from_slice(&0.42_f32.to_le_bytes());
 
         assert_eq!(material_alpha_threshold(&bytes), Some(0.42));
+    }
+
+    #[test]
+    fn material_shader_table_layout_uses_header_dataset_size() {
+        let mut bytes = vec![0; 16];
+        let data_set_size = 8_u16;
+        bytes[6..8].copy_from_slice(&data_set_size.to_le_bytes());
+        bytes.extend_from_slice(&[0xAA; 8]);
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x29AC_0223_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&0.25_f32.to_le_bytes());
+
+        assert_eq!(material_alpha_threshold(&bytes), Some(0.25));
     }
 
     #[test]
