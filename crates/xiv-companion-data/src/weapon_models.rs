@@ -791,6 +791,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             base_color_texture: texture_set.base_color,
             normal_texture: texture_set.normal,
             mask_texture: texture_set.mask,
+            material_map_texture: texture_set.material_map,
+            multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
@@ -844,6 +846,12 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             }
             WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MaterialMap => {
+                set.material_map.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MultiMap => {
+                set.multi_map.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Specular => {
                 set.specular.get_or_insert(texture_index);
@@ -1209,6 +1217,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             base_color_texture: texture_set.base_color,
             normal_texture: texture_set.normal,
             mask_texture: texture_set.mask,
+            material_map_texture: texture_set.material_map,
+            multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
@@ -1264,6 +1274,12 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             }
             WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MaterialMap => {
+                set.material_map.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MultiMap => {
+                set.multi_map.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Specular => {
                 set.specular.get_or_insert(texture_index);
@@ -1394,6 +1410,8 @@ struct WeaponTextureSet {
     base_color: Option<usize>,
     normal: Option<usize>,
     mask: Option<usize>,
+    material_map: Option<usize>,
+    multi_map: Option<usize>,
     specular: Option<usize>,
     emissive: Option<usize>,
     material_properties: Option<usize>,
@@ -2104,6 +2122,8 @@ fn fallback_weapon_material(
         base_color_texture: None,
         normal_texture: None,
         mask_texture: None,
+        material_map_texture: None,
+        multi_map_texture: None,
         specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
@@ -2457,10 +2477,10 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_IndexSampler", WeaponModelTextureKind::Index),
         ("g_SamplerMask", WeaponModelTextureKind::Mask),
         ("g_MaskSampler", WeaponModelTextureKind::Mask),
-        ("g_SamplerMaterial", WeaponModelTextureKind::Mask),
-        ("g_MaterialSampler", WeaponModelTextureKind::Mask),
-        ("g_SamplerMulti", WeaponModelTextureKind::Mask),
-        ("g_MultiSampler", WeaponModelTextureKind::Mask),
+        ("g_SamplerMaterial", WeaponModelTextureKind::MaterialMap),
+        ("g_MaterialSampler", WeaponModelTextureKind::MaterialMap),
+        ("g_SamplerMulti", WeaponModelTextureKind::MultiMap),
+        ("g_MultiSampler", WeaponModelTextureKind::MultiMap),
         ("g_SamplerSpecular", WeaponModelTextureKind::Specular),
         ("g_SpecularSampler", WeaponModelTextureKind::Specular),
         ("g_SamplerSpecularMap", WeaponModelTextureKind::Specular),
@@ -2852,15 +2872,54 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn sampler_classification_preserves_material_and_multi_roles() {
+        assert_eq!(
+            classify_sampler_name("g_SamplerMaterial"),
+            Some(WeaponModelTextureKind::MaterialMap)
+        );
+        assert_eq!(
+            classify_sampler_name("g_MaterialSampler"),
+            Some(WeaponModelTextureKind::MaterialMap)
+        );
+        assert_eq!(
+            classify_sampler_usage(physis::shpk::ShaderPackage::crc("g_SamplerMulti")),
+            Some(WeaponModelTextureKind::MultiMap)
+        );
+        assert_eq!(
+            classify_sampler_name("g_MultiSampler"),
+            Some(WeaponModelTextureKind::MultiMap)
+        );
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0001/obj/body/b0001/texture/unknown.tex",
+                Some(WeaponModelTextureKind::MaterialMap),
+            ),
+            WeaponModelTextureKind::MaterialMap
+        );
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0001/obj/body/b0001/texture/unknown.tex",
+                Some(WeaponModelTextureKind::MultiMap),
+            ),
+            WeaponModelTextureKind::MultiMap
+        );
+    }
+
+    #[test]
     fn fallback_base_texture_ignores_specialized_maps() {
         let textures = vec![
             test_texture("emissive.tex", WeaponModelTextureKind::Emissive),
             test_texture("normal.tex", WeaponModelTextureKind::Normal),
             test_texture("mask.tex", WeaponModelTextureKind::Mask),
+            test_texture("material.tex", WeaponModelTextureKind::MaterialMap),
+            test_texture("multi.tex", WeaponModelTextureKind::MultiMap),
             test_texture("specular.tex", WeaponModelTextureKind::Specular),
             test_texture("id.tex", WeaponModelTextureKind::Index),
         ];
-        assert_eq!(choose_fallback_base_texture(&[0, 1, 2, 3], &textures), None);
+        assert_eq!(
+            choose_fallback_base_texture(&[0, 1, 2, 3, 4, 5, 6], &textures),
+            None
+        );
     }
 
     #[test]
@@ -2877,6 +2936,8 @@ mod weapon_material_tests {
         for kind in [
             WeaponModelTextureKind::Normal,
             WeaponModelTextureKind::Mask,
+            WeaponModelTextureKind::MaterialMap,
+            WeaponModelTextureKind::MultiMap,
             WeaponModelTextureKind::Specular,
             WeaponModelTextureKind::Emissive,
             WeaponModelTextureKind::MaterialProperties,

@@ -447,6 +447,8 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Base", value: texture_counts.base.to_string() }
                     StatRow { label: "Normal", value: texture_counts.normal.to_string() }
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
+                    StatRow { label: "Material Map", value: texture_counts.material_map.to_string() }
+                    StatRow { label: "Multi Map", value: texture_counts.multi_map.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
                     StatRow { label: "Material Props", value: texture_counts.material_properties.to_string() }
                     StatRow { label: "Tile Props", value: texture_counts.tile_properties.to_string() }
@@ -493,6 +495,8 @@ struct TextureKindCounts {
     base: usize,
     normal: usize,
     mask: usize,
+    material_map: usize,
+    multi_map: usize,
     specular: usize,
     material_properties: usize,
     tile_properties: usize,
@@ -512,6 +516,8 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::BaseColor => counts.base += 1,
                 WeaponModelTextureKind::Normal => counts.normal += 1,
                 WeaponModelTextureKind::Mask => counts.mask += 1,
+                WeaponModelTextureKind::MaterialMap => counts.material_map += 1,
+                WeaponModelTextureKind::MultiMap => counts.multi_map += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
                 WeaponModelTextureKind::MaterialProperties => counts.material_properties += 1,
                 WeaponModelTextureKind::TileProperties => counts.tile_properties += 1,

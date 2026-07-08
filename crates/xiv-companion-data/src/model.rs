@@ -198,6 +198,10 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub mask_texture: Option<usize>,
     #[serde(default)]
+    pub material_map_texture: Option<usize>,
+    #[serde(default)]
+    pub multi_map_texture: Option<usize>,
+    #[serde(default)]
     pub specular_texture: Option<usize>,
     #[serde(default)]
     pub emissive_texture: Option<usize>,
@@ -256,6 +260,10 @@ pub enum ModelTextureKind {
     BaseColor,
     Normal,
     Mask,
+    /// Explicit `g_SamplerMaterial` texture. Renderer may still use it as a mask fallback.
+    MaterialMap,
+    /// Explicit `g_SamplerMulti` texture. Renderer may still use it as a mask fallback.
+    MultiMap,
     Specular,
     Emissive,
     /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。

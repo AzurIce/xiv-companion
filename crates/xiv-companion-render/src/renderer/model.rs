@@ -1015,6 +1015,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     material: &ModelMaterial,
     model: &M,
 ) -> wgpu::BindGroup {
+    let effective_mask_texture = effective_mask_texture(material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -1050,8 +1051,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
-            material
-                .mask_texture
+            effective_mask_texture
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
@@ -1113,8 +1113,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let mask_texture_view = material
-        .mask_texture
+    let mask_texture_view = effective_mask_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
@@ -1399,6 +1398,8 @@ fn fallback_material() -> ModelMaterial {
         base_color_texture: None,
         normal_texture: None,
         mask_texture: None,
+        material_map_texture: None,
+        multi_map_texture: None,
         specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
@@ -1407,6 +1408,13 @@ fn fallback_material() -> ModelMaterial {
         sphere_properties_texture: None,
         tile_matrix_texture: None,
     }
+}
+
+fn effective_mask_texture(material: &ModelMaterial) -> Option<usize> {
+    material
+        .mask_texture
+        .or(material.material_map_texture)
+        .or(material.multi_map_texture)
 }
 
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
