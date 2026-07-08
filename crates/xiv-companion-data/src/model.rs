@@ -167,6 +167,10 @@ pub struct ModelMaterial {
     pub shader_package_name: Option<String>,
     #[serde(default)]
     pub render_mode: MaterialRenderMode,
+    #[serde(default)]
+    pub alpha_mode: MaterialAlphaMode,
+    #[serde(default)]
+    pub alpha_threshold: f32,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -199,6 +203,16 @@ pub enum MaterialRenderMode {
     #[default]
     Opaque,
     Transparent,
+    Glass,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialAlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
     Glass,
 }
 
@@ -236,6 +250,7 @@ pub enum ModelTextureKind {
 }
 
 pub type WeaponMaterialRenderMode = MaterialRenderMode;
+pub type WeaponMaterialAlphaMode = MaterialAlphaMode;
 pub type WeaponModelBounds = ModelBounds;
 pub type WeaponModelMaterial = ModelMaterial;
 pub type WeaponModelMesh = ModelMesh;
@@ -333,7 +348,7 @@ pub struct ColorTableRowColors {
     pub roughness: f32,
     pub metalness: f32,
     /// ColorTable Tile Alpha，属于 tile 属性，不等同于材质整体透明度。
-    pub alpha: f32,
+    pub tile_alpha: f32,
 }
 
 impl Default for ColorTableRowColors {
@@ -346,7 +361,7 @@ impl Default for ColorTableRowColors {
             specular_strength: 1.0,
             roughness: 0.5,
             metalness: 0.0,
-            alpha: 1.0,
+            tile_alpha: 1.0,
         }
     }
 }
@@ -654,25 +669,25 @@ mod color_table_bake_tests {
             ColorTableRowColors {
                 diffuse: [1.0, 0.0, 0.0],
                 emissive: [0.0, 0.0, 0.0],
-                alpha: 1.0,
+                tile_alpha: 1.0,
                 ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 1.0, 0.0],
                 emissive: [0.0, 0.0, 0.0],
-                alpha: 0.5,
+                tile_alpha: 0.5,
                 ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 0.0, 1.0],
                 emissive: [1.0, 0.0, 0.0],
-                alpha: 1.0,
+                tile_alpha: 1.0,
                 ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 0.0, 1.0],
                 emissive: [1.0, 0.0, 0.0],
-                alpha: 1.0,
+                tile_alpha: 1.0,
                 ..Default::default()
             },
         ]
@@ -710,7 +725,7 @@ mod color_table_bake_tests {
         rows[16] = ColorTableRowColors {
             diffuse: [1.0, 1.0, 1.0],
             emissive: [0.0, 0.0, 0.0],
-            alpha: 1.0,
+            tile_alpha: 1.0,
             ..Default::default()
         };
         rows[17] = rows[16];

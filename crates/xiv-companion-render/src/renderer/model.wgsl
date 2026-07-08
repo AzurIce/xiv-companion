@@ -9,7 +9,7 @@ struct Material {
     emissive_color: vec4<f32>, // a: has emissive texture
     specular_color: vec4<f32>,
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
-    render: vec4<f32>, // x: mode 0=opaque 1=transparent 2=glass, y: opacity
+    render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
 };
 
 struct VertexInput {
@@ -81,11 +81,15 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let vertex_tint = select(input.color.rgb, vec3<f32>(1.0), dot(abs(input.color.rgb), vec3<f32>(1.0)) <= 0.0003);
-    let is_glass = material.render.x > 1.5;
+    let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
+    let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
     var alpha = clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0);
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
+    }
+    if is_mask && alpha < material.render.w {
+        discard;
     }
     if alpha < 0.01 {
         discard;

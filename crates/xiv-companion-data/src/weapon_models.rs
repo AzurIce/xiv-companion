@@ -2,10 +2,11 @@ pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelData,
     ModelMaterial, ModelMesh, ModelRenderData, ModelTexture, ModelTextureKind, ModelVertex,
     PackedModelId, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData, WeaponModelMaterial,
-    WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex,
-    bake_color_table_maps, calculate_model_bounds, is_weapon_equip_slot_category, material_color,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
+    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    is_weapon_equip_slot_category, material_color, weapon_material_candidate_paths,
+    weapon_model_candidate_paths, weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
@@ -526,6 +527,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
         let sampler_roles = parse_material_sampler_roles(&bytes);
         let shader_flags = parse_material_shader_flags(&bytes);
+        let alpha_test = material_has_alpha_test(&material);
+        let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -535,8 +538,15 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             loaded_paths,
         );
 
-        let render_mode =
-            weapon_material_render_mode(&shader_package_name, shader_flags, &texture_set);
+        let alpha_mode = weapon_material_alpha_mode(
+            &shader_package_name,
+            shader_flags,
+            &texture_set,
+            alpha_test,
+        );
+        let alpha_threshold =
+            material_alpha_threshold.unwrap_or_else(|| default_alpha_threshold(alpha_mode));
+        let render_mode = weapon_material_render_mode(alpha_mode);
         let opacity = weapon_material_opacity(render_mode);
         let render_backfaces = material_render_backfaces(shader_flags);
         let diffuse_color = if texture_set.base_color.is_some() {
@@ -553,6 +563,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             path: Some(path),
             shader_package_name: Some(shader_package_name),
             render_mode,
+            alpha_mode,
+            alpha_threshold,
             opacity,
             render_backfaces,
             fallback_color: fallback,
@@ -902,6 +914,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
         let sampler_roles = parse_material_sampler_roles(&bytes);
         let shader_flags = parse_material_shader_flags(&bytes);
+        let alpha_test = material_has_alpha_test(&material);
+        let material_alpha_threshold = material_alpha_threshold(&bytes);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -912,8 +926,15 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         )
         .await;
 
-        let render_mode =
-            weapon_material_render_mode(&shader_package_name, shader_flags, &texture_set);
+        let alpha_mode = weapon_material_alpha_mode(
+            &shader_package_name,
+            shader_flags,
+            &texture_set,
+            alpha_test,
+        );
+        let alpha_threshold =
+            material_alpha_threshold.unwrap_or_else(|| default_alpha_threshold(alpha_mode));
+        let render_mode = weapon_material_render_mode(alpha_mode);
         let opacity = weapon_material_opacity(render_mode);
         let render_backfaces = material_render_backfaces(shader_flags);
         let diffuse_color = if texture_set.base_color.is_some() {
@@ -930,6 +951,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             path: Some(path),
             shader_package_name: Some(shader_package_name),
             render_mode,
+            alpha_mode,
+            alpha_threshold,
             opacity,
             render_backfaces,
             fallback_color: fallback,
@@ -1236,19 +1259,33 @@ fn bake_weapon_color_table_textures(
 }
 
 #[cfg(feature = "game-data")]
-fn weapon_material_render_mode(
+fn weapon_material_render_mode(alpha_mode: WeaponMaterialAlphaMode) -> WeaponMaterialRenderMode {
+    match alpha_mode {
+        WeaponMaterialAlphaMode::Opaque | WeaponMaterialAlphaMode::Mask => {
+            WeaponMaterialRenderMode::Opaque
+        }
+        WeaponMaterialAlphaMode::Blend => WeaponMaterialRenderMode::Transparent,
+        WeaponMaterialAlphaMode::Glass => WeaponMaterialRenderMode::Glass,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn weapon_material_alpha_mode(
     shader_package_name: &str,
     shader_flags: u32,
     texture_set: &WeaponTextureSet,
-) -> WeaponMaterialRenderMode {
+    alpha_test: bool,
+) -> WeaponMaterialAlphaMode {
     const ENABLE_TRANSLUCENCY: u32 = 0x10;
     let shader = shader_package_name.to_ascii_lowercase();
     if shader.contains("glass") {
-        WeaponMaterialRenderMode::Glass
-    } else if texture_set.has_alpha || shader_flags & ENABLE_TRANSLUCENCY != 0 {
-        WeaponMaterialRenderMode::Transparent
+        WeaponMaterialAlphaMode::Glass
+    } else if shader_flags & ENABLE_TRANSLUCENCY != 0 {
+        WeaponMaterialAlphaMode::Blend
+    } else if alpha_test || texture_set.has_alpha {
+        WeaponMaterialAlphaMode::Mask
     } else {
-        WeaponMaterialRenderMode::Opaque
+        WeaponMaterialAlphaMode::Opaque
     }
 }
 
@@ -1268,8 +1305,33 @@ fn material_render_backfaces(shader_flags: u32) -> bool {
 }
 
 #[cfg(feature = "game-data")]
+fn default_alpha_threshold(_mode: WeaponMaterialAlphaMode) -> f32 {
+    0.0
+}
+
+#[cfg(feature = "game-data")]
+fn material_has_alpha_test(material: &physis::mtrl::Material) -> bool {
+    const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
+    const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
+    material
+        .shader_keys
+        .iter()
+        .any(|key| key.category == APPLY_ALPHA_TEST && key.value == APPLY_ALPHA_TEST_ON)
+}
+
+#[cfg(feature = "game-data")]
+fn material_alpha_threshold(bytes: &[u8]) -> Option<f32> {
+    const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
+    material_constant_first_f32(bytes, G_ALPHA_THRESHOLD)
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0))
+}
+
+#[cfg(feature = "game-data")]
 fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
-    let mode = weapon_material_render_mode(shader_package_name, 0, &WeaponTextureSet::default());
+    let alpha_mode =
+        weapon_material_alpha_mode(shader_package_name, 0, &WeaponTextureSet::default(), false);
+    let mode = weapon_material_render_mode(alpha_mode);
     (mode == WeaponMaterialRenderMode::Glass).then_some(weapon_material_opacity(mode))
 }
 
@@ -1395,7 +1457,7 @@ fn weapon_color_table_rows(
                     specular_strength: row.unknown2,
                     roughness: row.roughness,
                     metalness: row.metalness,
-                    alpha: row.tile_alpha,
+                    tile_alpha: row.tile_alpha,
                 })
                 .collect(),
         ),
@@ -1527,6 +1589,8 @@ fn fallback_weapon_material(
         path: None,
         shader_package_name: None,
         render_mode: WeaponMaterialRenderMode::Opaque,
+        alpha_mode: WeaponMaterialAlphaMode::Opaque,
+        alpha_threshold: 0.0,
         opacity: 1.0,
         render_backfaces: true,
         fallback_color: fallback,
@@ -1571,96 +1635,20 @@ fn parse_material_sampler_roles(bytes: &[u8]) -> Vec<MaterialSamplerRole> {
 
 #[cfg(feature = "game-data")]
 fn parse_material_sampler_records(bytes: &[u8]) -> Vec<MaterialSamplerRecord> {
-    let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
+    let Some(layout) = material_shader_table_layout(bytes) else {
         return Vec::new();
     };
-    let Some(uv_set_count) = bytes.get(13).copied().map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(color_set_count) = bytes.get(14).copied().map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(additional_data_size) = bytes.get(15).copied().map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
-        return Vec::new();
-    };
-
-    let mut offset = 16_usize;
-    for byte_count in [
-        texture_count.saturating_mul(4),
-        uv_set_count.saturating_mul(4),
-        color_set_count.saturating_mul(4),
-        string_table_size,
-    ] {
-        let Some(next) = checked_advance(offset, byte_count, bytes.len()) else {
-            return Vec::new();
-        };
-        offset = next;
-    }
-
-    let additional_data_offset = offset;
-    let table_flags = if additional_data_size >= 4 {
-        read_u32_le(bytes, additional_data_offset).unwrap_or(0)
-    } else {
-        0
-    };
-    let Some(next) = checked_advance(offset, additional_data_size, bytes.len()) else {
-        return Vec::new();
-    };
-    offset = next;
-
-    let table_dimension_logs = (table_flags >> 4) as u8;
-    if table_flags & 0x4 != 0 {
-        let Some(next) = checked_advance(
-            offset,
-            material_color_table_byte_len(table_dimension_logs),
-            bytes.len(),
-        ) else {
-            return Vec::new();
-        };
-        offset = next;
-    }
-    if table_flags & 0x8 != 0 {
-        let Some(next) = checked_advance(
-            offset,
-            material_color_dye_table_byte_len(table_dimension_logs),
-            bytes.len(),
-        ) else {
-            return Vec::new();
-        };
-        offset = next;
-    }
-
-    let Some(shader_key_count) = read_u16_le(bytes, offset + 2).map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(constant_count) = read_u16_le(bytes, offset + 4).map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(sampler_count) = read_u16_le(bytes, offset + 6).map(usize::from) else {
-        return Vec::new();
-    };
-    let Some(mut sampler_offset) = checked_advance(
-        offset,
-        12_usize
-            .saturating_add(shader_key_count.saturating_mul(8))
-            .saturating_add(constant_count.saturating_mul(8)),
-        bytes.len(),
-    ) else {
-        return Vec::new();
-    };
+    let mut sampler_offset = layout.sampler_offset;
 
     let mut records = Vec::new();
-    for _ in 0..sampler_count {
+    for _ in 0..layout.sampler_count {
         let Some(texture_usage) = read_u32_le(bytes, sampler_offset) else {
             return records;
         };
         let Some(texture_index) = bytes.get(sampler_offset + 8).copied().map(usize::from) else {
             return records;
         };
-        if texture_index < texture_count {
+        if texture_index < layout.texture_count {
             records.push(MaterialSamplerRecord {
                 texture_index,
                 texture_usage,
@@ -1678,20 +1666,56 @@ fn parse_material_sampler_records(bytes: &[u8]) -> Vec<MaterialSamplerRecord> {
 
 #[cfg(feature = "game-data")]
 fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
+    material_shader_table_layout(bytes)
+        .and_then(|layout| read_u32_le(bytes, layout.table_offset + 8))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "game-data")]
+fn material_constant_first_f32(bytes: &[u8], constant_id: u32) -> Option<f32> {
+    let layout = material_shader_table_layout(bytes)?;
+    let shader_values_offset = layout.shader_values_offset;
+    let mut constant_offset = layout.constant_offset;
+    for _ in 0..layout.constant_count {
+        let id = read_u32_le(bytes, constant_offset)?;
+        let value_offset = read_u16_le(bytes, constant_offset + 4).map(usize::from)?;
+        let value_size = read_u16_le(bytes, constant_offset + 6).map(usize::from)?;
+        if id == constant_id && value_size >= 4 {
+            return read_f32_le(bytes, shader_values_offset.checked_add(value_offset)?);
+        }
+        constant_offset = checked_advance(constant_offset, 8, bytes.len())?;
+    }
+    None
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug)]
+struct MaterialShaderTableLayout {
+    texture_count: usize,
+    table_offset: usize,
+    constant_offset: usize,
+    sampler_offset: usize,
+    shader_values_offset: usize,
+    constant_count: usize,
+    sampler_count: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayout> {
     let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
-        return 0;
+        return None;
     };
     let Some(uv_set_count) = bytes.get(13).copied().map(usize::from) else {
-        return 0;
+        return None;
     };
     let Some(color_set_count) = bytes.get(14).copied().map(usize::from) else {
-        return 0;
+        return None;
     };
     let Some(additional_data_size) = bytes.get(15).copied().map(usize::from) else {
-        return 0;
+        return None;
     };
     let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
-        return 0;
+        return None;
     };
 
     let mut offset = 16_usize;
@@ -1702,7 +1726,7 @@ fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
         string_table_size,
     ] {
         let Some(next) = checked_advance(offset, byte_count, bytes.len()) else {
-            return 0;
+            return None;
         };
         offset = next;
     }
@@ -1714,7 +1738,7 @@ fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
         0
     };
     let Some(next) = checked_advance(offset, additional_data_size, bytes.len()) else {
-        return 0;
+        return None;
     };
     offset = next;
 
@@ -1725,7 +1749,7 @@ fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
             material_color_table_byte_len(table_dimension_logs),
             bytes.len(),
         ) else {
-            return 0;
+            return None;
         };
         offset = next;
     }
@@ -1735,12 +1759,38 @@ fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
             material_color_dye_table_byte_len(table_dimension_logs),
             bytes.len(),
         ) else {
-            return 0;
+            return None;
         };
         offset = next;
     }
 
-    read_u32_le(bytes, offset + 8).unwrap_or(0)
+    let shader_value_list_size = read_u16_le(bytes, offset).map(usize::from)?;
+    let shader_key_count = read_u16_le(bytes, offset + 2).map(usize::from)?;
+    let constant_count = read_u16_le(bytes, offset + 4).map(usize::from)?;
+    let sampler_count = read_u16_le(bytes, offset + 6).map(usize::from)?;
+    let constant_offset =
+        checked_advance(offset, 12 + shader_key_count.saturating_mul(8), bytes.len())?;
+    let sampler_offset = checked_advance(
+        constant_offset,
+        constant_count.saturating_mul(8),
+        bytes.len(),
+    )?;
+    let shader_values_offset = checked_advance(
+        sampler_offset,
+        sampler_count.saturating_mul(12),
+        bytes.len(),
+    )?;
+    checked_advance(shader_values_offset, shader_value_list_size, bytes.len())?;
+
+    Some(MaterialShaderTableLayout {
+        texture_count,
+        table_offset: offset,
+        constant_offset,
+        sampler_offset,
+        shader_values_offset,
+        constant_count,
+        sampler_count,
+    })
 }
 
 #[cfg(feature = "game-data")]
@@ -1929,6 +1979,12 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 #[cfg(feature = "game-data")]
+fn read_f32_le(bytes: &[u8], offset: usize) -> Option<f32> {
+    let bytes = bytes.get(offset..offset + 4)?;
+    Some(f32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+#[cfg(feature = "game-data")]
 fn weapon_texture_candidate_paths(material_path: &str, texture_path: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     let texture_path = normalize_game_resource_path(texture_path);
@@ -2024,6 +2080,22 @@ mod weapon_material_tests {
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 1);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
+    }
+
+    #[test]
+    fn material_alpha_threshold_reads_shader_constant_value() {
+        let mut bytes = vec![0; 16];
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x29AC_0223_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&0.42_f32.to_le_bytes());
+
+        assert_eq!(material_alpha_threshold(&bytes), Some(0.42));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 
-use crate::{MaterialRenderMode, ModelMaterial, ModelRenderData};
+use crate::{MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData};
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
@@ -746,11 +746,11 @@ fn material_is_transparent<M: ModelRenderData + ?Sized>(model: &M, material_slot
         return false;
     };
 
-    material.render_mode != MaterialRenderMode::Opaque
-        || material
-            .base_color_texture
-            .and_then(|index| model.textures().get(index))
-            .is_some_and(|texture| texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250))
+    match material.alpha_mode {
+        MaterialAlphaMode::Blend | MaterialAlphaMode::Glass => true,
+        MaterialAlphaMode::Mask => false,
+        MaterialAlphaMode::Opaque => material.render_mode != MaterialRenderMode::Opaque,
+    }
 }
 
 fn material_renders_backfaces<M: ModelRenderData + ?Sized>(
@@ -1039,8 +1039,8 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         render: [
             render_mode_value(material.render_mode),
             material.opacity,
-            0.0,
-            0.0,
+            alpha_mode_value(material.alpha_mode),
+            material.alpha_threshold.clamp(0.0, 1.0),
         ],
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1262,6 +1262,8 @@ fn fallback_material() -> ModelMaterial {
         path: None,
         shader_package_name: None,
         render_mode: MaterialRenderMode::Opaque,
+        alpha_mode: MaterialAlphaMode::Opaque,
+        alpha_threshold: 0.0,
         opacity: 1.0,
         render_backfaces: true,
         fallback_color: [0.78, 0.72, 0.64],
@@ -1285,6 +1287,15 @@ fn render_mode_value(mode: MaterialRenderMode) -> f32 {
         MaterialRenderMode::Opaque => 0.0,
         MaterialRenderMode::Transparent => 1.0,
         MaterialRenderMode::Glass => 2.0,
+    }
+}
+
+fn alpha_mode_value(mode: MaterialAlphaMode) -> f32 {
+    match mode {
+        MaterialAlphaMode::Opaque => 0.0,
+        MaterialAlphaMode::Mask => 1.0,
+        MaterialAlphaMode::Blend => 2.0,
+        MaterialAlphaMode::Glass => 3.0,
     }
 }
 
@@ -1452,6 +1463,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    #[test]
+    fn material_alpha_mode_controls_transparent_pass() {
+        assert!(!test_material_is_transparent(
+            MaterialAlphaMode::Opaque,
+            MaterialRenderMode::Opaque
+        ));
+        assert!(!test_material_is_transparent(
+            MaterialAlphaMode::Mask,
+            MaterialRenderMode::Opaque
+        ));
+        assert!(test_material_is_transparent(
+            MaterialAlphaMode::Blend,
+            MaterialRenderMode::Transparent
+        ));
+        assert!(test_material_is_transparent(
+            MaterialAlphaMode::Glass,
+            MaterialRenderMode::Glass
+        ));
+        assert!(test_material_is_transparent(
+            MaterialAlphaMode::Opaque,
+            MaterialRenderMode::Transparent
+        ));
+    }
+
+    fn test_material_is_transparent(
+        alpha_mode: MaterialAlphaMode,
+        render_mode: MaterialRenderMode,
+    ) -> bool {
+        let mut material = fallback_material();
+        material.alpha_mode = alpha_mode;
+        material.render_mode = render_mode;
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material],
+            textures: Vec::new(),
+            meshes: Vec::new(),
+        };
+        material_is_transparent(&model, 0)
     }
 
     fn test_batch(material_slot: usize, transparent: bool, center: [f32; 3]) -> DrawBatch {
