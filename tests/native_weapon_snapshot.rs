@@ -59,6 +59,8 @@ fn mock_weapon_model() -> WeaponModelData {
 fn vertex(position: [f32; 3], color: [f32; 4]) -> WeaponModelVertex {
     WeaponModelVertex {
         position,
+        blend_weights: None,
+        blend_indices: None,
         normal: [0.0, 0.0, 1.0],
         uv0: [0.0, 0.0],
         uv1: [0.0, 0.0],

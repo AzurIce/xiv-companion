@@ -1,5 +1,5 @@
 use crate::mdl_metadata::{MdlMeshMetadata, MdlMeshRangeMetadata, mdl_metadata_from_mdl_bytes};
-use crate::model::{ModelVertex, WeaponModelVertex};
+use crate::model::{ModelBlendIndices, ModelBlendWeights, ModelVertex, WeaponModelVertex};
 
 const MODEL_FILE_HEADER_SIZE: usize = 68;
 const VERTEX_DECLARATION_SIZE: usize = 17 * 8;
@@ -215,6 +215,12 @@ fn apply_vertex_element(
         0 => {
             vertex.position = read_vec3(bytes, offset, element.vertex_type)?;
         }
+        1 => {
+            vertex.blend_weights = Some(read_blend_weights(bytes, offset, element.vertex_type)?);
+        }
+        2 => {
+            vertex.blend_indices = Some(read_blend_indices(bytes, offset, element.vertex_type)?);
+        }
         3 => {
             let normal = read_vec3(bytes, offset, element.vertex_type)?;
             match element.usage_index {
@@ -293,6 +299,8 @@ fn read_mesh_indices(
 fn default_model_vertex() -> ModelVertex {
     ModelVertex {
         position: [0.0; 3],
+        blend_weights: None,
+        blend_indices: None,
         normal: [0.0; 3],
         uv0: [0.0; 2],
         uv1: [0.0; 2],
@@ -306,6 +314,44 @@ fn default_model_vertex() -> ModelVertex {
         flow0: None,
         flow1: None,
     }
+}
+
+fn read_blend_weights(
+    bytes: &[u8],
+    offset: usize,
+    vertex_type: u8,
+) -> anyhow::Result<ModelBlendWeights> {
+    let raw = match vertex_type {
+        5 | 8 => read_bytes(bytes, offset, 4, "blend weights vertex value")?,
+        17 => read_bytes(bytes, offset, 8, "blend weights vertex value")?,
+        _ => anyhow::bail!("unsupported blend weights vertex type {vertex_type}"),
+    };
+    let mut values = [0.0; 8];
+    for (index, value) in raw.iter().enumerate() {
+        values[index] = f32::from(*value) / 255.0;
+    }
+    Ok(ModelBlendWeights {
+        count: raw.len() as u8,
+        values,
+    })
+}
+
+fn read_blend_indices(
+    bytes: &[u8],
+    offset: usize,
+    vertex_type: u8,
+) -> anyhow::Result<ModelBlendIndices> {
+    let raw = match vertex_type {
+        5 => read_bytes(bytes, offset, 4, "blend indices vertex value")?,
+        17 => read_bytes(bytes, offset, 8, "blend indices vertex value")?,
+        _ => anyhow::bail!("unsupported blend indices vertex type {vertex_type}"),
+    };
+    let mut values = [0; 8];
+    values[..raw.len()].copy_from_slice(raw);
+    Ok(ModelBlendIndices {
+        count: raw.len() as u8,
+        values,
+    })
 }
 
 fn apply_texcoord(vertex: &mut ModelVertex, usage_index: u8, uv: [f32; 4]) {
@@ -542,6 +588,107 @@ mod tests {
     }
 
     #[test]
+    fn blend_weights_and_indices_are_preserved() {
+        let mut vertex = default_model_vertex();
+        apply_vertex_element(
+            &mut vertex,
+            &[255, 128, 64, 0],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 8,
+                usage: 1,
+                usage_index: 0,
+            },
+        )
+        .expect("blend weights");
+        apply_vertex_element(
+            &mut vertex,
+            &[3, 2, 1, 0],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 5,
+                usage: 2,
+                usage_index: 0,
+            },
+        )
+        .expect("blend indices");
+
+        assert_eq!(
+            vertex.blend_weights,
+            Some(ModelBlendWeights {
+                count: 4,
+                values: [1.0, 128.0 / 255.0, 64.0 / 255.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            })
+        );
+        assert_eq!(
+            vertex.blend_indices,
+            Some(ModelBlendIndices {
+                count: 4,
+                values: [3, 2, 1, 0, 0, 0, 0, 0],
+            })
+        );
+    }
+
+    #[test]
+    fn eight_slot_blend_weights_and_indices_are_preserved() {
+        let mut vertex = default_model_vertex();
+        apply_vertex_element(
+            &mut vertex,
+            &[255, 224, 192, 160, 128, 96, 64, 32],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 17,
+                usage: 1,
+                usage_index: 0,
+            },
+        )
+        .expect("eight-slot blend weights");
+        apply_vertex_element(
+            &mut vertex,
+            &[10, 11, 12, 13, 14, 15, 16, 17],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 17,
+                usage: 2,
+                usage_index: 0,
+            },
+        )
+        .expect("eight-slot blend indices");
+
+        assert_eq!(
+            vertex.blend_weights,
+            Some(ModelBlendWeights {
+                count: 8,
+                values: [
+                    1.0,
+                    224.0 / 255.0,
+                    192.0 / 255.0,
+                    160.0 / 255.0,
+                    128.0 / 255.0,
+                    96.0 / 255.0,
+                    64.0 / 255.0,
+                    32.0 / 255.0,
+                ],
+            })
+        );
+        assert_eq!(
+            vertex.blend_indices,
+            Some(ModelBlendIndices {
+                count: 8,
+                values: [10, 11, 12, 13, 14, 15, 16, 17],
+            })
+        );
+    }
+
+    #[test]
     fn extra_texcoord_usage_does_not_overwrite_primary_uvs() {
         let mut vertex = default_model_vertex();
         let primary = f32_bytes(&[0.1, 0.2, 0.3, 0.4]);
@@ -702,6 +849,8 @@ mod tests {
     #[test]
     fn missing_vertex_color_defaults_to_white() {
         assert_eq!(default_model_vertex().color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(default_model_vertex().blend_weights, None);
+        assert_eq!(default_model_vertex().blend_indices, None);
         assert_eq!(default_model_vertex().normal1, None);
         assert_eq!(default_model_vertex().bitangent1, None);
         assert_eq!(default_model_vertex().color1, None);

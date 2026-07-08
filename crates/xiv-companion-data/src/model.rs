@@ -148,6 +148,10 @@ pub struct ModelMesh {
 #[serde(rename_all = "camelCase")]
 pub struct ModelVertex {
     pub position: [f32; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_weights: Option<ModelBlendWeights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_indices: Option<ModelBlendIndices>,
     pub normal: [f32; 3],
     #[serde(default)]
     pub uv0: [f32; 2],
@@ -171,6 +175,20 @@ pub struct ModelVertex {
     pub flow0: Option<[f32; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow1: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBlendWeights {
+    pub count: u8,
+    pub values: [f32; 8],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBlendIndices {
+    pub count: u8,
+    pub values: [u8; 8],
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

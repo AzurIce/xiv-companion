@@ -3395,6 +3395,8 @@ mod weapon_material_tests {
     fn test_vertex(x: f32) -> WeaponModelVertex {
         WeaponModelVertex {
             position: [x, 0.0, 0.0],
+            blend_weights: None,
+            blend_indices: None,
             normal: [0.0, 1.0, 0.0],
             uv0: [0.0, 0.0],
             uv1: [0.0, 0.0],
