@@ -240,7 +240,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
             .cloned()
             .unwrap_or_else(|| format!("material-{}", part.material_index));
         let color = material_color(part.material_index);
-        let vertices = part
+        let part_vertices = part
             .vertices
             .iter()
             .map(|vertex| WeaponModelVertex {
@@ -252,23 +252,147 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
                 color: vertex_color_or_fallback(vertex.color),
             })
             .collect::<Vec<_>>();
-        let indices = part.indices.iter().map(|index| u32::from(*index)).collect();
-        meshes.push(WeaponModelMesh {
-            path: path.to_string(),
-            part_index: part_index as u32,
-            material_index: part.material_index,
-            material_slot: part.material_index as usize,
-            material_name,
-            color,
-            vertices,
-            indices,
-        });
+        for range in mesh_index_ranges(part.indices.len(), &part.submeshes) {
+            let raw_indices = &part.indices[range.start..range.end];
+            let Some((vertices, indices)) = remap_mesh_vertices(&part_vertices, raw_indices) else {
+                continue;
+            };
+            meshes.push(WeaponModelMesh {
+                path: mesh_path_with_submesh(path, part_index, range.submesh_index),
+                part_index: part_index as u32,
+                material_index: part.material_index,
+                material_slot: part.material_index as usize,
+                material_name: material_name.clone(),
+                color,
+                vertices,
+                indices,
+            });
+        }
     }
 
     (!meshes.is_empty())
         .then_some(meshes)
         .ok_or_else(|| anyhow!("model {path} contains no renderable meshes"))
         .with_context(|| format!("failed to extract render meshes from {path}"))
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeshIndexRange {
+    submesh_index: Option<usize>,
+    start: usize,
+    end: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn mesh_index_ranges(
+    index_count: usize,
+    submeshes: &[physis::model::SubMesh],
+) -> Vec<MeshIndexRange> {
+    normalize_submesh_index_ranges(
+        index_count,
+        submeshes
+            .iter()
+            .enumerate()
+            .map(|(submesh_index, submesh)| {
+                (
+                    submesh_index,
+                    submesh.index_offset as usize,
+                    submesh.index_count as usize,
+                )
+            }),
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn normalize_submesh_index_ranges<I>(index_count: usize, submeshes: I) -> Vec<MeshIndexRange>
+where
+    I: IntoIterator<Item = (usize, usize, usize)>,
+{
+    let raw = submeshes
+        .into_iter()
+        .filter(|(_, _, count)| *count != 0)
+        .collect::<Vec<_>>();
+    if raw.is_empty() || index_count == 0 {
+        return full_mesh_index_range(index_count);
+    }
+
+    let base_index_offset = raw[0].1;
+    let mut ranges = Vec::new();
+    for (submesh_index, index_offset, count) in raw {
+        let relative_start = index_offset.checked_sub(base_index_offset).filter(|start| {
+            start
+                .checked_add(count)
+                .is_some_and(|end| end <= index_count)
+        });
+        let direct_start = (index_offset
+            .checked_add(count)
+            .is_some_and(|end| end <= index_count))
+        .then_some(index_offset);
+        let Some(start) = relative_start.or(direct_start) else {
+            continue;
+        };
+        ranges.push(MeshIndexRange {
+            submesh_index: Some(submesh_index),
+            start,
+            end: start + count,
+        });
+    }
+
+    if ranges.is_empty() {
+        return full_mesh_index_range(index_count);
+    }
+    if ranges.len() == 1 && ranges[0].start == 0 && ranges[0].end == index_count {
+        ranges[0].submesh_index = None;
+    }
+    ranges
+}
+
+#[cfg(feature = "game-data")]
+fn full_mesh_index_range(index_count: usize) -> Vec<MeshIndexRange> {
+    if index_count == 0 {
+        Vec::new()
+    } else {
+        vec![MeshIndexRange {
+            submesh_index: None,
+            start: 0,
+            end: index_count,
+        }]
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn mesh_path_with_submesh(path: &str, part_index: usize, submesh_index: Option<usize>) -> String {
+    match submesh_index {
+        Some(submesh_index) => format!("{path}#part-{part_index}-submesh-{submesh_index}"),
+        None => path.to_string(),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn remap_mesh_vertices(
+    vertices: &[WeaponModelVertex],
+    indices: &[u16],
+) -> Option<(Vec<WeaponModelVertex>, Vec<u32>)> {
+    let mut remapped_vertices = Vec::new();
+    let mut remap = HashMap::<u16, u32>::new();
+    let mut remapped_indices = Vec::with_capacity(indices.len());
+    for index in indices {
+        if usize::from(*index) >= vertices.len() {
+            return None;
+        }
+        let remapped_index = if let Some(remapped_index) = remap.get(index) {
+            *remapped_index
+        } else {
+            let remapped_index = remapped_vertices.len() as u32;
+            remapped_vertices.push(vertices[usize::from(*index)]);
+            remap.insert(*index, remapped_index);
+            remapped_index
+        };
+        remapped_indices.push(remapped_index);
+    }
+
+    Some((remapped_vertices, remapped_indices))
 }
 
 #[cfg(feature = "game-data")]
@@ -2311,6 +2435,70 @@ mod weapon_material_tests {
         assert_ne!(multiply_srgb_channels(128, 128), 64);
     }
 
+    #[test]
+    fn submesh_index_ranges_are_made_part_local() {
+        let ranges = normalize_submesh_index_ranges(12, [(0, 100, 6), (1, 106, 6), (2, 112, 3)]);
+
+        assert_eq!(
+            ranges,
+            vec![
+                MeshIndexRange {
+                    submesh_index: Some(0),
+                    start: 0,
+                    end: 6,
+                },
+                MeshIndexRange {
+                    submesh_index: Some(1),
+                    start: 6,
+                    end: 12,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn submesh_index_ranges_accept_already_local_offsets() {
+        let ranges = normalize_submesh_index_ranges(12, [(0, 0, 3), (1, 3, 9)]);
+
+        assert_eq!(
+            ranges,
+            vec![
+                MeshIndexRange {
+                    submesh_index: Some(0),
+                    start: 0,
+                    end: 3,
+                },
+                MeshIndexRange {
+                    submesh_index: Some(1),
+                    start: 3,
+                    end: 12,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn remap_mesh_vertices_keeps_submesh_vertex_order() {
+        let vertices = vec![
+            test_vertex(0.0),
+            test_vertex(1.0),
+            test_vertex(2.0),
+            test_vertex(3.0),
+        ];
+
+        let (remapped_vertices, remapped_indices) =
+            remap_mesh_vertices(&vertices, &[2, 0, 2, 3]).expect("valid remap");
+
+        assert_eq!(remapped_indices, vec![0, 1, 0, 2]);
+        assert_eq!(
+            remapped_vertices
+                .iter()
+                .map(|vertex| vertex.position[0])
+                .collect::<Vec<_>>(),
+            vec![2.0, 0.0, 3.0]
+        );
+    }
+
     fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
         test_texture_with_alpha(path, kind, 255)
     }
@@ -2326,6 +2514,17 @@ mod weapon_material_tests {
             width: 1,
             height: 1,
             rgba: vec![255, 255, 255, alpha],
+        }
+    }
+
+    fn test_vertex(x: f32) -> WeaponModelVertex {
+        WeaponModelVertex {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv0: [0.0, 0.0],
+            uv1: [0.0, 0.0],
+            bitangent: [1.0, 0.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
