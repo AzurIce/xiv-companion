@@ -1778,6 +1778,8 @@ fn weapon_color_table_rows(
                     diffuse: row.diffuse_color,
                     specular: row.specular_color,
                     emissive: row.emissive_color,
+                    // physis still exposes these Dawntrail fields with placeholder names.
+                    // Meddle names them GlossStrength and SpecularStrength respectively.
                     gloss_strength: row.unknown1,
                     specular_strength: row.unknown2,
                     roughness: row.roughness,

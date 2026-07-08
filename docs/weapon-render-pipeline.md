@@ -124,8 +124,11 @@ MTRL 贴图需要分类为：
 
 1. 读取 `_id.tex` RGBA。
 2. 按 R/G 查 ColorTable。
-3. 烘焙出 sRGB RGBA base texture。
-4. 若 ColorTable 有 emissive，则额外烘焙 emissive texture。
+3. 烘焙出 diffuse、specular、material-properties、emissive 贴图：
+   - diffuse RGB 为 sRGB，Alpha 固定不透明；`TileAlpha` 是 tile 属性，不作为材质透明度。
+   - specular RGB 为 sRGB，Alpha 保存 ColorTable `Anisotropy`。
+   - material-properties 为线性 unorm，通道为 metalness / roughness / gloss strength / specular strength。
+4. 若 ColorTable 有 emissive，则额外启用 emissive texture。
 
 只对 Dawntrail 32 行 ColorTable 启用；旧 16 行格式先保守回退，避免误烘焙。
 
@@ -154,8 +157,8 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 `冬雪之幻梦` 的雪球外壳即此类。调研发现：
 
 - MTRL 是 `characterglass.shpk`。
-- ColorTable `TileAlpha` 全部为 1.0。
 - 透明度并不直接由 TileAlpha 给出，而是 glass shader 语义控制。
+- ColorTable `TileAlpha` 属于 tile 属性；即使存在变化，也不能直接当作 diffuse/material alpha。
 
 当前实现做简化 glass：
 
@@ -200,6 +203,8 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 - 不要只从 item packed ID 推 variant，还要以真实存在路径/材质名为准。
 - ColorTable 需要按 `_id.tex` 查表。
+- MDL mesh 提取不依赖 physis LOD parts 过滤，改为读取 raw LOD0 mesh ranges，覆盖 normal/water/shadow/terrainShadow/verticalFog 以及 extra LOD 的 lightShaft/glass/materialChange/crestChange。
+- Dawntrail ColorTable 的 `unknown1/unknown2` 在 physis 中分别对应 Meddle 的 GlossStrength / SpecularStrength。
 - `characterglass` 需要单独模式。
 
 ## 10. 已知限制与后续计划
@@ -210,7 +215,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 1. 透明排序：对透明 mesh 按相机距离排序，至少 mesh-level back-to-front。
 2. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
-3. Mask/物理参数：从 ColorTable 烘焙 roughness/metalness/specular，而不是大量使用材质平均值。
+3. Tile/Sphere/Sheen：补齐 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
 4. Legacy ColorTable：补旧 16 行格式的正确索引路径。
 5. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
 6. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。
