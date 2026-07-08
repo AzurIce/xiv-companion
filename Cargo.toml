@@ -10,7 +10,13 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-game-data = ["dep:anyhow", "dep:binrw", "dep:flate2", "dep:physis"]
+game-data = [
+    "dep:anyhow",
+    "dep:binrw",
+    "dep:flate2",
+    "dep:physis",
+    "xiv-companion-data/game-data",
+]
 renderer = ["xiv-companion-render/renderer"]
 render-test-support = ["renderer", "xiv-companion-render/test-support"]
 web = [
@@ -35,6 +41,7 @@ wasm = [
     "dep:raphael-solver",
     "dep:tsify",
     "tsify/js",
+    "xiv-companion-data/wasm",
 ]
 
 [dependencies]
@@ -81,6 +88,7 @@ web-sys = { version = "0.3.83", features = [
     "Worker",
 ], optional = true }
 wgpu = { version = "29", features = ["webgl"], optional = true }
+xiv-companion-data = { path = "crates/xiv-companion-data", default-features = false }
 xiv-companion-render = { path = "crates/xiv-companion-render", default-features = false }
 
 [dev-dependencies]

@@ -1,0 +1,17 @@
+[package]
+name = "xiv-companion-data"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+game-data = ["dep:anyhow", "dep:physis"]
+wasm = ["dep:tsify", "dep:wasm-bindgen", "tsify/js"]
+
+[dependencies]
+anyhow = { version = "1.0.102", optional = true }
+physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+tsify = { version = "0.5.6", default-features = false, optional = true }
+wasm-bindgen = { version = "0.2.121", optional = true }

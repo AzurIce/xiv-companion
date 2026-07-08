@@ -4695,7 +4695,19 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+ "xiv-companion-data",
  "xiv-companion-render",
+]
+
+[[package]]
+name = "xiv-companion-data"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "physis",
+ "serde",
+ "tsify",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4706,8 +4718,8 @@ dependencies = [
  "glam",
  "image",
  "pollster",
- "serde",
  "wgpu",
+ "xiv-companion-data",
 ]
 
 [[package]]
