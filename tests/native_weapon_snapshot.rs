@@ -67,5 +67,7 @@ fn vertex(position: [f32; 3], color: [f32; 4]) -> WeaponModelVertex {
         bitangent: [0.0, 1.0, 0.0, 1.0],
         color,
         color1: None,
+        flow0: None,
+        flow1: None,
     }
 }

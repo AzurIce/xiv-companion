@@ -222,6 +222,18 @@ fn apply_vertex_element(
             let uv = read_vec4(bytes, offset, element.vertex_type)?;
             apply_texcoord(vertex, element.usage_index, uv);
         }
+        5 => {
+            let flow = read_vec4(bytes, offset, element.vertex_type)?;
+            match element.usage_index {
+                0 => {
+                    vertex.flow0 = Some(flow);
+                }
+                1 => {
+                    vertex.flow1 = Some(flow);
+                }
+                _ => {}
+            }
+        }
         6 => {
             if element.usage_index == 0 {
                 vertex.bitangent = read_tangent(bytes, offset)?;
@@ -273,6 +285,8 @@ fn default_model_vertex() -> ModelVertex {
         bitangent: [0.0; 4],
         color: [1.0; 4],
         color1: None,
+        flow0: None,
+        flow1: None,
     }
 }
 
@@ -590,9 +604,45 @@ mod tests {
     }
 
     #[test]
+    fn flow_vertex_attributes_are_preserved() {
+        let mut vertex = default_model_vertex();
+        apply_vertex_element(
+            &mut vertex,
+            &[0, 128, 255, 64],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 8,
+                usage: 5,
+                usage_index: 0,
+            },
+        )
+        .expect("primary flow");
+        apply_vertex_element(
+            &mut vertex,
+            &[255, 0, 128, 32],
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 8,
+                usage: 5,
+                usage_index: 1,
+            },
+        )
+        .expect("secondary flow");
+
+        assert_eq!(vertex.flow0, Some([0.0, 128.0 / 255.0, 1.0, 64.0 / 255.0]));
+        assert_eq!(vertex.flow1, Some([1.0, 0.0, 128.0 / 255.0, 32.0 / 255.0]));
+    }
+
+    #[test]
     fn missing_vertex_color_defaults_to_white() {
         assert_eq!(default_model_vertex().color, [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(default_model_vertex().color1, None);
+        assert_eq!(default_model_vertex().flow0, None);
+        assert_eq!(default_model_vertex().flow1, None);
     }
 
     fn fixture_mdl_with_normal_and_glass_mesh() -> Vec<u8> {

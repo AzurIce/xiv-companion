@@ -3403,6 +3403,8 @@ mod weapon_material_tests {
             bitangent: [1.0, 0.0, 0.0, 1.0],
             color: [1.0, 1.0, 1.0, 1.0],
             color1: None,
+            flow0: None,
+            flow1: None,
         }
     }
 

@@ -163,6 +163,10 @@ pub struct ModelVertex {
     pub color: [f32; 4],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color1: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow0: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow1: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
