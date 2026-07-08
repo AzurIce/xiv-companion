@@ -8,6 +8,7 @@ const VERTEX_STREAM_END: u8 = 0xff;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MdlGeometryMesh {
     pub mesh_index: usize,
+    pub category: String,
     pub material_index: u16,
     pub material_name: String,
     pub vertices: Vec<WeaponModelVertex>,
@@ -47,7 +48,7 @@ pub(crate) fn extract_mdl_lod0_geometry(
     let mesh_indices = mesh_indices_from_ranges(&lod.mesh_ranges);
     let mut meshes = Vec::new();
 
-    for mesh_index in mesh_indices {
+    for (mesh_index, category) in mesh_indices {
         let Some(mesh) = metadata.meshes.get(mesh_index) else {
             continue;
         };
@@ -85,6 +86,7 @@ pub(crate) fn extract_mdl_lod0_geometry(
             .unwrap_or_else(|| format!("material-{}", mesh.material_index));
         meshes.push(MdlGeometryMesh {
             mesh_index,
+            category,
             material_index: mesh.material_index,
             material_name,
             vertices,
@@ -96,13 +98,16 @@ pub(crate) fn extract_mdl_lod0_geometry(
     Ok(meshes)
 }
 
-fn mesh_indices_from_ranges(ranges: &[MdlMeshRangeMetadata]) -> Vec<usize> {
+fn mesh_indices_from_ranges(ranges: &[MdlMeshRangeMetadata]) -> Vec<(usize, String)> {
     let mut indices = Vec::new();
     for range in ranges {
         for mesh_index in range.mesh_index..range.mesh_end {
             let mesh_index = usize::from(mesh_index);
-            if !indices.contains(&mesh_index) {
-                indices.push(mesh_index);
+            if !indices
+                .iter()
+                .any(|(existing_index, _)| *existing_index == mesh_index)
+            {
+                indices.push((mesh_index, range.category.clone()));
             }
         }
     }
@@ -464,10 +469,12 @@ mod tests {
 
         assert_eq!(meshes.len(), 2);
         assert_eq!(meshes[0].mesh_index, 0);
+        assert_eq!(meshes[0].category, "normal");
         assert_eq!(meshes[0].material_index, 0);
         assert_eq!(meshes[0].vertices.len(), 3);
         assert_eq!(meshes[0].indices, vec![0, 1, 2]);
         assert_eq!(meshes[1].mesh_index, 1);
+        assert_eq!(meshes[1].category, "glass");
         assert_eq!(meshes[1].material_index, 1);
         assert_eq!(meshes[1].material_name, "/mt_glass.mtrl");
         assert_eq!(meshes[1].submeshes[0].index_offset, 0);

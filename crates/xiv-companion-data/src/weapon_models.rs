@@ -250,6 +250,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
             meshes.push(WeaponModelMesh {
                 path: mesh_path_with_submesh(path, mesh.mesh_index, range.submesh_index),
                 part_index: mesh.mesh_index as u32,
+                mesh_category: Some(mesh.category.clone()),
                 material_index: mesh.material_index,
                 material_slot: mesh.material_index as usize,
                 material_name: mesh.material_name.clone(),

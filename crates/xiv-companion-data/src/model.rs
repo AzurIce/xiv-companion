@@ -133,6 +133,8 @@ impl Default for ModelBounds {
 pub struct ModelMesh {
     pub path: String,
     pub part_index: u32,
+    #[serde(default)]
+    pub mesh_category: Option<String>,
     pub material_index: u16,
     #[serde(default)]
     pub material_slot: usize,
