@@ -9,16 +9,16 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
 
-use crate::WeaponModelData;
+use crate::ModelRenderData;
 
-use super::{WeaponRenderOptions, WeaponRenderer};
+use super::{ModelRenderOptions, ModelRenderer};
 
-pub struct WebWeaponCanvasRenderer {
+pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     depth_texture: wgpu::Texture,
-    renderer: WeaponRenderer,
+    renderer: ModelRenderer,
     orbit: Rc<RefCell<OrbitState>>,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
     _on_mouse_move: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -27,10 +27,10 @@ pub struct WebWeaponCanvasRenderer {
     _on_context_menu: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-impl WebWeaponCanvasRenderer {
-    pub async fn from_canvas(
+impl WebModelCanvasRenderer {
+    pub async fn from_canvas<M: ModelRenderData + ?Sized>(
         canvas: HtmlCanvasElement,
-        model: &WeaponModelData,
+        model: &M,
     ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -91,7 +91,7 @@ impl WebWeaponCanvasRenderer {
         };
         surface.configure(&device, &config);
         let depth_texture = create_depth_texture(&device, width, height);
-        let renderer = WeaponRenderer::new(device, queue, config.format, model);
+        let renderer = ModelRenderer::new(device, queue, config.format, model);
         let orbit = Rc::new(RefCell::new(OrbitState::default()));
         let (on_mouse_down, on_mouse_move, on_mouse_up, on_wheel, on_context_menu) =
             install_orbit_handlers(&canvas, orbit.clone())?;
@@ -112,10 +112,10 @@ impl WebWeaponCanvasRenderer {
     }
 
     pub fn render(&mut self) {
-        self.render_with_options(WeaponRenderOptions::default());
+        self.render_with_options(ModelRenderOptions::default());
     }
 
-    pub fn render_with_options(&mut self, options: WeaponRenderOptions) {
+    pub fn render_with_options(&mut self, options: ModelRenderOptions) {
         self.resize_to_client();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
@@ -164,6 +164,8 @@ impl WebWeaponCanvasRenderer {
         }
     }
 }
+
+pub type WebWeaponCanvasRenderer = WebModelCanvasRenderer;
 
 #[derive(Debug)]
 struct OrbitState {
