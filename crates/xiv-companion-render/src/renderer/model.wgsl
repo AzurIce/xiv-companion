@@ -94,16 +94,18 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5);
     let vertex_tint = select(input.color.rgb, vec3<f32>(1.0), dot(abs(input.color.rgb), vec3<f32>(1.0)) <= 0.0003);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
+    let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
+    let uses_alpha = is_mask || is_blend || is_glass || material.render.x > 0.5;
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
-    var alpha = clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0);
+    var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
     }
     if is_mask && alpha < material.render.w {
         discard;
     }
-    if alpha < 0.01 {
+    if uses_alpha && alpha < 0.01 {
         discard;
     }
     let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);

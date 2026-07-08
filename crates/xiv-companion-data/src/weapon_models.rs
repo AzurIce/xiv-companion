@@ -827,16 +827,10 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             ) {
                 set.base_color = Some(combined);
                 add_unique_index(&mut set.indices, combined);
-                if texture_alpha_affects_material_transparency(&textures[combined]) {
-                    set.has_alpha = true;
-                }
             }
         } else {
             set.base_color = Some(baked.base_color);
             add_unique_index(&mut set.indices, baked.base_color);
-            if texture_alpha_affects_material_transparency(&textures[baked.base_color]) {
-                set.has_alpha = true;
-            }
         }
 
         if set.emissive.is_none() {
@@ -1224,16 +1218,10 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             ) {
                 set.base_color = Some(combined);
                 add_unique_index(&mut set.indices, combined);
-                if texture_alpha_affects_material_transparency(&textures[combined]) {
-                    set.has_alpha = true;
-                }
             }
         } else {
             set.base_color = Some(baked.base_color);
             add_unique_index(&mut set.indices, baked.base_color);
-            if texture_alpha_affects_material_transparency(&textures[baked.base_color]) {
-                set.has_alpha = true;
-            }
         }
 
         if set.emissive.is_none() {
