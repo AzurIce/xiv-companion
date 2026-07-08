@@ -349,6 +349,7 @@ pub struct ColorTableRowColors {
     pub specular_strength: f32,
     pub roughness: f32,
     pub metalness: f32,
+    pub anisotropy: f32,
     /// ColorTable Tile Alpha，属于 tile 属性，不等同于材质整体透明度。
     pub tile_alpha: f32,
 }
@@ -363,6 +364,7 @@ impl Default for ColorTableRowColors {
             specular_strength: 1.0,
             roughness: 0.5,
             metalness: 0.0,
+            anisotropy: 0.0,
             tile_alpha: 1.0,
         }
     }
@@ -372,6 +374,7 @@ impl Default for ColorTableRowColors {
 ///
 /// `diffuse_rgba` / `specular_rgba` / `emissive_rgba` 的 RGB 为 sRGB 编码；
 /// `diffuse_rgba` 的 Alpha 来自 ColorTable TileAlpha，与 MeddleTools 的 diffuse bake 对齐。
+/// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
 /// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
 /// metalness / roughness / gloss strength / specular strength。
 #[derive(Clone, Debug, PartialEq)]
@@ -418,13 +421,14 @@ pub fn bake_color_table_maps(
         let roughness = lerp_value(row_a.roughness, row_b.roughness, blend);
         let gloss_strength = lerp_value(row_a.gloss_strength, row_b.gloss_strength, blend);
         let specular_strength = lerp_value(row_a.specular_strength, row_b.specular_strength, blend);
+        let anisotropy = lerp_value(row_a.anisotropy, row_b.anisotropy, blend);
         let tile_alpha = lerp_value(row_a.tile_alpha, row_b.tile_alpha, blend);
         if emissive.iter().any(|value| *value > 0.001) {
             has_emissive = true;
         }
 
         push_srgb_pixel(&mut diffuse_rgba, diffuse, tile_alpha);
-        push_srgb_pixel(&mut specular_rgba, specular, specular_strength);
+        push_srgb_pixel(&mut specular_rgba, specular, anisotropy);
         push_unorm_pixel(
             &mut material_rgba,
             [metalness, roughness, gloss_strength, specular_strength],
@@ -728,6 +732,29 @@ mod color_table_bake_tests {
         let id_rgba = [0, 128, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
         assert_eq!(baked.diffuse_rgba[3], 191);
+    }
+
+    #[test]
+    fn bake_uses_anisotropy_for_specular_alpha() {
+        let rows = vec![
+            ColorTableRowColors {
+                specular: [1.0, 1.0, 1.0],
+                anisotropy: 0.1,
+                specular_strength: 0.2,
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                specular: [1.0, 1.0, 1.0],
+                anisotropy: 0.25,
+                specular_strength: 0.75,
+                ..Default::default()
+            },
+        ];
+        let id_rgba = [0, 255, 0, 255];
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+
+        assert_eq!(baked.specular_rgba[3], 64);
+        assert_eq!(baked.material_rgba[3], 191);
     }
 
     #[test]
