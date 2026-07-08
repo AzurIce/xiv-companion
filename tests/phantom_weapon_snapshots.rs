@@ -90,6 +90,7 @@ struct MaterialSummary {
     shader_package_name: Option<String>,
     render_mode: String,
     opacity: f32,
+    render_backfaces: bool,
     fallback_color: [f32; 3],
     diffuse_color: [f32; 3],
     specular_color: [f32; 3],
@@ -100,7 +101,9 @@ struct MaterialSummary {
     base_color_texture: Option<usize>,
     normal_texture: Option<usize>,
     mask_texture: Option<usize>,
+    specular_texture: Option<usize>,
     emissive_texture: Option<usize>,
+    material_properties_texture: Option<usize>,
     debug_file: Option<String>,
 }
 
@@ -606,6 +609,7 @@ fn material_summary(
         shader_package_name: material.shader_package_name.clone(),
         render_mode: format!("{:?}", material.render_mode),
         opacity: material.opacity,
+        render_backfaces: material.render_backfaces,
         fallback_color: material.fallback_color,
         diffuse_color: material.diffuse_color,
         specular_color: material.specular_color,
@@ -616,7 +620,9 @@ fn material_summary(
         base_color_texture: material.base_color_texture,
         normal_texture: material.normal_texture,
         mask_texture: material.mask_texture,
+        specular_texture: material.specular_texture,
         emissive_texture: material.emissive_texture,
+        material_properties_texture: material.material_properties_texture,
         debug_file: debug_file_by_slot.get(&material.slot).cloned(),
     }
 }

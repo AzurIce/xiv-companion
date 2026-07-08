@@ -169,6 +169,8 @@ pub struct ModelMaterial {
     pub render_mode: MaterialRenderMode,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
+    #[serde(default = "default_render_backfaces")]
+    pub render_backfaces: bool,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -184,7 +186,11 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub mask_texture: Option<usize>,
     #[serde(default)]
+    pub specular_texture: Option<usize>,
+    #[serde(default)]
     pub emissive_texture: Option<usize>,
+    #[serde(default)]
+    pub material_properties_texture: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -198,6 +204,10 @@ pub enum MaterialRenderMode {
 
 fn default_material_opacity() -> f32 {
     1.0
+}
+
+fn default_render_backfaces() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -218,6 +228,8 @@ pub enum ModelTextureKind {
     Mask,
     Specular,
     Emissive,
+    /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。
+    MaterialProperties,
     /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
     Index,
     Other,
@@ -314,8 +326,13 @@ impl<T: ModelRenderData + ?Sized> ModelRenderData for std::sync::Arc<T> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorTableRowColors {
     pub diffuse: [f32; 3],
+    pub specular: [f32; 3],
     pub emissive: [f32; 3],
-    /// ColorTable Tile Alpha，用于玻璃/半透明材质。
+    pub gloss_strength: f32,
+    pub specular_strength: f32,
+    pub roughness: f32,
+    pub metalness: f32,
+    /// ColorTable Tile Alpha，属于 tile 属性，不等同于材质整体透明度。
     pub alpha: f32,
 }
 
@@ -323,16 +340,27 @@ impl Default for ColorTableRowColors {
     fn default() -> Self {
         Self {
             diffuse: [0.0; 3],
+            specular: [0.0; 3],
             emissive: [0.0; 3],
+            gloss_strength: 1.0,
+            specular_strength: 1.0,
+            roughness: 0.5,
+            metalness: 0.0,
             alpha: 1.0,
         }
     }
 }
 
-/// 由 ColorTable + 索引贴图烘焙出的贴图（RGBA8，sRGB 编码，与索引贴图同尺寸）
+/// 由 ColorTable + 索引贴图烘焙出的贴图（RGBA8，与索引贴图同尺寸）。
+///
+/// `diffuse_rgba` / `specular_rgba` / `emissive_rgba` 的 RGB 为 sRGB 编码；
+/// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
+/// metalness / roughness / gloss strength / specular strength。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
     pub diffuse_rgba: Vec<u8>,
+    pub specular_rgba: Vec<u8>,
+    pub material_rgba: Vec<u8>,
     /// 所有行 emissive 全黑时为 None
     pub emissive_rgba: Option<Vec<u8>>,
 }
@@ -353,6 +381,8 @@ pub fn bake_color_table_maps(
     let pair_count = rows.len() / 2;
     let pixel_count = id_rgba.len() / 4;
     let mut diffuse_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut specular_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut material_rgba = Vec::with_capacity(pixel_count * 4);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
     let mut has_emissive = false;
 
@@ -364,18 +394,29 @@ pub fn bake_color_table_maps(
         let row_b = rows[pair * 2 + 1];
 
         let diffuse = lerp_color(row_a.diffuse, row_b.diffuse, blend);
+        let specular = lerp_color(row_a.specular, row_b.specular, blend);
         let emissive = lerp_color(row_a.emissive, row_b.emissive, blend);
-        let alpha = row_a.alpha + (row_b.alpha - row_a.alpha) * blend;
+        let metalness = lerp_value(row_a.metalness, row_b.metalness, blend);
+        let roughness = lerp_value(row_a.roughness, row_b.roughness, blend);
+        let gloss_strength = lerp_value(row_a.gloss_strength, row_b.gloss_strength, blend);
+        let specular_strength = lerp_value(row_a.specular_strength, row_b.specular_strength, blend);
         if emissive.iter().any(|value| *value > 0.001) {
             has_emissive = true;
         }
 
-        push_srgb_pixel(&mut diffuse_rgba, diffuse, alpha);
+        push_srgb_pixel(&mut diffuse_rgba, diffuse, 1.0);
+        push_srgb_pixel(&mut specular_rgba, specular, specular_strength);
+        push_unorm_pixel(
+            &mut material_rgba,
+            [metalness, roughness, gloss_strength, specular_strength],
+        );
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
     }
 
     Some(BakedColorTableMaps {
         diffuse_rgba,
+        specular_rgba,
+        material_rgba,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
     })
 }
@@ -389,11 +430,22 @@ fn lerp_color(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
+fn lerp_value(a: f32, b: f32, t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    a + (b - a) * t
+}
+
 fn push_srgb_pixel(rgba: &mut Vec<u8>, linear: [f32; 3], alpha: f32) {
     for value in linear {
         rgba.push((linear_to_srgb(value).clamp(0.0, 1.0) * 255.0).round() as u8);
     }
     rgba.push((alpha.clamp(0.0, 1.0) * 255.0).round() as u8);
+}
+
+fn push_unorm_pixel(rgba: &mut Vec<u8>, linear: [f32; 4]) {
+    for value in linear {
+        rgba.push((value.clamp(0.0, 1.0) * 255.0).round() as u8);
+    }
 }
 
 fn linear_to_srgb(value: f32) -> f32 {
@@ -603,21 +655,25 @@ mod color_table_bake_tests {
                 diffuse: [1.0, 0.0, 0.0],
                 emissive: [0.0, 0.0, 0.0],
                 alpha: 1.0,
+                ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 1.0, 0.0],
                 emissive: [0.0, 0.0, 0.0],
                 alpha: 0.5,
+                ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 0.0, 1.0],
                 emissive: [1.0, 0.0, 0.0],
                 alpha: 1.0,
+                ..Default::default()
             },
             ColorTableRowColors {
                 diffuse: [0.0, 0.0, 1.0],
                 emissive: [1.0, 0.0, 0.0],
                 alpha: 1.0,
+                ..Default::default()
             },
         ]
     }
@@ -642,7 +698,7 @@ mod color_table_bake_tests {
         // R=0 → 行对 0；G=255 → 完全取第二行 (纯绿)
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
-        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 128]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
         // 全部像素 emissive 为 0 → 无 emissive 贴图
         assert!(baked.emissive_rgba.is_none());
     }
@@ -655,6 +711,7 @@ mod color_table_bake_tests {
             diffuse: [1.0, 1.0, 1.0],
             emissive: [0.0, 0.0, 0.0],
             alpha: 1.0,
+            ..Default::default()
         };
         rows[17] = rows[16];
         let id_rgba = [8 * 17, 0, 0, 255];

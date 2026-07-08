@@ -48,7 +48,9 @@ pub struct ModelRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    culled_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
+    transparent_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -289,12 +291,30 @@ impl ModelRenderer {
             &pipeline_layout,
             "weapon model pipeline",
             false,
+            false,
+        );
+        let culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon culled model pipeline",
+            false,
+            true,
         );
         let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
             &pipeline_layout,
             "weapon transparent model pipeline",
+            true,
+            false,
+        );
+        let transparent_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon transparent culled model pipeline",
+            true,
             true,
         );
 
@@ -350,7 +370,9 @@ impl ModelRenderer {
             device,
             queue,
             pipeline,
+            culled_pipeline,
             transparent_pipeline,
+            transparent_culled_pipeline,
             blur_pipeline,
             compose_pipeline,
             vertex_buffer,
@@ -458,15 +480,23 @@ impl ModelRenderer {
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-            render_pass.set_pipeline(&self.pipeline);
             for batch in self.draw_batches.iter().filter(|batch| !batch.transparent) {
+                render_pass.set_pipeline(if batch.render_backfaces {
+                    &self.pipeline
+                } else {
+                    &self.culled_pipeline
+                });
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
-            render_pass.set_pipeline(&self.transparent_pipeline);
             let sorted_transparent_batches =
                 sorted_transparent_batches(&self.draw_batches, yaw, pitch);
             for batch in sorted_transparent_batches {
+                render_pass.set_pipeline(if batch.render_backfaces {
+                    &self.transparent_pipeline
+                } else {
+                    &self.transparent_culled_pipeline
+                });
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
         }
@@ -682,6 +712,7 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             index_start,
             index_count: mesh.indices.len() as u32,
             transparent: material_is_transparent(model, mesh.material_slot),
+            render_backfaces: material_renders_backfaces(model, mesh.material_slot),
             center: mesh_bounds_center(mesh),
         });
     }
@@ -720,6 +751,17 @@ fn material_is_transparent<M: ModelRenderData + ?Sized>(model: &M, material_slot
             .base_color_texture
             .and_then(|index| model.textures().get(index))
             .is_some_and(|texture| texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250))
+}
+
+fn material_renders_backfaces<M: ModelRenderData + ?Sized>(
+    model: &M,
+    material_slot: usize,
+) -> bool {
+    model
+        .materials()
+        .get(material_slot)
+        .map(|material| material.render_backfaces)
+        .unwrap_or(true)
 }
 
 fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
@@ -772,6 +814,7 @@ fn create_model_pipeline(
     layout: &wgpu::PipelineLayout,
     label: &str,
     transparent: bool,
+    cull_backfaces: bool,
 ) -> wgpu::RenderPipeline {
     let blend = transparent.then_some(wgpu::BlendState::ALPHA_BLENDING);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -804,7 +847,7 @@ fn create_model_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
+            cull_mode: cull_backfaces.then_some(wgpu::Face::Back),
             polygon_mode: wgpu::PolygonMode::Fill,
             unclipped_depth: false,
             conservative: false,
@@ -1220,6 +1263,7 @@ fn fallback_material() -> ModelMaterial {
         shader_package_name: None,
         render_mode: MaterialRenderMode::Opaque,
         opacity: 1.0,
+        render_backfaces: true,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],
@@ -1230,7 +1274,9 @@ fn fallback_material() -> ModelMaterial {
         base_color_texture: None,
         normal_texture: None,
         mask_texture: None,
+        specular_texture: None,
         emissive_texture: None,
+        material_properties_texture: None,
     }
 }
 
@@ -1328,6 +1374,7 @@ struct DrawBatch {
     index_start: u32,
     index_count: u32,
     transparent: bool,
+    render_backfaces: bool,
     center: [f32; 3],
 }
 
@@ -1413,6 +1460,7 @@ mod tests {
             index_start: 0,
             index_count: 3,
             transparent,
+            render_backfaces: true,
             center,
         }
     }

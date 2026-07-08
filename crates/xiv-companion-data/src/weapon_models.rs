@@ -379,8 +379,8 @@ fn material_color_table_debug(
                     diffuse_color: Some(row.diffuse_color),
                     specular_color: Some(row.specular_color),
                     emissive_color: Some(row.emissive_color),
-                    specular_strength: None,
-                    gloss_strength: None,
+                    specular_strength: Some(row.unknown2),
+                    gloss_strength: Some(row.unknown1),
                     roughness: Some(row.roughness),
                     metalness: Some(row.metalness),
                     alpha: Some(row.tile_alpha),
@@ -538,6 +538,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let render_mode =
             weapon_material_render_mode(&shader_package_name, shader_flags, &texture_set);
         let opacity = weapon_material_opacity(render_mode);
+        let render_backfaces = material_render_backfaces(shader_flags);
         let diffuse_color = if texture_set.base_color.is_some() {
             [1.0, 1.0, 1.0]
         } else {
@@ -553,6 +554,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             shader_package_name: Some(shader_package_name),
             render_mode,
             opacity,
+            render_backfaces,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -563,7 +565,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             base_color_texture: texture_set.base_color,
             normal_texture: texture_set.normal,
             mask_texture: texture_set.mask,
+            specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
+            material_properties_texture: texture_set.material_properties,
         };
     }
 
@@ -608,11 +612,17 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             WeaponModelTextureKind::Normal => {
                 set.normal.get_or_insert(texture_index);
             }
-            WeaponModelTextureKind::Mask | WeaponModelTextureKind::Specular => {
+            WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Specular => {
+                set.specular.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MaterialProperties => {
+                set.material_properties.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
@@ -656,6 +666,12 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
                 add_unique_index(&mut set.indices, emissive);
             }
         }
+
+        set.specular.get_or_insert(baked.specular);
+        add_unique_index(&mut set.indices, baked.specular);
+        set.material_properties
+            .get_or_insert(baked.material_properties);
+        add_unique_index(&mut set.indices, baked.material_properties);
     }
 
     if set.base_color.is_none() {
@@ -899,6 +915,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let render_mode =
             weapon_material_render_mode(&shader_package_name, shader_flags, &texture_set);
         let opacity = weapon_material_opacity(render_mode);
+        let render_backfaces = material_render_backfaces(shader_flags);
         let diffuse_color = if texture_set.base_color.is_some() {
             [1.0, 1.0, 1.0]
         } else {
@@ -914,6 +931,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             shader_package_name: Some(shader_package_name),
             render_mode,
             opacity,
+            render_backfaces,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -924,7 +942,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             base_color_texture: texture_set.base_color,
             normal_texture: texture_set.normal,
             mask_texture: texture_set.mask,
+            specular_texture: texture_set.specular,
             emissive_texture: texture_set.emissive,
+            material_properties_texture: texture_set.material_properties,
         };
     }
 
@@ -971,11 +991,17 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             WeaponModelTextureKind::Normal => {
                 set.normal.get_or_insert(texture_index);
             }
-            WeaponModelTextureKind::Mask | WeaponModelTextureKind::Specular => {
+            WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Specular => {
+                set.specular.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::MaterialProperties => {
+                set.material_properties.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
@@ -1019,6 +1045,12 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
                 add_unique_index(&mut set.indices, emissive);
             }
         }
+
+        set.specular.get_or_insert(baked.specular);
+        add_unique_index(&mut set.indices, baked.specular);
+        set.material_properties
+            .get_or_insert(baked.material_properties);
+        add_unique_index(&mut set.indices, baked.material_properties);
     }
 
     if set.base_color.is_none() {
@@ -1076,7 +1108,9 @@ struct WeaponTextureSet {
     base_color: Option<usize>,
     normal: Option<usize>,
     mask: Option<usize>,
+    specular: Option<usize>,
     emissive: Option<usize>,
+    material_properties: Option<usize>,
     index: Option<usize>,
     has_alpha: bool,
 }
@@ -1084,6 +1118,8 @@ struct WeaponTextureSet {
 #[cfg(feature = "game-data")]
 struct BakedWeaponTextureIndices {
     base_color: usize,
+    specular: usize,
+    material_properties: usize,
     emissive: Option<usize>,
 }
 
@@ -1158,6 +1194,24 @@ fn bake_weapon_color_table_textures(
         baked.diffuse_rgba,
     );
 
+    let specular = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-specular"),
+        WeaponModelTextureKind::Specular,
+        width,
+        height,
+        baked.specular_rgba,
+    );
+
+    let material_properties = push_or_replace_baked_texture(
+        textures,
+        format!("baked://{material_key}#colorset-material-properties"),
+        WeaponModelTextureKind::MaterialProperties,
+        width,
+        height,
+        baked.material_rgba,
+    );
+
     let emissive = if bake_emissive {
         baked.emissive_rgba.map(|rgba| {
             push_or_replace_baked_texture(
@@ -1175,6 +1229,8 @@ fn bake_weapon_color_table_textures(
 
     Some(BakedWeaponTextureIndices {
         base_color,
+        specular,
+        material_properties,
         emissive,
     })
 }
@@ -1203,6 +1259,12 @@ fn weapon_material_opacity(mode: WeaponMaterialRenderMode) -> f32 {
         WeaponMaterialRenderMode::Transparent => 1.0,
         WeaponMaterialRenderMode::Glass => 0.28,
     }
+}
+
+#[cfg(feature = "game-data")]
+fn material_render_backfaces(shader_flags: u32) -> bool {
+    const HIDE_BACKFACES: u32 = 0x01;
+    shader_flags & HIDE_BACKFACES == 0
 }
 
 #[cfg(feature = "game-data")]
@@ -1327,7 +1389,12 @@ fn weapon_color_table_rows(
                 .iter()
                 .map(|row| ColorTableRowColors {
                     diffuse: row.diffuse_color,
+                    specular: row.specular_color,
                     emissive: row.emissive_color,
+                    gloss_strength: row.unknown1,
+                    specular_strength: row.unknown2,
+                    roughness: row.roughness,
+                    metalness: row.metalness,
                     alpha: row.tile_alpha,
                 })
                 .collect(),
@@ -1461,6 +1528,7 @@ fn fallback_weapon_material(
         shader_package_name: None,
         render_mode: WeaponMaterialRenderMode::Opaque,
         opacity: 1.0,
+        render_backfaces: true,
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -1471,7 +1539,9 @@ fn fallback_weapon_material(
         base_color_texture: None,
         normal_texture: None,
         mask_texture: None,
+        specular_texture: None,
         emissive_texture: None,
+        material_properties_texture: None,
     }
 }
 

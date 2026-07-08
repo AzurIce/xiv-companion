@@ -448,6 +448,7 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Normal", value: texture_counts.normal.to_string() }
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
+                    StatRow { label: "Material Props", value: texture_counts.material_properties.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
                     StatRow { label: "Index", value: texture_counts.index.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
@@ -489,6 +490,7 @@ struct TextureKindCounts {
     normal: usize,
     mask: usize,
     specular: usize,
+    material_properties: usize,
     emissive: usize,
     index: usize,
     other: usize,
@@ -503,6 +505,7 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::Normal => counts.normal += 1,
                 WeaponModelTextureKind::Mask => counts.mask += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
+                WeaponModelTextureKind::MaterialProperties => counts.material_properties += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
                 WeaponModelTextureKind::Index => counts.index += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
