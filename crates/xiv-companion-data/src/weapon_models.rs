@@ -933,6 +933,7 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
     if set.base_color.is_none() {
         set.base_color = choose_fallback_base_texture(&set.indices, textures);
     }
+    refresh_texture_set_alpha(&mut set, textures);
 
     set
 }
@@ -1328,6 +1329,7 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
     if set.base_color.is_none() {
         set.base_color = choose_fallback_base_texture(&set.indices, textures);
     }
+    refresh_texture_set_alpha(&mut set, textures);
 
     set
 }
@@ -1403,6 +1405,14 @@ fn texture_has_alpha(texture: &WeaponModelTexture) -> bool {
 #[cfg(feature = "game-data")]
 fn texture_alpha_affects_material_transparency(texture: &WeaponModelTexture) -> bool {
     texture.kind == WeaponModelTextureKind::BaseColor && texture_has_alpha(texture)
+}
+
+#[cfg(feature = "game-data")]
+fn refresh_texture_set_alpha(set: &mut WeaponTextureSet, textures: &[WeaponModelTexture]) {
+    set.has_alpha = set
+        .base_color
+        .and_then(|index| textures.get(index))
+        .is_some_and(texture_alpha_affects_material_transparency);
 }
 
 #[cfg(feature = "game-data")]
@@ -1670,8 +1680,10 @@ fn weapon_material_alpha_mode(
         WeaponMaterialAlphaMode::Glass
     } else if shader_flags & ENABLE_TRANSLUCENCY != 0 {
         WeaponMaterialAlphaMode::Blend
-    } else if alpha_test || texture_set.has_alpha {
+    } else if alpha_test {
         WeaponMaterialAlphaMode::Mask
+    } else if texture_set.has_alpha {
+        WeaponMaterialAlphaMode::Blend
     } else {
         WeaponMaterialAlphaMode::Opaque
     }
@@ -2705,6 +2717,52 @@ mod weapon_material_tests {
         let alpha_base =
             test_texture_with_alpha("base-alpha.tex", WeaponModelTextureKind::BaseColor, 128);
         assert!(texture_alpha_affects_material_transparency(&alpha_base));
+    }
+
+    #[test]
+    fn refresh_texture_set_alpha_uses_final_base_texture() {
+        let textures = vec![
+            test_texture_with_alpha("opaque-base.tex", WeaponModelTextureKind::BaseColor, 255),
+            test_texture_with_alpha("baked-base.tex", WeaponModelTextureKind::BaseColor, 128),
+        ];
+        let mut set = WeaponTextureSet {
+            base_color: Some(0),
+            has_alpha: true,
+            ..Default::default()
+        };
+
+        refresh_texture_set_alpha(&mut set, &textures);
+        assert!(!set.has_alpha);
+
+        set.base_color = Some(1);
+        refresh_texture_set_alpha(&mut set, &textures);
+        assert!(set.has_alpha);
+    }
+
+    #[test]
+    fn final_base_alpha_uses_blend_without_alpha_test() {
+        let texture_set = WeaponTextureSet {
+            has_alpha: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            weapon_material_alpha_mode("character.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Blend
+        );
+    }
+
+    #[test]
+    fn alpha_test_prefers_mask_over_final_base_alpha() {
+        let texture_set = WeaponTextureSet {
+            has_alpha: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            weapon_material_alpha_mode("character.shpk", 0, &texture_set, true),
+            WeaponMaterialAlphaMode::Mask
+        );
     }
 
     #[test]
