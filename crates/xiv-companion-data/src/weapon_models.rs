@@ -1694,7 +1694,7 @@ fn combine_base_with_colorset_texture(
             rgba.push(multiply_srgb_channels(base[0], colorset[0]));
             rgba.push(multiply_srgb_channels(base[1], colorset[1]));
             rgba.push(multiply_srgb_channels(base[2], colorset[2]));
-            rgba.push(((u16::from(base[3]) * u16::from(colorset[3])) / 255) as u8);
+            rgba.push(base[3]);
         }
     }
 
@@ -2705,6 +2705,34 @@ mod weapon_material_tests {
     fn srgb_multiply_uses_linear_space() {
         assert_eq!(multiply_srgb_channels(255, 128), 128);
         assert_ne!(multiply_srgb_channels(128, 128), 64);
+    }
+
+    #[test]
+    fn base_colorset_multiply_preserves_base_alpha() {
+        let mut textures = vec![
+            WeaponModelTexture {
+                path: "base.tex".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                width: 1,
+                height: 1,
+                rgba: vec![255, 128, 64, 255],
+            },
+            WeaponModelTexture {
+                path: "colorset.tex".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                width: 1,
+                height: 1,
+                rgba: vec![255, 255, 255, 32],
+            },
+        ];
+
+        let index =
+            combine_base_with_colorset_texture("material.mtrl", 0, 1, &mut textures).expect("bake");
+
+        assert_eq!(textures[index].rgba[3], 255);
+        assert!(!texture_alpha_affects_material_transparency(
+            &textures[index]
+        ));
     }
 
     #[test]

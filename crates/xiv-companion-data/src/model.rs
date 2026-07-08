@@ -373,7 +373,7 @@ impl Default for ColorTableRowColors {
 /// 由 ColorTable + 索引贴图烘焙出的贴图（RGBA8，与索引贴图同尺寸）。
 ///
 /// `diffuse_rgba` / `specular_rgba` / `emissive_rgba` 的 RGB 为 sRGB 编码；
-/// `diffuse_rgba` 的 Alpha 来自 ColorTable TileAlpha，与 MeddleTools 的 diffuse bake 对齐。
+/// `diffuse_rgba` 的 Alpha 固定为不透明；ColorTable TileAlpha 是 tile 属性，不是材质透明度。
 /// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
 /// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
 /// metalness / roughness / gloss strength / specular strength。
@@ -422,12 +422,11 @@ pub fn bake_color_table_maps(
         let gloss_strength = lerp_value(row_a.gloss_strength, row_b.gloss_strength, blend);
         let specular_strength = lerp_value(row_a.specular_strength, row_b.specular_strength, blend);
         let anisotropy = lerp_value(row_a.anisotropy, row_b.anisotropy, blend);
-        let tile_alpha = lerp_value(row_a.tile_alpha, row_b.tile_alpha, blend);
         if emissive.iter().any(|value| *value > 0.001) {
             has_emissive = true;
         }
 
-        push_srgb_pixel(&mut diffuse_rgba, diffuse, tile_alpha);
+        push_srgb_pixel(&mut diffuse_rgba, diffuse, 1.0);
         push_srgb_pixel(&mut specular_rgba, specular, anisotropy);
         push_unorm_pixel(
             &mut material_rgba,
@@ -721,17 +720,17 @@ mod color_table_bake_tests {
         // R=0 → 行对 0；G=255 → 完全取第二行 (纯绿)
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
-        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 128]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
         // 全部像素 emissive 为 0 → 无 emissive 贴图
         assert!(baked.emissive_rgba.is_none());
     }
 
     #[test]
-    fn bake_interpolates_tile_alpha_into_diffuse_alpha() {
-        // R=0 → 行对 0；G=128 → 约一半混合 1.0 与 0.5 的 TileAlpha。
+    fn bake_keeps_diffuse_alpha_opaque_when_tile_alpha_varies() {
+        // TileAlpha 属于 tile 属性，不是 diffuse/material alpha。
         let id_rgba = [0, 128, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
-        assert_eq!(baked.diffuse_rgba[3], 191);
+        assert_eq!(baked.diffuse_rgba[3], 255);
     }
 
     #[test]
