@@ -216,15 +216,9 @@ fn apply_vertex_element(
         }
         4 => {
             let uv = read_vec4(bytes, offset, element.vertex_type)?;
-            match element.usage_index {
-                0 => {
-                    vertex.uv0 = [uv[0], uv[1]];
-                    vertex.uv1 = [uv[2], uv[3]];
-                }
-                1 => {
-                    vertex.uv1 = [uv[0], uv[1]];
-                }
-                _ => {}
+            if element.usage_index == 0 {
+                vertex.uv0 = [uv[0], uv[1]];
+                vertex.uv1 = [uv[2], uv[3]];
             }
         }
         6 => {
@@ -495,6 +489,43 @@ mod tests {
         assert_eq!(bitangent, [1.0, 0.0, 0.0, 1.0]);
     }
 
+    #[test]
+    fn extra_texcoord_usage_does_not_overwrite_primary_uvs() {
+        let mut vertex = default_model_vertex();
+        let primary = f32_bytes(&[0.1, 0.2, 0.3, 0.4]);
+        apply_vertex_element(
+            &mut vertex,
+            &primary,
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 3,
+                usage: 4,
+                usage_index: 0,
+            },
+        )
+        .expect("primary uv");
+
+        let extra = f32_bytes(&[0.9, 0.8, 0.7, 0.6]);
+        apply_vertex_element(
+            &mut vertex,
+            &extra,
+            0,
+            VertexElement {
+                stream: 0,
+                offset: 0,
+                vertex_type: 3,
+                usage: 4,
+                usage_index: 1,
+            },
+        )
+        .expect("extra uv");
+
+        assert_eq!(vertex.uv0, [0.1, 0.2]);
+        assert_eq!(vertex.uv1, [0.3, 0.4]);
+    }
+
     fn fixture_mdl_with_normal_and_glass_mesh() -> Vec<u8> {
         const MODEL_HEADER_SIZE: usize = 56;
         const LOD_SIZE: usize = 60;
@@ -614,6 +645,13 @@ mod tests {
         );
         bytes.extend_from_slice(&[255, 128, 128, 255]);
         bytes.extend_from_slice(&[255, 255, 255, 255]);
+    }
+
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     fn write_vertex_element(
