@@ -28,6 +28,7 @@ const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 const LOCAL_RESOURCE_CACHE_DB: &str = "xiv-companion-resource-cache";
 const LOCAL_RESOURCE_CACHE_STORE: &str = "resources";
 const LOCAL_CRAFT_DATA_CACHE_KEY: &str = "user-local-craft-data";
+const LOCAL_WEAPON_CATALOG_CACHE_KEY: &str = "user-local-weapon-catalog";
 const ITEM_ICON_READ_WINDOW: u64 = 2 * 1024 * 1024;
 
 pub fn default_web_resource_hub() -> ResourceHub {
@@ -275,12 +276,91 @@ fn browser_sqpack_access_error_kind(error: &str) -> Option<ResourceErrorKind> {
 }
 
 async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
+    let start_ms = log::now_ms();
+    let open_start_ms = log::now_ms();
     let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    log::info(
+        "resource",
+        format!(
+            "WeaponCatalog from_window_handle completed in {}",
+            log::format_elapsed(log::elapsed_ms(open_start_ms)),
+        ),
+    );
+
+    let fingerprint_start_ms = log::now_ms();
+    let cache_fingerprint = match sqpack.weapon_catalog_cache_fingerprint().await {
+        Ok(fingerprint) => {
+            log::info(
+                "resource",
+                format!(
+                    "WeaponCatalog cache fingerprint completed in {}",
+                    log::format_elapsed(log::elapsed_ms(fingerprint_start_ms)),
+                ),
+            );
+            Some(fingerprint)
+        }
+        Err(error) => {
+            log::warn(
+                "resource-cache",
+                format!("WeaponCatalog cache fingerprint failed; skipping cache: {error}"),
+            );
+            None
+        }
+    };
+
+    if let Some(cache_fingerprint) = cache_fingerprint.as_deref() {
+        let cache_start_ms = log::now_ms();
+        match load_cached_local_weapon_catalog(cache_fingerprint).await {
+            Ok(Some((bytes, game_version))) => {
+                let version_detail = game_version
+                    .as_deref()
+                    .map(|version| format!(" ({version})"))
+                    .unwrap_or_default();
+                log::info(
+                    "resource",
+                    format!(
+                        "WeaponCatalog cache hit{version_detail}: {} bytes, cache lookup={}, total={}",
+                        bytes.len(),
+                        log::format_elapsed(log::elapsed_ms(cache_start_ms)),
+                        log::format_elapsed(log::elapsed_ms(start_ms)),
+                    ),
+                );
+                return Ok(bytes);
+            }
+            Ok(None) => {
+                log::info(
+                    "resource",
+                    format!(
+                        "WeaponCatalog cache miss checked in {}; exporting from SqPack",
+                        log::format_elapsed(log::elapsed_ms(cache_start_ms)),
+                    ),
+                );
+            }
+            Err(error) => {
+                log::warn(
+                    "resource-cache",
+                    format!("WeaponCatalog cache lookup failed; exporting from SqPack: {error}"),
+                );
+            }
+        }
+    }
+
+    let preload_start_ms = log::now_ms();
     let resource = sqpack.preload_weapon_catalog_resource().await?;
+    let preload_elapsed_ms = log::elapsed_ms(preload_start_ms);
+    log::info(
+        "resource",
+        format!(
+            "WeaponCatalog preload_weapon_catalog_resource completed in {}",
+            log::format_elapsed(preload_elapsed_ms),
+        ),
+    );
+
     let generated_at = js_sys::Date::new_0()
         .to_iso_string()
         .as_string()
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+    let export_start_ms = log::now_ms();
     let data = xiv_companion::game_data::export_weapon_catalog_from_resource(
         resource,
         "Browser Local SqPack".to_string(),
@@ -288,7 +368,62 @@ async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
         generated_at,
     )
     .map_err(|error| format!("failed to export WeaponCatalog from local SqPack: {error:#}"))?;
-    serde_json::to_vec(&data).map_err(|error| format!("failed to encode WeaponCatalog: {error}"))
+    let export_elapsed_ms = log::elapsed_ms(export_start_ms);
+    log::info(
+        "resource",
+        format!(
+            "WeaponCatalog export_weapon_catalog_from_resource completed in {} ({} items)",
+            log::format_elapsed(export_elapsed_ms),
+            data.counts.items,
+        ),
+    );
+
+    let encode_start_ms = log::now_ms();
+    let bytes = serde_json::to_vec(&data)
+        .map_err(|error| format!("failed to encode WeaponCatalog: {error}"))?;
+    let encode_elapsed_ms = log::elapsed_ms(encode_start_ms);
+    log::info(
+        "resource",
+        format!(
+            "WeaponCatalog serde_json encode completed in {} ({} bytes)",
+            log::format_elapsed(encode_elapsed_ms),
+            bytes.len(),
+        ),
+    );
+
+    if let Some(cache_fingerprint) = cache_fingerprint.as_deref() {
+        let save_start_ms = log::now_ms();
+        match save_cached_local_weapon_catalog(cache_fingerprint, &data.game_version, &bytes).await
+        {
+            Ok(()) => {
+                log::info(
+                    "resource-cache",
+                    format!(
+                        "WeaponCatalog cache save completed in {}",
+                        log::format_elapsed(log::elapsed_ms(save_start_ms)),
+                    ),
+                );
+            }
+            Err(error) => {
+                log::warn(
+                    "resource-cache",
+                    format!("failed to save WeaponCatalog cache: {error}"),
+                );
+            }
+        }
+    }
+
+    log::info(
+        "resource",
+        format!(
+            "WeaponCatalog local pipeline completed: preload={}, export={}, encode={}, total={}",
+            log::format_elapsed(preload_elapsed_ms),
+            log::format_elapsed(export_elapsed_ms),
+            log::format_elapsed(encode_elapsed_ms),
+            log::format_elapsed(log::elapsed_ms(start_ms)),
+        ),
+    );
+    Ok(bytes)
 }
 
 async fn load_weapon_model_from_browser_sqpack(
@@ -1722,6 +1857,97 @@ async fn save_cached_local_craft_data(
     log::info(
         "resource-cache",
         format!("saved CraftData cache: {} bytes", bytes.len()),
+    );
+    Ok(())
+}
+
+async fn load_cached_local_weapon_catalog(
+    expected_fingerprint: &str,
+) -> Result<Option<(Vec<u8>, Option<String>)>, String> {
+    let db = local_resource_cache_db().await?;
+    let record = db
+        .transaction(&[LOCAL_RESOURCE_CACHE_STORE])
+        .run(|transaction| async move {
+            transaction
+                .object_store(LOCAL_RESOURCE_CACHE_STORE)?
+                .get(&JsString::from(LOCAL_WEAPON_CATALOG_CACHE_KEY))
+                .await
+        })
+        .await
+        .map_err(|error| format!("读取本地 WeaponCatalog 缓存失败: {error}"))?;
+
+    let Some(record) = record else {
+        log::info("resource-cache", "WeaponCatalog cache miss: empty");
+        return Ok(None);
+    };
+
+    let fingerprint = js_string_field(&record, "fingerprint");
+    if fingerprint.as_deref() != Some(expected_fingerprint) {
+        log::info(
+            "resource-cache",
+            "WeaponCatalog cache miss: fingerprint changed",
+        );
+        return Ok(None);
+    }
+
+    let bytes =
+        js_sys::Reflect::get(&record, &JsValue::from_str("bytes")).map_err(format_js_error)?;
+    if bytes.is_undefined() || bytes.is_null() {
+        log::warn("resource-cache", "WeaponCatalog cache record has no bytes");
+        return Ok(None);
+    }
+
+    let bytes = js_sys::Uint8Array::new(&bytes).to_vec();
+    let game_version = js_string_field(&record, "gameVersion");
+    log::info(
+        "resource-cache",
+        format!("WeaponCatalog cache hit: {} bytes", bytes.len()),
+    );
+    Ok(Some((bytes, game_version)))
+}
+
+async fn save_cached_local_weapon_catalog(
+    fingerprint: &str,
+    game_version: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let object = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &object,
+        &JsValue::from_str("fingerprint"),
+        &JsValue::from_str(fingerprint),
+    )
+    .map_err(format_js_error)?;
+    js_sys::Reflect::set(
+        &object,
+        &JsValue::from_str("gameVersion"),
+        &JsValue::from_str(game_version),
+    )
+    .map_err(format_js_error)?;
+    js_sys::Reflect::set(
+        &object,
+        &JsValue::from_str("savedAt"),
+        &js_sys::Date::new_0().to_iso_string(),
+    )
+    .map_err(format_js_error)?;
+    let array = js_sys::Uint8Array::from(bytes);
+    js_sys::Reflect::set(&object, &JsValue::from_str("bytes"), &array).map_err(format_js_error)?;
+
+    let db = local_resource_cache_db().await?;
+    db.transaction(&[LOCAL_RESOURCE_CACHE_STORE])
+        .rw()
+        .run(move |transaction| async move {
+            transaction
+                .object_store(LOCAL_RESOURCE_CACHE_STORE)?
+                .put_kv(&JsString::from(LOCAL_WEAPON_CATALOG_CACHE_KEY), &object)
+                .await?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("保存本地 WeaponCatalog 缓存失败: {error}"))?;
+    log::info(
+        "resource-cache",
+        format!("saved WeaponCatalog cache: {} bytes", bytes.len()),
     );
     Ok(())
 }
