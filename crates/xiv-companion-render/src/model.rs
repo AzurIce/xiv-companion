@@ -274,6 +274,42 @@ impl ModelRenderData for WeaponModelData {
     }
 }
 
+impl<T: ModelRenderData + ?Sized> ModelRenderData for std::rc::Rc<T> {
+    fn bounds(&self) -> &ModelBounds {
+        self.as_ref().bounds()
+    }
+
+    fn materials(&self) -> &[ModelMaterial] {
+        self.as_ref().materials()
+    }
+
+    fn textures(&self) -> &[ModelTexture] {
+        self.as_ref().textures()
+    }
+
+    fn meshes(&self) -> &[ModelMesh] {
+        self.as_ref().meshes()
+    }
+}
+
+impl<T: ModelRenderData + ?Sized> ModelRenderData for std::sync::Arc<T> {
+    fn bounds(&self) -> &ModelBounds {
+        self.as_ref().bounds()
+    }
+
+    fn materials(&self) -> &[ModelMaterial] {
+        self.as_ref().materials()
+    }
+
+    fn textures(&self) -> &[ModelTexture] {
+        self.as_ref().textures()
+    }
+
+    fn meshes(&self) -> &[ModelMesh] {
+        self.as_ref().meshes()
+    }
+}
+
 /// ColorTable 单行中参与烘焙的颜色（线性空间）
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorTableRowColors {
