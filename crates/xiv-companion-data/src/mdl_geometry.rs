@@ -328,11 +328,8 @@ fn read_byte_float4(bytes: &[u8], offset: usize) -> anyhow::Result<[f32; 4]> {
 
 fn read_tangent(bytes: &[u8], offset: usize) -> anyhow::Result<[f32; 4]> {
     let bytes = read_bytes(bytes, offset, 4, "tangent vertex value")?;
-    let sign = if (f32::from(bytes[3]) * 2.0 / 255.0 - 1.0) == 1.0 {
-        1.0
-    } else {
-        -1.0
-    };
+    let w = f32::from(bytes[3]) * 2.0 / 255.0 - 1.0;
+    let sign = if w > 0.0 { 1.0 } else { -1.0 };
     Ok([
         f32::from(bytes[0]) * 2.0 / 255.0 - 1.0,
         f32::from(bytes[1]) * 2.0 / 255.0 - 1.0,
@@ -476,6 +473,12 @@ mod tests {
         let bitangent = sanitized_bitangent([0.0, 0.0, 0.0, f32::NAN]);
 
         assert_eq!(bitangent, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn tangent_sign_uses_decoded_positive_w() {
+        assert_eq!(read_tangent(&[128, 255, 128, 128], 0).unwrap()[3], 1.0);
+        assert_eq!(read_tangent(&[128, 255, 128, 127], 0).unwrap()[3], -1.0);
     }
 
     #[test]
