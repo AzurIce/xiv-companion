@@ -66,30 +66,58 @@ impl PackedModelId {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelData {
+    pub bounds: ModelBounds,
+    #[serde(default)]
+    pub materials: Vec<ModelMaterial>,
+    #[serde(default)]
+    pub textures: Vec<ModelTexture>,
+    pub meshes: Vec<ModelMesh>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WeaponModelData {
     pub item_id: u32,
     pub item_name: String,
     pub model_main: PackedModelId,
     pub model_sub: Option<PackedModelId>,
     pub loaded_paths: Vec<String>,
-    pub bounds: WeaponModelBounds,
+    pub bounds: ModelBounds,
     #[serde(default)]
-    pub materials: Vec<WeaponModelMaterial>,
+    pub materials: Vec<ModelMaterial>,
     #[serde(default)]
-    pub textures: Vec<WeaponModelTexture>,
-    pub meshes: Vec<WeaponModelMesh>,
+    pub textures: Vec<ModelTexture>,
+    pub meshes: Vec<ModelMesh>,
+}
+
+impl WeaponModelData {
+    pub fn to_model_data(&self) -> ModelData {
+        ModelData {
+            bounds: self.bounds,
+            materials: self.materials.clone(),
+            textures: self.textures.clone(),
+            meshes: self.meshes.clone(),
+        }
+    }
+}
+
+impl From<&WeaponModelData> for ModelData {
+    fn from(value: &WeaponModelData) -> Self {
+        value.to_model_data()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeaponModelBounds {
+pub struct ModelBounds {
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub center: [f32; 3],
     pub radius: f32,
 }
 
-impl Default for WeaponModelBounds {
+impl Default for ModelBounds {
     fn default() -> Self {
         Self {
             min: [0.0; 3],
@@ -102,7 +130,7 @@ impl Default for WeaponModelBounds {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeaponModelMesh {
+pub struct ModelMesh {
     pub path: String,
     pub part_index: u32,
     pub material_index: u16,
@@ -110,13 +138,13 @@ pub struct WeaponModelMesh {
     pub material_slot: usize,
     pub material_name: String,
     pub color: [f32; 3],
-    pub vertices: Vec<WeaponModelVertex>,
+    pub vertices: Vec<ModelVertex>,
     pub indices: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeaponModelVertex {
+pub struct ModelVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     #[serde(default)]
@@ -131,14 +159,14 @@ pub struct WeaponModelVertex {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeaponModelMaterial {
+pub struct ModelMaterial {
     pub slot: usize,
     pub material_index: u16,
     pub name: String,
     pub path: Option<String>,
     pub shader_package_name: Option<String>,
     #[serde(default)]
-    pub render_mode: WeaponMaterialRenderMode,
+    pub render_mode: MaterialRenderMode,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     pub fallback_color: [f32; 3],
@@ -161,7 +189,7 @@ pub struct WeaponModelMaterial {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum WeaponMaterialRenderMode {
+pub enum MaterialRenderMode {
     #[default]
     Opaque,
     Transparent,
@@ -174,9 +202,9 @@ fn default_material_opacity() -> f32 {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeaponModelTexture {
+pub struct ModelTexture {
     pub path: String,
-    pub kind: WeaponModelTextureKind,
+    pub kind: ModelTextureKind,
     pub width: u16,
     pub height: u16,
     pub rgba: Vec<u8>,
@@ -184,7 +212,7 @@ pub struct WeaponModelTexture {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum WeaponModelTextureKind {
+pub enum ModelTextureKind {
     BaseColor,
     Normal,
     Mask,
@@ -193,6 +221,57 @@ pub enum WeaponModelTextureKind {
     /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
     Index,
     Other,
+}
+
+pub type WeaponMaterialRenderMode = MaterialRenderMode;
+pub type WeaponModelBounds = ModelBounds;
+pub type WeaponModelMaterial = ModelMaterial;
+pub type WeaponModelMesh = ModelMesh;
+pub type WeaponModelTexture = ModelTexture;
+pub type WeaponModelTextureKind = ModelTextureKind;
+pub type WeaponModelVertex = ModelVertex;
+
+pub trait ModelRenderData {
+    fn bounds(&self) -> &ModelBounds;
+    fn materials(&self) -> &[ModelMaterial];
+    fn textures(&self) -> &[ModelTexture];
+    fn meshes(&self) -> &[ModelMesh];
+}
+
+impl ModelRenderData for ModelData {
+    fn bounds(&self) -> &ModelBounds {
+        &self.bounds
+    }
+
+    fn materials(&self) -> &[ModelMaterial] {
+        &self.materials
+    }
+
+    fn textures(&self) -> &[ModelTexture] {
+        &self.textures
+    }
+
+    fn meshes(&self) -> &[ModelMesh] {
+        &self.meshes
+    }
+}
+
+impl ModelRenderData for WeaponModelData {
+    fn bounds(&self) -> &ModelBounds {
+        &self.bounds
+    }
+
+    fn materials(&self) -> &[ModelMaterial] {
+        &self.materials
+    }
+
+    fn textures(&self) -> &[ModelTexture] {
+        &self.textures
+    }
+
+    fn meshes(&self) -> &[ModelMesh] {
+        &self.meshes
+    }
 }
 
 /// ColorTable 单行中参与烘焙的颜色（线性空间）
@@ -400,7 +479,7 @@ pub fn weapon_slot_label(category: u32) -> &'static str {
     }
 }
 
-pub fn calculate_model_bounds(meshes: &[WeaponModelMesh]) -> WeaponModelBounds {
+pub fn calculate_model_bounds(meshes: &[ModelMesh]) -> ModelBounds {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     let mut has_vertex = false;
@@ -416,7 +495,7 @@ pub fn calculate_model_bounds(meshes: &[WeaponModelMesh]) -> WeaponModelBounds {
     }
 
     if !has_vertex {
-        return WeaponModelBounds::default();
+        return ModelBounds::default();
     }
 
     let center = [
@@ -434,7 +513,7 @@ pub fn calculate_model_bounds(meshes: &[WeaponModelMesh]) -> WeaponModelBounds {
         }
     }
 
-    WeaponModelBounds {
+    ModelBounds {
         min,
         max,
         center,

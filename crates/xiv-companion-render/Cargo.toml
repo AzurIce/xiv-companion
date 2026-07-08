@@ -30,6 +30,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 wasm-bindgen = { version = "0.2.121", optional = true }
 web-sys = { version = "0.3.83", features = [
     "console",
+    "DomRect",
+    "Element",
     "Event",
     "HtmlCanvasElement",
     "MouseEvent",

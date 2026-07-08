@@ -1,19 +1,19 @@
 use wgpu::util::DeviceExt;
 
-use crate::{WeaponMaterialRenderMode, WeaponModelData, WeaponModelMaterial};
+use crate::{MaterialRenderMode, ModelMaterial, ModelRenderData};
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WeaponRenderOptions {
+pub struct ModelRenderOptions {
     pub normal_mapping: bool,
     pub normal_y_sign: f32,
     pub bloom: bool,
     pub bloom_strength: f32,
 }
 
-impl Default for WeaponRenderOptions {
+impl Default for ModelRenderOptions {
     fn default() -> Self {
         Self {
             normal_mapping: true,
@@ -24,7 +24,7 @@ impl Default for WeaponRenderOptions {
     }
 }
 
-impl WeaponRenderOptions {
+impl ModelRenderOptions {
     fn normalized(self) -> Self {
         Self {
             normal_mapping: self.normal_mapping,
@@ -44,7 +44,7 @@ impl WeaponRenderOptions {
     }
 }
 
-pub struct WeaponRenderer {
+pub struct ModelRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
@@ -67,12 +67,12 @@ pub struct WeaponRenderer {
     bounds_radius: f32,
 }
 
-impl WeaponRenderer {
-    pub fn new(
+impl ModelRenderer {
+    pub fn new<M: ModelRenderData + ?Sized>(
         device: wgpu::Device,
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
-        model: &WeaponModelData,
+        model: &M,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("weapon model shader"),
@@ -365,8 +365,8 @@ impl WeaponRenderer {
             compose_bind_group_layout,
             post_process: None,
             format,
-            bounds_center: model.bounds.center,
-            bounds_radius: model.bounds.radius,
+            bounds_center: model.bounds().center,
+            bounds_radius: model.bounds().radius,
         }
     }
 
@@ -379,7 +379,7 @@ impl WeaponRenderer {
         pitch: f32,
         zoom: f32,
         pan: [f32; 2],
-        options: WeaponRenderOptions,
+        options: ModelRenderOptions,
     ) {
         let uniform = camera_uniform(
             self.bounds_center,
@@ -659,12 +659,14 @@ impl PostProcessState {
     }
 }
 
-fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
+fn flatten_model<M: ModelRenderData + ?Sized>(
+    model: &M,
+) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
 
-    for mesh in &model.meshes {
+    for mesh in model.meshes() {
         let base = vertices.len() as u32;
         vertices.extend(mesh.vertices.iter().map(|vertex| GpuVertex {
             position: vertex.position,
@@ -687,7 +689,7 @@ fn flatten_model(model: &WeaponModelData) -> (Vec<GpuVertex>, Vec<u32>, Vec<Draw
     (vertices, indices, draw_batches)
 }
 
-fn mesh_bounds_center(mesh: &crate::WeaponModelMesh) -> [f32; 3] {
+fn mesh_bounds_center(mesh: &crate::ModelMesh) -> [f32; 3] {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for vertex in &mesh.vertices {
@@ -708,15 +710,15 @@ fn mesh_bounds_center(mesh: &crate::WeaponModelMesh) -> [f32; 3] {
     ]
 }
 
-fn material_is_transparent(model: &WeaponModelData, material_slot: usize) -> bool {
-    let Some(material) = model.materials.get(material_slot) else {
+fn material_is_transparent<M: ModelRenderData + ?Sized>(model: &M, material_slot: usize) -> bool {
+    let Some(material) = model.materials().get(material_slot) else {
         return false;
     };
 
-    material.render_mode != WeaponMaterialRenderMode::Opaque
+    material.render_mode != MaterialRenderMode::Opaque
         || material
             .base_color_texture
-            .and_then(|index| model.textures.get(index))
+            .and_then(|index| model.textures().get(index))
             .is_some_and(|texture| texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250))
 }
 
@@ -920,13 +922,13 @@ fn create_post_bind_group(
     })
 }
 
-fn create_material_bind_groups(
+fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
-    model: &WeaponModelData,
+    model: &M,
 ) -> Vec<wgpu::BindGroup> {
-    if model.materials.is_empty() {
+    if model.materials().is_empty() {
         return vec![create_material_bind_group(
             device,
             queue,
@@ -937,18 +939,18 @@ fn create_material_bind_groups(
     }
 
     model
-        .materials
+        .materials()
         .iter()
         .map(|material| create_material_bind_group(device, queue, layout, material, model))
         .collect()
 }
 
-fn create_material_bind_group(
+fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
-    material: &WeaponModelMaterial,
-    model: &WeaponModelData,
+    material: &ModelMaterial,
+    model: &M,
 ) -> wgpu::BindGroup {
     let uniform = MaterialUniform {
         diffuse_color: [
@@ -963,7 +965,7 @@ fn create_material_bind_group(
             material.emissive_color[2],
             material
                 .emissive_texture
-                .and_then(|index| model.textures.get(index))
+                .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
         ],
@@ -976,18 +978,18 @@ fn create_material_bind_group(
         params: [
             material
                 .base_color_texture
-                .and_then(|index| model.textures.get(index))
+                .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
             material.metalness,
             material
                 .normal_texture
-                .and_then(|index| model.textures.get(index))
+                .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
             material
                 .mask_texture
-                .and_then(|index| model.textures.get(index))
+                .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
         ],
@@ -1006,7 +1008,7 @@ fn create_material_bind_group(
 
     let texture_view = material
         .base_color_texture
-        .and_then(|index| model.textures.get(index))
+        .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
@@ -1032,7 +1034,7 @@ fn create_material_bind_group(
         .create_view(&wgpu::TextureViewDescriptor::default());
     let mask_texture_view = material
         .mask_texture
-        .and_then(|index| model.textures.get(index))
+        .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
@@ -1058,7 +1060,7 @@ fn create_material_bind_group(
         .create_view(&wgpu::TextureViewDescriptor::default());
     let emissive_texture_view = material
         .emissive_texture
-        .and_then(|index| model.textures.get(index))
+        .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
@@ -1084,7 +1086,7 @@ fn create_material_bind_group(
         .create_view(&wgpu::TextureViewDescriptor::default());
     let normal_texture_view = material
         .normal_texture
-        .and_then(|index| model.textures.get(index))
+        .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
@@ -1209,14 +1211,14 @@ fn create_rgba_texture(
     texture
 }
 
-fn fallback_material() -> WeaponModelMaterial {
-    WeaponModelMaterial {
+fn fallback_material() -> ModelMaterial {
+    ModelMaterial {
         slot: 0,
         material_index: 0,
         name: "fallback".to_string(),
         path: None,
         shader_package_name: None,
-        render_mode: WeaponMaterialRenderMode::Opaque,
+        render_mode: MaterialRenderMode::Opaque,
         opacity: 1.0,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
@@ -1232,11 +1234,11 @@ fn fallback_material() -> WeaponModelMaterial {
     }
 }
 
-fn render_mode_value(mode: WeaponMaterialRenderMode) -> f32 {
+fn render_mode_value(mode: MaterialRenderMode) -> f32 {
     match mode {
-        WeaponMaterialRenderMode::Opaque => 0.0,
-        WeaponMaterialRenderMode::Transparent => 1.0,
-        WeaponMaterialRenderMode::Glass => 2.0,
+        MaterialRenderMode::Opaque => 0.0,
+        MaterialRenderMode::Transparent => 1.0,
+        MaterialRenderMode::Glass => 2.0,
     }
 }
 
@@ -1248,7 +1250,7 @@ fn camera_uniform(
     pitch: f32,
     zoom: f32,
     pan: [f32; 2],
-    options: WeaponRenderOptions,
+    options: ModelRenderOptions,
 ) -> CameraUniform {
     let options = options.normalized();
     let aspect = if viewport[1] == 0 {
@@ -1378,6 +1380,9 @@ impl GpuVertex {
         }
     }
 }
+
+pub type WeaponRenderOptions = ModelRenderOptions;
+pub type WeaponRenderer = ModelRenderer;
 
 #[cfg(test)]
 mod tests {

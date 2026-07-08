@@ -4,8 +4,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use crate::WeaponModelData;
-use crate::renderer::{WeaponRenderOptions, WeaponRenderer};
+use crate::ModelRenderData;
+use crate::renderer::{ModelRenderOptions, ModelRenderer};
 
 #[derive(Clone, Debug)]
 pub struct WeaponModelSnapshotOptions {
@@ -17,7 +17,7 @@ pub struct WeaponModelSnapshotOptions {
     pub pitch: f32,
     pub zoom: f32,
     pub pan: [f32; 2],
-    pub render_options: WeaponRenderOptions,
+    pub render_options: ModelRenderOptions,
     pub power_preference: wgpu::PowerPreference,
     pub force_fallback_adapter: bool,
 }
@@ -49,7 +49,7 @@ impl WeaponModelSnapshotOptions {
         self
     }
 
-    pub fn with_render_options(mut self, render_options: WeaponRenderOptions) -> Self {
+    pub fn with_render_options(mut self, render_options: ModelRenderOptions) -> Self {
         self.render_options = render_options;
         self
     }
@@ -75,7 +75,7 @@ impl Default for WeaponModelSnapshotOptions {
             pitch: 0.35,
             zoom: 3.2,
             pan: [0.0, 0.0],
-            render_options: WeaponRenderOptions::default(),
+            render_options: ModelRenderOptions::default(),
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
         }
@@ -152,23 +152,41 @@ impl std::error::Error for WeaponModelSnapshotError {
     }
 }
 
+pub type ModelSnapshotOptions = WeaponModelSnapshotOptions;
+pub type ModelSnapshot = WeaponModelSnapshot;
+pub type ModelSnapshotError = WeaponModelSnapshotError;
+
+pub fn render_model_snapshot<M: ModelRenderData + ?Sized>(
+    name: impl Into<String>,
+    model: &M,
+) -> Result<ModelSnapshot, ModelSnapshotError> {
+    render_model_snapshot_with_options(ModelSnapshotOptions::new(name), model)
+}
+
+pub fn render_model_snapshot_with_options<M: ModelRenderData + ?Sized>(
+    options: ModelSnapshotOptions,
+    model: &M,
+) -> Result<ModelSnapshot, ModelSnapshotError> {
+    pollster::block_on(render_model_snapshot_async(options, model))
+}
+
 pub fn render_weapon_model_snapshot(
     name: impl Into<String>,
-    model: &WeaponModelData,
+    model: &impl ModelRenderData,
 ) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
-    render_weapon_model_snapshot_with_options(WeaponModelSnapshotOptions::new(name), model)
+    render_model_snapshot(name, model)
 }
 
 pub fn render_weapon_model_snapshot_with_options(
     options: WeaponModelSnapshotOptions,
-    model: &WeaponModelData,
+    model: &impl ModelRenderData,
 ) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
-    pollster::block_on(render_weapon_model_snapshot_async(options, model))
+    render_model_snapshot_with_options(options, model)
 }
 
-async fn render_weapon_model_snapshot_async(
+async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     options: WeaponModelSnapshotOptions,
-    model: &WeaponModelData,
+    model: &M,
 ) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
     if options.width == 0 || options.height == 0 {
         return Err(WeaponModelSnapshotError::InvalidViewport {
@@ -215,7 +233,7 @@ async fn render_weapon_model_snapshot_async(
     let depth = create_depth_texture(&device, options.width, options.height);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = WeaponRenderer::new(device, queue, format, model);
+    let mut renderer = ModelRenderer::new(device, queue, format, model);
     renderer.render_to(
         &target_view,
         &depth_view,
@@ -279,7 +297,7 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu:
 }
 
 fn read_texture_rgba(
-    renderer: &WeaponRenderer,
+    renderer: &ModelRenderer,
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
