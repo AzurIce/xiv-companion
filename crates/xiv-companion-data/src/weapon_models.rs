@@ -378,25 +378,98 @@ fn remap_mesh_vertices(
     vertices: &[WeaponModelVertex],
     indices: &[u16],
 ) -> Option<(Vec<WeaponModelVertex>, Vec<u32>)> {
+    if indices.len() % 3 != 0 {
+        return None;
+    }
+
     let mut remapped_vertices = Vec::new();
     let mut remap = HashMap::<u16, u32>::new();
     let mut remapped_indices = Vec::with_capacity(indices.len());
-    for index in indices {
-        if usize::from(*index) >= vertices.len() {
-            return None;
-        }
-        let remapped_index = if let Some(remapped_index) = remap.get(index) {
-            *remapped_index
+
+    for triangle in indices.chunks_exact(3) {
+        let a = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[0])?;
+        let b = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[1])?;
+        let c = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[2])?;
+
+        if should_flip_triangle_winding(
+            &remapped_vertices[a as usize],
+            &remapped_vertices[b as usize],
+            &remapped_vertices[c as usize],
+        ) {
+            remapped_indices.extend([a, c, b]);
         } else {
-            let remapped_index = remapped_vertices.len() as u32;
-            remapped_vertices.push(vertices[usize::from(*index)]);
-            remap.insert(*index, remapped_index);
-            remapped_index
-        };
-        remapped_indices.push(remapped_index);
+            remapped_indices.extend([a, b, c]);
+        }
     }
 
     Some((remapped_vertices, remapped_indices))
+}
+
+#[cfg(feature = "game-data")]
+fn remap_vertex_index(
+    vertices: &[WeaponModelVertex],
+    remapped_vertices: &mut Vec<WeaponModelVertex>,
+    remap: &mut HashMap<u16, u32>,
+    index: u16,
+) -> Option<u32> {
+    if usize::from(index) >= vertices.len() {
+        return None;
+    }
+
+    if let Some(remapped_index) = remap.get(&index) {
+        Some(*remapped_index)
+    } else {
+        let remapped_index = remapped_vertices.len() as u32;
+        remapped_vertices.push(vertices[usize::from(index)]);
+        remap.insert(index, remapped_index);
+        Some(remapped_index)
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn should_flip_triangle_winding(
+    a: &WeaponModelVertex,
+    b: &WeaponModelVertex,
+    c: &WeaponModelVertex,
+) -> bool {
+    let edge_ab = vec3_sub(b.position, a.position);
+    let edge_ac = vec3_sub(c.position, a.position);
+    let Some(face_normal) = normalize_vec3(vec3_cross(edge_ab, edge_ac)) else {
+        return false;
+    };
+
+    [a.normal, b.normal, c.normal].into_iter().all(|normal| {
+        normalize_vec3(normal).is_some_and(|normal| dot_vec3(face_normal, normal) < -0.25)
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+#[cfg(feature = "game-data")]
+fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[cfg(feature = "game-data")]
+fn dot_vec3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[cfg(feature = "game-data")]
+fn normalize_vec3(value: [f32; 3]) -> Option<[f32; 3]> {
+    let length = dot_vec3(value, value).sqrt();
+    if !length.is_finite() || length <= 0.0001 {
+        None
+    } else {
+        Some([value[0] / length, value[1] / length, value[2] / length])
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -2511,16 +2584,51 @@ mod weapon_material_tests {
         ];
 
         let (remapped_vertices, remapped_indices) =
-            remap_mesh_vertices(&vertices, &[2, 0, 2, 3]).expect("valid remap");
+            remap_mesh_vertices(&vertices, &[2, 0, 3, 2, 3, 1]).expect("valid remap");
 
-        assert_eq!(remapped_indices, vec![0, 1, 0, 2]);
+        assert_eq!(remapped_indices, vec![0, 1, 2, 0, 2, 3]);
         assert_eq!(
             remapped_vertices
                 .iter()
                 .map(|vertex| vertex.position[0])
                 .collect::<Vec<_>>(),
-            vec![2.0, 0.0, 3.0]
+            vec![2.0, 0.0, 3.0, 1.0]
         );
+    }
+
+    #[test]
+    fn remap_mesh_vertices_keeps_winding_when_normals_match() {
+        let vertices = vec![
+            test_vertex_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            test_vertex_at([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            test_vertex_at([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        ];
+
+        let (_, remapped_indices) =
+            remap_mesh_vertices(&vertices, &[0, 1, 2]).expect("valid remap");
+
+        assert_eq!(remapped_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn remap_mesh_vertices_flips_winding_when_normals_are_opposed() {
+        let vertices = vec![
+            test_vertex_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+            test_vertex_at([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+            test_vertex_at([0.0, 1.0, 0.0], [0.0, 0.0, -1.0]),
+        ];
+
+        let (_, remapped_indices) =
+            remap_mesh_vertices(&vertices, &[0, 1, 2]).expect("valid remap");
+
+        assert_eq!(remapped_indices, vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn remap_mesh_vertices_rejects_partial_triangles() {
+        let vertices = vec![test_vertex(0.0), test_vertex(1.0), test_vertex(2.0)];
+
+        assert!(remap_mesh_vertices(&vertices, &[0, 1]).is_none());
     }
 
     #[test]
@@ -2564,5 +2672,12 @@ mod weapon_material_tests {
             bitangent: [1.0, 0.0, 0.0, 1.0],
             color: [1.0, 1.0, 1.0, 1.0],
         }
+    }
+
+    fn test_vertex_at(position: [f32; 3], normal: [f32; 3]) -> WeaponModelVertex {
+        let mut vertex = test_vertex(position[0]);
+        vertex.position = position;
+        vertex.normal = normal;
+        vertex
     }
 }
