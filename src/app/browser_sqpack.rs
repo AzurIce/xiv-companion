@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -48,6 +48,8 @@ pub struct BrowserSqPack {
     root: JsValue,
     game_prefix: Option<&'static str>,
     index_cache: HashMap<String, physis::sqpack::SqPackIndex>,
+    missing_index_cache: HashSet<String>,
+    entry_location_cache: HashMap<String, (String, String)>,
 }
 
 impl BrowserSqPack {
@@ -83,6 +85,8 @@ impl BrowserSqPack {
             root,
             game_prefix,
             index_cache: HashMap::new(),
+            missing_index_cache: HashSet::new(),
+            entry_location_cache: HashMap::new(),
         })
     }
 
@@ -118,12 +122,13 @@ impl BrowserSqPack {
             "sqpack",
             format!("reading game file: {path} (read_window={read_window} bytes)"),
         );
-        let (index_path, dat_base) = self.find_entry_location(path, warn_missing).await?;
+        let game_path = normalize_game_path(path);
+        let (index_path, dat_base) = self.find_entry_location(&game_path, warn_missing).await?;
         let index = self.index_cache.get(&index_path).ok_or_else(|| {
             format!("internal error: index {index_path} was not cached while reading {path}")
         })?;
         let entry = index
-            .find_entry(path)
+            .find_entry(&game_path)
             .ok_or_else(|| format!("本地 SqPack 没有文件 {path}"))?;
         let dat_path = format!("{dat_base}.dat{}", entry.data_file_id);
         let bytes = self
@@ -301,40 +306,38 @@ impl BrowserSqPack {
         path: &str,
         warn_missing: bool,
     ) -> Result<(String, String), String> {
-        let category = category_for_path(path)
+        let normalized_path = normalize_game_path(path);
+        if let Some(location) = self.entry_location_cache.get(&normalized_path) {
+            return Ok(location.clone());
+        }
+
+        let start_ms = log::now_ms();
+        let candidates = sqpack_index_candidates_for_path(&normalized_path)
             .ok_or_else(|| format!("不支持的本地 SqPack 资源路径: {path}"))?;
-        let repo = repository_for_path(path);
-        for chunk in 0..=254_u8 {
-            for extension in ["index", "index2"] {
-                let index_file =
-                    format!("sqpack/{repo}/{category:02x}00{chunk:02}.win32.{extension}");
-                let dat_base = index_file
-                    .strip_suffix(&format!(".{extension}"))
-                    .expect("extension should match")
-                    .to_string();
 
-                if !self.index_cache.contains_key(&index_file) {
-                    match self.read_sqpack_file_all(&index_file).await {
-                        Ok(bytes) => {
-                            if let Ok(index) = physis::sqpack::SqPackIndex::read_options(
-                                &mut Cursor::new(bytes),
-                                Endian::Little,
-                                (),
-                            ) {
-                                self.index_cache.insert(index_file.clone(), index);
-                            }
-                        }
-                        Err(_) => continue,
-                    }
-                }
+        for candidate in &candidates {
+            if !self.load_index_file(&candidate.index_file).await {
+                continue;
+            }
 
-                if self
-                    .index_cache
-                    .get(&index_file)
-                    .is_some_and(|index| index.exists(path))
-                {
-                    return Ok((index_file, dat_base));
-                }
+            if self
+                .index_cache
+                .get(&candidate.index_file)
+                .is_some_and(|index| index.exists(&normalized_path))
+            {
+                let location = (candidate.index_file.clone(), candidate.dat_base.clone());
+                self.entry_location_cache
+                    .insert(normalized_path.clone(), location.clone());
+                log::debug(
+                    "sqpack",
+                    format!(
+                        "resolved SqPack index for {path}: {} in {} ({} candidates)",
+                        candidate.index_file,
+                        log::format_elapsed(log::elapsed_ms(start_ms)),
+                        candidates.len(),
+                    ),
+                );
+                return Ok(location);
             }
         }
 
@@ -342,6 +345,35 @@ impl BrowserSqPack {
             log::warn("sqpack", format!("missing in SqPack index: {path}"));
         }
         Err(format!("本地 SqPack 索引中没有 {path}"))
+    }
+
+    async fn load_index_file(&mut self, index_file: &str) -> bool {
+        if self.index_cache.contains_key(index_file) {
+            return true;
+        }
+        if self.missing_index_cache.contains(index_file) {
+            return false;
+        }
+
+        let Ok(bytes) = self.read_sqpack_file_all(index_file).await else {
+            self.missing_index_cache.insert(index_file.to_string());
+            return false;
+        };
+        match physis::sqpack::SqPackIndex::read_options(&mut Cursor::new(bytes), Endian::Little, ())
+        {
+            Ok(index) => {
+                self.index_cache.insert(index_file.to_string(), index);
+                true
+            }
+            Err(error) => {
+                log::warn(
+                    "sqpack",
+                    format!("failed to parse SqPack index {index_file}: {error}"),
+                );
+                self.missing_index_cache.insert(index_file.to_string());
+                false
+            }
+        }
     }
 
     async fn read_sqpack_file_all(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -417,6 +449,66 @@ fn craft_data_sheet_plan() -> Vec<(&'static str, Vec<Language>)> {
     ]
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SqPackIndexCandidate {
+    index_file: String,
+    dat_base: String,
+}
+
+fn sqpack_index_candidates_for_path(path: &str) -> Option<Vec<SqPackIndexCandidate>> {
+    let category = category_for_path(path)?;
+    let repo = repository_for_path(path);
+    let expansion = expansion_id_for_repository(&repo);
+    let allow_full_scan = category_uses_variable_chunks(category);
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    push_sqpack_index_candidates(&mut candidates, &mut seen, &repo, category, expansion, 0);
+    if allow_full_scan {
+        for chunk in 1..=254_u8 {
+            push_sqpack_index_candidates(
+                &mut candidates,
+                &mut seen,
+                &repo,
+                category,
+                expansion,
+                chunk,
+            );
+        }
+    }
+
+    Some(candidates)
+}
+
+fn push_sqpack_index_candidates(
+    candidates: &mut Vec<SqPackIndexCandidate>,
+    seen: &mut HashSet<String>,
+    repo: &str,
+    category: u8,
+    expansion: u8,
+    chunk: u8,
+) {
+    let stem = format!("{category:02x}{expansion:02}{chunk:02}");
+    for extension in ["index", "index2"] {
+        let index_file = format!("sqpack/{repo}/{stem}.win32.{extension}");
+        if !seen.insert(index_file.clone()) {
+            continue;
+        }
+        candidates.push(SqPackIndexCandidate {
+            dat_base: format!("sqpack/{repo}/{stem}.win32"),
+            index_file,
+        });
+    }
+}
+
+fn category_uses_variable_chunks(category: u8) -> bool {
+    matches!(category, 0x02 | 0x03 | 0x07 | 0x0c)
+}
+
+fn normalize_game_path(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
+}
+
 fn category_for_path(path: &str) -> Option<u8> {
     match path.split('/').next()? {
         "common" => Some(0x00),
@@ -441,13 +533,21 @@ fn category_for_path(path: &str) -> Option<u8> {
 fn repository_for_path(path: &str) -> String {
     path.split('/')
         .nth(1)
-        .and_then(|part| {
-            (part.len() == 3
-                && part.starts_with("ex")
-                && part.as_bytes().get(2).is_some_and(|b| b.is_ascii_digit()))
-            .then_some(part.to_string())
-        })
+        .filter(|part| expansion_number_from_repository(part).is_some())
+        .map(ToString::to_string)
         .unwrap_or_else(|| "ffxiv".to_string())
+}
+
+fn expansion_id_for_repository(repository: &str) -> u8 {
+    expansion_number_from_repository(repository).unwrap_or(0)
+}
+
+fn expansion_number_from_repository(repository: &str) -> Option<u8> {
+    let number = repository.strip_prefix("ex")?;
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    number.parse().ok()
 }
 
 async fn get_child_directory_handle(handle: &JsValue, name: &str) -> Option<JsValue> {
@@ -861,4 +961,64 @@ fn u64_to_f64(value: u64) -> Result<f64, String> {
         return Err(format!("offset {value} 不能安全转换为 f64"));
     }
     Ok(value as f64)
+}
+
+#[cfg(test)]
+mod sqpack_index_candidate_tests {
+    use super::*;
+
+    #[test]
+    fn exd_paths_use_single_base_exd_index_pair() {
+        let candidates = sqpack_index_candidates_for_path("exd/item.exh").unwrap();
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.index_file.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "sqpack/ffxiv/0a0000.win32.index",
+                "sqpack/ffxiv/0a0000.win32.index2",
+            ]
+        );
+    }
+
+    #[test]
+    fn weapon_paths_use_single_base_chara_index_pair() {
+        let candidates = sqpack_index_candidates_for_path(
+            "chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl",
+        )
+        .unwrap();
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].index_file, "sqpack/ffxiv/040000.win32.index");
+        assert_eq!(candidates[1].index_file, "sqpack/ffxiv/040000.win32.index2");
+    }
+
+    #[test]
+    fn ui_icon_paths_use_single_base_ui_index_pair() {
+        let candidates = sqpack_index_candidates_for_path("ui/icon/000000/000001.tex").unwrap();
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].index_file, "sqpack/ffxiv/060000.win32.index");
+    }
+
+    #[test]
+    fn background_expansion_paths_keep_full_chunk_fallback() {
+        let candidates =
+            sqpack_index_candidates_for_path("bg/ex2/01_gyr_g3/fld/g3fb/level/planner.lgb")
+                .unwrap();
+
+        assert_eq!(candidates[0].index_file, "sqpack/ex2/020200.win32.index");
+        assert_eq!(candidates[1].index_file, "sqpack/ex2/020200.win32.index2");
+        assert!(candidates.len() > 2);
+    }
+
+    #[test]
+    fn non_expansion_second_path_segment_stays_in_base_repository() {
+        let candidates =
+            sqpack_index_candidates_for_path("chara/weapon/w0001/model/example.mdl").unwrap();
+
+        assert_eq!(candidates[0].index_file, "sqpack/ffxiv/040000.win32.index");
+    }
 }
