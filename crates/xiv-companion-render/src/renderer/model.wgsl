@@ -9,6 +9,7 @@ struct Material {
     emissive_color: vec4<f32>, // a: has emissive texture
     specular_color: vec4<f32>,
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
+    properties: vec4<f32>, // x: has ColorTable material properties texture
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
 };
 
@@ -49,6 +50,9 @@ var mask_texture: texture_2d<f32>;
 @group(1) @binding(5)
 var emissive_texture: texture_2d<f32>;
 
+@group(1) @binding(6)
+var material_properties_texture: texture_2d<f32>;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
     @location(1) bright: vec4<f32>,
@@ -72,10 +76,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
     let mask = resolve_mask(input.uv0);
-    let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
-    let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
-    let specular_scale = mix(1.0, mask.r * 1.35, material.params.w);
-    let specular_power = mix(80.0, 12.0, roughness);
+    let properties = resolve_material_properties(input.uv0);
+    let metalness = clamp(properties.x, 0.0, 1.0);
+    let roughness = clamp(properties.y, 0.08, 1.0);
+    let gloss_strength = clamp(properties.z, 0.0, 1.0);
+    let specular_strength = clamp(properties.w, 0.0, 1.0);
+    let specular_scale = specular_strength * mix(1.0, mask.r * 1.35, material.params.w);
+    let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0);
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
@@ -121,6 +128,19 @@ fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
         return vec3<f32>(1.0, material.specular_color.a, material.params.y);
     }
     return textureSample(mask_texture, base_color_sampler, uv).rgb;
+}
+
+fn resolve_material_properties(uv: vec2<f32>) -> vec4<f32> {
+    if material.properties.x > 0.5 {
+        return textureSample(material_properties_texture, base_color_sampler, uv);
+    }
+
+    let mask = resolve_mask(uv);
+    let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
+    let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
+    let specular_strength = mix(1.0, mask.r * 1.35, material.params.w);
+    let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);
+    return vec4<f32>(metalness, roughness, gloss_strength, specular_strength);
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {

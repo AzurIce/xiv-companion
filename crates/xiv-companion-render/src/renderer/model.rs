@@ -176,6 +176,16 @@ impl ModelRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1036,6 +1046,16 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
         ],
+        properties: [
+            material
+                .material_properties_texture
+                .and_then(|index| model.textures().get(index))
+                .map(|_| 1.0)
+                .unwrap_or(0.0),
+            0.0,
+            0.0,
+            0.0,
+        ],
         render: [
             render_mode_value(material.render_mode),
             material.opacity,
@@ -1153,6 +1173,37 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let material_properties_texture_view = material
+        .material_properties_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon material properties texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral material properties texture",
+                1,
+                1,
+                &[
+                    unorm_byte(material.metalness),
+                    unorm_byte(material.roughness),
+                    255,
+                    255,
+                ],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("weapon material sampler"),
@@ -1192,6 +1243,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(&emissive_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&material_properties_texture_view),
             },
         ],
     })
@@ -1252,6 +1307,10 @@ fn create_rgba_texture(
         );
     }
     texture
+}
+
+fn unorm_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn fallback_material() -> ModelMaterial {
@@ -1370,6 +1429,7 @@ struct MaterialUniform {
     emissive_color: [f32; 4],
     specular_color: [f32; 4],
     params: [f32; 4],
+    properties: [f32; 4],
     render: [f32; 4],
 }
 
