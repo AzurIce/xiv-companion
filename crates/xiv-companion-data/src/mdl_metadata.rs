@@ -10,6 +10,10 @@ const MESH_SIZE: usize = 36;
 const TERRAIN_SHADOW_MESH_SIZE: usize = 20;
 const SUBMESH_SIZE: usize = 16;
 const TERRAIN_SHADOW_SUBMESH_SIZE: usize = 12;
+const MDL_VERSION_V5: u32 = 0x0100_0005;
+const MDL_VERSION_V6: u32 = 0x0100_0006;
+const V5_BONE_TABLE_SIZE: usize = 132;
+const V5_BONE_TABLE_BONE_CAPACITY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +31,8 @@ pub struct MdlMetadata {
     pub terrain_shadow_submeshes: Vec<MdlTerrainShadowSubmeshMetadata>,
     pub attributes: Vec<MdlNamedOffset>,
     pub materials: Vec<MdlNamedOffset>,
+    pub bones: Vec<MdlNamedOffset>,
+    pub bone_tables: Vec<MdlBoneTableMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -147,6 +153,8 @@ pub struct MdlMeshMetadata {
     pub submesh_indices: Vec<usize>,
     pub submeshes: Vec<MdlMeshSubmeshMetadata>,
     pub bone_table_index: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bone_table: Option<MdlBoneTableMetadata>,
     pub start_index: u32,
     pub vertex_buffer_offsets: [u32; 3],
     pub vertex_buffer_strides: [u8; 3],
@@ -209,6 +217,15 @@ pub struct MdlNamedOffset {
     pub index: usize,
     pub offset: u32,
     pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlBoneTableMetadata {
+    pub index: usize,
+    pub bone_count: u32,
+    pub bone_indices: Vec<u16>,
+    pub bone_names: Vec<Option<String>>,
 }
 
 pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<MdlMetadata> {
@@ -315,16 +332,31 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         usize::from(model_header.material_count),
         "material name offsets",
     )?;
+    let bone_offsets = read_u32_table(
+        bytes,
+        &mut offset,
+        usize::from(model_header.bone_count),
+        "bone name offsets",
+    )?;
 
     let attributes = named_offsets(&attribute_offsets, string_table);
     let materials = named_offsets(&material_offsets, string_table);
+    let bones = named_offsets(&bone_offsets, string_table);
+    let bone_tables = read_bone_tables(
+        bytes,
+        &mut offset,
+        file_header.version,
+        usize::from(model_header.bone_table_count),
+        usize::from(model_header.bone_table_array_count_total),
+        &bones,
+    )?;
     let submeshes = raw_submeshes
         .into_iter()
         .map(|submesh| submesh.with_attribute_names(&attributes))
         .collect::<Vec<_>>();
     let meshes = raw_meshes
         .into_iter()
-        .map(|mesh| mesh.with_tables(&materials, &submeshes))
+        .map(|mesh| mesh.with_tables(&materials, &submeshes, &bone_tables))
         .collect::<Vec<_>>();
 
     for (lod, extra_lod) in lods.iter_mut().zip(
@@ -351,6 +383,8 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         terrain_shadow_submeshes,
         attributes,
         materials,
+        bones,
+        bone_tables,
     })
 }
 
@@ -375,6 +409,7 @@ impl RawMeshMetadata {
         self,
         materials: &[MdlNamedOffset],
         submeshes: &[MdlSubmeshMetadata],
+        bone_tables: &[MdlBoneTableMetadata],
     ) -> MdlMeshMetadata {
         let submesh_start = usize::from(self.submesh_index);
         let submesh_end = submesh_start.saturating_add(usize::from(self.submesh_count));
@@ -396,6 +431,9 @@ impl RawMeshMetadata {
                 bone_count: submesh.bone_count,
             })
             .collect::<Vec<_>>();
+        let bone_table = (self.bone_table_index != 255)
+            .then(|| bone_tables.get(usize::from(self.bone_table_index)).cloned())
+            .flatten();
 
         MdlMeshMetadata {
             index: self.index,
@@ -414,6 +452,7 @@ impl RawMeshMetadata {
                 .collect(),
             submeshes: mesh_submeshes,
             bone_table_index: self.bone_table_index,
+            bone_table,
             start_index: self.start_index,
             vertex_buffer_offsets: self.vertex_buffer_offsets,
             vertex_buffer_strides: self.vertex_buffer_strides,
@@ -719,6 +758,121 @@ fn attribute_names(mask: u32, attributes: &[MdlNamedOffset]) -> Vec<String> {
         .collect()
 }
 
+fn read_bone_tables(
+    bytes: &[u8],
+    offset: &mut usize,
+    version: u32,
+    count: usize,
+    array_count_total: usize,
+    bones: &[MdlNamedOffset],
+) -> anyhow::Result<Vec<MdlBoneTableMetadata>> {
+    match version {
+        MDL_VERSION_V5 => read_v5_bone_tables(bytes, offset, count, bones),
+        MDL_VERSION_V6 => read_v6_bone_tables(bytes, offset, count, array_count_total, bones),
+        _ if count == 0 => Ok(Vec::new()),
+        _ => anyhow::bail!("unsupported mdl version {version:#010x} for bone tables"),
+    }
+}
+
+fn read_v5_bone_tables(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+    bones: &[MdlNamedOffset],
+) -> anyhow::Result<Vec<MdlBoneTableMetadata>> {
+    let mut tables = Vec::with_capacity(count);
+    for index in 0..count {
+        let table_offset = *offset;
+        let all_indices = read_u16_table(
+            bytes,
+            table_offset,
+            V5_BONE_TABLE_BONE_CAPACITY,
+            "v5 bone table indices",
+        )?;
+        let bone_count = read_u32_le(
+            bytes,
+            table_offset + V5_BONE_TABLE_BONE_CAPACITY * 2,
+            "v5 bone table count",
+        )?;
+        let bone_indices = all_indices
+            .into_iter()
+            .take(bone_count as usize)
+            .collect::<Vec<_>>();
+        tables.push(bone_table_metadata(index, bone_indices, bones));
+        *offset = checked_advance(*offset, V5_BONE_TABLE_SIZE, bytes.len(), "v5 bone table")?;
+    }
+    Ok(tables)
+}
+
+fn read_v6_bone_tables(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+    array_count_total: usize,
+    bones: &[MdlNamedOffset],
+) -> anyhow::Result<Vec<MdlBoneTableMetadata>> {
+    let descriptor_base = *offset;
+    let mut tables = Vec::with_capacity(count);
+    for index in 0..count {
+        let descriptor_offset = descriptor_base
+            .checked_add(index.checked_mul(4).ok_or_else(|| {
+                anyhow::anyhow!("v6 bone table descriptor offset overflow at index {index}")
+            })?)
+            .ok_or_else(|| anyhow::anyhow!("v6 bone table descriptor offset overflow"))?;
+        let relative_offset = usize::from(read_u16_le(
+            bytes,
+            descriptor_offset,
+            "v6 bone table relative offset",
+        )?);
+        let bone_count = usize::from(read_u16_le(
+            bytes,
+            descriptor_offset + 2,
+            "v6 bone table count",
+        )?);
+        let table_offset = descriptor_offset
+            .checked_add(relative_offset.checked_mul(4).ok_or_else(|| {
+                anyhow::anyhow!("v6 bone table relative offset overflow at index {index}")
+            })?)
+            .ok_or_else(|| anyhow::anyhow!("v6 bone table offset overflow"))?;
+        let bone_indices =
+            read_u16_table(bytes, table_offset, bone_count, "v6 bone table indices")?;
+        tables.push(bone_table_metadata(index, bone_indices, bones));
+    }
+    *offset = checked_advance(
+        descriptor_base,
+        count
+            .checked_mul(4)
+            .and_then(|descriptor_size| {
+                descriptor_size.checked_add(array_count_total.checked_mul(2)?)
+            })
+            .ok_or_else(|| anyhow::anyhow!("v6 bone table block size overflow"))?,
+        bytes.len(),
+        "v6 bone tables",
+    )?;
+    Ok(tables)
+}
+
+fn bone_table_metadata(
+    index: usize,
+    bone_indices: Vec<u16>,
+    bones: &[MdlNamedOffset],
+) -> MdlBoneTableMetadata {
+    let bone_names = bone_indices
+        .iter()
+        .map(|bone_index| {
+            bones
+                .get(usize::from(*bone_index))
+                .and_then(|bone| bone.name.clone())
+        })
+        .collect::<Vec<_>>();
+    MdlBoneTableMetadata {
+        index,
+        bone_count: bone_indices.len() as u32,
+        bone_indices,
+        bone_names,
+    }
+}
+
 fn read_u32_table(
     bytes: &[u8],
     offset: &mut usize,
@@ -729,6 +883,19 @@ fn read_u32_table(
     for _ in 0..count {
         values.push(read_u32_le(bytes, *offset, label)?);
         *offset = checked_advance(*offset, 4, bytes.len(), label)?;
+    }
+    Ok(values)
+}
+
+fn read_u16_table(
+    bytes: &[u8],
+    offset: usize,
+    count: usize,
+    label: &str,
+) -> anyhow::Result<Vec<u16>> {
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        values.push(read_u16_le(bytes, offset + index * 2, label)?);
     }
     Ok(values)
 }
@@ -841,6 +1008,21 @@ mod tests {
             metadata.meshes[2].submeshes[0].relative_index_offset,
             Some(0)
         );
+        assert_eq!(metadata.bones[1].name.as_deref(), Some("bone_b"));
+        assert_eq!(metadata.bone_tables.len(), 1);
+        assert_eq!(metadata.bone_tables[0].bone_indices, vec![1, 2]);
+        assert_eq!(
+            metadata.bone_tables[0].bone_names,
+            vec![Some("bone_b".to_string()), Some("bone_c".to_string())]
+        );
+        assert_eq!(metadata.meshes[0].bone_table, None);
+        assert_eq!(
+            metadata.meshes[2]
+                .bone_table
+                .as_ref()
+                .map(|table| table.bone_names.clone()),
+            Some(vec![Some("bone_b".to_string()), Some("bone_c".to_string())])
+        );
         assert!(metadata.lods[0].mesh_ranges.iter().any(|range| {
             range.category == "glass" && range.mesh_index == 2 && range.mesh_count == 1
         }));
@@ -855,10 +1037,10 @@ mod tests {
 
         bytes.extend_from_slice(&[0; VERTEX_DECLARATION_SIZE]);
 
-        let string_table = b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0";
+        let string_table = b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0bone_b\0bone_c\0";
         let string_header = bytes.len();
         bytes.extend_from_slice(&[0; 8]);
-        write_u16(&mut bytes, string_header, 4);
+        write_u16(&mut bytes, string_header, 7);
         write_u32(&mut bytes, string_header + 4, string_table.len() as u32);
         bytes.extend_from_slice(string_table);
 
@@ -869,10 +1051,13 @@ mod tests {
         write_u16(&mut bytes, model_header + 0x06, 2);
         write_u16(&mut bytes, model_header + 0x08, 2);
         write_u16(&mut bytes, model_header + 0x0a, 2);
+        write_u16(&mut bytes, model_header + 0x0c, 3);
+        write_u16(&mut bytes, model_header + 0x0e, 1);
         write_u8(&mut bytes, model_header + 0x16, 1);
         write_u8(&mut bytes, model_header + 0x1a, 1);
         write_u8(&mut bytes, model_header + 0x1b, 0x10);
         write_u16(&mut bytes, model_header + 0x26, 1);
+        write_u16(&mut bytes, model_header + 0x2c, 2);
 
         let lod0 = bytes.len();
         bytes.extend_from_slice(&[0; LOD_SIZE * 3]);
@@ -894,6 +1079,7 @@ mod tests {
             write_u16(&mut bytes, mesh + 8, if index == 2 { 1 } else { 0 });
             write_u16(&mut bytes, mesh + 10, if index == 2 { 1 } else { 0 });
             write_u16(&mut bytes, mesh + 12, 1);
+            write_u16(&mut bytes, mesh + 14, if index == 2 { 0 } else { 255 });
             write_u32(&mut bytes, mesh + 16, if index == 2 { 6 } else { 0 });
             write_u8(&mut bytes, mesh + 32, 12);
             write_u8(&mut bytes, mesh + 35, 1);
@@ -925,6 +1111,19 @@ mod tests {
         let material_b_offset = b"attr_a\0attr_b\0/mt_a.mtrl\0".len() as u32;
         bytes.extend_from_slice(&material_a_offset.to_le_bytes());
         bytes.extend_from_slice(&material_b_offset.to_le_bytes());
+
+        let bone_a_offset = b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0".len() as u32;
+        let bone_b_offset = b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0".len() as u32;
+        let bone_c_offset =
+            b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0bone_b\0".len() as u32;
+        bytes.extend_from_slice(&bone_a_offset.to_le_bytes());
+        bytes.extend_from_slice(&bone_b_offset.to_le_bytes());
+        bytes.extend_from_slice(&bone_c_offset.to_le_bytes());
+
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
 
         bytes
     }
