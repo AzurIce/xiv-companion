@@ -1,7 +1,7 @@
 #![cfg(all(feature = "game-data", feature = "render-test-support"))]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -180,16 +180,27 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
     let mut resource = SqPackResource::from_existing(game_dir_text);
     let mut manifest = Vec::new();
     let mut failures = Vec::new();
+    let case_filter = phantom_case_filter();
 
     manifest.push("# Phantom weapon snapshots".to_string());
     manifest.push(String::new());
     manifest.push(format!("- gameDir: {}", game_dir.display()));
     manifest.push(format!("- outputDir: {}", output_dir.display()));
+    if let Some(filter) = &case_filter {
+        manifest.push(format!(
+            "- filter: {}",
+            filter.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
     manifest.push(String::new());
     manifest.push("| priority | item | focus | snapshot | summary | raw |".to_string());
     manifest.push("| --- | --- | --- | --- | --- | --- |".to_string());
 
     for case in &fixture.cases {
+        if !phantom_case_matches_filter(case, case_filter.as_ref()) {
+            continue;
+        }
+
         let Some(item) = catalog_by_id.get(&case.item_id) else {
             failures.push(format!(
                 "{} {}: item not found in catalog",
@@ -327,6 +338,26 @@ fn game_dir() -> PathBuf {
     std::env::var_os("XIV_GAME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"E:\_ff14\game"))
+}
+
+fn phantom_case_filter() -> Option<HashSet<String>> {
+    let raw = std::env::var("XIV_PHANTOM_CASES").ok()?;
+    let values = raw
+        .split([',', ';', ' ', '\n', '\t'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<HashSet<_>>();
+    (!values.is_empty()).then_some(values)
+}
+
+fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    filter.contains(&case.case_id)
+        || filter.contains(&case.item_id.to_string())
+        || filter.contains(&case.name)
 }
 
 fn dump_raw_files(
