@@ -884,7 +884,7 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
         let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
             continue;
         };
-        let Some(rgba) = texture.to_rgba() else {
+        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
             continue;
         };
         let index = textures.len();
@@ -1278,7 +1278,7 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
         let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
             continue;
         };
-        let Some(rgba) = texture.to_rgba() else {
+        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
             continue;
         };
         let index = textures.len();
