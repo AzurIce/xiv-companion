@@ -17,6 +17,8 @@ const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
 #[cfg(feature = "game-data")]
 const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
+const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -767,6 +769,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             resource,
             &shader_package_name,
             &material,
+            &bytes,
             loaded_paths,
         );
         let sampler_roles = parse_material_sampler_roles(&bytes, &semantics);
@@ -774,7 +777,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
-        let material_alpha_threshold = material_alpha_threshold(&bytes);
+        let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1157,6 +1160,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             resource,
             &shader_package_name,
             &material,
+            &bytes,
             loaded_paths,
         )
         .await;
@@ -1165,7 +1169,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let alpha_test = semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
-        let material_alpha_threshold = material_alpha_threshold(&bytes);
+        let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1420,6 +1424,7 @@ struct MaterialSamplerRecord {
 #[derive(Default)]
 struct ComposedMaterialSemantics {
     material_keys: HashMap<u32, u32>,
+    material_constants: HashMap<u32, Vec<f32>>,
     resource_names: HashMap<u32, String>,
 }
 
@@ -1434,6 +1439,13 @@ impl ComposedMaterialSemantics {
             .get(&texture_usage)
             .and_then(|name| classify_sampler_name(name))
             .or_else(|| classify_sampler_usage(texture_usage))
+    }
+
+    fn material_constant_first_f32(&self, constant_id: u32) -> Option<f32> {
+        self.material_constants
+            .get(&constant_id)
+            .and_then(|values| values.first())
+            .copied()
     }
 
     fn apply_shader_package(&mut self, shader_package: &physis::shpk::ShaderPackage) {
@@ -1463,6 +1475,18 @@ impl ComposedMaterialSemantics {
         }
     }
 
+    fn apply_shader_package_material_constants(&mut self, bytes: &[u8]) {
+        for (id, values) in shader_package_material_defaults(bytes) {
+            self.material_constants.entry(id).or_insert(values);
+        }
+    }
+
+    fn apply_material_constants(&mut self, bytes: &[u8]) {
+        for (id, values) in material_constants(bytes) {
+            self.material_constants.insert(id, values);
+        }
+    }
+
     fn apply_shader_package_key_default(&mut self, key: u32, value: u32) {
         self.material_keys.entry(key).or_insert(value);
     }
@@ -1488,6 +1512,7 @@ fn load_composed_material_semantics_from_resource<R: physis::resource::Resource>
     resource: &mut R,
     shader_package_name: &str,
     material: &physis::mtrl::Material,
+    material_bytes: &[u8],
     loaded_paths: &mut Vec<String>,
 ) -> ComposedMaterialSemantics {
     use physis::ReadableFile;
@@ -1499,10 +1524,12 @@ fn load_composed_material_semantics_from_resource<R: physis::resource::Resource>
             physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
         {
             semantics.apply_shader_package(&shader_package);
+            semantics.apply_shader_package_material_constants(&bytes);
             push_loaded_path(loaded_paths, path);
         }
     }
     semantics.apply_material(material);
+    semantics.apply_material_constants(material_bytes);
     semantics
 }
 
@@ -1511,6 +1538,7 @@ async fn load_composed_material_semantics_from_async_resource<R: AsyncGameResour
     resource: &mut R,
     shader_package_name: &str,
     material: &physis::mtrl::Material,
+    material_bytes: &[u8],
     loaded_paths: &mut Vec<String>,
 ) -> ComposedMaterialSemantics {
     use physis::ReadableFile;
@@ -1522,10 +1550,12 @@ async fn load_composed_material_semantics_from_async_resource<R: AsyncGameResour
             physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
         {
             semantics.apply_shader_package(&shader_package);
+            semantics.apply_shader_package_material_constants(&bytes);
             push_loaded_path(loaded_paths, path);
         }
     }
     semantics.apply_material(material);
+    semantics.apply_material_constants(material_bytes);
     semantics
 }
 
@@ -1668,9 +1698,9 @@ fn default_alpha_threshold(_mode: WeaponMaterialAlphaMode) -> f32 {
 }
 
 #[cfg(feature = "game-data")]
-fn material_alpha_threshold(bytes: &[u8]) -> Option<f32> {
-    const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
-    material_constant_first_f32(bytes, G_ALPHA_THRESHOLD)
+fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> Option<f32> {
+    semantics
+        .material_constant_first_f32(G_ALPHA_THRESHOLD)
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(0.0, 1.0))
 }
@@ -2027,20 +2057,147 @@ fn parse_material_shader_flags(bytes: &[u8]) -> u32 {
 }
 
 #[cfg(feature = "game-data")]
-fn material_constant_first_f32(bytes: &[u8], constant_id: u32) -> Option<f32> {
-    let layout = material_shader_table_layout(bytes)?;
-    let shader_values_offset = layout.shader_values_offset;
+fn material_constants(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
+    let Some(layout) = material_shader_table_layout(bytes) else {
+        return Vec::new();
+    };
     let mut constant_offset = layout.constant_offset;
+    let mut constants = Vec::new();
+
     for _ in 0..layout.constant_count {
-        let id = read_u32_le(bytes, constant_offset)?;
-        let value_offset = read_u16_le(bytes, constant_offset + 4).map(usize::from)?;
-        let value_size = read_u16_le(bytes, constant_offset + 6).map(usize::from)?;
-        if id == constant_id && value_size >= 4 {
-            return read_f32_le(bytes, shader_values_offset.checked_add(value_offset)?);
+        let Some(id) = read_u32_le(bytes, constant_offset) else {
+            return constants;
+        };
+        let Some(value_offset) = read_u16_le(bytes, constant_offset + 4).map(usize::from) else {
+            return constants;
+        };
+        let Some(value_size) = read_u16_le(bytes, constant_offset + 6).map(usize::from) else {
+            return constants;
+        };
+        if value_size >= 4 {
+            let value_start = match layout.shader_values_offset.checked_add(value_offset) {
+                Some(value_start) => value_start,
+                None => return constants,
+            };
+            if let Some(values) = read_f32_values(bytes, value_start, value_size / 4) {
+                constants.push((id, values));
+            }
         }
-        constant_offset = checked_advance(constant_offset, 8, bytes.len())?;
+        let Some(next) = checked_advance(constant_offset, 8, bytes.len()) else {
+            return constants;
+        };
+        constant_offset = next;
     }
-    None
+
+    constants
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_material_defaults(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
+    let Some(layout) = shader_package_material_defaults_layout(bytes) else {
+        return Vec::new();
+    };
+
+    let mut constants = Vec::new();
+    let mut parameter_offset = layout.parameter_offset;
+    let defaults_offset = layout.defaults_offset;
+
+    for _ in 0..layout.parameter_count {
+        let Some(id) = read_u32_le(bytes, parameter_offset) else {
+            return constants;
+        };
+        let Some(byte_offset) = read_u16_le(bytes, parameter_offset + 4).map(usize::from) else {
+            return constants;
+        };
+        let Some(byte_size) = read_u16_le(bytes, parameter_offset + 6).map(usize::from) else {
+            return constants;
+        };
+        if byte_size >= 4 && byte_offset.saturating_add(byte_size) <= layout.defaults_size {
+            let value_start = match defaults_offset.checked_add(byte_offset) {
+                Some(value_start) => value_start,
+                None => return constants,
+            };
+            if let Some(values) = read_f32_values(bytes, value_start, byte_size / 4) {
+                constants.push((id, values));
+            }
+        }
+        let Some(next) = checked_advance(parameter_offset, 8, bytes.len()) else {
+            return constants;
+        };
+        parameter_offset = next;
+    }
+
+    constants
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug)]
+struct ShaderPackageMaterialDefaultsLayout {
+    parameter_offset: usize,
+    defaults_offset: usize,
+    defaults_size: usize,
+    parameter_count: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_material_defaults_layout(
+    bytes: &[u8],
+) -> Option<ShaderPackageMaterialDefaultsLayout> {
+    if bytes.get(0..4)? != b"ShPk" {
+        return None;
+    }
+
+    let version = read_u32_le(bytes, 4)?;
+    let vertex_shader_count = read_u32_usize(bytes, 24)?;
+    let pixel_shader_count = read_u32_usize(bytes, 28)?;
+    let defaults_size = read_u32_usize(bytes, 32)?;
+    let parameter_count = read_u16_le(bytes, 36).map(usize::from)?;
+    let has_defaults = read_u16_le(bytes, 38)? != 0;
+    if !has_defaults || defaults_size == 0 || parameter_count == 0 {
+        return None;
+    }
+
+    let mut offset = 72_usize;
+    if version >= 0x0D01 {
+        offset = checked_advance(offset, 12, bytes.len())?;
+    }
+    if version >= 0x0E01 {
+        offset = checked_advance(offset, 4, bytes.len())?;
+    }
+
+    for _ in 0..vertex_shader_count.saturating_add(pixel_shader_count) {
+        offset = shader_package_skip_shader(bytes, offset, version)?;
+    }
+
+    let parameter_offset = offset;
+    let defaults_offset = checked_advance(
+        parameter_offset,
+        parameter_count.saturating_mul(8),
+        bytes.len(),
+    )?;
+    checked_advance(defaults_offset, defaults_size, bytes.len())?;
+
+    Some(ShaderPackageMaterialDefaultsLayout {
+        parameter_offset,
+        defaults_offset,
+        defaults_size,
+        parameter_count,
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_skip_shader(bytes: &[u8], offset: usize, version: u32) -> Option<usize> {
+    let scalar_count = read_u16_le(bytes, offset + 8).map(usize::from)?;
+    let resource_count = read_u16_le(bytes, offset + 10).map(usize::from)?;
+    let uav_count = read_u16_le(bytes, offset + 12).map(usize::from)?;
+    let texture_count = read_u16_le(bytes, offset + 14).map(usize::from)?;
+    let header_size = if version >= 0x0D01 { 20 } else { 16 };
+    let parameter_count = scalar_count
+        .saturating_add(resource_count)
+        .saturating_add(uav_count)
+        .saturating_add(texture_count);
+    let offset = checked_advance(offset, header_size, bytes.len())?;
+    checked_advance(offset, parameter_count.saturating_mul(16), bytes.len())
 }
 
 #[cfg(feature = "game-data")]
@@ -2282,9 +2439,25 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 #[cfg(feature = "game-data")]
+fn read_u32_usize(bytes: &[u8], offset: usize) -> Option<usize> {
+    usize::try_from(read_u32_le(bytes, offset)?).ok()
+}
+
+#[cfg(feature = "game-data")]
 fn read_f32_le(bytes: &[u8], offset: usize) -> Option<f32> {
     let bytes = bytes.get(offset..offset + 4)?;
     Some(f32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+#[cfg(feature = "game-data")]
+fn read_f32_values(bytes: &[u8], offset: usize, count: usize) -> Option<Vec<f32>> {
+    let byte_count = count.checked_mul(4)?;
+    checked_advance(offset, byte_count, bytes.len())?;
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        values.push(read_f32_le(bytes, offset + index * 4)?);
+    }
+    Some(values)
 }
 
 #[cfg(feature = "game-data")]
@@ -2426,38 +2599,46 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn material_alpha_threshold_reads_shader_constant_value() {
-        let mut bytes = vec![0; 16];
-        bytes.extend_from_slice(&4_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0x29AC_0223_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&4_u16.to_le_bytes());
-        bytes.extend_from_slice(&0.42_f32.to_le_bytes());
+    fn material_constants_read_shader_constant_values() {
+        let bytes = test_mtrl_with_constant(G_ALPHA_THRESHOLD, &[0.42], 0);
 
-        assert_eq!(material_alpha_threshold(&bytes), Some(0.42));
+        assert_eq!(
+            material_constants(&bytes),
+            vec![(G_ALPHA_THRESHOLD, vec![0.42])]
+        );
     }
 
     #[test]
     fn material_shader_table_layout_uses_header_dataset_size() {
-        let mut bytes = vec![0; 16];
-        let data_set_size = 8_u16;
-        bytes[6..8].copy_from_slice(&data_set_size.to_le_bytes());
-        bytes.extend_from_slice(&[0xAA; 8]);
-        bytes.extend_from_slice(&4_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0x29AC_0223_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&4_u16.to_le_bytes());
-        bytes.extend_from_slice(&0.25_f32.to_le_bytes());
+        let bytes = test_mtrl_with_constant(G_ALPHA_THRESHOLD, &[0.25], 8);
 
-        assert_eq!(material_alpha_threshold(&bytes), Some(0.25));
+        assert_eq!(
+            material_constants(&bytes),
+            vec![(G_ALPHA_THRESHOLD, vec![0.25])]
+        );
+    }
+
+    #[test]
+    fn shader_package_material_defaults_read_default_constants() {
+        let bytes = test_shpk_with_material_defaults(&[(G_ALPHA_THRESHOLD, &[0.35])]);
+
+        assert_eq!(
+            shader_package_material_defaults(&bytes),
+            vec![(G_ALPHA_THRESHOLD, vec![0.35])]
+        );
+    }
+
+    #[test]
+    fn composed_material_semantics_material_constant_overrides_shader_package_default() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[(G_ALPHA_THRESHOLD, &[0.2])]);
+        let material = test_mtrl_with_constant(G_ALPHA_THRESHOLD, &[0.7], 0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_alpha_threshold(&semantics), Some(0.2));
+
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_threshold(&semantics), Some(0.7));
     }
 
     #[test]
@@ -2679,5 +2860,69 @@ mod weapon_material_tests {
         vertex.position = position;
         vertex.normal = normal;
         vertex
+    }
+
+    fn test_mtrl_with_constant(id: u32, values: &[f32], data_set_size: u16) -> Vec<u8> {
+        let value_size = (values.len() * 4) as u16;
+        let mut bytes = vec![0; 16];
+        bytes[6..8].copy_from_slice(&data_set_size.to_le_bytes());
+        bytes.extend(std::iter::repeat_n(0xAA, data_set_size as usize));
+        bytes.extend_from_slice(&value_size.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&id.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&value_size.to_le_bytes());
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn test_shpk_with_material_defaults(parameters: &[(u32, &[f32])]) -> Vec<u8> {
+        let defaults_size = parameters
+            .iter()
+            .map(|(_, values)| values.len() * 4)
+            .sum::<usize>() as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"ShPk");
+        bytes.extend_from_slice(&0x0C01_u32.to_le_bytes());
+        bytes.extend_from_slice(b"DX11");
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&defaults_size.to_le_bytes());
+        bytes.extend_from_slice(&(parameters.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+
+        let mut byte_offset = 0_u16;
+        for (id, values) in parameters {
+            let byte_size = (values.len() * 4) as u16;
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&byte_offset.to_le_bytes());
+            bytes.extend_from_slice(&byte_size.to_le_bytes());
+            byte_offset += byte_size;
+        }
+
+        for (_, values) in parameters {
+            for value in *values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        bytes
     }
 }
