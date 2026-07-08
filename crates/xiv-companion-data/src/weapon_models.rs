@@ -289,6 +289,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
                 material_slot: mesh.material_index as usize,
                 material_name: mesh.material_name.clone(),
                 color,
+                bone_table: mesh.bone_table.clone(),
                 vertices,
                 indices,
             });

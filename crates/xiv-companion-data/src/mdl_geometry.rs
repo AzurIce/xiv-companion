@@ -1,5 +1,7 @@
 use crate::mdl_metadata::{MdlMeshMetadata, MdlMeshRangeMetadata, mdl_metadata_from_mdl_bytes};
-use crate::model::{ModelBlendIndices, ModelBlendWeights, ModelVertex, WeaponModelVertex};
+use crate::model::{
+    ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelVertex, WeaponModelVertex,
+};
 
 const MODEL_FILE_HEADER_SIZE: usize = 68;
 const VERTEX_DECLARATION_SIZE: usize = 17 * 8;
@@ -11,6 +13,7 @@ pub(crate) struct MdlGeometryMesh {
     pub category: String,
     pub material_index: u16,
     pub material_name: String,
+    pub bone_table: Option<ModelBoneTable>,
     pub vertices: Vec<WeaponModelVertex>,
     pub indices: Vec<u16>,
     pub submeshes: Vec<MdlGeometrySubmesh>,
@@ -89,6 +92,7 @@ pub(crate) fn extract_mdl_lod0_geometry(
             category,
             material_index: mesh.material_index,
             material_name,
+            bone_table: mesh.bone_table.as_ref().map(model_bone_table_from_metadata),
             vertices,
             indices,
             submeshes: geometry_submeshes(mesh),
@@ -96,6 +100,17 @@ pub(crate) fn extract_mdl_lod0_geometry(
     }
 
     Ok(meshes)
+}
+
+fn model_bone_table_from_metadata(
+    table: &crate::mdl_metadata::MdlBoneTableMetadata,
+) -> ModelBoneTable {
+    ModelBoneTable {
+        index: table.index,
+        bone_count: table.bone_count,
+        bone_indices: table.bone_indices.clone(),
+        bone_names: table.bone_names.clone(),
+    }
 }
 
 fn mesh_indices_from_ranges(ranges: &[MdlMeshRangeMetadata]) -> Vec<(usize, String)> {

@@ -140,8 +140,19 @@ pub struct ModelMesh {
     pub material_slot: usize,
     pub material_name: String,
     pub color: [f32; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bone_table: Option<ModelBoneTable>,
     pub vertices: Vec<ModelVertex>,
     pub indices: Vec<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBoneTable {
+    pub index: usize,
+    pub bone_count: u32,
+    pub bone_indices: Vec<u16>,
+    pub bone_names: Vec<Option<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]

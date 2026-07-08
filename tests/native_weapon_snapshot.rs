@@ -46,6 +46,7 @@ fn mock_weapon_model() -> WeaponModelData {
             material_slot: 0,
             material_name: "mock".to_string(),
             color: [0.8, 0.72, 0.62],
+            bone_table: None,
             vertices: vec![
                 vertex([-0.8, -0.6, 0.0], [0.95, 0.82, 0.68, 1.0]),
                 vertex([0.8, -0.6, 0.0], [0.74, 0.83, 0.95, 1.0]),
