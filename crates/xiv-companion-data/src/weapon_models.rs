@@ -12,6 +12,49 @@ pub use crate::model::{
 pub use crate::game_data::normalize_game_dir;
 
 #[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponModelLoadRequest {
+    pub item_id: u32,
+    pub item_name: String,
+    pub model_main: u64,
+    pub model_sub: u64,
+}
+
+#[cfg(feature = "game-data")]
+impl WeaponModelLoadRequest {
+    pub fn primary_model(&self) -> PackedModelId {
+        PackedModelId::from_raw(self.model_main)
+    }
+
+    pub fn secondary_model(&self) -> Option<PackedModelId> {
+        (self.model_sub != 0).then(|| PackedModelId::from_raw(self.model_sub))
+    }
+}
+
+#[cfg(feature = "game-data")]
+impl From<&WeaponCatalogItem> for WeaponModelLoadRequest {
+    fn from(item: &WeaponCatalogItem) -> Self {
+        Self {
+            item_id: item.id,
+            item_name: item.name.clone(),
+            model_main: item.model_main,
+            model_sub: item.model_sub,
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+pub trait AsyncGameResource {
+    type Error: std::fmt::Display;
+    type ReadFuture<'a>: std::future::Future<Output = Result<Vec<u8>, Self::Error>> + 'a
+    where
+        Self: 'a;
+
+    fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a>;
+    fn platform(&self) -> physis::Platform;
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_game_dir(
     game_dir: &std::path::Path,
     item: &WeaponCatalogItem,
@@ -36,10 +79,18 @@ pub fn load_weapon_model_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     item: &WeaponCatalogItem,
 ) -> anyhow::Result<WeaponModelData> {
+    load_weapon_model_from_resource_request(resource, &WeaponModelLoadRequest::from(item))
+}
+
+#[cfg(feature = "game-data")]
+pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &WeaponModelLoadRequest,
+) -> anyhow::Result<WeaponModelData> {
     use anyhow::anyhow;
 
-    let model_main = item.primary_model();
-    let model_sub = item.secondary_model();
+    let model_main = request.primary_model();
+    let model_sub = request.secondary_model();
     let mut loaded_paths = Vec::new();
     let mut materials = Vec::new();
     let mut textures = Vec::new();
@@ -68,12 +119,15 @@ pub fn load_weapon_model_from_resource<R: physis::resource::Resource>(
     }
 
     if meshes.is_empty() {
-        return Err(anyhow!("{} has no renderable model meshes", item.name));
+        return Err(anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
     }
 
     Ok(WeaponModelData {
-        item_id: item.id,
-        item_name: item.name.clone(),
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
         model_main,
         model_sub,
         loaded_paths,
@@ -434,6 +488,369 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
         }
 
         let Some(bytes) = resource.read(&path) else {
+            continue;
+        };
+        let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
+            continue;
+        };
+        let Some(rgba) = texture.to_rgba() else {
+            continue;
+        };
+        let index = textures.len();
+        textures.push(WeaponModelTexture {
+            path: path.clone(),
+            kind,
+            width: texture.width,
+            height: texture.height,
+            rgba,
+        });
+        push_loaded_path(loaded_paths, path);
+        return Some(index);
+    }
+
+    None
+}
+
+#[cfg(feature = "game-data")]
+pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &WeaponModelLoadRequest,
+) -> anyhow::Result<WeaponModelData> {
+    use anyhow::anyhow;
+
+    let model_main = request.primary_model();
+    let model_sub = request.secondary_model();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+
+    load_weapon_model_meshes_from_async_resource(
+        resource,
+        model_main,
+        &mut loaded_paths,
+        &mut materials,
+        &mut textures,
+        &mut meshes,
+    )
+    .await?;
+
+    if let Some(model_sub) = model_sub {
+        if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
+            let _ = load_weapon_model_meshes_from_async_resource(
+                resource,
+                model_sub,
+                &mut loaded_paths,
+                &mut materials,
+                &mut textures,
+                &mut meshes,
+            )
+            .await;
+        }
+    }
+
+    if meshes.is_empty() {
+        return Err(anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main,
+        model_sub,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    model: PackedModelId,
+    loaded_paths: &mut Vec<String>,
+    materials: &mut Vec<WeaponModelMaterial>,
+    textures: &mut Vec<WeaponModelTexture>,
+    meshes: &mut Vec<WeaponModelMesh>,
+) -> anyhow::Result<()> {
+    use anyhow::{Context, anyhow};
+
+    let mut missing = Vec::new();
+    for path in weapon_model_candidate_paths(model) {
+        let bytes = match resource.read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                missing.push(format!("{path}: {error}"));
+                continue;
+            }
+        };
+
+        let mut path_meshes = meshes_from_mdl_bytes(&path, &bytes)
+            .with_context(|| format!("failed to load render meshes from {path}"))?;
+        push_loaded_path(loaded_paths, path.clone());
+        assign_weapon_materials_from_async_resource(
+            resource,
+            model,
+            &path,
+            &mut path_meshes,
+            materials,
+            textures,
+            loaded_paths,
+        )
+        .await;
+        meshes.append(&mut path_meshes);
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "unable to read weapon model {} (tried: {})",
+        model.model_id,
+        missing.join("; ")
+    ))
+}
+
+#[cfg(feature = "game-data")]
+async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    model: PackedModelId,
+    model_path: &str,
+    meshes: &mut [WeaponModelMesh],
+    materials: &mut Vec<WeaponModelMaterial>,
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) {
+    let mut slots = Vec::<(u16, usize)>::new();
+    let mut material_specs = Vec::<(u16, String)>::new();
+    for mesh in meshes.iter() {
+        if !material_specs
+            .iter()
+            .any(|(index, _)| *index == mesh.material_index)
+        {
+            material_specs.push((mesh.material_index, mesh.material_name.clone()));
+        }
+    }
+
+    for (material_index, material_name) in material_specs {
+        let slot = materials.len();
+        let material = load_weapon_material_from_async_resource(
+            resource,
+            model,
+            model_path,
+            material_index,
+            material_name,
+            slot,
+            textures,
+            loaded_paths,
+        )
+        .await;
+        materials.push(material);
+        slots.push((material_index, slot));
+    }
+
+    for mesh in meshes {
+        if let Some((_, slot)) = slots
+            .iter()
+            .find(|(material_index, _)| *material_index == mesh.material_index)
+        {
+            mesh.material_slot = *slot;
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    model: PackedModelId,
+    model_path: &str,
+    material_index: u16,
+    material_name: String,
+    slot: usize,
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponModelMaterial {
+    use physis::ReadableFile;
+
+    let fallback = material_color(material_index);
+    let candidates = weapon_material_candidate_paths(model, model_path, &material_name);
+    for path in candidates {
+        let Ok(bytes) = resource.read(&path).await else {
+            continue;
+        };
+        let Some(material) = physis::mtrl::Material::from_existing(resource.platform(), &bytes)
+        else {
+            continue;
+        };
+
+        push_loaded_path(loaded_paths, path.clone());
+        let shader_package_name = material.shader_package_name.clone();
+        let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
+        let sampler_roles = parse_material_sampler_roles(&bytes);
+        let shader_flags = parse_material_shader_flags(&bytes);
+        let texture_set = load_weapon_material_textures_from_async_resource(
+            resource,
+            &path,
+            &material,
+            &sampler_roles,
+            textures,
+            loaded_paths,
+        )
+        .await;
+
+        let render_mode =
+            weapon_material_render_mode(&shader_package_name, shader_flags, &texture_set);
+        let opacity = weapon_material_opacity(render_mode);
+        let diffuse_color = if texture_set.base_color.is_some() {
+            [1.0, 1.0, 1.0]
+        } else {
+            summary.diffuse
+        };
+        let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
+
+        return WeaponModelMaterial {
+            slot,
+            material_index,
+            name: material_name,
+            path: Some(path),
+            shader_package_name: Some(shader_package_name),
+            render_mode,
+            opacity,
+            fallback_color: fallback,
+            diffuse_color,
+            specular_color: summary.specular,
+            emissive_color,
+            roughness: summary.roughness,
+            metalness: summary.metalness,
+            texture_indices: texture_set.indices,
+            base_color_texture: texture_set.base_color,
+            normal_texture: texture_set.normal,
+            mask_texture: texture_set.mask,
+            emissive_texture: texture_set.emissive,
+        };
+    }
+
+    fallback_weapon_material(slot, material_index, material_name, fallback)
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    material_path: &str,
+    material: &physis::mtrl::Material,
+    sampler_roles: &[MaterialSamplerRole],
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponTextureSet {
+    let mut set = WeaponTextureSet::default();
+    for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
+        let kind = classify_weapon_texture(
+            raw_texture_path,
+            sampler_kind_for_texture(sampler_roles, texture_order),
+        );
+        let Some(texture_index) = load_weapon_texture_from_async_resource(
+            resource,
+            material_path,
+            raw_texture_path,
+            kind,
+            textures,
+            loaded_paths,
+        )
+        .await
+        else {
+            continue;
+        };
+        if !set.indices.contains(&texture_index) {
+            set.indices.push(texture_index);
+        }
+        match textures[texture_index].kind {
+            WeaponModelTextureKind::BaseColor => {
+                set.base_color.get_or_insert(texture_index);
+                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
+                    set.has_alpha = true;
+                }
+            }
+            WeaponModelTextureKind::Normal => {
+                set.normal.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Mask | WeaponModelTextureKind::Specular => {
+                set.mask.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Emissive => {
+                set.emissive.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Index => {
+                set.index.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Other => {}
+        }
+    }
+
+    if let Some(baked) = bake_weapon_color_table_textures(
+        material_path,
+        material.color_table.as_ref(),
+        set.index,
+        set.emissive.is_none(),
+        shader_opacity_override(&material.shader_package_name),
+        textures,
+    ) {
+        if let Some(base_color) = set.base_color {
+            if let Some(combined) = combine_base_with_colorset_texture(
+                material_path,
+                base_color,
+                baked.base_color,
+                textures,
+            ) {
+                set.base_color = Some(combined);
+                add_unique_index(&mut set.indices, combined);
+                if texture_alpha_affects_material_transparency(&textures[combined]) {
+                    set.has_alpha = true;
+                }
+            }
+        } else {
+            set.base_color = Some(baked.base_color);
+            add_unique_index(&mut set.indices, baked.base_color);
+            if texture_alpha_affects_material_transparency(&textures[baked.base_color]) {
+                set.has_alpha = true;
+            }
+        }
+
+        if set.emissive.is_none() {
+            if let Some(emissive) = baked.emissive {
+                set.emissive = Some(emissive);
+                add_unique_index(&mut set.indices, emissive);
+            }
+        }
+    }
+
+    if set.base_color.is_none() {
+        set.base_color = choose_fallback_base_texture(&set.indices, textures);
+    }
+
+    set
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    material_path: &str,
+    raw_texture_path: &str,
+    kind: WeaponModelTextureKind,
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Option<usize> {
+    use physis::ReadableFile;
+
+    for path in weapon_texture_candidate_paths(material_path, raw_texture_path) {
+        if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+            textures[index].kind = merge_texture_kind(textures[index].kind, kind);
+            return Some(index);
+        }
+
+        let Ok(bytes) = resource.read(&path).await else {
             continue;
         };
         let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
@@ -1295,5 +1712,122 @@ fn push_loaded_path(paths: &mut Vec<String>, path: String) {
 fn push_unique_path(paths: &mut Vec<String>, path: String) {
     if !path.is_empty() && !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
+    }
+}
+
+#[cfg(all(test, feature = "game-data"))]
+mod weapon_material_tests {
+    use super::*;
+
+    #[test]
+    fn parse_material_sampler_roles_uses_sampler_texture_index() {
+        let mut bytes = vec![0; 16];
+        bytes[12] = 2;
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&physis::shpk::ShaderPackage::crc("g_SamplerNormal").to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&[0; 3]);
+
+        let roles = parse_material_sampler_roles(&bytes);
+
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].texture_index, 1);
+        assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
+    }
+
+    #[test]
+    fn classify_weapon_texture_recognizes_ffxiv_albedo_suffix() {
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w1758/obj/body/b0001/texture/w1758b0001_a.tex",
+                None
+            ),
+            WeaponModelTextureKind::BaseColor
+        );
+    }
+
+    #[test]
+    fn classify_weapon_texture_recognizes_colorset_index_map() {
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0525/obj/body/b0001/texture/v01_w0525b0001_id.tex",
+                None
+            ),
+            WeaponModelTextureKind::Index
+        );
+    }
+
+    #[test]
+    fn fallback_base_texture_ignores_specialized_maps() {
+        let textures = vec![
+            test_texture("emissive.tex", WeaponModelTextureKind::Emissive),
+            test_texture("normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("mask.tex", WeaponModelTextureKind::Mask),
+            test_texture("specular.tex", WeaponModelTextureKind::Specular),
+            test_texture("id.tex", WeaponModelTextureKind::Index),
+        ];
+        assert_eq!(choose_fallback_base_texture(&[0, 1, 2, 3], &textures), None);
+    }
+
+    #[test]
+    fn fallback_base_texture_allows_unknown_maps() {
+        let textures = vec![
+            test_texture("normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("unknown.tex", WeaponModelTextureKind::Other),
+        ];
+        assert_eq!(choose_fallback_base_texture(&[0, 1], &textures), Some(1));
+    }
+
+    #[test]
+    fn only_base_texture_alpha_affects_material_transparency() {
+        for kind in [
+            WeaponModelTextureKind::Normal,
+            WeaponModelTextureKind::Mask,
+            WeaponModelTextureKind::Specular,
+            WeaponModelTextureKind::Emissive,
+            WeaponModelTextureKind::Index,
+            WeaponModelTextureKind::Other,
+        ] {
+            let texture = test_texture_with_alpha("non-base-alpha.tex", kind, 0);
+            assert!(!texture_alpha_affects_material_transparency(&texture));
+        }
+
+        let opaque_base =
+            test_texture_with_alpha("base-opaque.tex", WeaponModelTextureKind::BaseColor, 255);
+        assert!(!texture_alpha_affects_material_transparency(&opaque_base));
+
+        let alpha_base =
+            test_texture_with_alpha("base-alpha.tex", WeaponModelTextureKind::BaseColor, 128);
+        assert!(texture_alpha_affects_material_transparency(&alpha_base));
+    }
+
+    #[test]
+    fn srgb_multiply_uses_linear_space() {
+        assert_eq!(multiply_srgb_channels(255, 128), 128);
+        assert_ne!(multiply_srgb_channels(128, 128), 64);
+    }
+
+    fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
+        test_texture_with_alpha(path, kind, 255)
+    }
+
+    fn test_texture_with_alpha(
+        path: &str,
+        kind: WeaponModelTextureKind,
+        alpha: u8,
+    ) -> WeaponModelTexture {
+        WeaponModelTexture {
+            path: path.to_string(),
+            kind,
+            width: 1,
+            height: 1,
+            rgba: vec![255, 255, 255, alpha],
+        }
     }
 }

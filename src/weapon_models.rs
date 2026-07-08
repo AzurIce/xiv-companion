@@ -12,5 +12,7 @@ pub use xiv_companion_data::model::{
 pub use xiv_companion_data::game_data::normalize_game_dir;
 #[cfg(feature = "game-data")]
 pub use xiv_companion_data::weapon_models::{
-    load_weapon_model_from_game_dir, load_weapon_model_from_resource, meshes_from_mdl_bytes,
+    AsyncGameResource, WeaponModelLoadRequest, load_weapon_model_from_async_resource,
+    load_weapon_model_from_game_dir, load_weapon_model_from_resource,
+    load_weapon_model_from_resource_request, meshes_from_mdl_bytes,
 };
