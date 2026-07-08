@@ -152,6 +152,10 @@ pub struct ModelVertex {
     #[serde(default)]
     pub uv1: [f32; 2],
     #[serde(default)]
+    pub uv2: [f32; 2],
+    #[serde(default)]
+    pub uv3: [f32; 2],
+    #[serde(default)]
     pub bitangent: [f32; 4],
     #[serde(default)]
     pub color: [f32; 4],

@@ -215,10 +215,7 @@ fn apply_vertex_element(
         }
         4 => {
             let uv = read_vec4(bytes, offset, element.vertex_type)?;
-            if element.usage_index == 0 {
-                vertex.uv0 = [uv[0], uv[1]];
-                vertex.uv1 = [uv[2], uv[3]];
-            }
+            apply_texcoord(vertex, element.usage_index, uv);
         }
         6 => {
             if element.usage_index == 0 {
@@ -259,8 +256,24 @@ fn default_model_vertex() -> ModelVertex {
         normal: [0.0; 3],
         uv0: [0.0; 2],
         uv1: [0.0; 2],
+        uv2: [0.0; 2],
+        uv3: [0.0; 2],
         bitangent: [0.0; 4],
         color: [1.0; 4],
+    }
+}
+
+fn apply_texcoord(vertex: &mut ModelVertex, usage_index: u8, uv: [f32; 4]) {
+    match usage_index {
+        0 => {
+            vertex.uv0 = [uv[0], uv[1]];
+            vertex.uv1 = [uv[2], uv[3]];
+        }
+        1 => {
+            vertex.uv2 = [uv[0], uv[1]];
+            vertex.uv3 = [uv[2], uv[3]];
+        }
+        _ => {}
     }
 }
 
@@ -516,6 +529,8 @@ mod tests {
 
         assert_eq!(vertex.uv0, [0.1, 0.2]);
         assert_eq!(vertex.uv1, [0.3, 0.4]);
+        assert_eq!(vertex.uv2, [0.9, 0.8]);
+        assert_eq!(vertex.uv3, [0.7, 0.6]);
     }
 
     #[test]
