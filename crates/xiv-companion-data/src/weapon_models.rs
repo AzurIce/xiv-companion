@@ -248,7 +248,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
                 normal: normalized_or_fallback(vertex.normal),
                 uv0: vertex.uv0,
                 uv1: vertex.uv1,
-                bitangent: vertex.bitangent,
+                bitangent: sanitized_bitangent(vertex.bitangent),
                 color: vertex_color_or_fallback(vertex.color),
             })
             .collect::<Vec<_>>();
@@ -456,6 +456,31 @@ fn normalized_or_fallback(normal: [f32; 3]) -> [f32; 3] {
     } else {
         [0.0, 1.0, 0.0]
     }
+}
+
+#[cfg(feature = "game-data")]
+fn sanitized_bitangent(bitangent: [f32; 4]) -> [f32; 4] {
+    let length =
+        (bitangent[0] * bitangent[0] + bitangent[1] * bitangent[1] + bitangent[2] * bitangent[2])
+            .sqrt();
+    let xyz = if length.is_finite()
+        && length > 0.0001
+        && bitangent[..3].iter().all(|value| value.is_finite())
+    {
+        [
+            bitangent[0] / length,
+            bitangent[1] / length,
+            bitangent[2] / length,
+        ]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let sign = if bitangent[3].is_nan() || bitangent[3] > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    [xyz[0], xyz[1], xyz[2], sign]
 }
 
 #[cfg(feature = "game-data")]
@@ -2497,6 +2522,20 @@ mod weapon_material_tests {
                 .collect::<Vec<_>>(),
             vec![2.0, 0.0, 3.0]
         );
+    }
+
+    #[test]
+    fn sanitized_bitangent_normalizes_xyz_and_sign() {
+        let bitangent = sanitized_bitangent([0.0, 3.0, 4.0, 0.0]);
+
+        assert_eq!(bitangent, [0.0, 0.6, 0.8, -1.0]);
+    }
+
+    #[test]
+    fn sanitized_bitangent_falls_back_for_invalid_xyz() {
+        let bitangent = sanitized_bitangent([0.0, 0.0, 0.0, f32::NAN]);
+
+        assert_eq!(bitangent, [1.0, 0.0, 0.0, 1.0]);
     }
 
     fn test_texture(path: &str, kind: WeaponModelTextureKind) -> WeaponModelTexture {
