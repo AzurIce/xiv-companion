@@ -11,9 +11,14 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
-use xiv_companion::renderer::WeaponRenderOptions;
+use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
-use xiv_companion::renderer::WebWeaponCanvasRenderer;
+use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
+use crate::app::ui::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
+};
+use crate::app::utils::{cx, format_integer};
+use xiv_companion::renderer::WeaponRenderOptions;
 
 use xiv_companion::{
     PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
@@ -22,10 +27,6 @@ use xiv_companion::{
 
 use super::crafting::ItemIcon;
 use crate::app::data::{load_weapon_catalog, load_weapon_model};
-use xiv_companion_render::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconKind, cx,
-    format_integer, input_class,
-};
 
 const RESULT_LIMIT: usize = 220;
 

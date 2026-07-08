@@ -795,7 +795,10 @@
     }
   }
   .border-border\/60 {
-    border-color: color-mix(in oklab, oklch(0.922 0 0) 60%, transparent);
+    border-color: color-mix(in srgb, #e5e5e5 60%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-border) 60%, transparent);
+    }
   }
   .border-cyan-200 {
     border-color: var(--color-cyan-200);
@@ -1484,7 +1487,10 @@
   .hover\:bg-background\/70 {
     &:hover {
       @media (hover: hover) {
-        background-color: color-mix(in oklab, oklch(0.985 0 0) 70%, transparent);
+        background-color: color-mix(in srgb, #fafafa 70%, transparent);
+        @supports (color: color-mix(in lab, red, red)) {
+          background-color: color-mix(in oklab, var(--color-background) 70%, transparent);
+        }
       }
     }
   }

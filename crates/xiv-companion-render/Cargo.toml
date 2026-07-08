@@ -6,35 +6,13 @@ publish.workspace = true
 
 [features]
 default = []
-ui = ["dep:dioxus", "dep:dioxus-free-icons"]
 renderer = ["dep:bytemuck", "dep:glam", "dep:wgpu"]
-web = [
-    "renderer",
-    "dep:js-sys",
-    "dep:raw-window-handle",
-    "dep:wasm-bindgen",
-    "dep:web-sys",
-]
 test-support = ["renderer", "dep:image", "dep:pollster"]
 
 [dependencies]
 bytemuck = { version = "1.22", features = ["derive"], optional = true }
-dioxus = { version = "0.7.9", optional = true }
-dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true }
 glam = { version = "0.30", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
-js-sys = { version = "0.3.83", optional = true }
 pollster = { version = "0.4", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
-wasm-bindgen = { version = "0.2.121", optional = true }
-web-sys = { version = "0.3.83", features = [
-    "console",
-    "DomRect",
-    "Element",
-    "Event",
-    "HtmlCanvasElement",
-    "MouseEvent",
-    "WheelEvent",
-], optional = true }
 wgpu = { version = "29", features = ["webgl"], optional = true }

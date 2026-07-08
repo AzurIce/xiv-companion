@@ -75,11 +75,11 @@ impl ModelRenderer {
         model: &M,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("weapon model shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("weapon.wgsl").into()),
+            label: Some("model shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("model.wgsl").into()),
         });
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("weapon postprocess shader"),
+            label: Some("model postprocess shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
         });
 
@@ -283,14 +283,14 @@ impl ModelRenderer {
                 immediate_size: 0,
             });
 
-        let pipeline = create_weapon_pipeline(
+        let pipeline = create_model_pipeline(
             &device,
             &shader,
             &pipeline_layout,
             "weapon model pipeline",
             false,
         );
-        let transparent_pipeline = create_weapon_pipeline(
+        let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
             &pipeline_layout,
@@ -460,14 +460,14 @@ impl ModelRenderer {
 
             render_pass.set_pipeline(&self.pipeline);
             for batch in self.draw_batches.iter().filter(|batch| !batch.transparent) {
-                draw_weapon_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
             render_pass.set_pipeline(&self.transparent_pipeline);
             let sorted_transparent_batches =
                 sorted_transparent_batches(&self.draw_batches, yaw, pitch);
             for batch in sorted_transparent_batches {
-                draw_weapon_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
         }
 
@@ -748,7 +748,7 @@ fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
     .normalize_or_zero()
 }
 
-fn draw_weapon_batch<'a>(
+fn draw_model_batch<'a>(
     render_pass: &mut wgpu::RenderPass<'a>,
     material_bind_groups: &'a [wgpu::BindGroup],
     batch: &DrawBatch,
@@ -766,7 +766,7 @@ fn draw_weapon_batch<'a>(
     }
 }
 
-fn create_weapon_pipeline(
+fn create_model_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,

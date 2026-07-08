@@ -4676,14 +4676,17 @@ dependencies = [
  "binrw",
  "console_error_panic_hook",
  "dioxus",
+ "dioxus-free-icons",
  "flate2",
  "futures-executor",
  "gloo-net",
+ "image",
  "indexed-db",
  "js-sys",
  "physis",
  "raphael-sim",
  "raphael-solver",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tsify",
@@ -4691,6 +4694,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu",
  "xiv-companion-render",
 ]
 
@@ -4699,16 +4703,10 @@ name = "xiv-companion-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "dioxus",
- "dioxus-free-icons",
  "glam",
  "image",
- "js-sys",
  "pollster",
- "raw-window-handle",
  "serde",
- "wasm-bindgen",
- "web-sys",
  "wgpu",
 ]
 

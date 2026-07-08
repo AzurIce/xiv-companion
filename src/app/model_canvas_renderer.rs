@@ -8,10 +8,8 @@ use raw_window_handle::{
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
-
-use crate::ModelRenderData;
-
-use super::{ModelRenderOptions, ModelRenderer};
+use xiv_companion::ModelRenderData;
+use xiv_companion::renderer::{ModelRenderOptions, ModelRenderer};
 
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -111,17 +109,13 @@ impl WebModelCanvasRenderer {
         })
     }
 
-    pub fn render(&mut self) {
-        self.render_with_options(ModelRenderOptions::default());
-    }
-
     pub fn render_with_options(&mut self, options: ModelRenderOptions) {
         self.resize_to_client();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             other => {
-                web_sys::console::warn_1(&format!("weapon surface not ready: {other:?}").into());
+                web_sys::console::warn_1(&format!("model surface not ready: {other:?}").into());
                 return;
             }
         };
@@ -300,7 +294,7 @@ fn canvas_pixel_size(canvas: &HtmlCanvasElement) -> (u32, u32) {
 
 fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("weapon depth texture"),
+        label: Some("model depth texture"),
         size: wgpu::Extent3d {
             width,
             height,
