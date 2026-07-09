@@ -25,6 +25,7 @@ pub enum ModelDebugMode {
     Uv3,
     VertexColor,
     MeshRole,
+    ColorTableIndex,
 }
 
 impl ModelDebugMode {
@@ -44,6 +45,7 @@ impl ModelDebugMode {
             ModelDebugMode::Uv3 => 11.0,
             ModelDebugMode::VertexColor => 12.0,
             ModelDebugMode::MeshRole => 13.0,
+            ModelDebugMode::ColorTableIndex => 14.0,
         }
     }
 }
@@ -299,6 +301,16 @@ impl ModelRenderer {
                         binding: 13,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -1192,6 +1204,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_sources0: uv_sources.0,
         uv_sources1: uv_sources.1,
         uv_sources2: uv_sources.2,
+        uv_sources3: uv_sources.3,
         debug_color: draw_role_debug_color(draw_role),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1469,6 +1482,32 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let index_texture_view = material
+        .index_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon ColorTable index texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral ColorTable index texture",
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("weapon material color sampler"),
@@ -1560,6 +1599,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 13,
                 resource: wgpu::BindingResource::Sampler(&nearest_data_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: wgpu::BindingResource::TextureView(&index_texture_view),
             },
         ],
     })
@@ -1680,6 +1723,7 @@ fn fallback_material() -> ModelMaterial {
         sheen_properties_texture: None,
         sphere_properties_texture: None,
         tile_matrix_texture: None,
+        index_texture: None,
     }
 }
 
@@ -1750,7 +1794,7 @@ fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
 
 fn material_uv_source_params(
     prepared_material: PreparedMaterial,
-) -> ([f32; 4], [f32; 4], [f32; 4]) {
+) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
     let uv_sources = prepared_material.uv_sources.textures;
     (
         [
@@ -1770,6 +1814,12 @@ fn material_uv_source_params(
             prepared_uv_source_value(uv_sources.sheen_properties),
             prepared_uv_source_value(uv_sources.sphere_properties),
             prepared_uv_source_value(uv_sources.tile_matrix),
+        ],
+        [
+            prepared_uv_source_value(uv_sources.index),
+            prepared_uv_source_value(uv_sources.other),
+            0.0,
+            0.0,
         ],
     )
 }
@@ -1908,6 +1958,7 @@ struct MaterialUniform {
     uv_sources0: [f32; 4],
     uv_sources1: [f32; 4],
     uv_sources2: [f32; 4],
+    uv_sources3: [f32; 4],
     debug_color: [f32; 4],
 }
 
@@ -2210,6 +2261,7 @@ mod tests {
         assert_eq!(ModelDebugMode::Uv3.shader_value(), 11.0);
         assert_eq!(ModelDebugMode::VertexColor.shader_value(), 12.0);
         assert_eq!(ModelDebugMode::MeshRole.shader_value(), 13.0);
+        assert_eq!(ModelDebugMode::ColorTableIndex.shader_value(), 14.0);
     }
 
     #[test]
@@ -2420,8 +2472,8 @@ mod tests {
                     sheen_properties: PreparedUvSource::Uv2,
                     sphere_properties: PreparedUvSource::Uv3,
                     tile_matrix: PreparedUvSource::Uv0,
-                    index: PreparedUvSource::Uv0,
-                    other: PreparedUvSource::Uv0,
+                    index: PreparedUvSource::Uv1,
+                    other: PreparedUvSource::Uv2,
                 },
                 uv0_scroll: PreparedUvSource::Uv0,
                 uv1_scroll: PreparedUvSource::Uv1,
@@ -2435,7 +2487,8 @@ mod tests {
             (
                 [0.0, 1.0, 2.0, 3.0],
                 [3.0, 2.0, 1.0, 0.0],
-                [1.0, 2.0, 3.0, 0.0]
+                [1.0, 2.0, 3.0, 0.0],
+                [1.0, 2.0, 0.0, 0.0]
             )
         );
     }

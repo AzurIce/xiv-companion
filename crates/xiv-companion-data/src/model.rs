@@ -381,6 +381,8 @@ pub struct ModelMaterial {
     pub sphere_properties_texture: Option<usize>,
     #[serde(default)]
     pub tile_matrix_texture: Option<usize>,
+    #[serde(default)]
+    pub index_texture: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -613,6 +615,7 @@ pub struct PreparedTextureBindings {
     pub sheen_properties: Option<usize>,
     pub sphere_properties: Option<usize>,
     pub tile_matrix: Option<usize>,
+    pub index: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -857,6 +860,7 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         sheen_properties: material.sheen_properties_texture,
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
+        index: material.index_texture,
     }
 }
 
@@ -866,7 +870,8 @@ pub fn prepared_material_feature_flags(
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialFeatureFlags {
     let mut flags = PreparedMaterialFeatureFlags {
-        uses_color_table: texture_bindings.material_properties.is_some()
+        uses_color_table: texture_bindings.index.is_some()
+            || texture_bindings.material_properties.is_some()
             || texture_bindings.tile_properties.is_some()
             || texture_bindings.sheen_properties.is_some()
             || texture_bindings.sphere_properties.is_some()
@@ -1676,6 +1681,7 @@ mod color_table_bake_tests {
         material.sheen_properties_texture = Some(10);
         material.sphere_properties_texture = Some(11);
         material.tile_matrix_texture = Some(12);
+        material.index_texture = Some(13);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -1693,6 +1699,7 @@ mod color_table_bake_tests {
                 sheen_properties: Some(10),
                 sphere_properties: Some(11),
                 tile_matrix: Some(12),
+                index: Some(13),
             }
         );
         assert_eq!(
@@ -1739,6 +1746,19 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
             PreparedMaterialFeatureFlags::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_treats_index_texture_as_color_table_input() {
+        let mut material = test_material();
+        material.index_texture = Some(3);
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_color_table,
+            true
         );
     }
 
@@ -2128,6 +2148,7 @@ mod color_table_bake_tests {
             sheen_properties_texture: None,
             sphere_properties_texture: None,
             tile_matrix_texture: None,
+            index_texture: None,
         }
     }
 

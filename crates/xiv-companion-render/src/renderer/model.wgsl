@@ -21,6 +21,7 @@ struct Material {
     uv_sources0: vec4<f32>, // x: base, y: normal, z: mask, w: material map
     uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
     uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
+    uv_sources3: vec4<f32>, // x: ColorTable index, y: other
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
 
@@ -95,6 +96,9 @@ var tile_matrix_texture: texture_2d<f32>;
 
 @group(1) @binding(13)
 var nearest_data_sampler: sampler;
+
+@group(1) @binding(14)
+var color_table_index_texture: texture_2d<f32>;
 
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
@@ -222,8 +226,12 @@ fn debug_fragment_output(
         color = uv_debug_color(input.uv3);
     } else if mode < 12.5 {
         color = input.color.rgb;
-    } else {
+    } else if mode < 13.5 {
         color = material.debug_color.rgb;
+    } else {
+        let index_uv = resolve_uv(input, material.uv_sources3.x);
+        let index_sample = textureSample(color_table_index_texture, nearest_data_sampler, index_uv);
+        color = vec3<f32>(index_sample.r, index_sample.g, 0.5);
     }
 
     var out: FragmentOutput;

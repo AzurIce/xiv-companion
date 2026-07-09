@@ -577,6 +577,7 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "uv3", "UV3" }
                     option { value: "vertex", "Vertex" }
                     option { value: "mesh", "Mesh" }
+                    option { value: "ct-index", "CT Index" }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -659,6 +660,7 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::Uv3 => "uv3",
         ModelDebugMode::VertexColor => "vertex",
         ModelDebugMode::MeshRole => "mesh",
+        ModelDebugMode::ColorTableIndex => "ct-index",
     }
 }
 
@@ -677,6 +679,7 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "uv3" => ModelDebugMode::Uv3,
         "vertex" => ModelDebugMode::VertexColor,
         "mesh" => ModelDebugMode::MeshRole,
+        "ct-index" => ModelDebugMode::ColorTableIndex,
         _ => ModelDebugMode::Final,
     }
 }

@@ -1535,6 +1535,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             sheen_properties_texture: texture_set.sheen_properties,
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
+            index_texture: texture_set.index,
         };
     }
 
@@ -2002,6 +2003,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             sheen_properties_texture: texture_set.sheen_properties,
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
+            index_texture: texture_set.index,
         };
     }
 
@@ -3155,6 +3157,7 @@ fn fallback_weapon_material(
         sheen_properties_texture: None,
         sphere_properties_texture: None,
         tile_matrix_texture: None,
+        index_texture: None,
     }
 }
 

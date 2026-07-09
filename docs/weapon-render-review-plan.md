@@ -44,7 +44,7 @@
 - `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 仍不进入主 surface pass。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`；新增特殊 character family 目前只用于准备层分类和 debug，尚未改变 shader 行为。
-- `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
+- `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
 - `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总，`usesDye` 仍保守为 false，等待染色入口。
 - `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties 与 ColorTable extra maps 的采样 UV，并会按 render time 对 `uv0` / `uv1` 来源叠加已解析的 scroll multiplier；当前 source 规则仍基本保守为 `uv0`，scroll 也尚未做到节点级 texture-role 路由。
@@ -55,7 +55,7 @@
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`，当前作为后续 tile array / UV repeat 逻辑的稳定输入，尚未驱动实际 tile 贴图选择。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入，尚未驱动实际 detail map 采样。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
-- `ModelDebugMode` 已提供第一版 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color、mesh/draw-role color；Web 控件和 snapshot/test render options 共用同一入口。
+- `ModelDebugMode` 已提供第一版 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color、mesh/draw-role color、ColorTable index；Web 控件和 snapshot/test render options 共用同一入口。
 
 主要缺口集中在：
 
@@ -124,14 +124,14 @@
 - 没有独立 cutout/glass/additive-lightshaft pipeline；`AdditiveLightShaft` 只存在于 prepared pass，renderer 主 pass 仍过滤它。
 - 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；secondary tangent frame、`color1`、flow、detail/multi maps、tile/detail arrays 还没有真正参与 shading，scroll 仍缺少 shader node 级别的 texture-role 路由。
 - alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
-- renderer 已有第一版 debug view，能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color 与 mesh/draw-role color；ColorTable row index preview 和更细的 sampler/texture role 诊断仍未实现。
+- renderer 已有第一版 debug view，能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color 与 ColorTable index；更细的 sampler/texture role 诊断仍未实现。
 
 计划：
 
 1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
 2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择和保守 scroll time 已接入，后续优先补 shader-family-specific scroll 路由、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
-4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color、mesh/draw-role color 已有第一版；后续补 ColorTable row index 和 texture-role/sampler 诊断，作为真实武器样本回归的主要判断工具。
+4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color、mesh/draw-role color、ColorTable index 已有第一版；后续补 texture-role/sampler 诊断，作为真实武器样本回归的主要判断工具。
 
 ## 1. 数据解析改进
 
@@ -247,7 +247,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 - mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等；已有第一版 `PreparedMesh`，并保留 submesh attribute mask/name、attribute visibility 决策与 shape influence active/inactive 状态
 - material shader family：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、unknown；已有第一版分类，后续逐个补 shader-family-specific 行为
-- texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；per-role sampler config 已有第一版；index 仍未作为可直接渲染绑定保留，因为当前 `_id.tex` 会先用于 ColorTable bake
+- texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix、ColorTable index 已有第一版；per-role sampler config 已有第一版；index 当前主要用于 ColorTable bake 和 debug preview，尚未进入正常 shader 着色
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，实际 wgpu additive pass 仍待实现
 - culling policy：render backfaces / cull backfaces
@@ -491,10 +491,10 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 - UV set preview
 - vertex color preview
 - mesh category / draw role colors
+- ColorTable row index preview
 
 仍待补：
 
-- ColorTable row index preview
 - texture role / sampler policy preview
 
 这些视图能显著缩短后续对照 Meddle/MeddleTools 的定位时间。
