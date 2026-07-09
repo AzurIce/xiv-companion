@@ -3,8 +3,9 @@ pub use crate::model::{
     ModelMaterial, ModelMesh, ModelRenderData, ModelTexture, ModelTextureKind, ModelVertex,
     PackedModelId, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
     WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
-    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
+    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, weapon_material_candidate_paths,
     weapon_model_candidate_paths, weapon_slot_label,
 };
@@ -285,14 +286,66 @@ pub fn load_weapon_model_from_resource<R: physis::resource::Resource>(
 }
 
 #[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WeaponModelMeshLoadFailure {
+    model: PackedModelId,
+    candidates: Vec<WeaponModelLoadCandidateDiagnostic>,
+}
+
+#[cfg(feature = "game-data")]
+impl WeaponModelMeshLoadFailure {
+    fn new(model: PackedModelId, candidates: Vec<WeaponModelLoadCandidateDiagnostic>) -> Self {
+        Self { model, candidates }
+    }
+
+    fn message(&self) -> String {
+        let tried = self
+            .candidates
+            .iter()
+            .map(|candidate| format!("{}: {}", candidate.path, candidate.error))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "unable to read weapon model {} (tried: {})",
+            self.model.model_id, tried
+        )
+    }
+
+    fn into_error(self) -> anyhow::Error {
+        anyhow::anyhow!(self.message())
+    }
+
+    fn into_diagnostic(self, role: WeaponModelLoadRole) -> WeaponModelLoadDiagnostic {
+        WeaponModelLoadDiagnostic {
+            role,
+            model: self.model,
+            error: self.message(),
+            candidates: self.candidates,
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn model_load_candidate(
+    path: String,
+    status: WeaponModelLoadCandidateStatus,
+    error: impl Into<String>,
+) -> WeaponModelLoadCandidateDiagnostic {
+    WeaponModelLoadCandidateDiagnostic {
+        path,
+        status,
+        error: error.into(),
+    }
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     resource: &mut R,
     request: &WeaponModelLoadRequest,
 ) -> anyhow::Result<WeaponModelData> {
-    use anyhow::anyhow;
-
     let model_main = request.primary_model();
     let model_sub = request.secondary_model();
+    let mut load_diagnostics = Vec::new();
     let mut loaded_paths = Vec::new();
     let mut materials = Vec::new();
     let mut textures = Vec::new();
@@ -305,23 +358,26 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
         &mut materials,
         &mut textures,
         &mut meshes,
-    )?;
+    )
+    .map_err(WeaponModelMeshLoadFailure::into_error)?;
 
     if let Some(model_sub) = model_sub {
         if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
-            let _ = load_weapon_model_meshes_from_resource(
+            if let Err(failure) = load_weapon_model_meshes_from_resource(
                 resource,
                 model_sub,
                 &mut loaded_paths,
                 &mut materials,
                 &mut textures,
                 &mut meshes,
-            );
+            ) {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
         }
     }
 
     if meshes.is_empty() {
-        return Err(anyhow!(
+        return Err(anyhow::anyhow!(
             "{} has no renderable model meshes",
             request.item_name
         ));
@@ -332,6 +388,7 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
         materials,
@@ -1001,18 +1058,33 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     meshes: &mut Vec<WeaponModelMesh>,
-) -> anyhow::Result<()> {
-    use anyhow::{Context, anyhow};
+) -> Result<(), WeaponModelMeshLoadFailure> {
+    use anyhow::Context;
 
-    let mut missing = Vec::new();
+    let mut candidates = Vec::new();
     for path in weapon_model_candidate_paths(model) {
         let Some(bytes) = resource.read(&path) else {
-            missing.push(path);
+            candidates.push(model_load_candidate(
+                path,
+                WeaponModelLoadCandidateStatus::Missing,
+                "resource read returned no bytes",
+            ));
             continue;
         };
 
-        let mut path_meshes = meshes_from_mdl_bytes(&path, &bytes)
-            .with_context(|| format!("failed to load render meshes from {path}"))?;
+        let mut path_meshes = match meshes_from_mdl_bytes(&path, &bytes)
+            .with_context(|| format!("failed to load render meshes from {path}"))
+        {
+            Ok(path_meshes) => path_meshes,
+            Err(error) => {
+                candidates.push(model_load_candidate(
+                    path,
+                    WeaponModelLoadCandidateStatus::ParseError,
+                    format!("{error:#}"),
+                ));
+                return Err(WeaponModelMeshLoadFailure::new(model, candidates));
+            }
+        };
         push_loaded_path(loaded_paths, path.clone());
         assign_weapon_materials_from_resource(
             resource,
@@ -1027,11 +1099,7 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
         return Ok(());
     }
 
-    Err(anyhow!(
-        "unable to read weapon model {} (tried: {})",
-        model.model_id,
-        missing.join("; ")
-    ))
+    Err(WeaponModelMeshLoadFailure::new(model, candidates))
 }
 
 #[cfg(feature = "game-data")]
@@ -1361,10 +1429,9 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     request: &WeaponModelLoadRequest,
 ) -> anyhow::Result<WeaponModelData> {
-    use anyhow::anyhow;
-
     let model_main = request.primary_model();
     let model_sub = request.secondary_model();
+    let mut load_diagnostics = Vec::new();
     let mut loaded_paths = Vec::new();
     let mut materials = Vec::new();
     let mut textures = Vec::new();
@@ -1378,11 +1445,12 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         &mut textures,
         &mut meshes,
     )
-    .await?;
+    .await
+    .map_err(WeaponModelMeshLoadFailure::into_error)?;
 
     if let Some(model_sub) = model_sub {
         if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
-            let _ = load_weapon_model_meshes_from_async_resource(
+            if let Err(failure) = load_weapon_model_meshes_from_async_resource(
                 resource,
                 model_sub,
                 &mut loaded_paths,
@@ -1390,12 +1458,15 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
                 &mut textures,
                 &mut meshes,
             )
-            .await;
+            .await
+            {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
         }
     }
 
     if meshes.is_empty() {
-        return Err(anyhow!(
+        return Err(anyhow::anyhow!(
             "{} has no renderable model meshes",
             request.item_name
         ));
@@ -1406,6 +1477,7 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
         materials,
@@ -1422,21 +1494,36 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     meshes: &mut Vec<WeaponModelMesh>,
-) -> anyhow::Result<()> {
-    use anyhow::{Context, anyhow};
+) -> Result<(), WeaponModelMeshLoadFailure> {
+    use anyhow::Context;
 
-    let mut missing = Vec::new();
+    let mut candidates = Vec::new();
     for path in weapon_model_candidate_paths(model) {
         let bytes = match resource.read(&path).await {
             Ok(bytes) => bytes,
             Err(error) => {
-                missing.push(format!("{path}: {error}"));
+                candidates.push(model_load_candidate(
+                    path,
+                    WeaponModelLoadCandidateStatus::ReadError,
+                    error.to_string(),
+                ));
                 continue;
             }
         };
 
-        let mut path_meshes = meshes_from_mdl_bytes(&path, &bytes)
-            .with_context(|| format!("failed to load render meshes from {path}"))?;
+        let mut path_meshes = match meshes_from_mdl_bytes(&path, &bytes)
+            .with_context(|| format!("failed to load render meshes from {path}"))
+        {
+            Ok(path_meshes) => path_meshes,
+            Err(error) => {
+                candidates.push(model_load_candidate(
+                    path,
+                    WeaponModelLoadCandidateStatus::ParseError,
+                    format!("{error:#}"),
+                ));
+                return Err(WeaponModelMeshLoadFailure::new(model, candidates));
+            }
+        };
         push_loaded_path(loaded_paths, path.clone());
         assign_weapon_materials_from_async_resource(
             resource,
@@ -1452,11 +1539,7 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
         return Ok(());
     }
 
-    Err(anyhow!(
-        "unable to read weapon model {} (tried: {})",
-        model.model_id,
-        missing.join("; ")
-    ))
+    Err(WeaponModelMeshLoadFailure::new(model, candidates))
 }
 
 #[cfg(feature = "game-data")]
@@ -3258,6 +3341,46 @@ fn push_unique_path(paths: &mut Vec<String>, path: String) {
 #[cfg(all(test, feature = "game-data"))]
 mod weapon_material_tests {
     use super::*;
+
+    #[test]
+    fn sub_model_load_failure_diagnostic_preserves_candidate_errors() {
+        let model = PackedModelId::from_raw(0x0001_0002_0064);
+        let failure = WeaponModelMeshLoadFailure::new(
+            model,
+            vec![
+                model_load_candidate(
+                    "chara/weapon/w0064/obj/body/b0002/model/w0064b0002.mdl".to_string(),
+                    WeaponModelLoadCandidateStatus::Missing,
+                    "resource read returned no bytes",
+                ),
+                model_load_candidate(
+                    "chara/weapon/w0064/obj/body/b0002/model/w0064b0002_damaged.mdl".to_string(),
+                    WeaponModelLoadCandidateStatus::ParseError,
+                    "failed to load render meshes",
+                ),
+            ],
+        );
+
+        let diagnostic = failure.into_diagnostic(WeaponModelLoadRole::Secondary);
+
+        assert_eq!(diagnostic.role, WeaponModelLoadRole::Secondary);
+        assert_eq!(diagnostic.model, model);
+        assert!(diagnostic.error.contains("unable to read weapon model"));
+        assert_eq!(diagnostic.candidates.len(), 2);
+        assert_eq!(
+            diagnostic.candidates[0].status,
+            WeaponModelLoadCandidateStatus::Missing
+        );
+        assert_eq!(
+            diagnostic.candidates[1].status,
+            WeaponModelLoadCandidateStatus::ParseError
+        );
+        assert!(
+            diagnostic.candidates[1]
+                .error
+                .contains("failed to load render meshes")
+        );
+    }
 
     #[test]
     fn parse_material_sampler_roles_uses_sampler_texture_index() {

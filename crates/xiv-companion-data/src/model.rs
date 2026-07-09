@@ -82,6 +82,8 @@ pub struct WeaponModelData {
     pub item_name: String,
     pub model_main: PackedModelId,
     pub model_sub: Option<PackedModelId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load_diagnostics: Vec<WeaponModelLoadDiagnostic>,
     pub loaded_paths: Vec<String>,
     pub bounds: ModelBounds,
     #[serde(default)]
@@ -100,6 +102,38 @@ impl WeaponModelData {
             meshes: self.meshes.clone(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeaponModelLoadRole {
+    Primary,
+    Secondary,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponModelLoadDiagnostic {
+    pub role: WeaponModelLoadRole,
+    pub model: PackedModelId,
+    pub candidates: Vec<WeaponModelLoadCandidateDiagnostic>,
+    pub error: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeaponModelLoadCandidateStatus {
+    Missing,
+    ReadError,
+    ParseError,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponModelLoadCandidateDiagnostic {
+    pub path: String,
+    pub status: WeaponModelLoadCandidateStatus,
+    pub error: String,
 }
 
 impl From<&WeaponModelData> for ModelData {
