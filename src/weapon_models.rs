@@ -18,5 +18,5 @@ pub use xiv_companion_data::weapon_models::{
     AsyncGameResource, WeaponModelLoadRequest, load_weapon_model_from_async_resource,
     load_weapon_model_from_game_dir, load_weapon_model_from_resource,
     load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
-    meshes_from_mdl_bytes,
+    material_debug_info_from_resource, meshes_from_mdl_bytes,
 };

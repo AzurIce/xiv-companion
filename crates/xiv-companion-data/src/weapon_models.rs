@@ -181,9 +181,11 @@ pub struct MaterialSamplerDebug {
     pub texture_path: Option<String>,
     pub texture_usage: u32,
     pub texture_usage_hex: String,
+    pub texture_usage_name: Option<String>,
     pub flags: u32,
     pub flags_hex: String,
     pub kind: Option<WeaponModelTextureKind>,
+    pub kind_source: Option<String>,
 }
 
 #[cfg(feature = "game-data")]
@@ -516,6 +518,32 @@ fn remap_vertex_index(
 }
 
 #[cfg(feature = "game-data")]
+pub fn material_debug_info_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+) -> anyhow::Result<MaterialDebugInfo> {
+    use anyhow::{Context, anyhow};
+    use physis::ReadableFile;
+
+    let bytes = resource
+        .read(path)
+        .ok_or_else(|| anyhow!("failed to read material {path}"))?;
+    let material = physis::mtrl::Material::from_existing(resource.platform(), &bytes)
+        .ok_or_else(|| anyhow!("failed to parse material {path}"))?;
+    let mut loaded_paths = Vec::new();
+    let semantics = load_composed_material_semantics_from_resource(
+        resource,
+        &material.shader_package_name,
+        &material,
+        &bytes,
+        &mut loaded_paths,
+    );
+
+    material_debug_info_from_parsed_material(path, &bytes, material, &semantics)
+        .with_context(|| format!("failed to build material debug info for {path}"))
+}
+
+#[cfg(feature = "game-data")]
 pub fn material_debug_info_from_mtrl_bytes(
     path: &str,
     bytes: &[u8],
@@ -525,8 +553,22 @@ pub fn material_debug_info_from_mtrl_bytes(
 
     let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, bytes)
         .ok_or_else(|| anyhow!("failed to parse material {path}"))?;
-    let sampler_records =
-        parse_material_sampler_records(bytes, &ComposedMaterialSemantics::default());
+    material_debug_info_from_parsed_material(
+        path,
+        bytes,
+        material,
+        &ComposedMaterialSemantics::default(),
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn material_debug_info_from_parsed_material(
+    path: &str,
+    bytes: &[u8],
+    material: physis::mtrl::Material,
+    semantics: &ComposedMaterialSemantics,
+) -> anyhow::Result<MaterialDebugInfo> {
+    let sampler_records = parse_material_sampler_records(bytes, semantics);
     let shader_flags = parse_material_shader_flags(bytes);
     let low_level = material_low_level_debug(bytes, &material.texture_paths);
 
@@ -591,9 +633,11 @@ pub fn material_debug_info_from_mtrl_bytes(
                 texture_path: material.texture_paths.get(record.texture_index).cloned(),
                 texture_usage: record.texture_usage,
                 texture_usage_hex: hex_u32(record.texture_usage),
+                texture_usage_name: record.texture_usage_name,
                 flags: record.flags,
                 flags_hex: hex_u32(record.flags),
                 kind: record.kind,
+                kind_source: record.kind_source.map(ToString::to_string),
             })
             .collect(),
         color_table: material_color_table_debug(material.color_table.as_ref()),
@@ -1800,12 +1844,14 @@ struct MaterialSamplerRole {
 }
 
 #[cfg(feature = "game-data")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct MaterialSamplerRecord {
     texture_index: usize,
     texture_usage: u32,
+    texture_usage_name: Option<String>,
     flags: u32,
     kind: Option<WeaponModelTextureKind>,
+    kind_source: Option<&'static str>,
 }
 
 #[cfg(feature = "game-data")]
@@ -1822,11 +1868,32 @@ impl ComposedMaterialSemantics {
         self.material_keys.get(&key).copied() == Some(value)
     }
 
-    fn sampler_kind(&self, texture_usage: u32) -> Option<WeaponModelTextureKind> {
-        self.resource_names
-            .get(&texture_usage)
-            .and_then(|name| classify_sampler_name(name))
-            .or_else(|| classify_sampler_usage(texture_usage))
+    fn sampler_kind_resolution(&self, texture_usage: u32) -> MaterialSamplerKindResolution {
+        if let Some(name) = self.resource_names.get(&texture_usage) {
+            let kind = classify_sampler_name(name);
+            return MaterialSamplerKindResolution {
+                texture_usage_name: Some(name.clone()),
+                kind,
+                kind_source: kind.map(|_| "shpkResourceName"),
+            };
+        }
+
+        if let Some((name, kind)) = known_sampler_names()
+            .iter()
+            .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
+        {
+            return MaterialSamplerKindResolution {
+                texture_usage_name: Some((*name).to_string()),
+                kind: Some(*kind),
+                kind_source: Some("knownCrc"),
+            };
+        }
+
+        MaterialSamplerKindResolution {
+            texture_usage_name: None,
+            kind: None,
+            kind_source: None,
+        }
     }
 
     fn material_constant_first_f32(&self, constant_id: u32) -> Option<f32> {
@@ -1893,6 +1960,14 @@ impl ComposedMaterialSemantics {
         let id = physis::shpk::ShaderPackage::crc(&name);
         self.resource_names.insert(id, name);
     }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MaterialSamplerKindResolution {
+    texture_usage_name: Option<String>,
+    kind: Option<WeaponModelTextureKind>,
+    kind_source: Option<&'static str>,
 }
 
 #[cfg(feature = "game-data")]
@@ -2580,11 +2655,14 @@ fn parse_material_sampler_records(
             return records;
         };
         if texture_index < layout.texture_count {
+            let resolution = semantics.sampler_kind_resolution(texture_usage);
             records.push(MaterialSamplerRecord {
                 texture_index,
                 texture_usage,
+                texture_usage_name: resolution.texture_usage_name,
                 flags,
-                kind: semantics.sampler_kind(texture_usage),
+                kind: resolution.kind,
+                kind_source: resolution.kind_source,
             });
         }
         let Some(next) = checked_advance(sampler_offset, 12, bytes.len()) else {
@@ -2913,6 +2991,7 @@ fn sampler_kind_for_texture(
 }
 
 #[cfg(feature = "game-data")]
+#[cfg(test)]
 fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> {
     known_sampler_names()
         .iter()
@@ -3240,6 +3319,12 @@ mod weapon_material_tests {
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 0);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Index);
+
+        let records = parse_material_sampler_records(&bytes, &semantics);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].texture_usage_name.as_deref(), Some(sampler_name));
+        assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Index));
+        assert_eq!(records[0].kind_source, Some("shpkResourceName"));
     }
 
     #[test]
@@ -3262,8 +3347,39 @@ mod weapon_material_tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].texture_usage, texture_usage);
+        assert_eq!(
+            records[0].texture_usage_name.as_deref(),
+            Some("g_SamplerNormal")
+        );
         assert_eq!(records[0].flags, 0x1234_5678);
         assert_eq!(records[0].texture_index, 0);
+        assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Normal));
+        assert_eq!(records[0].kind_source, Some("knownCrc"));
+    }
+
+    #[test]
+    fn parse_material_sampler_records_marks_unknown_sampler_source() {
+        let texture_usage = 0x1234_5678_u32;
+        let mut bytes = vec![0; 16];
+        bytes[12] = 1;
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&texture_usage.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 3]);
+
+        let records = parse_material_sampler_records(&bytes, &ComposedMaterialSemantics::default());
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].texture_usage, texture_usage);
+        assert_eq!(records[0].texture_usage_name, None);
+        assert_eq!(records[0].kind, None);
+        assert_eq!(records[0].kind_source, None);
     }
 
     #[test]

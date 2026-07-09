@@ -32,6 +32,7 @@
 - 顶点解析保留了多套 UV、secondary normal/bitangent/color、flow、blend weights/indices，数据层接近 Meddle 的导出结构。
 - MTRL 路径解析已支持从 `mt_w####b####_*.mtrl` 反推材质根目录，解决副手模型引用主手材质的问题。
 - MTRL sampler 分类已结合 `.shpk` resource parameter 名称、CRC 和文件名兜底，比纯路径后缀可靠。
+- Material debug 已输出 sampler 的 `textureUsageName` 和 `kindSource`；resource-aware debug 会加载对应 `.shpk`，区分 `shpkResourceName`、`knownCrc` 与未知来源。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 
@@ -51,7 +52,7 @@
 
 - 在 model/material summary 中保留每个 mesh 的 category、submesh attribute names、bone table、shape 信息摘要。
 - 对副手/子模型加载失败不要完全吞掉，至少记录失败候选路径和错误原因。
-- 在 material debug 中明确列出 sampler role 的来源：`.shpk` resource name、known CRC、文件名后缀或 fallback。
+- 已完成：在 material debug 中明确列出 sampler role 的来源；目前覆盖 `.shpk` resource name、known CRC 和 unknown，文件名后缀来源仍应在 prepared texture config 中补齐。
 - 给每个材质输出 shader keys、resolved constants、shader flags、texture flags 的紧凑摘要，便于和 MeddleTools 节点输入对照。
 
 验证：

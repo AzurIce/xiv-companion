@@ -13,7 +13,7 @@ use xiv_companion::{
     ModelBounds, ModelMaterial, ModelMesh, ModelTexture, WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
-    mdl_metadata_from_mdl_bytes,
+    material_debug_info_from_resource, mdl_metadata_from_mdl_bytes,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
@@ -529,7 +529,9 @@ fn dump_material_debug(
             continue;
         };
 
-        match material_debug_info_from_mtrl_bytes(resource_path, &bytes) {
+        match material_debug_info_from_resource(resource, resource_path)
+            .or_else(|_| material_debug_info_from_mtrl_bytes(resource_path, &bytes))
+        {
             Ok(debug) => {
                 let debug_path = material_dir.join(format!(
                     "{:03}-m{:04}-{}.json",
