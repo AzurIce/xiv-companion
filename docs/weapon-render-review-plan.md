@@ -46,7 +46,7 @@
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
-- `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；flow/dye 仍保守为 false，等待 mesh-level prepared model 和染色入口。
+- `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总，`usesDye` 仍保守为 false，等待染色入口。
 - `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer 尚未按该表切换采样。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
@@ -171,7 +171,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialFeatureFlags`，聚合 `usesVertexColor`、`usesColorTable`、`usesTile`、`usesDetail`、`usesScroll`，并显式保留 `usesFlow` / `usesDye` 为后续 mesh/stain preparation 入口。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialUvSources`，常规贴图源保守为 `uv0`，scroll 源显式分为 `uv0Scroll=uv0` 和 `uv1Scroll=uv1`，与 MeddleTools `UvScrollMapping` 的 `UV0Scroll` / `UV1Scroll` 节点对应。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策，并通过第一版 `PreparedModel` 获得 mesh draw role / main pass 可见性。
-- `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；尚未包含 runtime enabled shape mask、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与第一版 UV source 已有公共语义，但尚未完整驱动所有 runtime 绑定。
+- `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；mesh-level flow presence 已进入 prepared material feature flags；尚未包含 runtime enabled shape mask、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与第一版 UV source 已有公共语义，但尚未完整驱动所有 runtime 绑定。
 
 建议中间结构包含：
 
@@ -181,7 +181,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft
 - culling policy：render backfaces / cull backfaces
-- feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow 和染色输入仍待补齐
+- feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，染色输入仍待补齐
 
 好处：
 
@@ -191,7 +191,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
+- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、mesh-level flow feature flag、alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
 - 后续仍需要用真实样本验证 sampler policy / UV source 到 renderer 绑定的覆盖率。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 

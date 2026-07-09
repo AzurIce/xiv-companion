@@ -65,7 +65,7 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 - mesh category 会映射成 `ModelMeshDrawRole`，并和 submesh attribute metadata 一起进入第一版 `PreparedModel` / `PreparedMesh`，作为 renderer-friendly 的第一步 prepared draw role。若调用方显式提供 `PreparedModelOptions.enabledAttributeMask`，prepared 阶段会按 submesh 所需 attribute mask 计算 visibility；默认离线模式不猜运行时 enabled mask。
 - ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
 
-注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；`PreparedMaterial` 已记录第一版 UV source，但 fragment shader 目前仍主要消费 uv0、primary normal/bitangent 和 color0。
+注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；`PreparedMaterial` 已记录第一版 UV source，`PreparedModel` 会把 mesh-level flow presence 汇总到 `usesFlow`，但 fragment shader 目前仍主要消费 uv0、primary normal/bitangent 和 color0。
 
 注意：顶点色在 FFXIV 角色/武器 shader 里不一定是纯颜色，常参与遮罩/alpha/材质调制；当前 renderer 只作近似 tint 使用。
 
@@ -243,7 +243,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 后续优先级：
 
 1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass` prepared pass；后续还需要 runtime shape visibility、独立 cutout/glass/additive-lightshaft wgpu pipeline。
-2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版材质级 feature flags 和 UV source；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
+2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags 和 UV source，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Material params：`g_AlphaThreshold`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 与 `g_UVScrollTime` 已进入结构化材质字段；后续要继续接入 glass/transparency 等其他参数，并让 multi/detail normal、tile select、detail UV 与 UV scroll 实际参与 shader。
 5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；PreparedMaterial 已保留第一版 UV source；后续要接入 tile array、shader-family-specific UV source 和更接近 MeddleTools 的 reflection/sphere 规则。

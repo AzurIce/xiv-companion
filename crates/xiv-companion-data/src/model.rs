@@ -698,6 +698,11 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
                 let visibility =
                     prepared_mesh_visibility(mesh.submesh.as_ref(), options.enabled_attribute_mask);
+                let mut prepared_material = prepare_material_for_draw_role(
+                    model.materials().get(mesh.material_slot),
+                    draw_role,
+                );
+                prepared_material.feature_flags.uses_flow |= mesh_has_flow_attributes(mesh);
                 PreparedMesh {
                     mesh_index,
                     material_slot: mesh.material_slot,
@@ -706,10 +711,7 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                         && visibility.submesh_attributes_visible,
                     visibility,
                     submesh: mesh.submesh.clone(),
-                    prepared_material: prepare_material_for_draw_role(
-                        model.materials().get(mesh.material_slot),
-                        draw_role,
-                    ),
+                    prepared_material,
                 }
             })
             .collect(),
@@ -733,6 +735,12 @@ fn prepared_mesh_visibility(
         enabled_attribute_mask: Some(enabled_attribute_mask),
         missing_attribute_mask,
     }
+}
+
+fn mesh_has_flow_attributes(mesh: &ModelMesh) -> bool {
+    mesh.vertices
+        .iter()
+        .any(|vertex| vertex.flow0.is_some() || vertex.flow1.is_some())
 }
 
 pub fn prepare_material_for_draw_role(
@@ -1790,6 +1798,27 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_model_reports_mesh_level_flow_feature_flags() {
+        let mut plain_mesh = test_model_mesh(None, 0);
+        plain_mesh.vertices = vec![test_model_vertex()];
+        let mut flow_mesh = test_model_mesh(None, 0);
+        let mut flow_vertex = test_model_vertex();
+        flow_vertex.flow0 = Some([0.25, 0.5, 0.75, 1.0]);
+        flow_mesh.vertices = vec![flow_vertex];
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![plain_mesh, flow_mesh],
+        };
+
+        let prepared = prepare_model_for_render(&model);
+
+        assert!(!prepared.meshes[0].prepared_material.feature_flags.uses_flow);
+        assert!(prepared.meshes[1].prepared_material.feature_flags.uses_flow);
+    }
+
+    #[test]
     fn prepared_texture_sampling_matches_meddletools_role_configs() {
         assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
@@ -1965,6 +1994,26 @@ mod color_table_bake_tests {
             bone_table: None,
             vertices: Vec::new(),
             indices: Vec::new(),
+        }
+    }
+
+    fn test_model_vertex() -> ModelVertex {
+        ModelVertex {
+            position: [0.0, 0.0, 0.0],
+            blend_weights: None,
+            blend_indices: None,
+            normal: [0.0, 1.0, 0.0],
+            uv0: [0.0, 0.0],
+            uv1: [0.0, 0.0],
+            uv2: [0.0, 0.0],
+            uv3: [0.0, 0.0],
+            bitangent: [1.0, 0.0, 0.0, 1.0],
+            normal1: None,
+            bitangent1: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            color1: None,
+            flow0: None,
+            flow1: None,
         }
     }
 
