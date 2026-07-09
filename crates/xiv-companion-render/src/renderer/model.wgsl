@@ -230,7 +230,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
     let lit = select(opaque_lit, glass_lit, is_glass);
     let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
-    let color = lit + extra_lit + emissive;
+    let outlined = resolve_outline_rim(lit + extra_lit, rim, is_glass);
+    let color = outlined + emissive;
     let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
     let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0)) * smoothstep(0.72, 1.0, luma);
 
@@ -455,6 +456,17 @@ fn resolve_glass_factors() -> vec3<f32> {
     let ior_delta = clamp((clamp(material.glass_params.x, 1.0, 2.5) - 1.0) / 1.5, 0.0, 1.0);
     let thickness_delta = clamp((max(material.glass_params.y, 0.0) - 0.01) * 8.0, 0.0, 1.0);
     return vec3<f32>(ior_delta, thickness_delta, max(ior_delta, thickness_delta * 0.35));
+}
+
+fn resolve_outline_rim(color: vec3<f32>, rim: f32, is_glass: bool) -> vec3<f32> {
+    let width = clamp(material.outline_params.a, 0.0, 1.0);
+    let outline_enabled = select(0.0, 1.0, width > 0.001);
+    let rim_limit = select(0.16, 0.58, is_glass);
+    let silhouette = smoothstep(0.35, 1.0, clamp(rim / rim_limit, 0.0, 1.0));
+    let outline_color = clamp(material.outline_params.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+    let glass_scale = select(1.0, 0.6, is_glass);
+    let strength = outline_enabled * silhouette * clamp(width * 1.5, 0.0, 0.35) * glass_scale;
+    return mix(color, outline_color, strength);
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
