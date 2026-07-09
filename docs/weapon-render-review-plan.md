@@ -45,12 +45,13 @@
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
+- renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制。
 
 主要缺口集中在：
 
 - 多套 UV、secondary normal/bitangent、`color1`、flow 已进 GPU 输入，但 shader-family-specific 逻辑还没有使用这些通道。
 - mesh category 已进入第一步 draw role 决策；submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息仍没有进入后续处理或渲染决策。
-- 材质语义被压缩成少量贴图和 Opaque/Mask/Blend/Glass；MeddleTools 中的 tile、sphere、sheen、scroll、transparency、reflection 等节点逻辑大多没有实现。
+- 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps 已有第一版实时消费，但 MeddleTools 中完整 tile array、scroll、transparency、reflection 等节点逻辑大多没有实现。
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
@@ -329,24 +330,32 @@ shadow、terrainShadow、verticalFog、lightShaft 在主预览中默认不画，
 
 ### P1: 消费 ColorTable extra ramps
 
-renderer 应开始使用已 bake 的：
+当前进度：renderer 已开始使用已 bake 的：
 
 - tile properties
 - sheen properties
 - sphere properties
 - tile matrix
 
-建议顺序：
+已完成第一步：
+
+- material bind group 增加 tile/sheen/sphere/tile-matrix 四张 Non-Color texture。
+- WGSL 使用 nearest sampler 采样这些 extra maps。
+- tile alpha 只用于 specular scale 的保守调制，不作为材质透明度。
+- sheen/sphere/tile-matrix 进入额外高光与 sphere-like rim 近似，确保数据流能产生可观察效果。
+- 已增加 focused test，确认 extra map flags 只在 texture index 实际存在时启用。
+
+仍建议的后续顺序：
 
 1. tile matrix / tile index 用于调整 UV 或选择 tile array 的近似层。
-2. sheen 作为额外高光项。
-3. sphere 作为环境/反射近似。
+2. 用真实 tile array 近似替代当前只读 ColorTable tile properties 的 specular 调制。
+3. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
 
-如果无法完整实现，至少把这些贴图绑定进 shader 并提供 debug view 开关，确认数据流通。
+如果无法完整实现，至少保留这些贴图的 shader 绑定，并提供 debug view 开关，确认数据流通。
 
 验证：
 
-- synthetic ColorTable ramp 生成明显 tile/sheen/sphere 差异。
+- 已有 native snapshot 覆盖 bind layout/WGSL 编译；后续仍需要 synthetic ColorTable ramp 生成明显 tile/sheen/sphere 差异。
 - 与 MeddleTools ramp 输出对照。
 
 ### P1: 改善 alpha/glass/transparency
@@ -372,7 +381,7 @@ renderer 应开始使用已 bake 的：
 - base/specular/emissive: sRGB 视具体语义
 - normal/mask/material/multi/material-properties: Non-Color，当前 renderer 已用 data sampler
 - index: nearest/closest，当前仅在 prepared policy 和 bake 入口语义上表达，未作为 runtime shader 绑定
-- tile/detail arrays 与 ColorTable extra maps: nearest 或 shader-family-specific，当前 policy 已把 extra maps 标为 nearest，但 renderer 尚未消费这些贴图
+- tile/detail arrays 与 ColorTable extra maps: nearest 或 shader-family-specific，当前 renderer 已用 nearest sampler 消费 ColorTable extra maps；tile/detail array 仍未绑定
 - decal: clip/extend 语义，当前尚无独立 texture kind
 
 WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接采 index/tile array，还需要 nearest sampler 或 per-texture sampler 选择。
@@ -380,7 +389,7 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 验证：
 
 - 已有 prepared texture sampling 测试覆盖 `_id.tex` nearest policy，避免颜色边界被 linear 混合污染。
-- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；仍需 synthetic shader fixture 验证可见效果。
+- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；ColorTable extra maps 已用 nearest sampler 采样。仍需 synthetic shader fixture 验证 tile/sheen/sphere 可见效果。
 
 ### P2: 视觉验证和调试视图
 
@@ -417,7 +426,7 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 
 1. 已完成 GPU 顶点格式扩展，后续让 shader-family 逻辑实际消费 uv1/color1/flow。
 2. 增加 per-material texture/sampler config。
-3. 绑定并消费 material/tile/sheen/sphere/tile-matrix 贴图。
+3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；后续让 tile array、UV source 和 shader-family 规则真正参与。
 4. 加入 shader family 和 alpha policy。
 
 完成标准：

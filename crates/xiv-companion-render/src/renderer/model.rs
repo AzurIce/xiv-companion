@@ -205,6 +205,52 @@ impl ModelRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
@@ -1071,6 +1117,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             alpha_mode_value(material.alpha_mode),
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
+        extra_properties: material_extra_texture_flags(material, model),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1243,6 +1290,110 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let tile_properties_texture_view = material
+        .tile_properties_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon tile properties texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral tile properties texture",
+                1,
+                1,
+                &[0, 255, 255, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let sheen_properties_texture_view = material
+        .sheen_properties_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon sheen properties texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral sheen properties texture",
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let sphere_properties_texture_view = material
+        .sphere_properties_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon sphere properties texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral sphere properties texture",
+                1,
+                1,
+                &[0, 0, 255, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let tile_matrix_texture_view = material
+        .tile_matrix_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon tile matrix texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral tile matrix texture",
+                1,
+                1,
+                &[255, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("weapon material color sampler"),
@@ -1261,6 +1412,16 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         address_mode_w: wgpu::AddressMode::Repeat,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    let nearest_data_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("weapon material nearest data sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
         mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
@@ -1304,6 +1465,26 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 8,
                 resource: wgpu::BindingResource::Sampler(&data_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::TextureView(&tile_properties_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: wgpu::BindingResource::TextureView(&sheen_properties_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::TextureView(&sphere_properties_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::TextureView(&tile_matrix_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: wgpu::BindingResource::Sampler(&nearest_data_sampler),
             },
         ],
     })
@@ -1419,6 +1600,28 @@ fn effective_mask_texture(material: &ModelMaterial) -> Option<usize> {
     material.mask_texture
 }
 
+fn material_extra_texture_flags<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> [f32; 4] {
+    [
+        texture_presence_flag(model, material.tile_properties_texture),
+        texture_presence_flag(model, material.sheen_properties_texture),
+        texture_presence_flag(model, material.sphere_properties_texture),
+        texture_presence_flag(model, material.tile_matrix_texture),
+    ]
+}
+
+fn texture_presence_flag<M: ModelRenderData + ?Sized>(
+    model: &M,
+    texture_index: Option<usize>,
+) -> f32 {
+    texture_index
+        .and_then(|index| model.textures().get(index))
+        .map(|_| 1.0)
+        .unwrap_or(0.0)
+}
+
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
     match mode {
         MaterialRenderMode::Opaque => 0.0,
@@ -1509,6 +1712,7 @@ struct MaterialUniform {
     params: [f32; 4],
     properties: [f32; 4],
     render: [f32; 4],
+    extra_properties: [f32; 4],
 }
 
 #[repr(C)]
@@ -1823,6 +2027,30 @@ mod tests {
     }
 
     #[test]
+    fn material_extra_texture_flags_require_loaded_textures() {
+        let mut material = fallback_material();
+        material.tile_properties_texture = Some(0);
+        material.sheen_properties_texture = Some(1);
+        material.sphere_properties_texture = Some(99);
+        material.tile_matrix_texture = Some(2);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: vec![
+                test_texture(crate::ModelTextureKind::TileProperties),
+                test_texture(crate::ModelTextureKind::SheenProperties),
+                test_texture(crate::ModelTextureKind::TileMatrixProperties),
+            ],
+            meshes: Vec::new(),
+        };
+
+        assert_eq!(
+            material_extra_texture_flags(&material, &model),
+            [1.0, 1.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
     fn gpu_vertex_layout_exposes_extended_model_channels() {
         let layout = GpuVertex::layout();
 
@@ -2049,6 +2277,17 @@ mod tests {
             color1: None,
             flow0: None,
             flow1: None,
+        }
+    }
+
+    fn test_texture(kind: crate::ModelTextureKind) -> crate::ModelTexture {
+        crate::ModelTexture {
+            path: "test.tex".to_string(),
+            kind,
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
         }
     }
 }

@@ -11,6 +11,7 @@ struct Material {
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
+    extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
 };
 
 struct VertexInput {
@@ -67,6 +68,21 @@ var specular_texture: texture_2d<f32>;
 @group(1) @binding(8)
 var data_sampler: sampler;
 
+@group(1) @binding(9)
+var tile_properties_texture: texture_2d<f32>;
+
+@group(1) @binding(10)
+var sheen_properties_texture: texture_2d<f32>;
+
+@group(1) @binding(11)
+var sphere_properties_texture: texture_2d<f32>;
+
+@group(1) @binding(12)
+var tile_matrix_texture: texture_2d<f32>;
+
+@group(1) @binding(13)
+var nearest_data_sampler: sampler;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
     @location(1) bright: vec4<f32>,
@@ -95,7 +111,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let roughness = clamp(properties.y, 0.08, 1.0);
     let gloss_strength = clamp(properties.z, 0.0, 1.0);
     let specular_strength = clamp(properties.w, 0.0, 1.0);
-    let specular_scale = specular_strength * mix(1.0, mask.r * 1.35, material.params.w);
+    let extra = resolve_extra_properties(input.uv0);
+    let tile_specular_scale = mix(1.0, mix(0.88, 1.16, extra.tile.y), extra.flags.x);
+    let specular_scale = specular_strength * mix(1.0, mask.r * 1.35, material.params.w) * tile_specular_scale;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0);
@@ -131,7 +149,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let lit = select(opaque_lit, glass_lit, is_glass);
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, input.uv0).rgb;
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
-    let color = lit + emissive;
+    let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
+    let color = lit + extra_lit + emissive;
     let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
     let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0)) * smoothstep(0.72, 1.0, luma);
 
@@ -159,6 +178,77 @@ fn resolve_material_properties(uv: vec2<f32>) -> vec4<f32> {
     let specular_strength = mix(1.0, mask.r * 1.35, material.params.w);
     let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);
     return vec4<f32>(metalness, roughness, gloss_strength, specular_strength);
+}
+
+struct ExtraProperties {
+    tile: vec4<f32>,
+    sheen: vec4<f32>,
+    sphere: vec4<f32>,
+    tile_matrix: vec4<f32>,
+    flags: vec4<f32>,
+};
+
+fn resolve_extra_properties(uv: vec2<f32>) -> ExtraProperties {
+    var extra: ExtraProperties;
+    let has_tile = material.extra_properties.x > 0.5;
+    let has_sheen = material.extra_properties.y > 0.5;
+    let has_sphere = material.extra_properties.z > 0.5;
+    let has_tile_matrix = material.extra_properties.w > 0.5;
+    extra.flags = vec4<f32>(
+        select(0.0, 1.0, has_tile),
+        select(0.0, 1.0, has_sheen),
+        select(0.0, 1.0, has_sphere),
+        select(0.0, 1.0, has_tile_matrix),
+    );
+    extra.tile = vec4<f32>(0.0, 1.0, 1.0, 1.0);
+    extra.sheen = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    extra.sphere = vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    extra.tile_matrix = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    if has_tile {
+        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, uv);
+    }
+    if has_sheen {
+        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, uv);
+    }
+    if has_sphere {
+        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, uv);
+    }
+    if has_tile_matrix {
+        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, uv);
+    }
+    return extra;
+}
+
+fn resolve_extra_lighting(
+    extra: ExtraProperties,
+    normal: vec3<f32>,
+    half_dir: vec3<f32>,
+    rim: f32,
+    material_specular: vec3<f32>,
+    base: vec3<f32>,
+    is_glass: bool,
+) -> vec3<f32> {
+    let sheen_rate = clamp(extra.sheen.x, 0.0, 1.0) * extra.flags.y;
+    let sheen_tint = clamp(extra.sheen.y, 0.0, 1.0);
+    let sheen_aptitude = clamp(extra.sheen.z, 0.0, 1.0);
+    let sheen_power = mix(24.0, 160.0, sheen_aptitude);
+    let sheen_term = pow(max(dot(normal, half_dir), 0.0), sheen_power) * sheen_rate;
+    let sheen_color = mix(material_specular, base, sheen_tint * 0.45) * sheen_term * 0.42;
+
+    let sphere_index = clamp(extra.sphere.x, 0.0, 1.0);
+    let sphere_mask = clamp(extra.sphere.y, 0.0, 1.0) * extra.flags.z;
+    let sphere_tint = mix(vec3<f32>(0.55, 0.68, 0.82), material_specular, sphere_index);
+    let sphere_term = rim * sphere_mask * select(0.18, 0.10, is_glass);
+
+    let matrix_delta = vec4<f32>(
+        extra.tile_matrix.x - 1.0,
+        extra.tile_matrix.y,
+        extra.tile_matrix.z,
+        extra.tile_matrix.w - 1.0,
+    );
+    let matrix_term = clamp(length(matrix_delta) * 0.16, 0.0, 0.18) * extra.flags.w;
+
+    return sheen_color + sphere_tint * sphere_term + material_specular * matrix_term * 0.18;
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
