@@ -852,9 +852,9 @@ fn material_color_table_debug(
                     sphere_index: None,
                     tile_matrix: Some([
                         row.material_repeat_x,
+                        row.material_repeat_y,
                         row.material_skew[0],
                         row.material_skew[1],
-                        row.material_repeat_y,
                     ]),
                     material_repeat: Some([row.material_repeat_x, row.material_repeat_y]),
                     material_skew: Some(row.material_skew),
@@ -2319,8 +2319,28 @@ fn weapon_color_table_rows(
                 })
                 .collect(),
         ),
-        physis::mtrl::ColorTable::LegacyColorTable(_)
-        | physis::mtrl::ColorTable::OpaqueColorTable(_) => None,
+        physis::mtrl::ColorTable::LegacyColorTable(table) => Some(
+            table
+                .rows
+                .iter()
+                .map(|row| ColorTableRowColors {
+                    diffuse: row.diffuse_color,
+                    specular: row.specular_color,
+                    emissive: row.emissive_color,
+                    gloss_strength: row.gloss_strength,
+                    specular_strength: row.specular_strength,
+                    tile_index: f32::from(row.tile_set),
+                    tile_matrix: [
+                        row.material_repeat_x,
+                        row.material_repeat_y,
+                        row.material_skew[0],
+                        row.material_skew[1],
+                    ],
+                    ..Default::default()
+                })
+                .collect(),
+        ),
+        physis::mtrl::ColorTable::OpaqueColorTable(_) => None,
     }
 }
 
@@ -3294,6 +3314,70 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn legacy_color_table_rows_use_meddle_strength_names() {
+        let row = test_legacy_color_table_row();
+        let color_table =
+            physis::mtrl::ColorTable::LegacyColorTable(physis::mtrl::LegacyColorTableData {
+                rows: vec![row],
+            });
+
+        let rows = weapon_color_table_rows(&color_table).expect("legacy rows");
+
+        assert_eq!(rows[0].diffuse, row.diffuse_color);
+        assert_eq!(rows[0].specular, row.specular_color);
+        assert_eq!(rows[0].emissive, row.emissive_color);
+        assert_eq!(rows[0].gloss_strength, row.gloss_strength);
+        assert_eq!(rows[0].specular_strength, row.specular_strength);
+        assert_eq!(rows[0].roughness, 0.5);
+        assert_eq!(rows[0].metalness, 0.0);
+        assert_eq!(rows[0].anisotropy, 0.0);
+        assert_eq!(rows[0].tile_alpha, 1.0);
+        assert_eq!(rows[0].tile_index, f32::from(row.tile_set));
+        assert_eq!(rows[0].sheen_rate, 0.0);
+        assert_eq!(rows[0].sheen_tint, 0.0);
+        assert_eq!(rows[0].sheen_aperture, 0.0);
+        assert_eq!(rows[0].sphere_index, 0.0);
+        assert_eq!(rows[0].sphere_mask, 0.0);
+        assert_eq!(
+            rows[0].tile_matrix,
+            [
+                row.material_repeat_x,
+                row.material_repeat_y,
+                row.material_skew[0],
+                row.material_skew[1],
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_color_table_debug_uses_meddle_tile_matrix_order() {
+        let row = test_legacy_color_table_row();
+        let color_table =
+            physis::mtrl::ColorTable::LegacyColorTable(physis::mtrl::LegacyColorTableData {
+                rows: vec![row],
+            });
+
+        let debug = material_color_table_debug(Some(&color_table)).expect("debug");
+
+        assert_eq!(debug.kind, "Legacy");
+        assert_eq!(debug.rows[0].tile_index, Some(f32::from(row.tile_set)));
+        assert_eq!(
+            debug.rows[0].tile_matrix,
+            Some([
+                row.material_repeat_x,
+                row.material_repeat_y,
+                row.material_skew[0],
+                row.material_skew[1],
+            ])
+        );
+        assert_eq!(
+            debug.rows[0].material_repeat,
+            Some([row.material_repeat_x, row.material_repeat_y])
+        );
+        assert_eq!(debug.rows[0].material_skew, Some(row.material_skew));
+    }
+
+    #[test]
     fn color_dye_table_debug_preserves_legacy_rows() {
         let color_dye_table = physis::mtrl::ColorDyeTable::LegacyColorDyeTable(
             physis::mtrl::LegacyColorDyeTableData {
@@ -3749,6 +3833,20 @@ mod weapon_material_tests {
             sphere_index: 5,
             material_repeat: [1.25, 1.5],
             material_skew: [0.25, 0.5],
+        }
+    }
+
+    fn test_legacy_color_table_row() -> physis::mtrl::LegacyColorTableRow {
+        physis::mtrl::LegacyColorTableRow {
+            diffuse_color: [0.1, 0.2, 0.3],
+            specular_strength: 0.62,
+            specular_color: [0.4, 0.5, 0.6],
+            gloss_strength: 0.31,
+            emissive_color: [0.7, 0.8, 0.9],
+            tile_set: 7,
+            material_repeat_x: 1.25,
+            material_skew: [0.25, 0.5],
+            material_repeat_y: 1.5,
         }
     }
 
