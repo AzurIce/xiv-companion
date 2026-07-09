@@ -2,7 +2,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    PreparedMaterial, PreparedRenderPass, PreparedUvSource, prepare_model_for_render,
+    PreparedMaterial, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter,
+    PreparedTextureSampling, PreparedUvSource, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1593,36 +1594,21 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("weapon material color sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        address_mode_w: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    });
-    let data_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("weapon material data sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        address_mode_w: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    });
-    let nearest_data_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("weapon material nearest data sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        address_mode_w: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    });
+    let color_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material color sampler",
+        material_color_sampler_policy(prepared_material),
+    );
+    let data_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material data sampler",
+        material_data_sampler_policy(prepared_material),
+    );
+    let nearest_data_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material nearest data sampler",
+        material_nearest_sampler_policy(prepared_material),
+    );
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("weapon material bind group"),
@@ -1698,6 +1684,60 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
         ],
     })
+}
+
+fn material_color_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
+    prepared_material.texture_sampling.base_color
+}
+
+fn material_data_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
+    prepared_material.texture_sampling.normal
+}
+
+fn material_nearest_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
+    prepared_material.texture_sampling.index
+}
+
+fn create_sampler_for_sampling(
+    device: &wgpu::Device,
+    label: &'static str,
+    sampling: PreparedTextureSampling,
+) -> wgpu::Sampler {
+    device.create_sampler(&sampler_descriptor_for_sampling(label, sampling))
+}
+
+fn sampler_descriptor_for_sampling(
+    label: &'static str,
+    sampling: PreparedTextureSampling,
+) -> wgpu::SamplerDescriptor<'static> {
+    let address_mode = sampler_address_mode(sampling.address_mode);
+    let filter_mode = sampler_filter_mode(sampling.filter);
+    wgpu::SamplerDescriptor {
+        label: Some(label),
+        address_mode_u: address_mode,
+        address_mode_v: address_mode,
+        address_mode_w: address_mode,
+        mag_filter: filter_mode,
+        min_filter: filter_mode,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    }
+}
+
+fn sampler_address_mode(address_mode: PreparedTextureAddressMode) -> wgpu::AddressMode {
+    match address_mode {
+        PreparedTextureAddressMode::Repeat => wgpu::AddressMode::Repeat,
+        PreparedTextureAddressMode::ClampToEdge | PreparedTextureAddressMode::Clip => {
+            wgpu::AddressMode::ClampToEdge
+        }
+    }
+}
+
+fn sampler_filter_mode(filter: PreparedTextureFilter) -> wgpu::FilterMode {
+    match filter {
+        PreparedTextureFilter::Linear => wgpu::FilterMode::Linear,
+        PreparedTextureFilter::Nearest => wgpu::FilterMode::Nearest,
+    }
 }
 
 fn create_rgba_texture(
@@ -2203,8 +2243,10 @@ mod tests {
     use super::*;
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
-        PreparedMaterialUvSources, PreparedTextureBindings, PreparedTextureSamplingSet,
-        PreparedTextureUvSources, PreparedUvSource, prepare_material_for_draw_role,
+        PreparedMaterialUvSources, PreparedTextureAddressMode, PreparedTextureBindings,
+        PreparedTextureColorSpace, PreparedTextureFilter, PreparedTextureSampling,
+        PreparedTextureSamplingSet, PreparedTextureUvSources, PreparedUvSource,
+        prepare_material_for_draw_role,
     };
 
     #[test]
@@ -2360,6 +2402,72 @@ mod tests {
         assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 18.0);
         assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 19.0);
         assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 20.0);
+    }
+
+    #[test]
+    fn material_sampler_groups_use_prepared_sampling_roles() {
+        let color_sampling = test_sampling(
+            PreparedTextureColorSpace::Srgb,
+            PreparedTextureFilter::Linear,
+            PreparedTextureAddressMode::Repeat,
+        );
+        let data_sampling = test_sampling(
+            PreparedTextureColorSpace::NonColor,
+            PreparedTextureFilter::Linear,
+            PreparedTextureAddressMode::Clip,
+        );
+        let nearest_sampling = test_sampling(
+            PreparedTextureColorSpace::NonColor,
+            PreparedTextureFilter::Nearest,
+            PreparedTextureAddressMode::Repeat,
+        );
+        let prepared = PreparedMaterial {
+            render_pass: PreparedRenderPass::Opaque,
+            shader_family: MaterialShaderFamily::Character,
+            texture_bindings: PreparedTextureBindings::default(),
+            texture_sampling: PreparedTextureSamplingSet {
+                base_color: color_sampling,
+                normal: data_sampling,
+                index: nearest_sampling,
+                ..PreparedTextureSamplingSet::default()
+            },
+            uv_sources: PreparedMaterialUvSources::default(),
+            feature_flags: PreparedMaterialFeatureFlags::default(),
+            render_backfaces: true,
+        };
+
+        assert_eq!(material_color_sampler_policy(prepared), color_sampling);
+        assert_eq!(material_data_sampler_policy(prepared), data_sampling);
+        assert_eq!(material_nearest_sampler_policy(prepared), nearest_sampling);
+    }
+
+    #[test]
+    fn sampler_descriptor_follows_prepared_filter_and_address_policy() {
+        let linear_repeat = sampler_descriptor_for_sampling(
+            "linear repeat",
+            test_sampling(
+                PreparedTextureColorSpace::Srgb,
+                PreparedTextureFilter::Linear,
+                PreparedTextureAddressMode::Repeat,
+            ),
+        );
+        assert_eq!(linear_repeat.mag_filter, wgpu::FilterMode::Linear);
+        assert_eq!(linear_repeat.min_filter, wgpu::FilterMode::Linear);
+        assert_eq!(linear_repeat.address_mode_u, wgpu::AddressMode::Repeat);
+        assert_eq!(linear_repeat.address_mode_v, wgpu::AddressMode::Repeat);
+
+        let nearest_clip = sampler_descriptor_for_sampling(
+            "nearest clip",
+            test_sampling(
+                PreparedTextureColorSpace::NonColor,
+                PreparedTextureFilter::Nearest,
+                PreparedTextureAddressMode::Clip,
+            ),
+        );
+        assert_eq!(nearest_clip.mag_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(nearest_clip.min_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(nearest_clip.address_mode_u, wgpu::AddressMode::ClampToEdge);
+        assert_eq!(nearest_clip.address_mode_v, wgpu::AddressMode::ClampToEdge);
     }
 
     #[test]
@@ -2794,6 +2902,18 @@ mod tests {
                 render_backfaces: true,
             },
             center,
+        }
+    }
+
+    fn test_sampling(
+        color_space: PreparedTextureColorSpace,
+        filter: PreparedTextureFilter,
+        address_mode: PreparedTextureAddressMode,
+    ) -> PreparedTextureSampling {
+        PreparedTextureSampling {
+            color_space,
+            filter,
+            address_mode,
         }
     }
 
