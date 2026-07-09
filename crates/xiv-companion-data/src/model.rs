@@ -425,8 +425,57 @@ pub struct PreparedMaterial {
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
     #[serde(default)]
+    pub uv_sources: PreparedMaterialUvSources,
+    #[serde(default)]
     pub feature_flags: PreparedMaterialFeatureFlags,
     pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialUvSources {
+    pub textures: PreparedTextureUvSources,
+    pub uv0_scroll: PreparedUvSource,
+    pub uv1_scroll: PreparedUvSource,
+}
+
+impl Default for PreparedMaterialUvSources {
+    fn default() -> Self {
+        Self {
+            textures: PreparedTextureUvSources::default(),
+            uv0_scroll: PreparedUvSource::Uv0,
+            uv1_scroll: PreparedUvSource::Uv1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureUvSources {
+    pub base_color: PreparedUvSource,
+    pub normal: PreparedUvSource,
+    pub mask: PreparedUvSource,
+    pub material_map: PreparedUvSource,
+    pub multi_map: PreparedUvSource,
+    pub specular: PreparedUvSource,
+    pub emissive: PreparedUvSource,
+    pub material_properties: PreparedUvSource,
+    pub tile_properties: PreparedUvSource,
+    pub sheen_properties: PreparedUvSource,
+    pub sphere_properties: PreparedUvSource,
+    pub tile_matrix: PreparedUvSource,
+    pub index: PreparedUvSource,
+    pub other: PreparedUvSource,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedUvSource {
+    #[default]
+    Uv0,
+    Uv1,
+    Uv2,
+    Uv3,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -579,6 +628,7 @@ pub fn prepare_material_for_draw_role(
         shader_family,
         texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
+        uv_sources: PreparedMaterialUvSources::default(),
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
         render_backfaces: material
             .map(|material| material.render_backfaces)
@@ -1362,6 +1412,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Character,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: false,
             }
@@ -1373,6 +1424,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             }
@@ -1469,6 +1521,44 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
             PreparedMaterialFeatureFlags::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_texture_and_scroll_uv_sources() {
+        let mut material = test_material();
+        material.shader_package_name = Some("characterScroll.shpk".to_string());
+        material.base_color_texture = Some(1);
+        material.normal_texture = Some(2);
+        material.multi_map_texture = Some(3);
+        material.material_properties_texture = Some(4);
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal).uv_sources,
+            PreparedMaterialUvSources {
+                textures: PreparedTextureUvSources {
+                    base_color: PreparedUvSource::Uv0,
+                    normal: PreparedUvSource::Uv0,
+                    mask: PreparedUvSource::Uv0,
+                    material_map: PreparedUvSource::Uv0,
+                    multi_map: PreparedUvSource::Uv0,
+                    specular: PreparedUvSource::Uv0,
+                    emissive: PreparedUvSource::Uv0,
+                    material_properties: PreparedUvSource::Uv0,
+                    tile_properties: PreparedUvSource::Uv0,
+                    sheen_properties: PreparedUvSource::Uv0,
+                    sphere_properties: PreparedUvSource::Uv0,
+                    tile_matrix: PreparedUvSource::Uv0,
+                    index: PreparedUvSource::Uv0,
+                    other: PreparedUvSource::Uv0,
+                },
+                uv0_scroll: PreparedUvSource::Uv0,
+                uv1_scroll: PreparedUvSource::Uv1,
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).uv_sources,
+            PreparedMaterialUvSources::default()
         );
     }
 

@@ -1939,7 +1939,7 @@ mod tests {
     use super::*;
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
-        PreparedTextureBindings, PreparedTextureSamplingSet,
+        PreparedMaterialUvSources, PreparedTextureBindings, PreparedTextureSamplingSet,
     };
 
     #[test]
@@ -2023,6 +2023,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             }
@@ -2059,6 +2060,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: false,
             }
@@ -2396,6 +2398,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             },
