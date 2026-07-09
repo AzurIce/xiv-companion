@@ -53,7 +53,7 @@
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
-- `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`，当前作为后续 multi/detail normal 组合的稳定输入，尚未改变 fragment shader 的实际法线混合。
+- `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`；WGSL 当前把这些非默认值作为 primary normal map 强度的受限 fallback 补充，真实 multi/detail normal 贴图组合仍未绑定。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 当前把 `TileAlpha` 与 `TileScale/TileIndex` 作为缺少真实 tile array 时的弱 specular fallback，`TileAlpha` 仍不作为材质透明度，真实 tile 贴图阵列仍未绑定。
 - `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `toonSheenParams` / `sheenSphereParams` uniform；WGSL 已把 sheen/sphere 常量作为 ColorTable extra ramp 之外的保守高光/反射输入，toon lighting 仍未实现。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms；WGSL 当前把 detail color 与 UV scale 作为缺少真实 detail array 时的保守 tint fallback，真实 detail color/normal 贴图阵列仍未绑定。
@@ -179,7 +179,7 @@
 
 - 已完成：`g_AlphaThreshold` 进入 `ModelMaterial.alphaThreshold`，用于 cutout discard 阈值。
 - 已完成：`g_NormalScale` 进入 `ModelMaterial.normalScale`，默认 1.0，材质 override 优先于 shader package default，renderer 会 clamp 到 0..4 后作用于 normal map XY 强度。
-- 已完成：`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 进入 `ModelMaterial`，默认 1.0，材质 override 优先于 shader package default；renderer uniform 已预留 y/z/w 三个通道并 clamp 到 0..4，但当前 WGSL 仍只消费 `normalScale`。
+- 已完成：`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 进入 `ModelMaterial`，默认 1.0，材质 override 优先于 shader package default；renderer uniform 已进入 WGSL，当前在没有真实 multi/detail normal array 时只作为 primary normal map 强度的低权重 fallback；真实多法线贴图组合仍待后续实现。
 - 已完成：`g_TileIndex`、`g_TileAlpha`、`g_TileScale` 进入 `ModelMaterial`，默认值分别为 `0`、`1`、`[16,16]`；renderer uniform 已进入 WGSL，当前把 shader tile alpha 与 ColorTable tile alpha 一起用于弱 specular fallback，并用 tile index/scale 驱动轻量 UV pattern；真实 tile array 仍未选择或采样。
 - 已完成：`g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 进入 `ModelMaterial`，默认值分别为 `0`、`2`、`0`、`0`、`1`、`0`；renderer uniform 已进入 WGSL，其中 `g_SheenRate` / `g_SheenTintRate` / `g_SheenAperture` 会补充 sheen 高光，`g_SphereMapIndex` 会影响已有 sphere-like rim tint；toon lighting 仍待后续实现。
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[0.5,0.5,0.5,1]`、`[0.5,0.5,0.5,1]`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已进入 WGSL，当前在 detail id 或 detail color 非默认时做轻量 tint fallback，UV scale 只影响这个 fallback 的弱纹理感；真实 detail map / detail normal array 仍待后续绑定。
@@ -198,7 +198,7 @@
 验证：
 
 - 用合成 MTRL fixture 测 shader constant 解析。
-- 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp。
+- 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp；multi/detail normal scale fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 传递；tile specular fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 toon/sheen/sphere focused tests，覆盖 `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 的 shader package default、material override、非 finite fallback 和 renderer uniform 传递；sheen/sphere 常量的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 detail focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；detail tint fallback 的 WGSL 消费通过 native snapshot 编译验证。
@@ -343,9 +343,9 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 建议先支持 character family：
 
 - base/color map
-- normal map + normal scale：`g_NormalScale` 已实际用于 primary normal；`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已进入数据/renderer 参数，后续需要接入 shader-family-specific normal map 组合
+- normal map + normal scale：`g_NormalScale` 已实际用于 primary normal；`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已作为低权重 primary normal fallback，后续仍需要接入 shader-family-specific multi/detail normal map 组合
 - mask/material map 的通道解释
-- multi map/detail map 的第二层颜色/法线影响；detail color/UV scale 与 tile index/scale 已先进入保守 fallback，detail normal 和 UV scroll 参数已进入数据/renderer 参数，scroll time 已接入保守滚动采样，后续需要接入 tile array、detail map/detail normal array 与 shader-family-specific scroll 路由
+- multi map/detail map 的第二层颜色/法线影响；detail color/UV scale、tile index/scale 与 multi/detail normal scale 已先进入保守 fallback，UV scroll 参数已进入数据/renderer 参数，scroll time 已接入保守滚动采样，后续需要接入 tile array、detail map/detail normal array 与 shader-family-specific scroll 路由
 - vertex color 的具体启用条件
 
 然后再支持：
@@ -540,7 +540,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：优先补染色输入链路。先把 `ColorDyeTable` 行语义、`stainingtemplate.stm`、EXD stain 参数和用户 stain 输入定义清楚，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
 2. 结果处理：把 stain、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
-3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset、glass IOR/thickness、multi diffuse 和 outline rim 已有保守 fallback，下一步顺序为 detail normal 或 texture mip/shadow offset 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
+3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset、glass IOR/thickness、multi diffuse、outline rim 和 multi/detail normal scale 已有保守 fallback，下一步顺序为 texture mip/shadow offset 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
 4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。
 
 ### 第一阶段：可审计和不误画

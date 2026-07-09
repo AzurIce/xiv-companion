@@ -566,13 +566,22 @@ fn resolve_normal(input: VertexOutput, front_facing: bool, uv: vec2<f32>) -> vec
     let bitangent = normalize(input.bitangent.xyz);
     let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
     let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
-    let normal_scale = clamp(material.shader_params.x, 0.0, 4.0);
+    let normal_scale = resolve_effective_normal_scale();
     let mapped = normalize(vec3<f32>(
         sampled.x * normal_scale,
         sampled.y * camera.options.y * normal_scale,
         sampled.z,
     ));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
+}
+
+fn resolve_effective_normal_scale() -> f32 {
+    let primary = clamp(material.shader_params.x, 0.0, 4.0);
+    let multi_delta = clamp(material.shader_params.y, 0.0, 4.0) - 1.0;
+    let detail_delta = clamp(material.shader_params.z, 0.0, 4.0) - 1.0;
+    let multi_detail_delta = clamp(material.shader_params.w, 0.0, 4.0) - 1.0;
+    let fallback_delta = multi_delta * 0.08 + detail_delta * 0.12 + multi_detail_delta * 0.08;
+    return clamp(primary + fallback_delta, 0.0, 4.0);
 }
 
 fn resolve_uv(input: VertexOutput, source: f32) -> vec2<f32> {
