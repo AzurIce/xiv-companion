@@ -188,7 +188,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || material.render.x > 0.5;
-    let shader_tint = resolve_shader_diffuse_tint();
+    let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input);
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
@@ -480,8 +480,11 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
         + shader_multi_emissive * mask_gate * vertex_gate;
 }
 
-fn resolve_shader_diffuse_tint() -> vec3<f32> {
-    return clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+fn resolve_shader_diffuse_tint(mask: vec3<f32>) -> vec3<f32> {
+    let diffuse_tint = clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+    let multi_tint = clamp(material.shader_multi_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+    let multi_gate = smoothstep(0.22, 1.0, mask.r) * material.params.w * 0.35;
+    return diffuse_tint * mix(vec3<f32>(1.0), multi_tint, multi_gate);
 }
 
 fn resolve_detail_tint(input: VertexOutput) -> vec3<f32> {
