@@ -343,6 +343,16 @@ pub struct ModelMaterial {
     pub detail_normal_uv_scale: [f32; 4],
     #[serde(default)]
     pub uv_scroll: [f32; 4],
+    #[serde(default = "default_material_lightshaft_color")]
+    pub lightshaft_color: [f32; 4],
+    #[serde(default)]
+    pub lightshaft_tex_anim: [f32; 4],
+    #[serde(default = "default_material_lightshaft_tex_u")]
+    pub lightshaft_tex_u: [f32; 4],
+    #[serde(default = "default_material_lightshaft_tex_v")]
+    pub lightshaft_tex_v: [f32; 4],
+    #[serde(default)]
+    pub lightshaft_ray: [f32; 4],
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -897,7 +907,8 @@ pub fn prepared_material_feature_flags(
         || material_scalar_differs(material.multi_detail_id, 0.0)
         || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
-    flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4]);
+    flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4])
+        || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
 
     flags
 }
@@ -996,6 +1007,18 @@ fn default_material_tile_scale() -> [f32; 2] {
 
 fn default_material_detail_uv_scale() -> [f32; 4] {
     [4.0, 4.0, 4.0, 4.0]
+}
+
+fn default_material_lightshaft_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_lightshaft_tex_u() -> [f32; 4] {
+    [1.0, 0.0, 0.0, 0.0]
+}
+
+fn default_material_lightshaft_tex_v() -> [f32; 4] {
+    [0.0, 1.0, 0.0, 0.0]
 }
 
 fn default_render_backfaces() -> bool {
@@ -1743,6 +1766,16 @@ mod color_table_bake_tests {
                 ..PreparedMaterialFeatureFlags::default()
             }
         );
+        material = test_material();
+        material.lightshaft_tex_anim = [0.5, 0.0, 0.0, 0.0];
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft)
+                .feature_flags,
+            PreparedMaterialFeatureFlags {
+                uses_scroll: true,
+                ..PreparedMaterialFeatureFlags::default()
+            }
+        );
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
             PreparedMaterialFeatureFlags::default()
@@ -2126,6 +2159,11 @@ mod color_table_bake_tests {
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],
+            lightshaft_color: [1.0, 1.0, 1.0, 1.0],
+            lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
+            lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
+            lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
+            lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,

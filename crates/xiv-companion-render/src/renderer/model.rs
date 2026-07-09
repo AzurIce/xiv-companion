@@ -1304,10 +1304,16 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
+        lightshaft_color: material_lightshaft_color(material),
+        lightshaft_tex_anim: material_lightshaft_tex_anim(material),
+        lightshaft_tex_u: material_lightshaft_tex_u(material),
+        lightshaft_tex_v: material_lightshaft_tex_v(material),
+        lightshaft_ray: material_lightshaft_ray(material),
         uv_sources0: uv_sources.0,
         uv_sources1: uv_sources.1,
         uv_sources2: uv_sources.2,
         uv_sources3: uv_sources.3,
+        draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1903,6 +1909,11 @@ fn fallback_material() -> ModelMaterial {
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_color: [1.0, 1.0, 1.0, 1.0],
+        lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
+        lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
+        lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1994,6 +2005,26 @@ fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.uv_scroll, [0.0; 4])
 }
 
+fn material_lightshaft_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.lightshaft_color, [1.0; 4])
+}
+
+fn material_lightshaft_tex_anim(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.lightshaft_tex_anim, [0.0; 4])
+}
+
+fn material_lightshaft_tex_u(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.lightshaft_tex_u, [1.0, 0.0, 0.0, 0.0])
+}
+
+fn material_lightshaft_tex_v(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.lightshaft_tex_v, [0.0, 1.0, 0.0, 0.0])
+}
+
+fn material_lightshaft_ray(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.lightshaft_ray, [0.0; 4])
+}
+
 fn material_uv_source_params(
     prepared_material: PreparedMaterial,
 ) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
@@ -2044,6 +2075,19 @@ fn draw_role_debug_color(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         ModelMeshDrawRole::Ignored => [0.55, 0.55, 0.55, 1.0],
         ModelMeshDrawRole::DebugVisible => [1.0, 0.34, 0.76, 1.0],
     }
+}
+
+fn draw_role_params(draw_role: ModelMeshDrawRole) -> [f32; 4] {
+    [
+        if matches!(draw_role, ModelMeshDrawRole::LightShaft) {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+        0.0,
+    ]
 }
 
 fn finite_vec4_or(values: [f32; 4], default: [f32; 4]) -> [f32; 4] {
@@ -2157,10 +2201,16 @@ struct MaterialUniform {
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
+    lightshaft_color: [f32; 4],
+    lightshaft_tex_anim: [f32; 4],
+    lightshaft_tex_u: [f32; 4],
+    lightshaft_tex_v: [f32; 4],
+    lightshaft_ray: [f32; 4],
     uv_sources0: [f32; 4],
     uv_sources1: [f32; 4],
     uv_sources2: [f32; 4],
     uv_sources3: [f32; 4],
+    draw_role_params: [f32; 4],
     debug_color: [f32; 4],
 }
 
@@ -2746,6 +2796,40 @@ mod tests {
 
         material.uv_scroll = [1.0, f32::NAN, f32::INFINITY, 2.0];
         assert_eq!(material_uv_scroll(&material), [1.0, 0.0, 0.0, 2.0]);
+    }
+
+    #[test]
+    fn material_lightshaft_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_lightshaft_color(&material), [1.0; 4]);
+        assert_eq!(material_lightshaft_tex_anim(&material), [0.0; 4]);
+        assert_eq!(material_lightshaft_tex_u(&material), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(material_lightshaft_tex_v(&material), [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(material_lightshaft_ray(&material), [0.0; 4]);
+        assert_eq!(draw_role_params(ModelMeshDrawRole::Normal), [0.0; 4]);
+        assert_eq!(
+            draw_role_params(ModelMeshDrawRole::LightShaft),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.lightshaft_color = [0.2, 0.4, 0.6, 0.8];
+        material.lightshaft_tex_anim = [0.1, 0.2, 0.3, 0.4];
+        material.lightshaft_tex_u = [1.5, 0.5, 0.25, 0.0];
+        material.lightshaft_tex_v = [0.25, 1.75, 0.5, 0.0];
+        material.lightshaft_ray = [2.0, 3.0, 4.0, 5.0];
+        assert_eq!(material_lightshaft_color(&material), [0.2, 0.4, 0.6, 0.8]);
+        assert_eq!(
+            material_lightshaft_tex_anim(&material),
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(material_lightshaft_tex_u(&material), [1.5, 0.5, 0.25, 0.0]);
+        assert_eq!(material_lightshaft_tex_v(&material), [0.25, 1.75, 0.5, 0.0]);
+        assert_eq!(material_lightshaft_ray(&material), [2.0, 3.0, 4.0, 5.0]);
+
+        material.lightshaft_color = [0.2, f32::NAN, f32::INFINITY, 0.8];
+        material.lightshaft_tex_u = [f32::NAN, 0.5, f32::INFINITY, 0.0];
+        assert_eq!(material_lightshaft_color(&material), [0.2, 1.0, 1.0, 0.8]);
+        assert_eq!(material_lightshaft_tex_u(&material), [1.0, 0.5, 0.0, 0.0]);
     }
 
     #[test]

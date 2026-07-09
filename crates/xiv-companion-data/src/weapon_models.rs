@@ -45,6 +45,16 @@ const G_MULTI_DETAIL_ID: u32 = 0xAC15_6136;
 #[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
 #[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_TEX_ANIM: u32 = 0x14D8_E13D;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_TEX_U: u32 = 0x5926_A043;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_TEX_V: u32 = 0xC02F_F1F9;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_RAY: u32 = 0x827B_DD09;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_COLOR: u32 = 0xD27C_58B9;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -1465,6 +1475,11 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
+        let lightshaft_color = composed_material_lightshaft_color(&semantics);
+        let lightshaft_tex_anim = composed_material_lightshaft_tex_anim(&semantics);
+        let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
+        let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
+        let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1513,6 +1528,11 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
+            lightshaft_color,
+            lightshaft_tex_anim,
+            lightshaft_tex_u,
+            lightshaft_tex_v,
+            lightshaft_ray,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -1932,6 +1952,11 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
+        let lightshaft_color = composed_material_lightshaft_color(&semantics);
+        let lightshaft_tex_anim = composed_material_lightshaft_tex_anim(&semantics);
+        let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
+        let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
+        let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1981,6 +2006,11 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
+            lightshaft_color,
+            lightshaft_tex_anim,
+            lightshaft_tex_u,
+            lightshaft_tex_v,
+            lightshaft_ray,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2744,6 +2774,31 @@ fn composed_material_uv_scroll(semantics: &ComposedMaterialSemantics) -> [f32; 4
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_lightshaft_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_tex_anim(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_TEX_ANIM, [0.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_tex_u(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_TEX_U, [1.0, 0.0, 0.0, 0.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_tex_v(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_TEX_V, [0.0, 1.0, 0.0, 0.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_ray(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_RAY, [0.0; 4])
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_finite_vec4_constant(
     semantics: &ComposedMaterialSemantics,
     constant_id: u32,
@@ -3135,6 +3190,11 @@ fn fallback_weapon_material(
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_color: [1.0, 1.0, 1.0, 1.0],
+        lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
+        lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
+        lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -4572,6 +4632,66 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_uv_scroll(&semantics),
             [-5.0, 6.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn composed_material_lightshaft_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_LIGHTSHAFT_COLOR, &[0.2, 0.4, 0.6, 0.8]),
+            (G_LIGHTSHAFT_TEX_ANIM, &[0.1, 0.2, 0.3, 0.4]),
+            (G_LIGHTSHAFT_TEX_U, &[1.5, 0.5, 0.25]),
+            (G_LIGHTSHAFT_TEX_V, &[0.25, 1.75, 0.5]),
+            (G_LIGHTSHAFT_RAY, &[2.0, 3.0, 4.0, 5.0]),
+        ]);
+
+        assert_eq!(composed_material_lightshaft_color(&semantics), [1.0; 4]);
+        assert_eq!(composed_material_lightshaft_tex_anim(&semantics), [0.0; 4]);
+        assert_eq!(
+            composed_material_lightshaft_tex_u(&semantics),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            composed_material_lightshaft_tex_v(&semantics),
+            [0.0, 1.0, 0.0, 0.0]
+        );
+        assert_eq!(composed_material_lightshaft_ray(&semantics), [0.0; 4]);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_lightshaft_color(&semantics),
+            [0.2, 0.4, 0.6, 0.8]
+        );
+        assert_eq!(
+            composed_material_lightshaft_tex_anim(&semantics),
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(
+            composed_material_lightshaft_tex_u(&semantics),
+            [1.5, 0.5, 0.25, 0.0]
+        );
+        assert_eq!(
+            composed_material_lightshaft_tex_v(&semantics),
+            [0.25, 1.75, 0.5, 0.0]
+        );
+        assert_eq!(
+            composed_material_lightshaft_ray(&semantics),
+            [2.0, 3.0, 4.0, 5.0]
+        );
+
+        let material = test_mtrl_with_constant(G_LIGHTSHAFT_COLOR, &[1.0, 0.5, 0.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_lightshaft_color(&semantics),
+            [1.0, 0.5, 0.25, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_LIGHTSHAFT_TEX_U, &[2.0, 3.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_lightshaft_tex_u(&semantics),
+            [2.0, 3.0, 0.0, 0.0]
         );
     }
 

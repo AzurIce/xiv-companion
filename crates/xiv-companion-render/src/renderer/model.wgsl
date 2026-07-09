@@ -18,10 +18,16 @@ struct Material {
     detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
     detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
     uv_scroll: vec4<f32>, // xy: uv0 scroll multiplier, zw: uv1 scroll multiplier
+    lightshaft_color: vec4<f32>,
+    lightshaft_tex_anim: vec4<f32>,
+    lightshaft_tex_u: vec4<f32>,
+    lightshaft_tex_v: vec4<f32>,
+    lightshaft_ray: vec4<f32>,
     uv_sources0: vec4<f32>, // x: base, y: normal, z: mask, w: material map
     uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
     uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     uv_sources3: vec4<f32>, // x: ColorTable index, y: other
+    draw_role_params: vec4<f32>, // x: lightshaft draw role
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
 
@@ -127,7 +133,11 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
-    let base_uv = resolve_uv(input, material.uv_sources0.x);
+    let is_lightshaft = material.draw_role_params.x > 0.5;
+    var base_uv = resolve_uv(input, material.uv_sources0.x);
+    if is_lightshaft {
+        base_uv = resolve_lightshaft_uv(input);
+    }
     let normal_uv = resolve_uv(input, material.uv_sources0.y);
     let mask_uv = resolve_uv(input, material.uv_sources0.z);
     let specular_uv = resolve_uv(input, material.uv_sources1.y);
@@ -159,7 +169,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
-    let uses_alpha = is_mask || is_blend || is_glass || material.render.x > 0.5;
+    let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || material.render.x > 0.5;
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if is_glass {
@@ -174,6 +184,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     }
     if uses_alpha && alpha < 0.01 {
         discard;
+    }
+    if is_lightshaft {
+        let lightshaft = resolve_lightshaft_color(base, texture_alpha, input.color.a);
+        var out: FragmentOutput;
+        out.color = lightshaft;
+        out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
+        return out;
     }
     let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
     let specular_tint = mix(material_specular, base, metalness * 0.35);
@@ -366,6 +383,26 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
     let mask_gate = smoothstep(0.88, 1.0, mask.b) * material.params.w * 0.18;
     let vertex_gate = 0.35 + clamp(vertex_alpha, 0.0, 1.0) * 0.65;
     return emissive_tex * texture_strength + material_emissive * (texture_gate + mask_gate) * vertex_gate;
+}
+
+fn resolve_lightshaft_uv(input: VertexOutput) -> vec2<f32> {
+    let animated = input.uv0 + material.lightshaft_tex_anim.xy * camera.options.z;
+    let basis = vec3<f32>(animated, 1.0);
+    return vec2<f32>(
+        dot(basis, material.lightshaft_tex_u.xyz),
+        dot(basis, material.lightshaft_tex_v.xyz),
+    );
+}
+
+fn resolve_lightshaft_color(base: vec3<f32>, texture_alpha: f32, vertex_alpha: f32) -> vec4<f32> {
+    let tint = clamp(material.lightshaft_color, vec4<f32>(0.0), vec4<f32>(8.0));
+    let ray_strength = max(
+        max(material.lightshaft_ray.x, material.lightshaft_ray.y),
+        max(material.lightshaft_ray.z, material.lightshaft_ray.w),
+    );
+    let intensity = max(1.0, clamp(ray_strength, 0.0, 8.0));
+    let alpha = clamp(texture_alpha * vertex_alpha * tint.a, 0.0, 1.0);
+    return vec4<f32>(base * tint.rgb * intensity * alpha, alpha);
 }
 
 fn resolve_normal(input: VertexOutput, front_facing: bool, uv: vec2<f32>) -> vec3<f32> {
