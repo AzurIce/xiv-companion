@@ -299,9 +299,9 @@ pub enum ModelTextureKind {
     BaseColor,
     Normal,
     Mask,
-    /// Explicit `g_SamplerMaterial` texture. Renderer may still use it as a mask fallback.
+    /// Explicit `g_SamplerMaterial` texture. Its channel semantics are shader-specific.
     MaterialMap,
-    /// Explicit `g_SamplerMulti` texture. Renderer may still use it as a mask fallback.
+    /// Explicit `g_SamplerMulti` texture. Its channel semantics are shader-specific.
     MultiMap,
     Specular,
     Emissive,

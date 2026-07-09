@@ -1411,10 +1411,7 @@ fn fallback_material() -> ModelMaterial {
 }
 
 fn effective_mask_texture(material: &ModelMaterial) -> Option<usize> {
-    material
-        .mask_texture
-        .or(material.material_map_texture)
-        .or(material.multi_map_texture)
+    material.mask_texture
 }
 
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
@@ -1623,6 +1620,18 @@ mod tests {
             MaterialAlphaMode::Opaque,
             MaterialRenderMode::Transparent
         ));
+    }
+
+    #[test]
+    fn effective_mask_texture_uses_only_explicit_mask_sampler() {
+        let mut material = fallback_material();
+        material.material_map_texture = Some(2);
+        material.multi_map_texture = Some(3);
+
+        assert_eq!(effective_mask_texture(&material), None);
+
+        material.mask_texture = Some(1);
+        assert_eq!(effective_mask_texture(&material), Some(1));
     }
 
     fn test_material_is_transparent(
