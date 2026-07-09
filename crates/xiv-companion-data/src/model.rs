@@ -351,10 +351,53 @@ pub enum MaterialAlphaMode {
     Glass,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialShaderFamily {
+    Character,
+    CharacterGlass,
+    CharacterTransparency,
+    CharacterScroll,
+    Bg,
+    LightShaft,
+    Water,
+    #[default]
+    Unknown,
+}
+
+pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShaderFamily {
+    let Some(shader_package_name) = shader_package_name else {
+        return MaterialShaderFamily::Unknown;
+    };
+    let normalized = shader_package_name.replace('\\', "/");
+    let file_name = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .trim_start_matches("meddle ")
+        .trim()
+        .to_ascii_lowercase();
+
+    match file_name.as_str() {
+        "character.shpk"
+        | "characterlegacy.shpk"
+        | "characterstockings.shpk"
+        | "characterinc.shpk" => MaterialShaderFamily::Character,
+        "characterglass.shpk" => MaterialShaderFamily::CharacterGlass,
+        "charactertransparency.shpk" => MaterialShaderFamily::CharacterTransparency,
+        "characterscroll.shpk" => MaterialShaderFamily::CharacterScroll,
+        "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
+        "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
+        "water.shpk" | "river.shpk" => MaterialShaderFamily::Water,
+        _ => MaterialShaderFamily::Unknown,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
+    pub shader_family: MaterialShaderFamily,
     pub render_backfaces: bool,
 }
 
@@ -394,6 +437,9 @@ pub fn prepare_material_for_draw_role(
 ) -> PreparedMaterial {
     PreparedMaterial {
         render_pass: prepared_render_pass(material, draw_role),
+        shader_family: material_shader_family(
+            material.and_then(|material| material.shader_package_name.as_deref()),
+        ),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -1044,11 +1090,13 @@ mod color_table_bake_tests {
     fn prepared_material_preserves_culling_and_missing_material_defaults() {
         let mut material = test_material();
         material.render_backfaces = false;
+        material.shader_package_name = Some("character.shpk".to_string());
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal),
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
+                shader_family: MaterialShaderFamily::Character,
                 render_backfaces: false,
             }
         );
@@ -1056,6 +1104,7 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal),
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
+                shader_family: MaterialShaderFamily::Unknown,
                 render_backfaces: true,
             }
         );
@@ -1071,6 +1120,51 @@ mod color_table_bake_tests {
         assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
+    }
+
+    #[test]
+    fn material_shader_family_maps_meddletools_shader_packages() {
+        assert_eq!(
+            material_shader_family(Some("character.shpk")),
+            MaterialShaderFamily::Character
+        );
+        assert_eq!(
+            material_shader_family(Some("characterlegacy.shpk")),
+            MaterialShaderFamily::Character
+        );
+        assert_eq!(
+            material_shader_family(Some("characterglass.shpk")),
+            MaterialShaderFamily::CharacterGlass
+        );
+        assert_eq!(
+            material_shader_family(Some("charactertransparency.shpk")),
+            MaterialShaderFamily::CharacterTransparency
+        );
+        assert_eq!(
+            material_shader_family(Some("characterscroll.shpk")),
+            MaterialShaderFamily::CharacterScroll
+        );
+        assert_eq!(
+            material_shader_family(Some("bg.shpk")),
+            MaterialShaderFamily::Bg
+        );
+        assert_eq!(
+            material_shader_family(Some("lightshaft.shpk")),
+            MaterialShaderFamily::LightShaft
+        );
+        assert_eq!(
+            material_shader_family(Some("river.shpk")),
+            MaterialShaderFamily::Water
+        );
+        assert_eq!(
+            material_shader_family(Some("chara/weapon/test/CHARACTERSTOCKINGS.SHPK")),
+            MaterialShaderFamily::Character
+        );
+        assert_eq!(material_shader_family(None), MaterialShaderFamily::Unknown);
+        assert_eq!(
+            material_shader_family(Some("unknown.shpk")),
+            MaterialShaderFamily::Unknown
+        );
     }
 
     fn test_prepared_render_pass(

@@ -1636,7 +1636,7 @@ pub type WeaponRenderer = ModelRenderer;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ModelMeshDrawRole;
+    use crate::{MaterialShaderFamily, ModelMeshDrawRole};
 
     #[test]
     fn transparent_batches_sort_back_to_front_without_moving_opaque() {
@@ -1716,6 +1716,7 @@ mod tests {
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal),
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
+                shader_family: MaterialShaderFamily::Unknown,
                 render_backfaces: true,
             }
         );
@@ -1748,6 +1749,7 @@ mod tests {
             prepare_material_for_draw_role(model.materials().first(), ModelMeshDrawRole::Normal),
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
+                shader_family: MaterialShaderFamily::Unknown,
                 render_backfaces: false,
             }
         );
@@ -1975,6 +1977,7 @@ mod tests {
             index_count: 3,
             prepared_material: PreparedMaterial {
                 render_pass: pass,
+                shader_family: MaterialShaderFamily::Unknown,
                 render_backfaces: true,
             },
             center,
