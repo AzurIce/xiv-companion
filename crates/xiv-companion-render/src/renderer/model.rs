@@ -1118,6 +1118,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
         extra_properties: material_extra_texture_flags(material, model),
+        shader_params: material_shader_params(material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1571,6 +1572,7 @@ fn fallback_material() -> ModelMaterial {
         render_mode: MaterialRenderMode::Opaque,
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        normal_scale: 1.0,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1620,6 +1622,10 @@ fn texture_presence_flag<M: ModelRenderData + ?Sized>(
         .and_then(|index| model.textures().get(index))
         .map(|_| 1.0)
         .unwrap_or(0.0)
+}
+
+fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
+    [material.normal_scale.clamp(0.0, 4.0), 0.0, 0.0, 0.0]
 }
 
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
@@ -1713,6 +1719,7 @@ struct MaterialUniform {
     properties: [f32; 4],
     render: [f32; 4],
     extra_properties: [f32; 4],
+    shader_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -2048,6 +2055,18 @@ mod tests {
             material_extra_texture_flags(&material, &model),
             [1.0, 1.0, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn material_shader_params_clamp_normal_scale() {
+        let mut material = fallback_material();
+        assert_eq!(material_shader_params(&material), [1.0, 0.0, 0.0, 0.0]);
+
+        material.normal_scale = 2.25;
+        assert_eq!(material_shader_params(&material), [2.25, 0.0, 0.0, 0.0]);
+
+        material.normal_scale = 8.0;
+        assert_eq!(material_shader_params(&material), [4.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

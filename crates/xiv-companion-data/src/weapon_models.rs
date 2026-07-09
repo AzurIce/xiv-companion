@@ -20,6 +20,8 @@ const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
 const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
+const G_NORMAL_SCALE: u32 = 0xB554_5FBB;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -1422,6 +1424,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
+        let normal_scale = composed_material_normal_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1458,6 +1461,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            normal_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -1864,6 +1868,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
+        let normal_scale = composed_material_normal_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1901,6 +1906,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            normal_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2576,6 +2582,15 @@ fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> O
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    semantics
+        .material_constant_first_f32(G_NORMAL_SCALE)
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 4.0))
+        .unwrap_or(1.0)
+}
+
+#[cfg(feature = "game-data")]
 fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
     let alpha_mode =
         weapon_material_alpha_mode(shader_package_name, 0, &WeaponTextureSet::default(), false);
@@ -2926,6 +2941,7 @@ fn fallback_weapon_material(
         render_mode: WeaponMaterialRenderMode::Opaque,
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        normal_scale: 1.0,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -4206,6 +4222,25 @@ mod weapon_material_tests {
 
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_alpha_threshold(&semantics), Some(0.7));
+    }
+
+    #[test]
+    fn composed_material_normal_scale_uses_resolved_material_constant() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[(G_NORMAL_SCALE, &[0.65])]);
+        let material = test_mtrl_with_constant(G_NORMAL_SCALE, &[1.75], 0);
+
+        assert_eq!(composed_material_normal_scale(&semantics), 1.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_normal_scale(&semantics), 0.65);
+
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_normal_scale(&semantics), 1.75);
+
+        let material = test_mtrl_with_constant(G_NORMAL_SCALE, &[8.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_normal_scale(&semantics), 4.0);
     }
 
     #[test]

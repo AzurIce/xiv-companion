@@ -46,6 +46,7 @@
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制。
+- `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 
 主要缺口集中在：
 
@@ -86,10 +87,14 @@
 
 现有 `.shpk` 解析主要用于 sampler role、material key 和常量默认值。后续需要把常见 character/bg/lightshaft/scroll/glass 参数提升成结构化字段，而不是只留在 debug。
 
-优先参数：
+当前进度：
 
-- `g_NormalScale`
-- `g_AlphaThreshold`
+- 已完成：`g_AlphaThreshold` 进入 `ModelMaterial.alphaThreshold`，用于 cutout discard 阈值。
+- 已完成：`g_NormalScale` 进入 `ModelMaterial.normalScale`，默认 1.0，材质 override 优先于 shader package default，renderer 会 clamp 到 0..4 后作用于 normal map XY 强度。
+
+后续优先参数：
+
+- `g_MultiNormalScale`
 - `g_TileIndex`
 - `g_TileAlpha`
 - `g_TileScale`
@@ -102,6 +107,7 @@
 验证：
 
 - 用合成 MTRL fixture 测 shader constant 解析。
+- 已增加 normal scale focused test，覆盖 shader package default、material override 和 clamp。
 - 用本地 SqPack 样本输出 material debug，对照 MeddleTools `node_configs.py` 中对应 mapping。
 
 ### P1: 处理染色数据入口
@@ -230,7 +236,7 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 建议先支持 character family：
 
 - base/color map
-- normal map + normal scale
+- normal map + normal scale：`g_NormalScale` 已完成第一步；后续需要 `g_MultiNormalScale`、detail normal scale 和 shader-family-specific normal map 组合
 - mask/material map 的通道解释
 - multi map/detail map 的第二层颜色/法线影响
 - vertex color 的具体启用条件

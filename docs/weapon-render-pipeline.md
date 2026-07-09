@@ -157,6 +157,7 @@ WeaponMaterialRenderMode::Glass
 ### 7.1 Opaque
 
 普通角色/武器材质。使用 base/ColorTable、normal、mask、emissive 近似 Blinn-Phong 渲染。
+`g_NormalScale` 会从 shader package default 与 material override 中解析为 `normalScale`，并用于缩放 tangent-space normal map 强度。
 
 ### 7.2 Transparent
 
@@ -240,7 +241,8 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤，renderer 内部已有 `Opaque/Cutout/Transparent/Glass` prepared pass；后续还需要独立 cutout/glass/additive-lightshaft wgpu pipeline。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；下一步是按 shader family 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
-4. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；后续要接入 tile array、UV source 和更接近 MeddleTools 的 reflection/sphere 规则。
-5. 纹理采样配置：数据层已有第一版 role policy，renderer 已区分 color/data/nearest-data sampler；后续还要让 index/tile array 等 nearest 采样进入 runtime 绑定，尤其 `_id.tex` 不应统一 linear 采样。
-6. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
-7. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。
+4. Material params：`g_AlphaThreshold` 与 `g_NormalScale` 已进入结构化材质字段；后续要继续接入 `g_MultiNormalScale`、tile/detail/scroll 参数。
+5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；后续要接入 tile array、UV source 和更接近 MeddleTools 的 reflection/sphere 规则。
+6. 纹理采样配置：数据层已有第一版 role policy，renderer 已区分 color/data/nearest-data sampler；后续还要让 index/tile array 等 nearest 采样进入 runtime 绑定，尤其 `_id.tex` 不应统一 linear 采样。
+7. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
+8. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。

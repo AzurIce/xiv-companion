@@ -12,6 +12,7 @@ struct Material {
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
+    shader_params: vec4<f32>, // x: normal scale
 };
 
 struct VertexInput {
@@ -272,6 +273,11 @@ fn resolve_normal(input: VertexOutput, front_facing: bool) -> vec3<f32> {
     let bitangent = normalize(input.bitangent.xyz);
     let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
     let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
-    let mapped = normalize(vec3<f32>(sampled.x, sampled.y * camera.options.y, sampled.z));
+    let normal_scale = clamp(material.shader_params.x, 0.0, 4.0);
+    let mapped = normalize(vec3<f32>(
+        sampled.x * normal_scale,
+        sampled.y * camera.options.y * normal_scale,
+        sampled.z,
+    ));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }
