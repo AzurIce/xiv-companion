@@ -473,16 +473,7 @@ fn remap_mesh_vertices(
         let a = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[0])?;
         let b = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[1])?;
         let c = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[2])?;
-
-        if should_flip_triangle_winding(
-            &remapped_vertices[a as usize],
-            &remapped_vertices[b as usize],
-            &remapped_vertices[c as usize],
-        ) {
-            remapped_indices.extend([a, c, b]);
-        } else {
-            remapped_indices.extend([a, b, c]);
-        }
+        remapped_indices.extend([a, b, c]);
     }
 
     Some((remapped_vertices, remapped_indices))
@@ -506,52 +497,6 @@ fn remap_vertex_index(
         remapped_vertices.push(vertices[usize::from(index)]);
         remap.insert(index, remapped_index);
         Some(remapped_index)
-    }
-}
-
-#[cfg(feature = "game-data")]
-fn should_flip_triangle_winding(
-    a: &WeaponModelVertex,
-    b: &WeaponModelVertex,
-    c: &WeaponModelVertex,
-) -> bool {
-    let edge_ab = vec3_sub(b.position, a.position);
-    let edge_ac = vec3_sub(c.position, a.position);
-    let Some(face_normal) = normalize_vec3(vec3_cross(edge_ab, edge_ac)) else {
-        return false;
-    };
-
-    [a.normal, b.normal, c.normal].into_iter().all(|normal| {
-        normalize_vec3(normal).is_some_and(|normal| dot_vec3(face_normal, normal) < -0.25)
-    })
-}
-
-#[cfg(feature = "game-data")]
-fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-#[cfg(feature = "game-data")]
-fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-#[cfg(feature = "game-data")]
-fn dot_vec3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-#[cfg(feature = "game-data")]
-fn normalize_vec3(value: [f32; 3]) -> Option<[f32; 3]> {
-    let length = dot_vec3(value, value).sqrt();
-    if !length.is_finite() || length <= 0.0001 {
-        None
-    } else {
-        Some([value[0] / length, value[1] / length, value[2] / length])
     }
 }
 
@@ -3769,7 +3714,7 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn remap_mesh_vertices_flips_winding_when_normals_are_opposed() {
+    fn remap_mesh_vertices_preserves_winding_when_normals_are_opposed() {
         let vertices = vec![
             test_vertex_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
             test_vertex_at([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
@@ -3779,7 +3724,7 @@ mod weapon_material_tests {
         let (_, remapped_indices) =
             remap_mesh_vertices(&vertices, &[0, 1, 2]).expect("valid remap");
 
-        assert_eq!(remapped_indices, vec![0, 2, 1]);
+        assert_eq!(remapped_indices, vec![0, 1, 2]);
     }
 
     #[test]
