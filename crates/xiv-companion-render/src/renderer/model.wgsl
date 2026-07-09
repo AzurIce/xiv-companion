@@ -1,7 +1,7 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
-    options: vec4<f32>, // x: normal mapping, y: normal y sign, z: uv scroll time
+    options: vec4<f32>, // x: normal mapping, y: normal y sign, z: uv scroll time, w: debug mode
 };
 
 struct Material {
@@ -140,6 +140,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
     let sampled_specular = textureSample(specular_texture, base_color_sampler, specular_uv).rgb;
+    let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5);
@@ -152,6 +153,10 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
+    }
+    let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
+    if camera.options.w > 0.5 {
+        return debug_fragment_output(input, camera.options.w, base, normal, mask, properties, material_specular, emissive, alpha);
     }
     if is_mask && alpha < material.render.w {
         discard;
@@ -169,8 +174,6 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         + material_specular * specular * 0.65
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0);
     let lit = select(opaque_lit, glass_lit, is_glass);
-    let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
-    let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
     let color = lit + extra_lit + emissive;
     let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -180,6 +183,54 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     out.color = vec4<f32>(color, alpha);
     out.bright = vec4<f32>(emissive * 1.15 + highlight * 0.65, 1.0);
     return out;
+}
+
+fn debug_fragment_output(
+    input: VertexOutput,
+    mode: f32,
+    base: vec3<f32>,
+    normal: vec3<f32>,
+    mask: vec3<f32>,
+    properties: vec4<f32>,
+    specular: vec3<f32>,
+    emissive: vec3<f32>,
+    alpha: f32,
+) -> FragmentOutput {
+    var color = base;
+    if mode < 1.5 {
+        color = base;
+    } else if mode < 2.5 {
+        color = normal * 0.5 + vec3<f32>(0.5);
+    } else if mode < 3.5 {
+        color = mask;
+    } else if mode < 4.5 {
+        color = vec3<f32>(properties.x, properties.y, properties.w);
+    } else if mode < 5.5 {
+        color = specular;
+    } else if mode < 6.5 {
+        color = emissive;
+    } else if mode < 7.5 {
+        color = vec3<f32>(alpha);
+    } else if mode < 8.5 {
+        color = uv_debug_color(input.uv0);
+    } else if mode < 9.5 {
+        color = uv_debug_color(input.uv1);
+    } else if mode < 10.5 {
+        color = uv_debug_color(input.uv2);
+    } else if mode < 11.5 {
+        color = uv_debug_color(input.uv3);
+    } else {
+        color = input.color.rgb;
+    }
+
+    var out: FragmentOutput;
+    out.color = vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    out.bright = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+}
+
+fn uv_debug_color(uv: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(fract(uv.x), fract(uv.y), 0.5);
 }
 
 fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {

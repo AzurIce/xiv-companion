@@ -1,3 +1,5 @@
 pub mod model;
 
-pub use model::{ModelRenderOptions, ModelRenderer, WeaponRenderOptions, WeaponRenderer};
+pub use model::{
+    ModelDebugMode, ModelRenderOptions, ModelRenderer, WeaponRenderOptions, WeaponRenderer,
+};

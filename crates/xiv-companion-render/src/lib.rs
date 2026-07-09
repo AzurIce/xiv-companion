@@ -24,4 +24,6 @@ pub use model::{
 };
 
 #[cfg(feature = "renderer")]
-pub use renderer::{ModelRenderOptions, ModelRenderer, WeaponRenderOptions, WeaponRenderer};
+pub use renderer::{
+    ModelDebugMode, ModelRenderOptions, ModelRenderer, WeaponRenderOptions, WeaponRenderer,
+};

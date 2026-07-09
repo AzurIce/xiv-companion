@@ -8,6 +8,44 @@ use crate::{
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelDebugMode {
+    #[default]
+    Final,
+    BaseColor,
+    Normal,
+    Mask,
+    MaterialProperties,
+    Specular,
+    Emissive,
+    Alpha,
+    Uv0,
+    Uv1,
+    Uv2,
+    Uv3,
+    VertexColor,
+}
+
+impl ModelDebugMode {
+    fn shader_value(self) -> f32 {
+        match self {
+            ModelDebugMode::Final => 0.0,
+            ModelDebugMode::BaseColor => 1.0,
+            ModelDebugMode::Normal => 2.0,
+            ModelDebugMode::Mask => 3.0,
+            ModelDebugMode::MaterialProperties => 4.0,
+            ModelDebugMode::Specular => 5.0,
+            ModelDebugMode::Emissive => 6.0,
+            ModelDebugMode::Alpha => 7.0,
+            ModelDebugMode::Uv0 => 8.0,
+            ModelDebugMode::Uv1 => 9.0,
+            ModelDebugMode::Uv2 => 10.0,
+            ModelDebugMode::Uv3 => 11.0,
+            ModelDebugMode::VertexColor => 12.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelRenderOptions {
     pub normal_mapping: bool,
@@ -15,6 +53,7 @@ pub struct ModelRenderOptions {
     pub bloom: bool,
     pub bloom_strength: f32,
     pub uv_scroll_time: f32,
+    pub debug_mode: ModelDebugMode,
 }
 
 impl Default for ModelRenderOptions {
@@ -25,6 +64,7 @@ impl Default for ModelRenderOptions {
             bloom: true,
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
+            debug_mode: ModelDebugMode::Final,
         }
     }
 }
@@ -41,6 +81,7 @@ impl ModelRenderOptions {
             } else {
                 0.0
             },
+            debug_mode: self.debug_mode,
         }
     }
 
@@ -1818,7 +1859,7 @@ fn camera_uniform(
             if options.normal_mapping { 1.0 } else { 0.0 },
             options.normal_y_sign,
             options.uv_scroll_time,
-            0.0,
+            options.debug_mode.shader_value(),
         ],
     }
 }
@@ -2121,14 +2162,34 @@ mod tests {
     fn camera_uniform_preserves_finite_uv_scroll_time() {
         let mut options = ModelRenderOptions {
             uv_scroll_time: 12.5,
+            debug_mode: ModelDebugMode::Mask,
             ..ModelRenderOptions::default()
         };
         let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
         assert_eq!(uniform.options[2], 12.5);
+        assert_eq!(uniform.options[3], 3.0);
 
         options.uv_scroll_time = f32::NAN;
         let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
         assert_eq!(uniform.options[2], 0.0);
+        assert_eq!(uniform.options[3], 3.0);
+    }
+
+    #[test]
+    fn model_debug_modes_have_stable_shader_values() {
+        assert_eq!(ModelDebugMode::Final.shader_value(), 0.0);
+        assert_eq!(ModelDebugMode::BaseColor.shader_value(), 1.0);
+        assert_eq!(ModelDebugMode::Normal.shader_value(), 2.0);
+        assert_eq!(ModelDebugMode::Mask.shader_value(), 3.0);
+        assert_eq!(ModelDebugMode::MaterialProperties.shader_value(), 4.0);
+        assert_eq!(ModelDebugMode::Specular.shader_value(), 5.0);
+        assert_eq!(ModelDebugMode::Emissive.shader_value(), 6.0);
+        assert_eq!(ModelDebugMode::Alpha.shader_value(), 7.0);
+        assert_eq!(ModelDebugMode::Uv0.shader_value(), 8.0);
+        assert_eq!(ModelDebugMode::Uv1.shader_value(), 9.0);
+        assert_eq!(ModelDebugMode::Uv2.shader_value(), 10.0);
+        assert_eq!(ModelDebugMode::Uv3.shader_value(), 11.0);
+        assert_eq!(ModelDebugMode::VertexColor.shader_value(), 12.0);
     }
 
     #[test]

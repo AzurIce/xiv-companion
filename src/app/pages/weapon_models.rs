@@ -18,7 +18,7 @@ use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
 };
 use crate::app::utils::{cx, format_integer};
-use xiv_companion::renderer::WeaponRenderOptions;
+use xiv_companion::renderer::{ModelDebugMode, WeaponRenderOptions};
 
 use xiv_companion::{
     PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
@@ -544,6 +544,7 @@ fn SkeletonLine() -> Element {
 fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
     let current = options();
     let bloom_percent = (current.bloom_strength * 100.0).round() as i32;
+    let debug_select_class = input_class("h-8 cursor-pointer py-1 text-xs");
 
     rsx! {
         div {
@@ -554,6 +555,28 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                 span { class: "text-[11px] text-muted-foreground", "{bloom_percent}%" }
             }
             div { class: "space-y-2",
+                select {
+                    class: "{debug_select_class}",
+                    value: "{debug_mode_value(current.debug_mode)}",
+                    onchange: move |event| {
+                        let mut next = options();
+                        next.debug_mode = parse_debug_mode(&event.value());
+                        options.set(next);
+                    },
+                    option { value: "final", "Final" }
+                    option { value: "base", "Base" }
+                    option { value: "normal", "Normal" }
+                    option { value: "mask", "Mask" }
+                    option { value: "material", "Material" }
+                    option { value: "specular", "Specular" }
+                    option { value: "emissive", "Emissive" }
+                    option { value: "alpha", "Alpha" }
+                    option { value: "uv0", "UV0" }
+                    option { value: "uv1", "UV1" }
+                    option { value: "uv2", "UV2" }
+                    option { value: "uv3", "UV3" }
+                    option { value: "vertex", "Vertex" }
+                }
                 RenderCheckbox {
                     label: "Normal",
                     checked: current.normal_mapping,
@@ -617,6 +640,42 @@ fn RenderCheckbox(label: &'static str, checked: bool, on_change: EventHandler<bo
 
 fn parse_render_slider_value(value: &str) -> f32 {
     value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 160.0)
+}
+
+fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
+    match mode {
+        ModelDebugMode::Final => "final",
+        ModelDebugMode::BaseColor => "base",
+        ModelDebugMode::Normal => "normal",
+        ModelDebugMode::Mask => "mask",
+        ModelDebugMode::MaterialProperties => "material",
+        ModelDebugMode::Specular => "specular",
+        ModelDebugMode::Emissive => "emissive",
+        ModelDebugMode::Alpha => "alpha",
+        ModelDebugMode::Uv0 => "uv0",
+        ModelDebugMode::Uv1 => "uv1",
+        ModelDebugMode::Uv2 => "uv2",
+        ModelDebugMode::Uv3 => "uv3",
+        ModelDebugMode::VertexColor => "vertex",
+    }
+}
+
+fn parse_debug_mode(value: &str) -> ModelDebugMode {
+    match value {
+        "base" => ModelDebugMode::BaseColor,
+        "normal" => ModelDebugMode::Normal,
+        "mask" => ModelDebugMode::Mask,
+        "material" => ModelDebugMode::MaterialProperties,
+        "specular" => ModelDebugMode::Specular,
+        "emissive" => ModelDebugMode::Emissive,
+        "alpha" => ModelDebugMode::Alpha,
+        "uv0" => ModelDebugMode::Uv0,
+        "uv1" => ModelDebugMode::Uv1,
+        "uv2" => ModelDebugMode::Uv2,
+        "uv3" => ModelDebugMode::Uv3,
+        "vertex" => ModelDebugMode::VertexColor,
+        _ => ModelDebugMode::Final,
+    }
 }
 
 #[component]

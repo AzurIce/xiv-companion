@@ -55,6 +55,7 @@
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`，当前作为后续 tile array / UV repeat 逻辑的稳定输入，尚未驱动实际 tile 贴图选择。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入，尚未驱动实际 detail map 采样。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
+- `ModelDebugMode` 已提供第一版 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color；Web 控件和 snapshot/test render options 共用同一入口。
 
 主要缺口集中在：
 
@@ -123,14 +124,14 @@
 - 没有独立 cutout/glass/additive-lightshaft pipeline；`AdditiveLightShaft` 只存在于 prepared pass，renderer 主 pass 仍过滤它。
 - 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；secondary tangent frame、`color1`、flow、detail/multi maps、tile/detail arrays 还没有真正参与 shading，scroll 仍缺少 shader node 级别的 texture-role 路由。
 - alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
-- renderer 缺少 debug view，后续对照 MeddleTools bake 输出时仍难快速判断是 UV、sampler、ColorTable、alpha 还是 shader family 分支的问题。
+- renderer 已有第一版 debug view，能切换 base、normal、mask/material、specular、emissive、alpha、UV 与 vertex color；mesh category colors、ColorTable row index preview 和更细的 sampler/texture role 诊断仍未实现。
 
 计划：
 
 1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
 2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择和保守 scroll time 已接入，后续优先补 shader-family-specific scroll 路由、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
-4. 增加 debug render modes：base、normal、mask/material、specular、emissive、alpha、mesh category、UV set、ColorTable row index，作为真实武器样本回归的主要判断工具。
+4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color 已有第一版；后续补 mesh category、ColorTable row index 和 texture-role/sampler 诊断，作为真实武器样本回归的主要判断工具。
 
 ## 1. 数据解析改进
 
@@ -479,7 +480,7 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 
 ### P2: 视觉验证和调试视图
 
-建议在 UI 和 snapshot 工具加入 debug render mode：
+UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 - base color
 - normal
@@ -487,9 +488,14 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 - specular
 - emissive
 - alpha
-- mesh category colors
 - UV set preview
+- vertex color preview
+
+仍待补：
+
+- mesh category colors
 - ColorTable row index preview
+- texture role / sampler policy preview
 
 这些视图能显著缩短后续对照 Meddle/MeddleTools 的定位时间。
 
