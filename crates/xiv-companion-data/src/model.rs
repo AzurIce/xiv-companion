@@ -351,6 +351,79 @@ pub enum MaterialAlphaMode {
     Glass,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterial {
+    pub render_pass: PreparedRenderPass,
+    pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedRenderPass {
+    #[default]
+    Opaque,
+    Cutout,
+    Transparent,
+    Glass,
+}
+
+impl PreparedRenderPass {
+    pub fn uses_opaque_pipeline(self) -> bool {
+        matches!(
+            self,
+            PreparedRenderPass::Opaque | PreparedRenderPass::Cutout
+        )
+    }
+
+    pub fn uses_transparent_pipeline(self) -> bool {
+        matches!(
+            self,
+            PreparedRenderPass::Transparent | PreparedRenderPass::Glass
+        )
+    }
+
+    pub fn sorts_back_to_front(self) -> bool {
+        self.uses_transparent_pipeline()
+    }
+}
+
+pub fn prepare_material_for_draw_role(
+    material: Option<&ModelMaterial>,
+    draw_role: ModelMeshDrawRole,
+) -> PreparedMaterial {
+    PreparedMaterial {
+        render_pass: prepared_render_pass(material, draw_role),
+        render_backfaces: material
+            .map(|material| material.render_backfaces)
+            .unwrap_or(true),
+    }
+}
+
+fn prepared_render_pass(
+    material: Option<&ModelMaterial>,
+    draw_role: ModelMeshDrawRole,
+) -> PreparedRenderPass {
+    if matches!(draw_role, ModelMeshDrawRole::Glass) {
+        return PreparedRenderPass::Glass;
+    }
+
+    let Some(material) = material else {
+        return PreparedRenderPass::Opaque;
+    };
+
+    match material.alpha_mode {
+        MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
+        MaterialAlphaMode::Blend => PreparedRenderPass::Transparent,
+        MaterialAlphaMode::Mask => PreparedRenderPass::Cutout,
+        MaterialAlphaMode::Opaque => match material.render_mode {
+            MaterialRenderMode::Glass => PreparedRenderPass::Glass,
+            MaterialRenderMode::Transparent => PreparedRenderPass::Transparent,
+            MaterialRenderMode::Opaque => PreparedRenderPass::Opaque,
+        },
+    }
+}
+
 fn default_material_opacity() -> f32 {
     1.0
 }
@@ -921,6 +994,129 @@ mod color_table_bake_tests {
             ModelMeshDrawRole::DebugVisible
         );
         assert_eq!(mesh_draw_role_for_category(None), ModelMeshDrawRole::Normal);
+    }
+
+    #[test]
+    fn prepared_material_maps_alpha_modes_and_draw_roles() {
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::Normal
+            ),
+            PreparedRenderPass::Opaque
+        );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Mask,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::Normal
+            ),
+            PreparedRenderPass::Cutout
+        );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Blend,
+                MaterialRenderMode::Transparent,
+                ModelMeshDrawRole::Normal
+            ),
+            PreparedRenderPass::Transparent
+        );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Glass,
+                MaterialRenderMode::Glass,
+                ModelMeshDrawRole::Normal
+            ),
+            PreparedRenderPass::Glass
+        );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::Glass
+            ),
+            PreparedRenderPass::Glass
+        );
+    }
+
+    #[test]
+    fn prepared_material_preserves_culling_and_missing_material_defaults() {
+        let mut material = test_material();
+        material.render_backfaces = false;
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal),
+            PreparedMaterial {
+                render_pass: PreparedRenderPass::Opaque,
+                render_backfaces: false,
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal),
+            PreparedMaterial {
+                render_pass: PreparedRenderPass::Opaque,
+                render_backfaces: true,
+            }
+        );
+    }
+
+    #[test]
+    fn prepared_render_pass_reports_pipeline_class() {
+        assert!(PreparedRenderPass::Opaque.uses_opaque_pipeline());
+        assert!(PreparedRenderPass::Cutout.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::Opaque.sorts_back_to_front());
+        assert!(!PreparedRenderPass::Cutout.sorts_back_to_front());
+        assert!(PreparedRenderPass::Transparent.uses_transparent_pipeline());
+        assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
+        assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
+        assert!(PreparedRenderPass::Glass.sorts_back_to_front());
+    }
+
+    fn test_prepared_render_pass(
+        alpha_mode: MaterialAlphaMode,
+        render_mode: MaterialRenderMode,
+        draw_role: ModelMeshDrawRole,
+    ) -> PreparedRenderPass {
+        let mut material = test_material();
+        material.alpha_mode = alpha_mode;
+        material.render_mode = render_mode;
+        prepare_material_for_draw_role(Some(&material), draw_role).render_pass
+    }
+
+    fn test_material() -> ModelMaterial {
+        ModelMaterial {
+            slot: 0,
+            material_index: 0,
+            name: "test".to_string(),
+            path: None,
+            shader_package_name: None,
+            render_mode: MaterialRenderMode::Opaque,
+            alpha_mode: MaterialAlphaMode::Opaque,
+            alpha_threshold: 0.0,
+            opacity: 1.0,
+            render_backfaces: true,
+            apply_vertex_color: false,
+            fallback_color: [1.0, 1.0, 1.0],
+            diffuse_color: [1.0, 1.0, 1.0],
+            specular_color: [1.0, 1.0, 1.0],
+            emissive_color: [0.0, 0.0, 0.0],
+            roughness: 0.5,
+            metalness: 0.0,
+            texture_indices: Vec::new(),
+            base_color_texture: None,
+            normal_texture: None,
+            mask_texture: None,
+            material_map_texture: None,
+            multi_map_texture: None,
+            specular_texture: None,
+            emissive_texture: None,
+            material_properties_texture: None,
+            tile_properties_texture: None,
+            sheen_properties_texture: None,
+            sphere_properties_texture: None,
+            tile_matrix_texture: None,
+        }
     }
 
     fn rows_with_two_pairs() -> Vec<ColorTableRowColors> {

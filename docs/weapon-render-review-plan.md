@@ -41,6 +41,7 @@
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 - renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
+- `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass` 与 culling policy。
 
 主要缺口集中在：
 
@@ -146,8 +147,9 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 当前进度：
 
 - 已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用。
-- renderer 内部已增加第一版 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
-- 完整 `PreparedModel`、shader family、texture binding、UV source、feature flags 仍尚未建立，prepared 决策也还没有输出到 snapshot summary。
+- 已增加第一版公共 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
+- phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策。
+- 完整 `PreparedModel`、shader family、texture binding、UV source、feature flags 仍尚未建立。
 
 建议中间结构包含：
 
@@ -167,8 +169,9 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 为几个代表材质构造 fixture，断言 shader family、texture bindings、alpha policy。
-- P0/P1 phantom weapon 样本输出 prepared summary。
+- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射，以及 culling policy fallback。
+- 后续仍需要为 shader family、texture bindings、UV source 构造 fixture。
+- P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
 ### P0: mesh category 和 submesh attribute 决策前置
 

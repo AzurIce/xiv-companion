@@ -1,8 +1,8 @@
 use wgpu::util::DeviceExt;
 
 use crate::{
-    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    mesh_draw_role_for_category,
+    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData, PreparedMaterial,
+    PreparedRenderPass, mesh_draw_role_for_category, prepare_material_for_draw_role,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -737,7 +737,10 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             material_slot: mesh.material_slot,
             index_start,
             index_count: mesh.indices.len() as u32,
-            prepared_material: prepare_material(model, mesh.material_slot, draw_role),
+            prepared_material: prepare_material_for_draw_role(
+                model.materials().get(mesh.material_slot),
+                draw_role,
+            ),
             center: mesh_bounds_center(mesh),
         });
     }
@@ -764,44 +767,6 @@ fn mesh_bounds_center(mesh: &crate::ModelMesh) -> [f32; 3] {
         (min[1] + max[1]) * 0.5,
         (min[2] + max[2]) * 0.5,
     ]
-}
-
-fn prepare_material<M: ModelRenderData + ?Sized>(
-    model: &M,
-    material_slot: usize,
-    draw_role: ModelMeshDrawRole,
-) -> PreparedMaterial {
-    let material = model.materials().get(material_slot);
-    PreparedMaterial {
-        pass: prepared_render_pass(material, draw_role),
-        render_backfaces: material
-            .map(|material| material.render_backfaces)
-            .unwrap_or(true),
-    }
-}
-
-fn prepared_render_pass(
-    material: Option<&ModelMaterial>,
-    draw_role: ModelMeshDrawRole,
-) -> PreparedRenderPass {
-    if matches!(draw_role, ModelMeshDrawRole::Glass) {
-        return PreparedRenderPass::Glass;
-    }
-
-    let Some(material) = material else {
-        return PreparedRenderPass::Opaque;
-    };
-
-    match material.alpha_mode {
-        MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
-        MaterialAlphaMode::Blend => PreparedRenderPass::Transparent,
-        MaterialAlphaMode::Mask => PreparedRenderPass::Cutout,
-        MaterialAlphaMode::Opaque => match material.render_mode {
-            MaterialRenderMode::Glass => PreparedRenderPass::Glass,
-            MaterialRenderMode::Transparent => PreparedRenderPass::Transparent,
-            MaterialRenderMode::Opaque => PreparedRenderPass::Opaque,
-        },
-    }
 }
 
 fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
@@ -1543,45 +1508,11 @@ struct DrawBatch {
 
 impl DrawBatch {
     fn pass(&self) -> PreparedRenderPass {
-        self.prepared_material.pass
+        self.prepared_material.render_pass
     }
 
     fn render_backfaces(&self) -> bool {
         self.prepared_material.render_backfaces
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct PreparedMaterial {
-    pass: PreparedRenderPass,
-    render_backfaces: bool,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum PreparedRenderPass {
-    Opaque,
-    Cutout,
-    Transparent,
-    Glass,
-}
-
-impl PreparedRenderPass {
-    fn uses_opaque_pipeline(self) -> bool {
-        matches!(
-            self,
-            PreparedRenderPass::Opaque | PreparedRenderPass::Cutout
-        )
-    }
-
-    fn uses_transparent_pipeline(self) -> bool {
-        matches!(
-            self,
-            PreparedRenderPass::Transparent | PreparedRenderPass::Glass
-        )
-    }
-
-    fn sorts_back_to_front(self) -> bool {
-        self.uses_transparent_pipeline()
     }
 }
 
@@ -1705,6 +1636,7 @@ pub type WeaponRenderer = ModelRenderer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ModelMeshDrawRole;
 
     #[test]
     fn transparent_batches_sort_back_to_front_without_moving_opaque() {
@@ -1780,17 +1712,10 @@ mod tests {
 
     #[test]
     fn prepared_material_falls_back_for_missing_material_slot() {
-        let model = crate::ModelData {
-            bounds: crate::ModelBounds::default(),
-            materials: Vec::new(),
-            textures: Vec::new(),
-            meshes: Vec::new(),
-        };
-
         assert_eq!(
-            prepare_material(&model, 10, ModelMeshDrawRole::Normal),
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal),
             PreparedMaterial {
-                pass: PreparedRenderPass::Opaque,
+                render_pass: PreparedRenderPass::Opaque,
                 render_backfaces: true,
             }
         );
@@ -1820,9 +1745,9 @@ mod tests {
         };
 
         assert_eq!(
-            prepare_material(&model, 0, ModelMeshDrawRole::Normal),
+            prepare_material_for_draw_role(model.materials().first(), ModelMeshDrawRole::Normal),
             PreparedMaterial {
-                pass: PreparedRenderPass::Opaque,
+                render_pass: PreparedRenderPass::Opaque,
                 render_backfaces: false,
             }
         );
@@ -2040,7 +1965,7 @@ mod tests {
             textures: Vec::new(),
             meshes: Vec::new(),
         };
-        prepare_material(&model, 0, draw_role).pass
+        prepare_material_for_draw_role(model.materials().first(), draw_role).render_pass
     }
 
     fn test_batch(material_slot: usize, pass: PreparedRenderPass, center: [f32; 3]) -> DrawBatch {
@@ -2049,7 +1974,7 @@ mod tests {
             index_start: 0,
             index_count: 3,
             prepared_material: PreparedMaterial {
-                pass,
+                render_pass: pass,
                 render_backfaces: true,
             },
             center,
