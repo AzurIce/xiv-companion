@@ -1363,6 +1363,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         detail_params: material_detail_params(material),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
+        shader_diffuse_color: material_shader_diffuse_color(material),
+        shader_multi_diffuse_color: material_shader_multi_diffuse_color(material),
+        shader_emissive_color: material_shader_emissive_color(material),
+        shader_multi_emissive_color: material_shader_multi_emissive_color(material),
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
@@ -1969,8 +1973,12 @@ fn fallback_material() -> ModelMaterial {
         tile_scale: [16.0, 16.0],
         detail_id: 0.0,
         multi_detail_id: 0.0,
-        detail_color: [1.0, 1.0, 1.0, 1.0],
-        multi_detail_color: [1.0, 1.0, 1.0, 1.0],
+        detail_color: [0.5, 0.5, 0.5, 1.0],
+        multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+        shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -2059,11 +2067,27 @@ fn material_detail_params(material: &ModelMaterial) -> [f32; 4] {
 }
 
 fn material_detail_color(material: &ModelMaterial) -> [f32; 4] {
-    finite_vec4_or(material.detail_color, [1.0; 4])
+    finite_vec4_or(material.detail_color, [0.5, 0.5, 0.5, 1.0])
 }
 
 fn material_multi_detail_color(material: &ModelMaterial) -> [f32; 4] {
-    finite_vec4_or(material.multi_detail_color, [1.0; 4])
+    finite_vec4_or(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
+}
+
+fn material_shader_diffuse_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_diffuse_color, [1.0; 4])
+}
+
+fn material_shader_multi_diffuse_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_multi_diffuse_color, [1.0; 4])
+}
+
+fn material_shader_emissive_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_emissive_color, [0.0, 0.0, 0.0, 1.0])
+}
+
+fn material_shader_multi_emissive_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_multi_emissive_color, [0.0, 0.0, 0.0, 1.0])
 }
 
 fn material_detail_color_uv_scale(material: &ModelMaterial) -> [f32; 4] {
@@ -2273,6 +2297,10 @@ struct MaterialUniform {
     detail_params: [f32; 4],
     detail_color: [f32; 4],
     multi_detail_color: [f32; 4],
+    shader_diffuse_color: [f32; 4],
+    shader_multi_diffuse_color: [f32; 4],
+    shader_emissive_color: [f32; 4],
+    shader_multi_emissive_color: [f32; 4],
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
@@ -2833,8 +2861,8 @@ mod tests {
     fn material_detail_params_preserve_detail_uv_values() {
         let mut material = fallback_material();
         assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(material_detail_color(&material), [1.0; 4]);
-        assert_eq!(material_multi_detail_color(&material), [1.0; 4]);
+        assert_eq!(material_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(material_multi_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(material_detail_color_uv_scale(&material), [4.0; 4]);
         assert_eq!(material_detail_normal_uv_scale(&material), [4.0; 4]);
 
@@ -2863,8 +2891,8 @@ mod tests {
         material.detail_color_uv_scale = [1.0, f32::NAN, f32::INFINITY, 2.0];
         material.detail_normal_uv_scale = [f32::NEG_INFINITY, 3.0, 4.0, f32::NAN];
         assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(material_detail_color(&material), [0.25, 1.0, 1.0, 0.5]);
-        assert_eq!(material_multi_detail_color(&material), [1.0, 0.3, 0.5, 1.0]);
+        assert_eq!(material_detail_color(&material), [0.25, 0.5, 0.5, 0.5]);
+        assert_eq!(material_multi_detail_color(&material), [0.5, 0.3, 0.5, 1.0]);
         assert_eq!(
             material_detail_color_uv_scale(&material),
             [1.0, 4.0, 4.0, 2.0]
@@ -2872,6 +2900,53 @@ mod tests {
         assert_eq!(
             material_detail_normal_uv_scale(&material),
             [4.0, 3.0, 4.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn material_shader_colors_preserve_material_constants() {
+        let mut material = fallback_material();
+        assert_eq!(material_shader_diffuse_color(&material), [1.0; 4]);
+        assert_eq!(material_shader_multi_diffuse_color(&material), [1.0; 4]);
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            material_shader_multi_emissive_color(&material),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        material.shader_diffuse_color = [0.8, 0.7, 0.6, 0.5];
+        material.shader_multi_diffuse_color = [0.6, 0.7, 0.8, 0.9];
+        material.shader_emissive_color = [0.1, 0.2, 0.3, 1.0];
+        material.shader_multi_emissive_color = [0.4, 0.5, 0.6, 1.0];
+        assert_eq!(
+            material_shader_diffuse_color(&material),
+            [0.8, 0.7, 0.6, 0.5]
+        );
+        assert_eq!(
+            material_shader_multi_diffuse_color(&material),
+            [0.6, 0.7, 0.8, 0.9]
+        );
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            material_shader_multi_emissive_color(&material),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+
+        material.shader_diffuse_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
+        material.shader_emissive_color = [f32::NEG_INFINITY, 0.2, 0.3, f32::NAN];
+        assert_eq!(
+            material_shader_diffuse_color(&material),
+            [0.25, 1.0, 1.0, 0.5]
+        );
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.0, 0.2, 0.3, 1.0]
         );
     }
 

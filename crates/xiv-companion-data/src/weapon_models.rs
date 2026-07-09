@@ -49,6 +49,14 @@ const G_DETAIL_COLOR: u32 = 0xDD93_D839;
 #[cfg(feature = "game-data")]
 const G_MULTI_DETAIL_COLOR: u32 = 0x11FD_4221;
 #[cfg(feature = "game-data")]
+const G_DIFFUSE_COLOR: u32 = 0x2C2A_34DD;
+#[cfg(feature = "game-data")]
+const G_MULTI_DIFFUSE_COLOR: u32 = 0x3F8A_C211;
+#[cfg(feature = "game-data")]
+const G_EMISSIVE_COLOR: u32 = 0x38A6_4362;
+#[cfg(feature = "game-data")]
+const G_MULTI_EMISSIVE_COLOR: u32 = 0xAA67_6D0F;
+#[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_TEX_ANIM: u32 = 0x14D8_E13D;
@@ -1481,6 +1489,10 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color = composed_material_detail_color(&semantics);
         let multi_detail_color = composed_material_multi_detail_color(&semantics);
+        let shader_diffuse_color = composed_material_shader_diffuse_color(&semantics);
+        let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
+        let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
+        let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -1537,6 +1549,10 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             multi_detail_id,
             detail_color,
             multi_detail_color,
+            shader_diffuse_color,
+            shader_multi_diffuse_color,
+            shader_emissive_color,
+            shader_multi_emissive_color,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -1964,6 +1980,10 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color = composed_material_detail_color(&semantics);
         let multi_detail_color = composed_material_multi_detail_color(&semantics);
+        let shader_diffuse_color = composed_material_shader_diffuse_color(&semantics);
+        let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
+        let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
+        let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -2021,6 +2041,10 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             multi_detail_id,
             detail_color,
             multi_detail_color,
+            shader_diffuse_color,
+            shader_multi_diffuse_color,
+            shader_emissive_color,
+            shader_multi_emissive_color,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -2782,12 +2806,34 @@ fn composed_material_multi_detail_id(semantics: &ComposedMaterialSemantics) -> f
 
 #[cfg(feature = "game-data")]
 fn composed_material_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
-    composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR, [1.0; 4])
+    composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR, [0.5, 0.5, 0.5, 1.0])
 }
 
 #[cfg(feature = "game-data")]
 fn composed_material_multi_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
-    composed_material_finite_vec4_constant(semantics, G_MULTI_DETAIL_COLOR, [1.0; 4])
+    composed_material_finite_vec4_constant(semantics, G_MULTI_DETAIL_COLOR, [0.5, 0.5, 0.5, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_diffuse_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_DIFFUSE_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_multi_diffuse_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_DIFFUSE_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_emissive_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_EMISSIVE_COLOR, [0.0, 0.0, 0.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_multi_emissive_color(
+    semantics: &ComposedMaterialSemantics,
+) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_EMISSIVE_COLOR, [0.0, 0.0, 0.0, 1.0])
 }
 
 #[cfg(feature = "game-data")]
@@ -3221,8 +3267,12 @@ fn fallback_weapon_material(
         tile_scale: [16.0, 16.0],
         detail_id: 0.0,
         multi_detail_id: 0.0,
-        detail_color: [1.0, 1.0, 1.0, 1.0],
-        multi_detail_color: [1.0, 1.0, 1.0, 1.0],
+        detail_color: [0.5, 0.5, 0.5, 1.0],
+        multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+        shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -4669,8 +4719,14 @@ mod weapon_material_tests {
             (G_MULTI_DETAIL_COLOR, &[0.1, 0.3, 0.5, 0.7]),
         ]);
 
-        assert_eq!(composed_material_detail_color(&semantics), [1.0; 4]);
-        assert_eq!(composed_material_multi_detail_color(&semantics), [1.0; 4]);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.5, 0.5, 0.5, 1.0]
+        );
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.5, 0.5, 0.5, 1.0]
+        );
 
         semantics.apply_shader_package_material_constants(&shader_package);
         assert_eq!(
@@ -4693,7 +4749,7 @@ mod weapon_material_tests {
         semantics.apply_material_constants(&material);
         assert_eq!(
             composed_material_multi_detail_color(&semantics),
-            [0.25, 0.5, 1.0, 1.0]
+            [0.25, 0.5, 0.5, 1.0]
         );
 
         let material =
@@ -4701,7 +4757,65 @@ mod weapon_material_tests {
         semantics.apply_material_constants(&material);
         assert_eq!(
             composed_material_detail_color(&semantics),
-            [0.3, 1.0, 1.0, 0.4]
+            [0.3, 0.5, 0.5, 0.4]
+        );
+    }
+
+    #[test]
+    fn composed_material_shader_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_DIFFUSE_COLOR, &[0.8, 0.7, 0.6, 0.5]),
+            (G_MULTI_DIFFUSE_COLOR, &[0.6, 0.7, 0.8, 0.9]),
+            (G_EMISSIVE_COLOR, &[0.1, 0.2, 0.3, 1.0]),
+            (G_MULTI_EMISSIVE_COLOR, &[0.4, 0.5, 0.6, 1.0]),
+        ]);
+
+        assert_eq!(composed_material_shader_diffuse_color(&semantics), [1.0; 4]);
+        assert_eq!(
+            composed_material_shader_multi_diffuse_color(&semantics),
+            [1.0; 4]
+        );
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            composed_material_shader_multi_emissive_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_shader_diffuse_color(&semantics),
+            [0.8, 0.7, 0.6, 0.5]
+        );
+        assert_eq!(
+            composed_material_shader_multi_diffuse_color(&semantics),
+            [0.6, 0.7, 0.8, 0.9]
+        );
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            composed_material_shader_multi_emissive_color(&semantics),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_DIFFUSE_COLOR, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_shader_diffuse_color(&semantics),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+
+        let material =
+            test_mtrl_with_constant(G_EMISSIVE_COLOR, &[0.75, f32::NAN, f32::INFINITY, 0.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.75, 0.0, 0.0, 0.25]
         );
     }
 

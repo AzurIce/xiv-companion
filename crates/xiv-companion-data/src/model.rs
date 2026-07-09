@@ -343,6 +343,14 @@ pub struct ModelMaterial {
     pub detail_color: [f32; 4],
     #[serde(default = "default_material_detail_color")]
     pub multi_detail_color: [f32; 4],
+    #[serde(default = "default_material_shader_diffuse_color")]
+    pub shader_diffuse_color: [f32; 4],
+    #[serde(default = "default_material_shader_diffuse_color")]
+    pub shader_multi_diffuse_color: [f32; 4],
+    #[serde(default = "default_material_shader_emissive_color")]
+    pub shader_emissive_color: [f32; 4],
+    #[serde(default = "default_material_shader_emissive_color")]
+    pub shader_multi_emissive_color: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
     pub detail_color_uv_scale: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
@@ -913,8 +921,8 @@ pub fn prepared_material_feature_flags(
         || material_scalar_differs(material.multi_detail_normal_scale, 1.0)
         || material_scalar_differs(material.detail_id, 0.0)
         || material_scalar_differs(material.multi_detail_id, 0.0)
-        || material_vec4_differs(material.detail_color, [1.0; 4])
-        || material_vec4_differs(material.multi_detail_color, [1.0; 4])
+        || material_vec4_differs(material.detail_color, [0.5, 0.5, 0.5, 1.0])
+        || material_vec4_differs(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
         || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
     flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4])
@@ -1020,7 +1028,15 @@ fn default_material_detail_uv_scale() -> [f32; 4] {
 }
 
 fn default_material_detail_color() -> [f32; 4] {
+    [0.5, 0.5, 0.5, 1.0]
+}
+
+fn default_material_shader_diffuse_color() -> [f32; 4] {
     [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_shader_emissive_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
 }
 
 fn default_material_lightshaft_color() -> [f32; 4] {
@@ -2175,8 +2191,12 @@ mod color_table_bake_tests {
             tile_scale: [16.0, 16.0],
             detail_id: 0.0,
             multi_detail_id: 0.0,
-            detail_color: [1.0, 1.0, 1.0, 1.0],
-            multi_detail_color: [1.0, 1.0, 1.0, 1.0],
+            detail_color: [0.5, 0.5, 0.5, 1.0],
+            multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+            shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+            shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+            shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+            shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],
