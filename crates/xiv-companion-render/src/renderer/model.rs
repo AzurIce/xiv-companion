@@ -1120,6 +1120,9 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
+        detail_params: material_detail_params(material),
+        detail_color_uv_scale: material_detail_color_uv_scale(material),
+        detail_normal_uv_scale: material_detail_normal_uv_scale(material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1580,6 +1583,10 @@ fn fallback_material() -> ModelMaterial {
         tile_index: 0.0,
         tile_alpha: 1.0,
         tile_scale: [16.0, 16.0],
+        detail_id: 0.0,
+        multi_detail_id: 0.0,
+        detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
+        detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1647,6 +1654,33 @@ fn material_tile_params(material: &ModelMaterial) -> [f32; 4] {
         finite_or(material.tile_scale[0], 16.0),
         finite_or(material.tile_scale[1], 16.0),
     ]
+}
+
+fn material_detail_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.detail_id, 0.0),
+        finite_or(material.multi_detail_id, 0.0),
+        0.0,
+        0.0,
+    ]
+}
+
+fn material_detail_color_uv_scale(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.detail_color_uv_scale, [4.0; 4])
+}
+
+fn material_detail_normal_uv_scale(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.detail_normal_uv_scale, [4.0; 4])
+}
+
+fn finite_vec4_or(values: [f32; 4], default: [f32; 4]) -> [f32; 4] {
+    let mut resolved = default;
+    for (target, value) in resolved.iter_mut().zip(values) {
+        if value.is_finite() {
+            *target = value;
+        }
+    }
+    resolved
 }
 
 fn finite_or(value: f32, default: f32) -> f32 {
@@ -1746,6 +1780,9 @@ struct MaterialUniform {
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
     tile_params: [f32; 4],
+    detail_params: [f32; 4],
+    detail_color_uv_scale: [f32; 4],
+    detail_normal_uv_scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -2115,6 +2152,42 @@ mod tests {
         material.tile_alpha = 8.0;
         material.tile_scale = [f32::NAN, f32::NEG_INFINITY];
         assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
+    }
+
+    #[test]
+    fn material_detail_params_preserve_detail_uv_values() {
+        let mut material = fallback_material();
+        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(material_detail_color_uv_scale(&material), [4.0; 4]);
+        assert_eq!(material_detail_normal_uv_scale(&material), [4.0; 4]);
+
+        material.detail_id = 3.0;
+        material.multi_detail_id = 5.0;
+        material.detail_color_uv_scale = [8.0, 6.0, 4.0, 2.0];
+        material.detail_normal_uv_scale = [7.0, 5.0, 3.0, 1.0];
+        assert_eq!(material_detail_params(&material), [3.0, 5.0, 0.0, 0.0]);
+        assert_eq!(
+            material_detail_color_uv_scale(&material),
+            [8.0, 6.0, 4.0, 2.0]
+        );
+        assert_eq!(
+            material_detail_normal_uv_scale(&material),
+            [7.0, 5.0, 3.0, 1.0]
+        );
+
+        material.detail_id = f32::NAN;
+        material.multi_detail_id = f32::INFINITY;
+        material.detail_color_uv_scale = [1.0, f32::NAN, f32::INFINITY, 2.0];
+        material.detail_normal_uv_scale = [f32::NEG_INFINITY, 3.0, 4.0, f32::NAN];
+        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            material_detail_color_uv_scale(&material),
+            [1.0, 4.0, 4.0, 2.0]
+        );
+        assert_eq!(
+            material_detail_normal_uv_scale(&material),
+            [4.0, 3.0, 4.0, 4.0]
+        );
     }
 
     #[test]

@@ -14,6 +14,9 @@ struct Material {
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
     tile_params: vec4<f32>, // x: tile index, y: tile alpha, zw: tile repeat uv
+    detail_params: vec4<f32>, // x: detail id, y: multi detail id
+    detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
+    detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
 };
 
 struct VertexInput {

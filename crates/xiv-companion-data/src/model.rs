@@ -306,6 +306,14 @@ pub struct ModelMaterial {
     pub tile_alpha: f32,
     #[serde(default = "default_material_tile_scale")]
     pub tile_scale: [f32; 2],
+    #[serde(default)]
+    pub detail_id: f32,
+    #[serde(default)]
+    pub multi_detail_id: f32,
+    #[serde(default = "default_material_detail_uv_scale")]
+    pub detail_color_uv_scale: [f32; 4],
+    #[serde(default = "default_material_detail_uv_scale")]
+    pub detail_normal_uv_scale: [f32; 4],
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -648,6 +656,10 @@ fn default_material_tile_alpha() -> f32 {
 
 fn default_material_tile_scale() -> [f32; 2] {
     [16.0, 16.0]
+}
+
+fn default_material_detail_uv_scale() -> [f32; 4] {
+    [4.0, 4.0, 4.0, 4.0]
 }
 
 fn default_render_backfaces() -> bool {
@@ -1475,6 +1487,10 @@ mod color_table_bake_tests {
             tile_index: 0.0,
             tile_alpha: 1.0,
             tile_scale: [16.0, 16.0],
+            detail_id: 0.0,
+            multi_detail_id: 0.0,
+            detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
+            detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,

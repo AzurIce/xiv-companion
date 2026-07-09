@@ -49,6 +49,7 @@
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`，当前作为后续 multi/detail normal 组合的稳定输入，尚未改变 fragment shader 的实际法线混合。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`，当前作为后续 tile array / UV repeat 逻辑的稳定输入，尚未驱动实际 tile 贴图选择。
+- `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入，尚未驱动实际 detail map 采样。
 
 主要缺口集中在：
 
@@ -95,12 +96,10 @@
 - 已完成：`g_NormalScale` 进入 `ModelMaterial.normalScale`，默认 1.0，材质 override 优先于 shader package default，renderer 会 clamp 到 0..4 后作用于 normal map XY 强度。
 - 已完成：`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 进入 `ModelMaterial`，默认 1.0，材质 override 优先于 shader package default；renderer uniform 已预留 y/z/w 三个通道并 clamp 到 0..4，但当前 WGSL 仍只消费 `normalScale`。
 - 已完成：`g_TileIndex`、`g_TileAlpha`、`g_TileScale` 进入 `ModelMaterial`，默认值分别为 `0`、`1`、`[16,16]`；renderer uniform 已预留 `tileParams`，但当前 WGSL 仍只使用 ColorTable extra tile ramp 的第一版高光调制，没有实际选择 tile array。
+- 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已预留 detail id 与 primary/multi UV scale，但当前 WGSL 还没有绑定或采样 detail map。
 
 后续优先参数：
 
-- `g_DetailID`
-- `g_DetailColorUvScale`
-- `g_DetailNormalUvScale`
 - UV scroll 相关参数，例如 MeddleTools `UvScrollMapping` 使用的 `0x9A696A17`
 - glass/transparency 相关 shader keys 和 constants
 
@@ -109,6 +108,7 @@
 - 用合成 MTRL fixture 测 shader constant 解析。
 - 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp。
 - 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 预留。
+- 已增加 detail UV focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override 和 renderer uniform 预留。
 - 用本地 SqPack 样本输出 material debug，对照 MeddleTools `node_configs.py` 中对应 mapping。
 
 ### P1: 处理染色数据入口
@@ -239,7 +239,7 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 - base/color map
 - normal map + normal scale：`g_NormalScale` 已实际用于 primary normal；`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已进入数据/renderer 参数，后续需要接入 shader-family-specific normal map 组合
 - mask/material map 的通道解释
-- multi map/detail map 的第二层颜色/法线影响；tile select 参数已进入数据/renderer 参数，后续需要接入 tile array 与 UV repeat
+- multi map/detail map 的第二层颜色/法线影响；tile select 和 detail UV 参数已进入数据/renderer 参数，后续需要接入 tile array、detail map 与 UV repeat
 - vertex color 的具体启用条件
 
 然后再支持：
