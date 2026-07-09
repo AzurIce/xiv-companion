@@ -151,12 +151,14 @@
 - 已完成：对副手/子模型加载失败不再完全吞掉；`WeaponModelData.loadDiagnostics` 会记录候选路径、missing/read/parse 状态和错误原因。
 - 已完成：在 material debug 中明确列出 sampler role 的来源；目前覆盖 `.shpk` resource name、known CRC 和 unknown，文件名后缀来源仍应在 prepared texture config 中补齐。
 - 已完成：给每个材质输出 shader keys、resolved constants、shader flags、texture flags、sampler flags 的紧凑摘要，便于和 MeddleTools 节点输入对照；resolved 值会标注 `shaderPackageDefault` 或 `materialOverride` 来源。
+- 下一步 P0：给 `PreparedMaterial` 增加显式 unsupported/runtime-only 输入摘要，至少区分 `dyeApplication`、`runtimeColorTable`、`decalOrCrest`、`tileArray`、`detailArray`、`incompleteShaderFamilyLogic`。目标是让 snapshot 能区分“资源确实不存在”和“离线 Web/prepared 层还没有支持”。
 
 验证：
 
 - 扩展 ignored snapshot 测试生成的 `model-summary.json`，让 P0/P1 样本能直接看到缺失资源、sampler 来源和 mesh category。
 - 为副手材质反推、sampler role 来源、shader constant override 增加 focused tests。
 - 已增加 material semantic summary focused test，覆盖 key/constant 来源、known name、texture flags 与 sampler flags。
+- 新增 unsupported/runtime-only 输入字段时，用合成材质 fixture 覆盖染色表存在、tile/detail 参数非默认、debugVisible decal/crest mesh 和特殊 shader family 标记。
 
 ### P0: 修正文档和实现不一致
 
@@ -264,6 +266,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialUvSources`，常规贴图源保守为 `uv0`，scroll 源显式分为 `uv0Scroll=uv0` 和 `uv1Scroll=uv1`，与 MeddleTools `UvScrollMapping` 的 `UV0Scroll` / `UV1Scroll` 节点对应；renderer 已按 texture-role source 选择采样 UV。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策，并通过第一版 `PreparedModel` 获得 mesh draw role / main pass 可见性。
 - `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；mesh-level shape influence 已进入 `ModelMesh` / `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 可标出 active/inactive influence 但不改变 draw visibility；mesh-level flow presence 已进入 prepared material feature flags；第一版 UV source 已驱动 renderer 采样选择；尚未包含实际 shape morph、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与 shader-family-specific UV source 仍未完整驱动所有 runtime 绑定。
+- 当前缺口：`ColorDyeTable` 已在 material debug 中可见，但 `ModelMaterial` / `PreparedMaterial` 还没有结构化 `hasColorDyeTable` 或等价能力标记；tile/detail array、runtime GPU ColorTable、decal/crest 和特殊 shader family 的未支持状态也还没有进入 prepared summary。
 
 建议中间结构包含：
 
@@ -274,6 +277,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，并进入最小 wgpu additive pass
 - culling policy：render backfaces / cull backfaces
 - feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，染色输入仍待补齐
+- unsupported/runtime-only inputs：dye application、runtime ColorTable、decal/crest、tile/detail array、shader-family-specific incomplete behavior；先只基于当前可可靠判断的数据置位，不猜测运行时状态
 
 好处：
 
@@ -530,11 +534,12 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 ### 第一阶段：可审计和不误画
 
-1. 更新过期文档。
-2. 增强 summary/debug 输出。
-3. 引入 prepared draw role。
-4. 默认过滤 shadow/terrainShadow/verticalFog。
-5. 记录副手加载失败。
+1. 已完成：更新过期文档。
+2. 已完成：增强 summary/debug 输出。
+3. 已完成：引入 prepared draw role。
+4. 已完成：默认过滤 shadow/terrainShadow/verticalFog。
+5. 已完成：记录副手加载失败。
+6. 下一步：在 prepared summary 中补 runtime-only / unsupported inputs 审计字段。
 
 完成标准：
 
