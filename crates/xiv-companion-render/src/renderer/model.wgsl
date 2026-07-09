@@ -19,6 +19,14 @@ struct VertexInput {
     @location(2) uv0: vec2<f32>,
     @location(3) bitangent: vec4<f32>,
     @location(4) color: vec4<f32>,
+    @location(5) uv1: vec2<f32>,
+    @location(6) uv2: vec2<f32>,
+    @location(7) uv3: vec2<f32>,
+    @location(8) color1: vec4<f32>,
+    @location(9) normal1: vec3<f32>,
+    @location(10) bitangent1: vec4<f32>,
+    @location(11) flow0: vec4<f32>,
+    @location(12) flow1: vec4<f32>,
 };
 
 struct VertexOutput {

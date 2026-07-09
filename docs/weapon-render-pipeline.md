@@ -65,7 +65,7 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 - mesh category 会映射成 `ModelMeshDrawRole`，作为 renderer-friendly 的第一步 prepared draw role。
 - ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
 
-注意：renderer 当前 GPU 顶点格式仍只上传 position、normal、uv0、bitangent、color0；其余字段已解析但还没有进入 WGSL。
+注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；fragment shader 目前仍主要消费 uv0、primary normal/bitangent 和 color0。
 
 注意：顶点色在 FFXIV 角色/武器 shader 里不一定是纯颜色，常参与遮罩/alpha/材质调制；当前 renderer 只作近似 tint 使用。
 
@@ -231,7 +231,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 后续优先级：
 
 1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤；后续还需要独立 cutout/glass/additive-lightshaft pass。
-2. GPU 顶点格式：把 uv1-uv3、color1、secondary normal/bitangent、flow 等已解析字段逐步传入 shader。
+2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；下一步是按 shader family 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Tile/Sphere/Sheen：让 renderer 消费 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
 5. 纹理采样配置：按 role 区分 sRGB/Non-Color、linear/nearest，尤其 `_id.tex` 不应统一 linear 采样。

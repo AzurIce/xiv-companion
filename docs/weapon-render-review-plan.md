@@ -40,10 +40,11 @@
 - `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
+- renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
 
 主要缺口集中在：
 
-- 数据层保存了很多字段，但 GPU 顶点格式和 WGSL 只消费了第一套 UV/normal/bitangent/color。
+- 多套 UV、secondary normal/bitangent、`color1`、flow 已进 GPU 输入，但 shader-family-specific 逻辑还没有使用这些通道。
 - mesh category 已进入第一步 draw role 决策；submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息仍没有进入后续处理或渲染决策。
 - 材质语义被压缩成少量贴图和 Opaque/Mask/Blend/Glass；MeddleTools 中的 tile、sphere、sheen、scroll、transparency、reflection 等节点逻辑大多没有实现。
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
@@ -251,21 +252,22 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 
 ### P0: 扩展 GPU 顶点格式
 
-当前 GPU 只上传 `position`、`normal`、`uv0`、`bitangent`、`color`。需要至少补齐：
+已完成第一步：GPU 顶点格式和 WGSL `VertexInput` 已上传/声明以下字段：
 
 - `uv1`
 - `uv2`
 - `uv3`
-- `color1`
-- `normal1` / `bitangent1`，可先不绑定但需要设计位置
-- `flow0` / `flow1`，用于 scroll 或特殊 shader
+- `color1`，缺省为 `[1, 1, 1, 1]`
+- `normal1` / `bitangent1`，缺省回落到 primary normal/bitangent
+- `flow0` / `flow1`，缺省为零，用于后续 scroll 或特殊 shader
 
-初期可以按 feature flag 控制是否真正消费，避免一次性改动太大。
+当前仍保持现有视觉行为：fragment shader 还只使用 `uv0`、primary normal/bitangent 和 `color0`。后续按 shader family 和 feature flag 决定何时消费 `uv1-uv3`、`color1`、secondary tangent frame 和 flow，避免一次性改变太多材质表现。
 
 验证：
 
-- synthetic model 渲染不同 UV 层贴图，确认 shader 能选择 uv0/uv1。
-- 单元测试 `GpuVertex::layout` stride/offset。
+- 已增加单元测试 `GpuVertex::layout` stride/offset。
+- 已增加 flatten 单元测试，确认 `ModelVertex` 的扩展字段不会在 CPU -> GPU 顶点转换时丢失，并覆盖 optional 字段 fallback。
+- 后续仍需要 synthetic model 渲染不同 UV 层贴图，确认 shader-family 逻辑能选择 uv0/uv1。
 
 ### P0: 按 prepared draw role 分 pass
 
@@ -392,7 +394,7 @@ WebGPU bind group 需要支持每材质多个 sampler，或至少区分 color sa
 
 ### 第二阶段：让解析结果真正进 shader
 
-1. 扩展 GPU 顶点格式，至少支持 uv1 和 color1。
+1. 已完成 GPU 顶点格式扩展，后续让 shader-family 逻辑实际消费 uv1/color1/flow。
 2. 增加 per-material texture/sampler config。
 3. 绑定并消费 material/tile/sheen/sphere/tile-matrix 贴图。
 4. 加入 shader family 和 alpha policy。

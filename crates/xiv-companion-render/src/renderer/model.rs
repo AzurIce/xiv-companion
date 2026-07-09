@@ -726,13 +726,7 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
         }
 
         let base = vertices.len() as u32;
-        vertices.extend(mesh.vertices.iter().map(|vertex| GpuVertex {
-            position: vertex.position,
-            normal: vertex.normal,
-            uv0: vertex.uv0,
-            bitangent: vertex.bitangent,
-            color: vertex.color,
-        }));
+        vertices.extend(mesh.vertices.iter().map(GpuVertex::from_model_vertex));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
         draw_batches.push(DrawBatch {
@@ -1539,44 +1533,108 @@ struct GpuVertex {
     uv0: [f32; 2],
     bitangent: [f32; 4],
     color: [f32; 4],
+    uv1: [f32; 2],
+    uv2: [f32; 2],
+    uv3: [f32; 2],
+    color1: [f32; 4],
+    normal1: [f32; 3],
+    bitangent1: [f32; 4],
+    flow0: [f32; 4],
+    flow1: [f32; 4],
 }
 
 impl GpuVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 13] = [
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, position) as wgpu::BufferAddress,
+            shader_location: 0,
+            format: wgpu::VertexFormat::Float32x3,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, normal) as wgpu::BufferAddress,
+            shader_location: 1,
+            format: wgpu::VertexFormat::Float32x3,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, uv0) as wgpu::BufferAddress,
+            shader_location: 2,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, bitangent) as wgpu::BufferAddress,
+            shader_location: 3,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, color) as wgpu::BufferAddress,
+            shader_location: 4,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, uv1) as wgpu::BufferAddress,
+            shader_location: 5,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, uv2) as wgpu::BufferAddress,
+            shader_location: 6,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, uv3) as wgpu::BufferAddress,
+            shader_location: 7,
+            format: wgpu::VertexFormat::Float32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, color1) as wgpu::BufferAddress,
+            shader_location: 8,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, normal1) as wgpu::BufferAddress,
+            shader_location: 9,
+            format: wgpu::VertexFormat::Float32x3,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, bitangent1) as wgpu::BufferAddress,
+            shader_location: 10,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, flow0) as wgpu::BufferAddress,
+            shader_location: 11,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, flow1) as wgpu::BufferAddress,
+            shader_location: 12,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+    ];
+
+    fn from_model_vertex(vertex: &crate::ModelVertex) -> Self {
+        Self {
+            position: vertex.position,
+            normal: vertex.normal,
+            uv0: vertex.uv0,
+            bitangent: vertex.bitangent,
+            color: vertex.color,
+            uv1: vertex.uv1,
+            uv2: vertex.uv2,
+            uv3: vertex.uv3,
+            color1: vertex.color1.unwrap_or([1.0, 1.0, 1.0, 1.0]),
+            normal1: vertex.normal1.unwrap_or(vertex.normal),
+            bitangent1: vertex.bitangent1.unwrap_or(vertex.bitangent),
+            flow0: vertex.flow0.unwrap_or([0.0; 4]),
+            flow1: vertex.flow1.unwrap_or([0.0; 4]),
+        }
+    }
+
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<GpuVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-                wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2 + std::mem::size_of::<[f32; 2]>())
-                        as wgpu::BufferAddress,
-                    shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2
-                        + std::mem::size_of::<[f32; 2]>()
-                        + std::mem::size_of::<[f32; 4]>())
-                        as wgpu::BufferAddress,
-                    shader_location: 4,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-            ],
+            attributes: &Self::ATTRIBUTES,
         }
     }
 }
@@ -1644,6 +1702,95 @@ mod tests {
     }
 
     #[test]
+    fn gpu_vertex_layout_exposes_extended_model_channels() {
+        let layout = GpuVertex::layout();
+
+        assert_eq!(
+            layout.array_stride,
+            std::mem::size_of::<GpuVertex>() as wgpu::BufferAddress
+        );
+        assert_eq!(layout.step_mode, wgpu::VertexStepMode::Vertex);
+        assert_eq!(
+            layout
+                .attributes
+                .iter()
+                .map(|attribute| (
+                    attribute.shader_location,
+                    attribute.offset,
+                    attribute.format
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    0,
+                    std::mem::offset_of!(GpuVertex, position) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x3
+                ),
+                (
+                    1,
+                    std::mem::offset_of!(GpuVertex, normal) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x3
+                ),
+                (
+                    2,
+                    std::mem::offset_of!(GpuVertex, uv0) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x2
+                ),
+                (
+                    3,
+                    std::mem::offset_of!(GpuVertex, bitangent) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    4,
+                    std::mem::offset_of!(GpuVertex, color) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    5,
+                    std::mem::offset_of!(GpuVertex, uv1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x2
+                ),
+                (
+                    6,
+                    std::mem::offset_of!(GpuVertex, uv2) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x2
+                ),
+                (
+                    7,
+                    std::mem::offset_of!(GpuVertex, uv3) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x2
+                ),
+                (
+                    8,
+                    std::mem::offset_of!(GpuVertex, color1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    9,
+                    std::mem::offset_of!(GpuVertex, normal1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x3
+                ),
+                (
+                    10,
+                    std::mem::offset_of!(GpuVertex, bitangent1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    11,
+                    std::mem::offset_of!(GpuVertex, flow0) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    12,
+                    std::mem::offset_of!(GpuVertex, flow1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn flatten_model_filters_meshes_outside_main_draw_roles() {
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
@@ -1675,6 +1822,41 @@ mod tests {
         assert!(!batches[0].transparent);
         assert!(!batches[1].transparent);
         assert!(batches[2].transparent);
+    }
+
+    #[test]
+    fn flatten_model_preserves_extended_vertex_channels() {
+        let mut mesh = test_mesh("normal", 0.0);
+        mesh.vertices[0].uv1 = [0.1, 0.2];
+        mesh.vertices[0].uv2 = [0.3, 0.4];
+        mesh.vertices[0].uv3 = [0.5, 0.6];
+        mesh.vertices[0].color1 = Some([0.7, 0.8, 0.9, 1.0]);
+        mesh.vertices[0].normal1 = Some([1.0, 0.0, 0.0]);
+        mesh.vertices[0].bitangent1 = Some([0.0, 1.0, 0.0, -1.0]);
+        mesh.vertices[0].flow0 = Some([0.11, 0.22, 0.33, 0.44]);
+        mesh.vertices[0].flow1 = Some([0.55, 0.66, 0.77, 0.88]);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        let (vertices, _, _) = flatten_model(&model);
+
+        assert_eq!(vertices[0].uv1, [0.1, 0.2]);
+        assert_eq!(vertices[0].uv2, [0.3, 0.4]);
+        assert_eq!(vertices[0].uv3, [0.5, 0.6]);
+        assert_eq!(vertices[0].color1, [0.7, 0.8, 0.9, 1.0]);
+        assert_eq!(vertices[0].normal1, [1.0, 0.0, 0.0]);
+        assert_eq!(vertices[0].bitangent1, [0.0, 1.0, 0.0, -1.0]);
+        assert_eq!(vertices[0].flow0, [0.11, 0.22, 0.33, 0.44]);
+        assert_eq!(vertices[0].flow1, [0.55, 0.66, 0.77, 0.88]);
+        assert_eq!(vertices[1].color1, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(vertices[1].normal1, [0.0, 1.0, 0.0]);
+        assert_eq!(vertices[1].bitangent1, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(vertices[1].flow0, [0.0; 4]);
+        assert_eq!(vertices[1].flow1, [0.0; 4]);
     }
 
     fn test_material_is_transparent(
