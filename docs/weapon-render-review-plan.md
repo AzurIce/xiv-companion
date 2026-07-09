@@ -40,14 +40,14 @@
 - `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
-- renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
+- renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已把 `uv1-uv3` 传到 fragment，并按 prepared UV source 选择 texture-role 采样 UV，但当前规则仍基本选择 `uv0`，secondary normal/bitangent、`color1` 和 flow 尚未参与实际 shader。
 - `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 仍不进入主 surface pass。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`；新增特殊 character family 目前只用于准备层分类和 debug，尚未改变 shader 行为。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
 - `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总，`usesDye` 仍保守为 false，等待染色入口。
-- `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer 尚未按该表切换采样。
+- `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties 与 ColorTable extra maps 的采样 UV，但当前 source 规则仍基本保守为 `uv0`。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
@@ -99,14 +99,14 @@
 主要不足：
 
 - preparation 已有 `enabledShapeMask` 的 active/inactive shape influence 审计，但还没有真正应用 shape mesh/morph、skinning/morph runtime 输入，也没有 per-submesh draw batch 级别的可见性拆分。
-- `PreparedMaterialUvSources` 和 `PreparedTextureSamplingSet` 目前主要用于 debug/规划，renderer 仍没有按该表选择 UV set 或 per-role sampler。
+- `PreparedMaterialUvSources` 已开始驱动 renderer 选择采样 UV；`PreparedTextureSamplingSet` 仍主要用于 debug/规划，renderer 还没有按该表完整选择 per-role sampler。
 - shader-family-specific 规则还没有进入中间层，例如 character base texture 如何与 ColorTable diffuse 混合、material/multi map 通道如何解释、scroll/reflection 使用哪套 UV/flow。
 - `usesDye`、decal/crest、runtime ColorTable、tile/detail array 这些 capability flags 还不完整，导致 snapshot 很难区分“资源不存在”和“准备层还没启用”。
 
 计划：
 
 1. 扩展 `PreparedModelOptions`：继续加入 stain 输入、decal/crest fallback 或显式资源入口；`enabledShapeMask` 已先作为审计输入存在，默认仍保持离线保守行为。
-2. 把 prepared texture/sampler/UV source 从“输出给 debug”推进到“驱动 renderer binding”：先接入 uv0/uv1 选择和 nearest data resources，再考虑 per-texture sampler。
+2. 把 prepared texture/sampler/UV source 从“输出给 debug”推进到“驱动 renderer binding”：UV source 已先接入 renderer material uniform 和 WGSL 采样选择；后续继续接入 shader-family-specific source、nearest data resources 和 per-texture sampler。
 3. 将 shader-family-specific 规则下沉到 prepared 层：为 character/glass/transparency/scroll/lightshaft/reflection 等输出明确的 feature flags、UV source、blend/alpha policy 和需要的 texture roles。
 4. 继续让 phantom `model-summary.json` 输出 preparation 结果，新增“为什么没画/为什么用了 fallback”的原因字段，作为后续真实样本验证的主要入口。
 
@@ -116,7 +116,7 @@
 
 - renderer 已上传扩展顶点格式，并已将 base/normal/mask/emissive/specular/material-properties/tile/sheen/sphere/tile-matrix 绑定到 material bind group；color/data/nearest data sampler 已初步分开。
 - 透明 batch 已按 mesh-level back-to-front 排序；glass 已进入透明管线；cutout 有 alpha test；ColorTable extra maps 已在 WGSL 中产生可观察的保守高光/反射近似。
-- 当前 `model.wgsl` 仍是单个近似 shader，实际主要消费 `uv0`、primary normal/bitangent、`color0`，与 MeddleTools 节点图和 bake pass 的差距仍集中在 shader 行为，而不是字段缺失。
+- 当前 `model.wgsl` 仍是单个近似 shader，虽然已能按 prepared UV source 在 `uv0-uv3` 间选择采样 UV，但 shader-family-specific 规则仍少，实际材质多数仍走 `uv0`、primary normal/bitangent、`color0` 的近似路径；与 MeddleTools 节点图和 bake pass 的差距仍集中在 shader 行为，而不是字段缺失。
 
 主要不足：
 
@@ -128,7 +128,7 @@
 计划：
 
 1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
-2. 让 WGSL 按 prepared UV source 和 feature flags 消费 uv1/flow/detail/tile 信息：优先 scroll UV/time、tile matrix/tile index、detail map，再做 secondary normal/bitangent。
+2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择已接入，后续优先 scroll UV/time、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
 4. 增加 debug render modes：base、normal、mask/material、specular、emissive、alpha、mesh category、UV set、ColorTable row index，作为真实武器样本回归的主要判断工具。
 
@@ -238,9 +238,9 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `PreparedMaterial` 已包含第一版 `PreparedTextureBindings`，聚合 renderer 当前已知的材质贴图索引。
 - `PreparedMaterial` 已包含第一版 `PreparedTextureSamplingSet`，把 texture role 的 sRGB/Non-Color、linear/nearest、repeat/clip 语义从 renderer 私有实现中拆出来；当前没有 decal texture kind，因此 clip 仍只是预留枚举。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialFeatureFlags`，聚合 `usesVertexColor`、`usesColorTable`、`usesTile`、`usesDetail`、`usesScroll`，并显式保留 `usesFlow` / `usesDye` 为后续 mesh/stain preparation 入口。
-- `PreparedMaterial` 已包含第一版 `PreparedMaterialUvSources`，常规贴图源保守为 `uv0`，scroll 源显式分为 `uv0Scroll=uv0` 和 `uv1Scroll=uv1`，与 MeddleTools `UvScrollMapping` 的 `UV0Scroll` / `UV1Scroll` 节点对应。
+- `PreparedMaterial` 已包含第一版 `PreparedMaterialUvSources`，常规贴图源保守为 `uv0`，scroll 源显式分为 `uv0Scroll=uv0` 和 `uv1Scroll=uv1`，与 MeddleTools `UvScrollMapping` 的 `UV0Scroll` / `UV1Scroll` 节点对应；renderer 已按 texture-role source 选择采样 UV。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策，并通过第一版 `PreparedModel` 获得 mesh draw role / main pass 可见性。
-- `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；mesh-level shape influence 已进入 `ModelMesh` / `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 可标出 active/inactive influence 但不改变 draw visibility；mesh-level flow presence 已进入 prepared material feature flags；尚未包含实际 shape morph、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与第一版 UV source 已有公共语义，但尚未完整驱动所有 runtime 绑定。
+- `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；mesh-level shape influence 已进入 `ModelMesh` / `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 可标出 active/inactive influence 但不改变 draw visibility；mesh-level flow presence 已进入 prepared material feature flags；第一版 UV source 已驱动 renderer 采样选择；尚未包含实际 shape morph、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与 shader-family-specific UV source 仍未完整驱动所有 runtime 绑定。
 
 建议中间结构包含：
 
@@ -260,7 +260,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、mesh-level shape influence active/inactive 状态、mesh-level flow feature flag、alpha policy、lightshaft additive prepared pass 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
+- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、mesh-level shape influence active/inactive 状态、mesh-level flow feature flag、alpha policy、lightshaft additive prepared pass 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、prepared UV source 及 renderer uniform 编码，以及 culling policy fallback。
 - 后续仍需要用真实样本验证 sampler policy / UV source 到 renderer 绑定的覆盖率。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
@@ -360,13 +360,13 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 - `normal1` / `bitangent1`，缺省回落到 primary normal/bitangent
 - `flow0` / `flow1`，缺省为零，用于后续 scroll 或特殊 shader
 
-当前仍保持现有视觉行为：fragment shader 还只使用 `uv0`、primary normal/bitangent 和 `color0`。`PreparedMaterialUvSources` 已先记录 texture role 与 scroll 的 UV 来源，后续按 shader family、UV source 和 feature flag 决定何时消费 `uv1-uv3`、`color1`、secondary tangent frame 和 flow，避免一次性改变太多材质表现。
+当前仍保持现有视觉行为：fragment shader 已按 prepared UV source 选择 texture-role 采样 UV，但 source 规则仍基本默认 `uv0`，并且 primary normal/bitangent 与 `color0` 仍是主要着色输入。后续按 shader family、UV source 和 feature flag 决定何时让 `uv1-uv3` 产生差异、以及何时消费 `color1`、secondary tangent frame 和 flow，避免一次性改变太多材质表现。
 
 验证：
 
 - 已增加单元测试 `GpuVertex::layout` stride/offset。
 - 已增加 flatten 单元测试，确认 `ModelVertex` 的扩展字段不会在 CPU -> GPU 顶点转换时丢失，并覆盖 optional 字段 fallback。
-- 后续仍需要 synthetic model 渲染不同 UV 层贴图，确认 shader-family / prepared UV source 逻辑能选择 uv0/uv1。
+- renderer 已把 `uv1-uv3` 传入 fragment，并按 prepared UV source uniform 选择各 texture role 的采样 UV；后续仍需要 synthetic model 渲染不同 UV 层贴图，确认 shader-family-specific source 规则能产生可见差异。
 
 ### P0: 按 prepared draw role 分 pass
 
@@ -512,7 +512,7 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 
 1. 已完成 GPU 顶点格式扩展，后续让 shader-family 逻辑实际消费 uv1/color1/flow。
 2. 增加 per-material texture/sampler config。
-3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；后续让 tile array、UV source 和 shader-family 规则真正参与。
+3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；prepared UV source 已驱动采样选择，后续让 tile array 和 shader-family-specific source 规则真正参与。
 4. 加入 shader family 和 alpha policy。
 
 完成标准：

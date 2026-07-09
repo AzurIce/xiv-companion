@@ -18,6 +18,9 @@ struct Material {
     detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
     detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
     uv_scroll: vec4<f32>, // xy: uv0 scroll multiplier, zw: uv1 scroll multiplier
+    uv_sources0: vec4<f32>, // x: base, y: normal, z: mask, w: material map
+    uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
+    uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
 };
 
 struct VertexInput {
@@ -42,6 +45,9 @@ struct VertexOutput {
     @location(1) uv0: vec2<f32>,
     @location(2) bitangent: vec4<f32>,
     @location(3) color: vec4<f32>,
+    @location(4) uv1: vec2<f32>,
+    @location(5) uv2: vec2<f32>,
+    @location(6) uv3: vec2<f32>,
 };
 
 @group(0) @binding(0)
@@ -102,28 +108,38 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.uv0 = input.uv0;
     out.bitangent = input.bitangent;
     out.color = input.color;
+    out.uv1 = input.uv1;
+    out.uv2 = input.uv2;
+    out.uv3 = input.uv3;
     return out;
 }
 
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
-    let normal = resolve_normal(input, front_facing);
+    let base_uv = resolve_uv(input, material.uv_sources0.x);
+    let normal_uv = resolve_uv(input, material.uv_sources0.y);
+    let mask_uv = resolve_uv(input, material.uv_sources0.z);
+    let specular_uv = resolve_uv(input, material.uv_sources1.y);
+    let emissive_uv = resolve_uv(input, material.uv_sources1.z);
+    let material_properties_uv = resolve_uv(input, material.uv_sources1.w);
+
+    let normal = resolve_normal(input, front_facing, normal_uv);
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
-    let mask = resolve_mask(input.uv0);
-    let properties = resolve_material_properties(input.uv0);
+    let mask = resolve_mask(mask_uv);
+    let properties = resolve_material_properties(material_properties_uv, mask);
     let metalness = clamp(properties.x, 0.0, 1.0);
     let roughness = clamp(properties.y, 0.08, 1.0);
     let gloss_strength = clamp(properties.z, 0.0, 1.0);
     let specular_strength = clamp(properties.w, 0.0, 1.0);
-    let extra = resolve_extra_properties(input.uv0);
+    let extra = resolve_extra_properties(input);
     let tile_specular_scale = mix(1.0, mix(0.88, 1.16, extra.tile.y), extra.flags.x);
     let specular_scale = specular_strength * mix(1.0, mask.r * 1.35, material.params.w) * tile_specular_scale;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
-    let sampled_base = textureSample(base_color_texture, base_color_sampler, input.uv0);
-    let sampled_specular = textureSample(specular_texture, base_color_sampler, input.uv0).rgb;
+    let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
+    let sampled_specular = textureSample(specular_texture, base_color_sampler, specular_uv).rgb;
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5);
@@ -153,7 +169,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         + material_specular * specular * 0.65
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0);
     let lit = select(opaque_lit, glass_lit, is_glass);
-    let emissive_tex = textureSample(emissive_texture, base_color_sampler, input.uv0).rgb;
+    let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
     let color = lit + extra_lit + emissive;
@@ -173,12 +189,11 @@ fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
     return textureSample(mask_texture, data_sampler, uv).rgb;
 }
 
-fn resolve_material_properties(uv: vec2<f32>) -> vec4<f32> {
+fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
     if material.properties.x > 0.5 {
         return textureSample(material_properties_texture, data_sampler, uv);
     }
 
-    let mask = resolve_mask(uv);
     let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
     let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
     let specular_strength = mix(1.0, mask.r * 1.35, material.params.w);
@@ -194,7 +209,7 @@ struct ExtraProperties {
     flags: vec4<f32>,
 };
 
-fn resolve_extra_properties(uv: vec2<f32>) -> ExtraProperties {
+fn resolve_extra_properties(input: VertexOutput) -> ExtraProperties {
     var extra: ExtraProperties;
     let has_tile = material.extra_properties.x > 0.5;
     let has_sheen = material.extra_properties.y > 0.5;
@@ -211,16 +226,16 @@ fn resolve_extra_properties(uv: vec2<f32>) -> ExtraProperties {
     extra.sphere = vec4<f32>(0.0, 0.0, 1.0, 1.0);
     extra.tile_matrix = vec4<f32>(1.0, 0.0, 0.0, 1.0);
     if has_tile {
-        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, uv);
+        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.x));
     }
     if has_sheen {
-        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, uv);
+        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.y));
     }
     if has_sphere {
-        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, uv);
+        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.z));
     }
     if has_tile_matrix {
-        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, uv);
+        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.w));
     }
     return extra;
 }
@@ -267,10 +282,10 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
     return emissive_tex * texture_strength + material_emissive * (texture_gate + mask_gate) * vertex_gate;
 }
 
-fn resolve_normal(input: VertexOutput, front_facing: bool) -> vec3<f32> {
+fn resolve_normal(input: VertexOutput, front_facing: bool, uv: vec2<f32>) -> vec3<f32> {
     let face_sign = select(-1.0, 1.0, front_facing);
     let geometric_normal = normalize(input.normal) * face_sign;
-    let sampled = textureSample(normal_texture, data_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
+    let sampled = textureSample(normal_texture, data_sampler, uv).xyz * 2.0 - vec3<f32>(1.0);
     if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
         return geometric_normal;
     }
@@ -285,4 +300,17 @@ fn resolve_normal(input: VertexOutput, front_facing: bool) -> vec3<f32> {
         sampled.z,
     ));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
+}
+
+fn resolve_uv(input: VertexOutput, source: f32) -> vec2<f32> {
+    if source > 2.5 {
+        return input.uv3;
+    }
+    if source > 1.5 {
+        return input.uv2;
+    }
+    if source > 0.5 {
+        return input.uv1;
+    }
+    return input.uv0;
 }

@@ -2,7 +2,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData, PreparedMaterial,
-    PreparedRenderPass, prepare_model_for_render,
+    PreparedRenderPass, PreparedUvSource, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -421,8 +421,13 @@ impl ModelRenderer {
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let material_bind_groups =
-            create_material_bind_groups(&device, &queue, &material_bind_group_layout, model);
+        let material_bind_groups = create_material_bind_groups(
+            &device,
+            &queue,
+            &material_bind_group_layout,
+            model,
+            &draw_batches,
+        );
         let post_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("weapon postprocess sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -790,6 +795,7 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
         indices.extend(mesh.indices.iter().map(|index| base + *index));
         draw_batches.push(DrawBatch {
             material_slot: prepared_mesh.material_slot,
+            material_bind_group_index: draw_batches.len(),
             index_start,
             index_count: mesh.indices.len() as u32,
             prepared_material: prepared_mesh.prepared_material,
@@ -853,7 +859,7 @@ fn draw_model_batch<'a>(
     batch: &DrawBatch,
 ) {
     if let Some(bind_group) = material_bind_groups
-        .get(batch.material_slot)
+        .get(batch.material_bind_group_index)
         .or_else(|| material_bind_groups.first())
     {
         render_pass.set_bind_group(1, bind_group, &[]);
@@ -1027,21 +1033,25 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     model: &M,
+    draw_batches: &[DrawBatch],
 ) -> Vec<wgpu::BindGroup> {
-    if model.materials().is_empty() {
-        return vec![create_material_bind_group(
-            device,
-            queue,
-            layout,
-            &fallback_material(),
-            model,
-        )];
-    }
-
-    model
-        .materials()
+    draw_batches
         .iter()
-        .map(|material| create_material_bind_group(device, queue, layout, material, model))
+        .map(|batch| {
+            let fallback = fallback_material();
+            let material = model
+                .materials()
+                .get(batch.material_slot)
+                .unwrap_or(&fallback);
+            create_material_bind_group(
+                device,
+                queue,
+                layout,
+                material,
+                model,
+                batch.prepared_material,
+            )
+        })
         .collect()
 }
 
@@ -1051,8 +1061,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     layout: &wgpu::BindGroupLayout,
     material: &ModelMaterial,
     model: &M,
+    prepared_material: PreparedMaterial,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
+    let uv_sources = material_uv_source_params(prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -1124,6 +1136,9 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
+        uv_sources0: uv_sources.0,
+        uv_sources1: uv_sources.1,
+        uv_sources2: uv_sources.2,
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1679,6 +1694,41 @@ fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.uv_scroll, [0.0; 4])
 }
 
+fn material_uv_source_params(
+    prepared_material: PreparedMaterial,
+) -> ([f32; 4], [f32; 4], [f32; 4]) {
+    let uv_sources = prepared_material.uv_sources.textures;
+    (
+        [
+            prepared_uv_source_value(uv_sources.base_color),
+            prepared_uv_source_value(uv_sources.normal),
+            prepared_uv_source_value(uv_sources.mask),
+            prepared_uv_source_value(uv_sources.material_map),
+        ],
+        [
+            prepared_uv_source_value(uv_sources.multi_map),
+            prepared_uv_source_value(uv_sources.specular),
+            prepared_uv_source_value(uv_sources.emissive),
+            prepared_uv_source_value(uv_sources.material_properties),
+        ],
+        [
+            prepared_uv_source_value(uv_sources.tile_properties),
+            prepared_uv_source_value(uv_sources.sheen_properties),
+            prepared_uv_source_value(uv_sources.sphere_properties),
+            prepared_uv_source_value(uv_sources.tile_matrix),
+        ],
+    )
+}
+
+fn prepared_uv_source_value(source: PreparedUvSource) -> f32 {
+    match source {
+        PreparedUvSource::Uv0 => 0.0,
+        PreparedUvSource::Uv1 => 1.0,
+        PreparedUvSource::Uv2 => 2.0,
+        PreparedUvSource::Uv3 => 3.0,
+    }
+}
+
 fn finite_vec4_or(values: [f32; 4], default: [f32; 4]) -> [f32; 4] {
     let mut resolved = default;
     for (target, value) in resolved.iter_mut().zip(values) {
@@ -1790,6 +1840,9 @@ struct MaterialUniform {
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
+    uv_sources0: [f32; 4],
+    uv_sources1: [f32; 4],
+    uv_sources2: [f32; 4],
 }
 
 #[repr(C)]
@@ -1801,6 +1854,7 @@ struct PostUniform {
 #[derive(Copy, Clone, Debug)]
 struct DrawBatch {
     material_slot: usize,
+    material_bind_group_index: usize,
     index_start: u32,
     index_count: u32,
     prepared_material: PreparedMaterial,
@@ -1940,7 +1994,7 @@ mod tests {
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
         PreparedMaterialUvSources, PreparedTextureBindings, PreparedTextureSamplingSet,
-        prepare_material_for_draw_role,
+        PreparedTextureUvSources, PreparedUvSource, prepare_material_for_draw_role,
     };
 
     #[test]
@@ -2228,6 +2282,47 @@ mod tests {
     }
 
     #[test]
+    fn material_uv_source_params_preserve_prepared_texture_sources() {
+        let prepared = PreparedMaterial {
+            render_pass: PreparedRenderPass::Opaque,
+            shader_family: MaterialShaderFamily::Character,
+            texture_bindings: PreparedTextureBindings::default(),
+            texture_sampling: PreparedTextureSamplingSet::default(),
+            uv_sources: PreparedMaterialUvSources {
+                textures: PreparedTextureUvSources {
+                    base_color: PreparedUvSource::Uv0,
+                    normal: PreparedUvSource::Uv1,
+                    mask: PreparedUvSource::Uv2,
+                    material_map: PreparedUvSource::Uv3,
+                    multi_map: PreparedUvSource::Uv3,
+                    specular: PreparedUvSource::Uv2,
+                    emissive: PreparedUvSource::Uv1,
+                    material_properties: PreparedUvSource::Uv0,
+                    tile_properties: PreparedUvSource::Uv1,
+                    sheen_properties: PreparedUvSource::Uv2,
+                    sphere_properties: PreparedUvSource::Uv3,
+                    tile_matrix: PreparedUvSource::Uv0,
+                    index: PreparedUvSource::Uv0,
+                    other: PreparedUvSource::Uv0,
+                },
+                uv0_scroll: PreparedUvSource::Uv0,
+                uv1_scroll: PreparedUvSource::Uv1,
+            },
+            feature_flags: PreparedMaterialFeatureFlags::default(),
+            render_backfaces: true,
+        };
+
+        assert_eq!(
+            material_uv_source_params(prepared),
+            (
+                [0.0, 1.0, 2.0, 3.0],
+                [3.0, 2.0, 1.0, 0.0],
+                [1.0, 2.0, 3.0, 0.0]
+            )
+        );
+    }
+
+    #[test]
     fn gpu_vertex_layout_exposes_extended_model_channels() {
         let layout = GpuVertex::layout();
 
@@ -2405,6 +2500,7 @@ mod tests {
     fn test_batch(material_slot: usize, pass: PreparedRenderPass, center: [f32; 3]) -> DrawBatch {
         DrawBatch {
             material_slot,
+            material_bind_group_index: material_slot,
             index_start: 0,
             index_count: 3,
             prepared_material: PreparedMaterial {
