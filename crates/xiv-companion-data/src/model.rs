@@ -437,6 +437,20 @@ pub struct PreparedModel {
     pub meshes: Vec<PreparedMesh>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedModelOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_attribute_mask: Option<u32>,
+}
+
+impl PreparedModelOptions {
+    pub fn with_enabled_attribute_mask(mut self, enabled_attribute_mask: u32) -> Self {
+        self.enabled_attribute_mask = Some(enabled_attribute_mask);
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMesh {
@@ -444,9 +458,30 @@ pub struct PreparedMesh {
     pub material_slot: usize,
     pub draw_role: ModelMeshDrawRole,
     pub renders_in_main_pass: bool,
+    #[serde(default)]
+    pub visibility: PreparedMeshVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submesh: Option<ModelSubmeshInfo>,
     pub prepared_material: PreparedMaterial,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMeshVisibility {
+    pub submesh_attributes_visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_attribute_mask: Option<u32>,
+    pub missing_attribute_mask: u32,
+}
+
+impl Default for PreparedMeshVisibility {
+    fn default() -> Self {
+        Self {
+            submesh_attributes_visible: true,
+            enabled_attribute_mask: None,
+            missing_attribute_mask: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -647,6 +682,13 @@ impl PreparedRenderPass {
 }
 
 pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> PreparedModel {
+    prepare_model_for_render_with_options(model, PreparedModelOptions::default())
+}
+
+pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
+    model: &M,
+    options: PreparedModelOptions,
+) -> PreparedModel {
     PreparedModel {
         meshes: model
             .meshes()
@@ -654,11 +696,15 @@ pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> Prepa
             .enumerate()
             .map(|(mesh_index, mesh)| {
                 let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
+                let visibility =
+                    prepared_mesh_visibility(mesh.submesh.as_ref(), options.enabled_attribute_mask);
                 PreparedMesh {
                     mesh_index,
                     material_slot: mesh.material_slot,
                     draw_role,
-                    renders_in_main_pass: draw_role.renders_in_main_pass(),
+                    renders_in_main_pass: draw_role.renders_in_main_pass()
+                        && visibility.submesh_attributes_visible,
+                    visibility,
                     submesh: mesh.submesh.clone(),
                     prepared_material: prepare_material_for_draw_role(
                         model.materials().get(mesh.material_slot),
@@ -667,6 +713,25 @@ pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> Prepa
                 }
             })
             .collect(),
+    }
+}
+
+fn prepared_mesh_visibility(
+    submesh: Option<&ModelSubmeshInfo>,
+    enabled_attribute_mask: Option<u32>,
+) -> PreparedMeshVisibility {
+    let Some(enabled_attribute_mask) = enabled_attribute_mask else {
+        return PreparedMeshVisibility::default();
+    };
+    let required_attribute_mask = submesh
+        .map(|submesh| submesh.attribute_index_mask)
+        .unwrap_or(0);
+    let missing_attribute_mask = required_attribute_mask & !enabled_attribute_mask;
+
+    PreparedMeshVisibility {
+        submesh_attributes_visible: missing_attribute_mask == 0,
+        enabled_attribute_mask: Some(enabled_attribute_mask),
+        missing_attribute_mask,
     }
 }
 
@@ -1641,6 +1706,10 @@ mod color_table_bake_tests {
         assert_eq!(prepared.meshes[0].material_slot, 0);
         assert_eq!(prepared.meshes[0].draw_role, ModelMeshDrawRole::Normal);
         assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].visibility,
+            PreparedMeshVisibility::default()
+        );
         assert_eq!(prepared.meshes[0].submesh, Some(test_model_submesh_info()));
         assert_eq!(
             prepared.meshes[0].prepared_material.render_pass,
@@ -1667,6 +1736,57 @@ mod color_table_bake_tests {
             prepared.meshes[2].prepared_material.shader_family,
             MaterialShaderFamily::Unknown
         );
+    }
+
+    #[test]
+    fn prepared_model_applies_explicit_enabled_attribute_mask() {
+        let mut visible_mesh = test_model_mesh(None, 0);
+        visible_mesh.submesh = Some(test_model_submesh_info());
+        let mut hidden_mesh = test_model_mesh(None, 0);
+        hidden_mesh.submesh = Some(test_model_submesh_info());
+        let mut no_attribute_mesh = test_model_mesh(None, 0);
+        no_attribute_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x00000000".to_string(),
+            attribute_names: Vec::new(),
+            ..test_model_submesh_info()
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![visible_mesh, hidden_mesh, no_attribute_mesh],
+        };
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_attribute_mask(0x0000_0005),
+        );
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].visibility,
+            PreparedMeshVisibility {
+                submesh_attributes_visible: true,
+                enabled_attribute_mask: Some(0x0000_0005),
+                missing_attribute_mask: 0,
+            }
+        );
+        assert!(prepared.meshes[2].renders_in_main_pass);
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_attribute_mask(0x0000_0001),
+        );
+        assert!(!prepared.meshes[1].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[1].visibility,
+            PreparedMeshVisibility {
+                submesh_attributes_visible: false,
+                enabled_attribute_mask: Some(0x0000_0001),
+                missing_attribute_mask: 0x0000_0004,
+            }
+        );
+        assert!(prepared.meshes[2].renders_in_main_pass);
     }
 
     #[test]
