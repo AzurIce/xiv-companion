@@ -45,7 +45,7 @@
 - mesh category、submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息没有进入后续处理或渲染决策。
 - 材质语义被压缩成少量贴图和 Opaque/Mask/Blend/Glass；MeddleTools 中的 tile、sphere、sheen、scroll、transparency、reflection 等节点逻辑大多没有实现。
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
-- 文档 `weapon-render-pipeline.md` 有若干过期点，需要后续同步。
+- 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
 ## 1. 数据解析改进
 
