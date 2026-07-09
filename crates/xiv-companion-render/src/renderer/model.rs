@@ -1357,6 +1357,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             alpha_mode_value(material.alpha_mode),
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
+        alpha_params: material_alpha_params(material),
         glass_params: material_glass_params(material),
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
@@ -1965,6 +1966,9 @@ fn fallback_material() -> ModelMaterial {
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         transparency: 0.0,
+        alpha_aperture: 2.0,
+        alpha_offset: 0.0,
+        shadow_alpha_threshold: 0.5,
         glass_ior: 1.0,
         glass_thickness_max: 0.01,
         normal_scale: 1.0,
@@ -2048,6 +2052,15 @@ fn material_glass_params(material: &ModelMaterial) -> [f32; 4] {
         finite_or(material.glass_thickness_max, 0.01),
         0.0,
         0.0,
+    ]
+}
+
+fn material_alpha_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.alpha_aperture, 2.0),
+        finite_or(material.alpha_offset, 0.0),
+        finite_or(material.shadow_alpha_threshold, 0.5).clamp(0.0, 1.0),
+        finite_or(material.transparency, 0.0).clamp(0.0, 1.0),
     ]
 }
 
@@ -2303,6 +2316,7 @@ struct MaterialUniform {
     params: [f32; 4],
     properties: [f32; 4],
     render: [f32; 4],
+    alpha_params: [f32; 4],
     glass_params: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
@@ -2868,6 +2882,24 @@ mod tests {
         material.tile_alpha = 8.0;
         material.tile_scale = [f32::NAN, f32::NEG_INFINITY];
         assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
+    }
+
+    #[test]
+    fn material_alpha_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_alpha_params(&material), [2.0, 0.0, 0.5, 0.0]);
+
+        material.alpha_aperture = 2.5;
+        material.alpha_offset = -0.2;
+        material.shadow_alpha_threshold = 0.35;
+        material.transparency = 0.6;
+        assert_eq!(material_alpha_params(&material), [2.5, -0.2, 0.35, 0.6]);
+
+        material.alpha_aperture = f32::NAN;
+        material.alpha_offset = f32::INFINITY;
+        material.shadow_alpha_threshold = 4.0;
+        material.transparency = -1.0;
+        assert_eq!(material_alpha_params(&material), [2.0, 0.0, 1.0, 0.0]);
     }
 
     #[test]

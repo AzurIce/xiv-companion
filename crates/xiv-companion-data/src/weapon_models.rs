@@ -21,6 +21,12 @@ const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
 const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
+const G_ALPHA_APERTURE: u32 = 0xD62B_F368;
+#[cfg(feature = "game-data")]
+const G_ALPHA_OFFSET: u32 = 0xD07A_6A65;
+#[cfg(feature = "game-data")]
+const G_SHADOW_ALPHA_THRESHOLD: u32 = 0xD925_FF32;
+#[cfg(feature = "game-data")]
 const G_TRANSPARENCY: u32 = 0x53E8_417B;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
@@ -942,6 +948,9 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_MultiDetailColor",
             "g_DetailNormalScale",
             "g_MultiDetailNormalScale",
+            "g_AlphaAperture",
+            "g_AlphaOffset",
+            "g_ShadowAlphaThreshold",
             "g_Transparency",
             "g_TexAnim",
             "g_TexU",
@@ -1484,6 +1493,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let transparency = composed_material_transparency(&semantics);
+        let alpha_aperture = composed_material_alpha_aperture(&semantics);
+        let alpha_offset = composed_material_alpha_offset(&semantics);
+        let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
         let glass_ior = composed_material_glass_ior(&semantics);
         let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
@@ -1546,6 +1558,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             alpha_mode,
             alpha_threshold,
             transparency,
+            alpha_aperture,
+            alpha_offset,
+            shadow_alpha_threshold,
             glass_ior,
             glass_thickness_max,
             normal_scale,
@@ -1979,6 +1994,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let transparency = composed_material_transparency(&semantics);
+        let alpha_aperture = composed_material_alpha_aperture(&semantics);
+        let alpha_offset = composed_material_alpha_offset(&semantics);
+        let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
         let glass_ior = composed_material_glass_ior(&semantics);
         let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
@@ -2042,6 +2060,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             alpha_mode,
             alpha_threshold,
             transparency,
+            alpha_aperture,
+            alpha_offset,
+            shadow_alpha_threshold,
             glass_ior,
             glass_thickness_max,
             normal_scale,
@@ -2754,6 +2775,21 @@ fn composed_material_transparency(semantics: &ComposedMaterialSemantics) -> f32 
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_alpha_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_ALPHA_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shadow_alpha_threshold(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHADOW_ALPHA_THRESHOLD, 0.5).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_glass_ior(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_GLASS_IOR, 1.0)
 }
@@ -3282,6 +3318,9 @@ fn fallback_weapon_material(
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         transparency: 0.0,
+        alpha_aperture: 2.0,
+        alpha_offset: 0.0,
+        shadow_alpha_threshold: 0.5,
         glass_ior: 1.0,
         glass_thickness_max: 0.01,
         normal_scale: 1.0,
@@ -4607,6 +4646,49 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[8.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_transparency(&semantics), 1.0);
+    }
+
+    #[test]
+    fn composed_material_alpha_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_ALPHA_APERTURE, &[2.5]),
+            (G_ALPHA_OFFSET, &[-0.25]),
+            (G_SHADOW_ALPHA_THRESHOLD, &[0.35]),
+        ]);
+
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.0);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.5);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.5);
+        assert_eq!(composed_material_alpha_offset(&semantics), -0.25);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_ALPHA_APERTURE, &[4.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 4.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.2);
+
+        let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[1.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 1.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_APERTURE, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.5);
     }
 
     #[test]

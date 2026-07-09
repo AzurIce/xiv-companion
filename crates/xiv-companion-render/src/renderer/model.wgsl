@@ -11,6 +11,7 @@ struct Material {
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
+    alpha_params: vec4<f32>, // x: aperture, y: offset, z: shadow alpha threshold, w: transparency
     glass_params: vec4<f32>, // x: IOR, y: max thickness
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
