@@ -123,7 +123,7 @@
 
 主要不足：
 
-- cutout 仍复用 opaque pipeline，glass 仍复用 transparent pipeline；additive-lightshaft 已有最小 additive pipeline，并已消费第一组 `lightshaft.shpk` 参数，但完整 lightshaft 节点行为尚未实现。
+- cutout/glass 已有独立 wgpu pipeline 入口，但 shader 行为仍分别沿用现有 alpha test 与 glass 近似；additive-lightshaft 已有最小 additive pipeline，并已消费第一组 `lightshaft.shpk` 参数，但完整 lightshaft 节点行为尚未实现。
 - 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；secondary tangent frame、`color1`、flow、detail/multi maps、tile/detail arrays 还没有真正参与 shading，scroll 仍缺少 shader node 级别的 texture-role 路由。
 - alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
 - renderer 已有第一版 debug view，能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color、ColorTable index、material map、multi map 与 ColorTable extra maps；更细的 per-texture independent sampler policy、真实 tile/detail array 诊断仍未实现。
@@ -380,17 +380,17 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 当前进度：数据层已记录 prepared render pass：
 
 - `Opaque`
-- `Cutout`：当前仍复用 opaque pipeline，写 depth，并由 shader alpha test discard。
+- `Cutout`：已有独立 cutout pipeline，写 depth，并由 shader alpha test discard。
 - `Transparent`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
-- `Glass`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
+- `Glass`：已有独立 glass pipeline，不写 depth，参与 mesh-level sorting；当前仍使用透明 alpha blending 和现有 glass 近似参数。
 - `AdditiveLightShaft`：lightshaft 已有 prepared 分类，renderer 会保留为 additive batch，使用加法混合且不写 depth。
 
 当前仍未完成的是把 cutout/glass/lightshaft 行为做成更完整的 shader-family-specific 管线：
 
 - opaque pass：写 depth
-- cutout pass：写 depth，alpha test discard
+- cutout pass：已有独立 pipeline，写 depth，alpha test discard；尚未有 shader-family-specific cutout 行为
 - transparent pass：不写 depth，mesh-level sorted
-- glass pass：不写 depth，单独 blend/参数
+- glass pass：已有独立 pipeline，不写 depth，参与 mesh-level sorted；尚未有独立 blend/参数模型
 - additive/lightshaft pass：已有最小加法混合、不写 depth；已解析并保守消费 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU/V`、`g_Ray`，但尚未复刻完整 lightshaft 节点语义
 
 shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 surface；lightShaft 不作为普通 surface，但会通过 additive pass 绘制。

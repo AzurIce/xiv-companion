@@ -720,17 +720,19 @@ pub enum PreparedRenderPass {
 
 impl PreparedRenderPass {
     pub fn uses_opaque_pipeline(self) -> bool {
-        matches!(
-            self,
-            PreparedRenderPass::Opaque | PreparedRenderPass::Cutout
-        )
+        matches!(self, PreparedRenderPass::Opaque)
+    }
+
+    pub fn uses_cutout_pipeline(self) -> bool {
+        matches!(self, PreparedRenderPass::Cutout)
     }
 
     pub fn uses_transparent_pipeline(self) -> bool {
-        matches!(
-            self,
-            PreparedRenderPass::Transparent | PreparedRenderPass::Glass
-        )
+        matches!(self, PreparedRenderPass::Transparent)
+    }
+
+    pub fn uses_glass_pipeline(self) -> bool {
+        matches!(self, PreparedRenderPass::Glass)
     }
 
     pub fn uses_additive_pipeline(self) -> bool {
@@ -738,7 +740,7 @@ impl PreparedRenderPass {
     }
 
     pub fn sorts_back_to_front(self) -> bool {
-        self.uses_transparent_pipeline()
+        self.uses_transparent_pipeline() || self.uses_glass_pipeline()
     }
 }
 
@@ -1678,16 +1680,20 @@ mod color_table_bake_tests {
     #[test]
     fn prepared_render_pass_reports_pipeline_class() {
         assert!(PreparedRenderPass::Opaque.uses_opaque_pipeline());
-        assert!(PreparedRenderPass::Cutout.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::Cutout.uses_opaque_pipeline());
+        assert!(PreparedRenderPass::Cutout.uses_cutout_pipeline());
         assert!(!PreparedRenderPass::Opaque.sorts_back_to_front());
         assert!(!PreparedRenderPass::Cutout.sorts_back_to_front());
         assert!(PreparedRenderPass::Transparent.uses_transparent_pipeline());
-        assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::Glass.uses_transparent_pipeline());
+        assert!(PreparedRenderPass::Glass.uses_glass_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
         assert!(PreparedRenderPass::AdditiveLightShaft.uses_additive_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_cutout_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_glass_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.sorts_back_to_front());
     }
 

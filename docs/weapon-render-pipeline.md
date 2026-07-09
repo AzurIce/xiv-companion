@@ -210,10 +210,12 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - nearest data sampler（repeat/nearest，用于 ColorTable extra maps）
 3. scene pass：
    - renderer 先计算第一版 `PreparedModel`，为每个 mesh 记录 draw role、main-pass 可见性、submesh attribute metadata、attribute visibility 和 `PreparedMaterial`；`PreparedMaterial` 会把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 五类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags 和 UV source。
-   - opaque pipeline：写 depth，绘制 `Opaque` 与 `Cutout` batch；`Cutout` 仍由 WGSL alpha test discard。
-   - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` 与 `Glass` batch。
+   - opaque pipeline：写 depth，绘制 `Opaque` batch。
+   - cutout pipeline：写 depth，绘制 `Cutout` batch；当前仍由 WGSL alpha test discard。
+   - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` batch。
+   - glass pipeline：alpha blending，不写 depth，绘制 `Glass` batch；仍沿用现有 glass 近似参数。
    - additive pipeline：additive blending，不写 depth，绘制 `AdditiveLightShaft` batch。
-   - opaque/transparent/additive 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
+   - opaque/cutout/transparent/glass/additive 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
    - `PreparedMesh` 先过滤非 surface：shadow、terrainShadow、verticalFog 不进入当前渲染；lightShaft 不作为普通 surface，但会分类为 `AdditiveLightShaft` 并保留到 additive pass；materialChange/crestChange 暂作为 debugVisible 绘制；mesh category glass 会强制进入 `Glass` prepared pass。
 4. bloom pass：从 bright attachment 提取高亮并 blur。
 5. compose pass：scene + bloom 输出到 canvas。
@@ -245,7 +247,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 后续优先级：
 
-1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass/AdditiveLightShaft` prepared pass 分类，`AdditiveLightShaft` 已进入最小 additive wgpu pipeline 并消费第一组 lightshaft 参数；后续还需要 runtime shape visibility、独立 cutout/glass 行为和更完整的 lightshaft 节点语义。
+1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass/AdditiveLightShaft` prepared pass 分类，Cutout/Glass 已有独立 wgpu pipeline 入口，`AdditiveLightShaft` 已进入最小 additive wgpu pipeline 并消费第一组 lightshaft 参数；后续还需要 runtime shape visibility、更完整的 cutout/glass shader 行为和 lightshaft 节点语义。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags 和 UV source，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Material params：`g_AlphaThreshold`、`g_Transparency`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale`、`g_UVScrollTime` 以及 `lightshaft.shpk` 的 `g_Color/g_TexAnim/g_TexU/g_TexV/g_Ray` 已进入结构化材质字段；后续要继续接入 glass 等其他参数，并让 transparency alpha、multi/detail normal、tile select、detail UV 与 shader-family-specific UV scroll 更完整地参与 shader。

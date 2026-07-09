@@ -117,8 +117,12 @@ pub struct ModelRenderer {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     culled_pipeline: wgpu::RenderPipeline,
+    cutout_pipeline: wgpu::RenderPipeline,
+    cutout_culled_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
     transparent_culled_pipeline: wgpu::RenderPipeline,
+    glass_pipeline: wgpu::RenderPipeline,
+    glass_culled_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     additive_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
@@ -473,6 +477,22 @@ impl ModelRenderer {
             ModelPipelineBlend::Opaque,
             true,
         );
+        let cutout_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon cutout model pipeline",
+            ModelPipelineBlend::Opaque,
+            false,
+        );
+        let cutout_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon cutout culled model pipeline",
+            ModelPipelineBlend::Opaque,
+            true,
+        );
         let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
@@ -486,6 +506,22 @@ impl ModelRenderer {
             &shader,
             &pipeline_layout,
             "weapon transparent culled model pipeline",
+            ModelPipelineBlend::Alpha,
+            true,
+        );
+        let glass_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon glass model pipeline",
+            ModelPipelineBlend::Alpha,
+            false,
+        );
+        let glass_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon glass culled model pipeline",
             ModelPipelineBlend::Alpha,
             true,
         );
@@ -564,8 +600,12 @@ impl ModelRenderer {
             queue,
             pipeline,
             culled_pipeline,
+            cutout_pipeline,
+            cutout_culled_pipeline,
             transparent_pipeline,
             transparent_culled_pipeline,
+            glass_pipeline,
+            glass_culled_pipeline,
             additive_pipeline,
             additive_culled_pipeline,
             blur_pipeline,
@@ -678,7 +718,7 @@ impl ModelRenderer {
             for batch in self
                 .draw_batches
                 .iter()
-                .filter(|batch| batch.pass().uses_opaque_pipeline())
+                .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
             {
                 render_pass.set_pipeline(if batch.render_backfaces() {
                     &self.pipeline
@@ -688,14 +728,34 @@ impl ModelRenderer {
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
+            {
+                render_pass.set_pipeline(if batch.render_backfaces() {
+                    &self.cutout_pipeline
+                } else {
+                    &self.cutout_culled_pipeline
+                });
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
             let sorted_transparent_batches =
                 sorted_transparent_batches(&self.draw_batches, yaw, pitch);
             for batch in sorted_transparent_batches {
-                render_pass.set_pipeline(if batch.render_backfaces() {
+                let pipeline = if batch.pass() == PreparedRenderPass::Glass {
+                    if batch.render_backfaces() {
+                        &self.glass_pipeline
+                    } else {
+                        &self.glass_culled_pipeline
+                    }
+                } else if batch.render_backfaces() {
                     &self.transparent_pipeline
                 } else {
                     &self.transparent_culled_pipeline
-                });
+                };
+                render_pass.set_pipeline(pipeline);
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
@@ -2470,16 +2530,20 @@ mod tests {
     #[test]
     fn prepared_render_pass_reports_pipeline_class() {
         assert!(PreparedRenderPass::Opaque.uses_opaque_pipeline());
-        assert!(PreparedRenderPass::Cutout.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::Cutout.uses_opaque_pipeline());
+        assert!(PreparedRenderPass::Cutout.uses_cutout_pipeline());
         assert!(!PreparedRenderPass::Opaque.sorts_back_to_front());
         assert!(!PreparedRenderPass::Cutout.sorts_back_to_front());
         assert!(PreparedRenderPass::Transparent.uses_transparent_pipeline());
-        assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::Glass.uses_transparent_pipeline());
+        assert!(PreparedRenderPass::Glass.uses_glass_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
         assert!(PreparedRenderPass::AdditiveLightShaft.uses_additive_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_cutout_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_glass_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.sorts_back_to_front());
     }
 
