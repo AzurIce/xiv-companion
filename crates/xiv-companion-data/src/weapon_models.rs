@@ -28,6 +28,12 @@ const G_DETAIL_NORMAL_SCALE: u32 = 0x9F42_EDA2;
 #[cfg(feature = "game-data")]
 const G_MULTI_DETAIL_NORMAL_SCALE: u32 = 0xA83D_BDF1;
 #[cfg(feature = "game-data")]
+const G_TILE_ALPHA: u32 = 0x12C6_AC9F;
+#[cfg(feature = "game-data")]
+const G_TILE_INDEX: u32 = 0x4255_F2F4;
+#[cfg(feature = "game-data")]
+const G_TILE_SCALE: u32 = 0x2E60_B071;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -1434,6 +1440,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
         let multi_detail_normal_scale = composed_material_multi_detail_normal_scale(&semantics);
+        let tile_index = composed_material_tile_index(&semantics);
+        let tile_alpha = composed_material_tile_alpha(&semantics);
+        let tile_scale = composed_material_tile_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1474,6 +1483,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             multi_normal_scale,
             detail_normal_scale,
             multi_detail_normal_scale,
+            tile_index,
+            tile_alpha,
+            tile_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -1884,6 +1896,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
         let multi_detail_normal_scale = composed_material_multi_detail_normal_scale(&semantics);
+        let tile_index = composed_material_tile_index(&semantics);
+        let tile_alpha = composed_material_tile_alpha(&semantics);
+        let tile_scale = composed_material_tile_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1925,6 +1940,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             multi_normal_scale,
             detail_normal_scale,
             multi_detail_normal_scale,
+            tile_index,
+            tile_alpha,
+            tile_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2248,6 +2266,12 @@ impl ComposedMaterialSemantics {
             .get(&constant_id)
             .and_then(|entry| entry.value.first())
             .copied()
+    }
+
+    fn material_constant_f32_values(&self, constant_id: u32) -> Option<&[f32]> {
+        self.material_constants
+            .get(&constant_id)
+            .map(|entry| entry.value.as_slice())
     }
 
     fn apply_shader_package(&mut self, shader_package: &physis::shpk::ShaderPackage) {
@@ -2632,6 +2656,41 @@ fn composed_material_normal_scale_constant(
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_tile_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TILE_INDEX, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_tile_alpha(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TILE_ALPHA, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_tile_scale(semantics: &ComposedMaterialSemantics) -> [f32; 2] {
+    let mut scale = [16.0, 16.0];
+    if let Some(values) = semantics.material_constant_f32_values(G_TILE_SCALE) {
+        for (target, value) in scale.iter_mut().zip(values.iter().copied()) {
+            if value.is_finite() {
+                *target = value;
+            }
+        }
+    }
+    scale
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_finite_constant(
+    semantics: &ComposedMaterialSemantics,
+    constant_id: u32,
+    default: f32,
+) -> f32 {
+    semantics
+        .material_constant_first_f32(constant_id)
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+}
+
+#[cfg(feature = "game-data")]
 fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
     let alpha_mode =
         weapon_material_alpha_mode(shader_package_name, 0, &WeaponTextureSet::default(), false);
@@ -2986,6 +3045,9 @@ fn fallback_weapon_material(
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
         multi_detail_normal_scale: 1.0,
+        tile_index: 0.0,
+        tile_alpha: 1.0,
+        tile_scale: [16.0, 16.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -4307,6 +4369,37 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_MULTI_DETAIL_NORMAL_SCALE, &[8.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_multi_detail_normal_scale(&semantics), 4.0);
+    }
+
+    #[test]
+    fn composed_material_tile_select_uses_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_TILE_INDEX, &[3.0]),
+            (G_TILE_ALPHA, &[0.75]),
+            (G_TILE_SCALE, &[16.0, 8.0]),
+        ]);
+
+        assert_eq!(composed_material_tile_index(&semantics), 0.0);
+        assert_eq!(composed_material_tile_alpha(&semantics), 1.0);
+        assert_eq!(composed_material_tile_scale(&semantics), [16.0, 16.0]);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_tile_index(&semantics), 3.0);
+        assert_eq!(composed_material_tile_alpha(&semantics), 0.75);
+        assert_eq!(composed_material_tile_scale(&semantics), [16.0, 8.0]);
+
+        let material = test_mtrl_with_constant(G_TILE_INDEX, &[9.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_index(&semantics), 9.0);
+
+        let material = test_mtrl_with_constant(G_TILE_ALPHA, &[0.35], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_alpha(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_TILE_SCALE, &[4.0, 2.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_scale(&semantics), [4.0, 2.0]);
     }
 
     #[test]

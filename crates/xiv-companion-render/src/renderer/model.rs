@@ -1119,6 +1119,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         ],
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
+        tile_params: material_tile_params(material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1576,6 +1577,9 @@ fn fallback_material() -> ModelMaterial {
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
         multi_detail_normal_scale: 1.0,
+        tile_index: 0.0,
+        tile_alpha: 1.0,
+        tile_scale: [16.0, 16.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1634,6 +1638,19 @@ fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
         material.detail_normal_scale.clamp(0.0, 4.0),
         material.multi_detail_normal_scale.clamp(0.0, 4.0),
     ]
+}
+
+fn material_tile_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.tile_index, 0.0),
+        finite_or(material.tile_alpha, 1.0).clamp(0.0, 1.0),
+        finite_or(material.tile_scale[0], 16.0),
+        finite_or(material.tile_scale[1], 16.0),
+    ]
+}
+
+fn finite_or(value: f32, default: f32) -> f32 {
+    if value.is_finite() { value } else { default }
 }
 
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
@@ -1728,6 +1745,7 @@ struct MaterialUniform {
     render: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
+    tile_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -2081,6 +2099,22 @@ mod tests {
         material.detail_normal_scale = 8.0;
         material.multi_detail_normal_scale = 0.25;
         assert_eq!(material_shader_params(&material), [4.0, 0.0, 4.0, 0.25]);
+    }
+
+    #[test]
+    fn material_tile_params_preserve_tile_select_values() {
+        let mut material = fallback_material();
+        assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
+
+        material.tile_index = 7.0;
+        material.tile_alpha = 0.35;
+        material.tile_scale = [24.0, 12.0];
+        assert_eq!(material_tile_params(&material), [7.0, 0.35, 24.0, 12.0]);
+
+        material.tile_index = f32::INFINITY;
+        material.tile_alpha = 8.0;
+        material.tile_scale = [f32::NAN, f32::NEG_INFINITY];
+        assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
     }
 
     #[test]
