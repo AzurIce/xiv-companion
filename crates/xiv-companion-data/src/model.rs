@@ -480,9 +480,10 @@ pub struct BakedColorTableMaps {
 
 /// 按 `_id.tex` 逐像素查 ColorTable 烘焙 diffuse / emissive 贴图。
 ///
-/// Dawntrail 索引贴图编码: R 通道选择行对 (0..=15, 值为 17 的倍数)，
-/// 行对 i 对应表中第 2i 与 2i+1 行；G 通道在两行之间线性混合。
-/// `rows` 为 ColorTable 全部行（Dawntrail 32 行）；`id_rgba` 为索引贴图 RGBA8 数据。
+/// MeddleTools 的 ColorTable ramp 语义按偶/奇行拆成 A/B ramp；这里用 R 通道选择行对，
+/// 行对 i 对应表中第 2i 与 2i+1 行，G 通道在两行之间线性混合。
+/// Dawntrail 通常是 32 行、16 个行对，R 通道以 17 为步长；Legacy 是 16 行、8 个行对。
+/// `rows` 为 ColorTable 全部行；`id_rgba` 为索引贴图 RGBA8 数据。
 pub fn bake_color_table_maps(
     rows: &[ColorTableRowColors],
     id_rgba: &[u8],
@@ -952,6 +953,26 @@ mod color_table_bake_tests {
 
         assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
         assert_eq!(&baked.diffuse_rgba[4..8], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn bake_maps_legacy_pair_steps() {
+        // 16 行 Legacy ColorTable = 8 个行对，R=255 选择最后一对的偶数行 14。
+        let mut rows = vec![ColorTableRowColors::default(); 16];
+        rows[14] = ColorTableRowColors {
+            diffuse: [1.0, 1.0, 1.0],
+            ..Default::default()
+        };
+        rows[15] = ColorTableRowColors {
+            diffuse: [1.0, 0.0, 0.0],
+            ..Default::default()
+        };
+
+        let id_rgba = [255, 0, 0, 255, 255, 255, 0, 255];
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
+        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 0, 0, 255]);
     }
 
     #[test]
