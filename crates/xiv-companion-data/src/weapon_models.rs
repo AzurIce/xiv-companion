@@ -22,6 +22,12 @@ const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
 const G_NORMAL_SCALE: u32 = 0xB554_5FBB;
 #[cfg(feature = "game-data")]
+const G_MULTI_NORMAL_SCALE: u32 = 0x793A_C5A3;
+#[cfg(feature = "game-data")]
+const G_DETAIL_NORMAL_SCALE: u32 = 0x9F42_EDA2;
+#[cfg(feature = "game-data")]
+const G_MULTI_DETAIL_NORMAL_SCALE: u32 = 0xA83D_BDF1;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -1425,6 +1431,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
+        let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
+        let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
+        let multi_detail_normal_scale = composed_material_multi_detail_normal_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1462,6 +1471,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             alpha_mode,
             alpha_threshold,
             normal_scale,
+            multi_normal_scale,
+            detail_normal_scale,
+            multi_detail_normal_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -1869,6 +1881,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
+        let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
+        let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
+        let multi_detail_normal_scale = composed_material_multi_detail_normal_scale(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1907,6 +1922,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             alpha_mode,
             alpha_threshold,
             normal_scale,
+            multi_normal_scale,
+            detail_normal_scale,
+            multi_detail_normal_scale,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2583,8 +2601,31 @@ fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> O
 
 #[cfg(feature = "game-data")]
 fn composed_material_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_normal_scale_constant(semantics, G_NORMAL_SCALE)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_multi_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_normal_scale_constant(semantics, G_MULTI_NORMAL_SCALE)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_detail_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_normal_scale_constant(semantics, G_DETAIL_NORMAL_SCALE)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_multi_detail_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_normal_scale_constant(semantics, G_MULTI_DETAIL_NORMAL_SCALE)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_normal_scale_constant(
+    semantics: &ComposedMaterialSemantics,
+    constant_id: u32,
+) -> f32 {
     semantics
-        .material_constant_first_f32(G_NORMAL_SCALE)
+        .material_constant_first_f32(constant_id)
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(0.0, 4.0))
         .unwrap_or(1.0)
@@ -2942,6 +2983,9 @@ fn fallback_weapon_material(
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         normal_scale: 1.0,
+        multi_normal_scale: 1.0,
+        detail_normal_scale: 1.0,
+        multi_detail_normal_scale: 1.0,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -4225,22 +4269,44 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn composed_material_normal_scale_uses_resolved_material_constant() {
+    fn composed_material_normal_scales_use_resolved_material_constants() {
         let mut semantics = ComposedMaterialSemantics::default();
-        let shader_package = test_shpk_with_material_defaults(&[(G_NORMAL_SCALE, &[0.65])]);
-        let material = test_mtrl_with_constant(G_NORMAL_SCALE, &[1.75], 0);
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_NORMAL_SCALE, &[0.65]),
+            (G_MULTI_NORMAL_SCALE, &[0.75]),
+            (G_DETAIL_NORMAL_SCALE, &[0.85]),
+            (G_MULTI_DETAIL_NORMAL_SCALE, &[0.95]),
+        ]);
 
         assert_eq!(composed_material_normal_scale(&semantics), 1.0);
+        assert_eq!(composed_material_multi_normal_scale(&semantics), 1.0);
+        assert_eq!(composed_material_detail_normal_scale(&semantics), 1.0);
+        assert_eq!(composed_material_multi_detail_normal_scale(&semantics), 1.0);
 
         semantics.apply_shader_package_material_constants(&shader_package);
         assert_eq!(composed_material_normal_scale(&semantics), 0.65);
+        assert_eq!(composed_material_multi_normal_scale(&semantics), 0.75);
+        assert_eq!(composed_material_detail_normal_scale(&semantics), 0.85);
+        assert_eq!(
+            composed_material_multi_detail_normal_scale(&semantics),
+            0.95
+        );
 
+        let material = test_mtrl_with_constant(G_NORMAL_SCALE, &[1.75], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_normal_scale(&semantics), 1.75);
 
-        let material = test_mtrl_with_constant(G_NORMAL_SCALE, &[8.0], 0);
+        let material = test_mtrl_with_constant(G_MULTI_NORMAL_SCALE, &[2.25], 0);
         semantics.apply_material_constants(&material);
-        assert_eq!(composed_material_normal_scale(&semantics), 4.0);
+        assert_eq!(composed_material_multi_normal_scale(&semantics), 2.25);
+
+        let material = test_mtrl_with_constant(G_DETAIL_NORMAL_SCALE, &[3.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_detail_normal_scale(&semantics), 3.25);
+
+        let material = test_mtrl_with_constant(G_MULTI_DETAIL_NORMAL_SCALE, &[8.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_multi_detail_normal_scale(&semantics), 4.0);
     }
 
     #[test]

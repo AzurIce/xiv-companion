@@ -1573,6 +1573,9 @@ fn fallback_material() -> ModelMaterial {
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         normal_scale: 1.0,
+        multi_normal_scale: 1.0,
+        detail_normal_scale: 1.0,
+        multi_detail_normal_scale: 1.0,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1625,7 +1628,12 @@ fn texture_presence_flag<M: ModelRenderData + ?Sized>(
 }
 
 fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
-    [material.normal_scale.clamp(0.0, 4.0), 0.0, 0.0, 0.0]
+    [
+        material.normal_scale.clamp(0.0, 4.0),
+        material.multi_normal_scale.clamp(0.0, 4.0),
+        material.detail_normal_scale.clamp(0.0, 4.0),
+        material.multi_detail_normal_scale.clamp(0.0, 4.0),
+    ]
 }
 
 fn render_mode_value(mode: MaterialRenderMode) -> f32 {
@@ -2058,15 +2066,21 @@ mod tests {
     }
 
     #[test]
-    fn material_shader_params_clamp_normal_scale() {
+    fn material_shader_params_clamp_normal_scales() {
         let mut material = fallback_material();
-        assert_eq!(material_shader_params(&material), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(material_shader_params(&material), [1.0, 1.0, 1.0, 1.0]);
 
         material.normal_scale = 2.25;
-        assert_eq!(material_shader_params(&material), [2.25, 0.0, 0.0, 0.0]);
+        material.multi_normal_scale = 0.5;
+        material.detail_normal_scale = 3.5;
+        material.multi_detail_normal_scale = f32::INFINITY;
+        assert_eq!(material_shader_params(&material), [2.25, 0.5, 3.5, 4.0]);
 
         material.normal_scale = 8.0;
-        assert_eq!(material_shader_params(&material), [4.0, 0.0, 0.0, 0.0]);
+        material.multi_normal_scale = -1.0;
+        material.detail_normal_scale = 8.0;
+        material.multi_detail_normal_scale = 0.25;
+        assert_eq!(material_shader_params(&material), [4.0, 0.0, 4.0, 0.25]);
     }
 
     #[test]

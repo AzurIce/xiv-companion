@@ -294,6 +294,12 @@ pub struct ModelMaterial {
     pub alpha_threshold: f32,
     #[serde(default = "default_material_normal_scale")]
     pub normal_scale: f32,
+    #[serde(default = "default_material_normal_scale")]
+    pub multi_normal_scale: f32,
+    #[serde(default = "default_material_normal_scale")]
+    pub detail_normal_scale: f32,
+    #[serde(default = "default_material_normal_scale")]
+    pub multi_detail_normal_scale: f32,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -1449,6 +1455,9 @@ mod color_table_bake_tests {
             alpha_mode: MaterialAlphaMode::Opaque,
             alpha_threshold: 0.0,
             normal_scale: 1.0,
+            multi_normal_scale: 1.0,
+            detail_normal_scale: 1.0,
+            multi_detail_normal_scale: 1.0,
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,
