@@ -1938,8 +1938,8 @@ pub type WeaponRenderer = ModelRenderer;
 mod tests {
     use super::*;
     use crate::{
-        MaterialShaderFamily, ModelMeshDrawRole, PreparedTextureBindings,
-        PreparedTextureSamplingSet,
+        MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
+        PreparedTextureBindings, PreparedTextureSamplingSet,
     };
 
     #[test]
@@ -2023,6 +2023,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             }
         );
@@ -2058,6 +2059,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: false,
             }
         );
@@ -2394,6 +2396,7 @@ mod tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             },
             center,

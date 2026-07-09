@@ -424,7 +424,21 @@ pub struct PreparedMaterial {
     pub shader_family: MaterialShaderFamily,
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
+    #[serde(default)]
+    pub feature_flags: PreparedMaterialFeatureFlags,
     pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialFeatureFlags {
+    pub uses_vertex_color: bool,
+    pub uses_color_table: bool,
+    pub uses_tile: bool,
+    pub uses_detail: bool,
+    pub uses_scroll: bool,
+    pub uses_flow: bool,
+    pub uses_dye: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -555,13 +569,17 @@ pub fn prepare_material_for_draw_role(
     material: Option<&ModelMaterial>,
     draw_role: ModelMeshDrawRole,
 ) -> PreparedMaterial {
+    let shader_family = material_shader_family(
+        material.and_then(|material| material.shader_package_name.as_deref()),
+    );
+    let texture_bindings = prepared_texture_bindings(material);
+
     PreparedMaterial {
         render_pass: prepared_render_pass(material, draw_role),
-        shader_family: material_shader_family(
-            material.and_then(|material| material.shader_package_name.as_deref()),
-        ),
-        texture_bindings: prepared_texture_bindings(material),
+        shader_family,
+        texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
+        feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -587,6 +605,43 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
     }
+}
+
+pub fn prepared_material_feature_flags(
+    material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> PreparedMaterialFeatureFlags {
+    let mut flags = PreparedMaterialFeatureFlags {
+        uses_color_table: texture_bindings.material_properties.is_some()
+            || texture_bindings.tile_properties.is_some()
+            || texture_bindings.sheen_properties.is_some()
+            || texture_bindings.sphere_properties.is_some()
+            || texture_bindings.tile_matrix.is_some(),
+        uses_tile: texture_bindings.tile_properties.is_some(),
+        uses_detail: texture_bindings.multi_map.is_some(),
+        uses_scroll: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
+        ..PreparedMaterialFeatureFlags::default()
+    };
+
+    let Some(material) = material else {
+        return flags;
+    };
+
+    flags.uses_vertex_color = material.apply_vertex_color;
+    flags.uses_tile |= material_scalar_differs(material.tile_index, 0.0)
+        || material_scalar_differs(material.tile_alpha, 1.0)
+        || material_vec2_differs(material.tile_scale, [16.0, 16.0]);
+    flags.uses_detail |= material_scalar_differs(material.multi_normal_scale, 1.0)
+        || material_scalar_differs(material.detail_normal_scale, 1.0)
+        || material_scalar_differs(material.multi_detail_normal_scale, 1.0)
+        || material_scalar_differs(material.detail_id, 0.0)
+        || material_scalar_differs(material.multi_detail_id, 0.0)
+        || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
+        || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
+    flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4]);
+
+    flags
 }
 
 pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTextureSampling {
@@ -618,6 +673,24 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
             address_mode: PreparedTextureAddressMode::Repeat,
         },
     }
+}
+
+fn material_scalar_differs(value: f32, default: f32) -> bool {
+    value.is_finite() && (value - default).abs() > 0.000_001
+}
+
+fn material_vec2_differs(value: [f32; 2], default: [f32; 2]) -> bool {
+    value
+        .into_iter()
+        .zip(default)
+        .any(|(value, default)| material_scalar_differs(value, default))
+}
+
+fn material_vec4_differs(value: [f32; 4], default: [f32; 4]) -> bool {
+    value
+        .into_iter()
+        .zip(default)
+        .any(|(value, default)| material_scalar_differs(value, default))
 }
 
 fn prepared_render_pass(
@@ -1289,6 +1362,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Character,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: false,
             }
         );
@@ -1299,6 +1373,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
+                feature_flags: PreparedMaterialFeatureFlags::default(),
                 render_backfaces: true,
             }
         );
@@ -1353,6 +1428,47 @@ mod color_table_bake_tests {
         assert_eq!(
             prepared_texture_bindings(None),
             PreparedTextureBindings::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_material_feature_flags() {
+        let mut material = test_material();
+        material.apply_vertex_color = true;
+        material.material_properties_texture = Some(8);
+        material.tile_properties_texture = Some(9);
+        material.multi_map_texture = Some(10);
+        material.detail_id = 3.0;
+        material.detail_color_uv_scale = [8.0, 4.0, 4.0, 4.0];
+        material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags,
+            PreparedMaterialFeatureFlags {
+                uses_vertex_color: true,
+                uses_color_table: true,
+                uses_tile: true,
+                uses_detail: true,
+                uses_scroll: true,
+                uses_flow: false,
+                uses_dye: false,
+            }
+        );
+
+        material = test_material();
+        material.shader_package_name = Some("characterScroll.shpk".to_string());
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags,
+            PreparedMaterialFeatureFlags {
+                uses_scroll: true,
+                ..PreparedMaterialFeatureFlags::default()
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
+            PreparedMaterialFeatureFlags::default()
         );
     }
 
