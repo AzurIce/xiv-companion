@@ -1,13 +1,14 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelData,
-    ModelMaterial, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelTexture, ModelTextureKind,
-    ModelVertex, PackedModelId, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
-    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    ModelMaterial, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelSubmeshInfo, ModelTexture,
+    ModelTextureKind, ModelVertex, PackedModelId, WeaponCatalogCounts, WeaponCatalogItem,
+    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
+    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
+    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
+    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
+    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
+    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
+    weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
@@ -512,6 +513,7 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
                 path: mesh_path_with_submesh(path, mesh.mesh_index, range.submesh_index),
                 part_index: mesh.mesh_index as u32,
                 mesh_category: Some(mesh.category.clone()),
+                submesh: range.submesh.clone(),
                 material_index: mesh.material_index,
                 material_slot: mesh.material_index as usize,
                 material_name: mesh.material_name.clone(),
@@ -530,9 +532,10 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
 }
 
 #[cfg(feature = "game-data")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct MeshIndexRange {
     submesh_index: Option<usize>,
+    submesh: Option<ModelSubmeshInfo>,
     start: usize,
     end: usize,
 }
@@ -550,6 +553,7 @@ fn mesh_index_ranges(
             .map(|(submesh_index, submesh)| {
                 (
                     submesh_index,
+                    submesh.info.clone(),
                     submesh.index_offset as usize,
                     submesh.index_count as usize,
                 )
@@ -560,19 +564,19 @@ fn mesh_index_ranges(
 #[cfg(feature = "game-data")]
 fn normalize_submesh_index_ranges<I>(index_count: usize, submeshes: I) -> Vec<MeshIndexRange>
 where
-    I: IntoIterator<Item = (usize, usize, usize)>,
+    I: IntoIterator<Item = (usize, ModelSubmeshInfo, usize, usize)>,
 {
     let raw = submeshes
         .into_iter()
-        .filter(|(_, _, count)| *count != 0)
+        .filter(|(_, _, _, count)| *count != 0)
         .collect::<Vec<_>>();
     if raw.is_empty() || index_count == 0 {
         return full_mesh_index_range(index_count);
     }
 
-    let base_index_offset = raw[0].1;
+    let base_index_offset = raw[0].2;
     let mut ranges = Vec::new();
-    for (submesh_index, index_offset, count) in raw {
+    for (submesh_index, submesh, index_offset, count) in raw {
         let direct_start = (index_offset
             .checked_add(count)
             .is_some_and(|end| end <= index_count))
@@ -587,6 +591,7 @@ where
         };
         ranges.push(MeshIndexRange {
             submesh_index: Some(submesh_index),
+            submesh: Some(submesh),
             start,
             end: start + count,
         });
@@ -608,6 +613,7 @@ fn full_mesh_index_range(index_count: usize) -> Vec<MeshIndexRange> {
     } else {
         vec![MeshIndexRange {
             submesh_index: None,
+            submesh: None,
             start: 0,
             end: index_count,
         }]
@@ -4840,18 +4846,27 @@ mod weapon_material_tests {
 
     #[test]
     fn submesh_index_ranges_are_made_part_local() {
-        let ranges = normalize_submesh_index_ranges(12, [(0, 100, 6), (1, 106, 6), (2, 112, 3)]);
+        let ranges = normalize_submesh_index_ranges(
+            12,
+            [
+                test_submesh_range(0, 100, 6),
+                test_submesh_range(1, 106, 6),
+                test_submesh_range(2, 112, 3),
+            ],
+        );
 
         assert_eq!(
             ranges,
             vec![
                 MeshIndexRange {
                     submesh_index: Some(0),
+                    submesh: Some(test_submesh_info(0)),
                     start: 0,
                     end: 6,
                 },
                 MeshIndexRange {
                     submesh_index: Some(1),
+                    submesh: Some(test_submesh_info(1)),
                     start: 6,
                     end: 12,
                 },
@@ -4861,18 +4876,23 @@ mod weapon_material_tests {
 
     #[test]
     fn submesh_index_ranges_accept_already_local_offsets() {
-        let ranges = normalize_submesh_index_ranges(12, [(0, 0, 3), (1, 3, 9)]);
+        let ranges = normalize_submesh_index_ranges(
+            12,
+            [test_submesh_range(0, 0, 3), test_submesh_range(1, 3, 9)],
+        );
 
         assert_eq!(
             ranges,
             vec![
                 MeshIndexRange {
                     submesh_index: Some(0),
+                    submesh: Some(test_submesh_info(0)),
                     start: 0,
                     end: 3,
                 },
                 MeshIndexRange {
                     submesh_index: Some(1),
+                    submesh: Some(test_submesh_info(1)),
                     start: 3,
                     end: 12,
                 },
@@ -4882,22 +4902,42 @@ mod weapon_material_tests {
 
     #[test]
     fn submesh_index_ranges_keep_nonzero_local_offsets() {
-        let ranges = normalize_submesh_index_ranges(12, [(0, 3, 3), (1, 6, 6)]);
+        let ranges = normalize_submesh_index_ranges(
+            12,
+            [test_submesh_range(0, 3, 3), test_submesh_range(1, 6, 6)],
+        );
 
         assert_eq!(
             ranges,
             vec![
                 MeshIndexRange {
                     submesh_index: Some(0),
+                    submesh: Some(test_submesh_info(0)),
                     start: 3,
                     end: 6,
                 },
                 MeshIndexRange {
                     submesh_index: Some(1),
+                    submesh: Some(test_submesh_info(1)),
                     start: 6,
                     end: 12,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn submesh_index_ranges_keep_attribute_info_for_full_mesh_range() {
+        let ranges = normalize_submesh_index_ranges(12, [test_submesh_range(2, 0, 12)]);
+
+        assert_eq!(
+            ranges,
+            vec![MeshIndexRange {
+                submesh_index: None,
+                submesh: Some(test_submesh_info(2)),
+                start: 0,
+                end: 12,
+            }]
         );
     }
 
@@ -4974,6 +5014,27 @@ mod weapon_material_tests {
             height: 1,
             rgba: vec![255, 255, 255, alpha],
             rgba_f32: None,
+        }
+    }
+
+    fn test_submesh_range(
+        index: usize,
+        index_offset: usize,
+        index_count: usize,
+    ) -> (usize, ModelSubmeshInfo, usize, usize) {
+        (index, test_submesh_info(index), index_offset, index_count)
+    }
+
+    fn test_submesh_info(index: usize) -> ModelSubmeshInfo {
+        let mask = 1_u32 << index;
+        ModelSubmeshInfo {
+            index,
+            table_index: index + 10,
+            attribute_index_mask: mask,
+            attribute_index_mask_hex: format!("0x{mask:08x}"),
+            attribute_names: vec![format!("attr_{index}")],
+            bone_start_index: index as u16,
+            bone_count: 1,
         }
     }
 

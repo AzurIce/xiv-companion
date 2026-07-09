@@ -10,8 +10,8 @@ use anyhow::{Context, Result, anyhow};
 use physis::resource::{Resource, SqPackResource};
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelTexture,
-    PreparedMaterial, PreparedMesh, WeaponCatalogItem, WeaponModelData,
+    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelSubmeshInfo,
+    ModelTexture, PreparedMaterial, PreparedMesh, WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
@@ -81,6 +81,7 @@ struct MeshSummary {
     draw_role: xiv_companion::ModelMeshDrawRole,
     rendered_in_main_pass: bool,
     prepared_material: Option<PreparedMaterial>,
+    prepared_submesh: Option<ModelSubmeshInfo>,
     metadata_file: Option<String>,
     submesh_index: Option<usize>,
     submeshes: Vec<MeshSubmeshSummary>,
@@ -768,6 +769,7 @@ fn mesh_summary(
         draw_role,
         rendered_in_main_pass,
         prepared_material: rendered_in_main_pass.then_some(prepared_mesh.prepared_material),
+        prepared_submesh: prepared_mesh.submesh.clone(),
         metadata_file,
         submesh_index,
         submeshes: raw_mesh

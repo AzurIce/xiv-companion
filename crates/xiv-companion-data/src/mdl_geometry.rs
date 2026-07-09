@@ -1,6 +1,7 @@
 use crate::mdl_metadata::{MdlMeshMetadata, MdlMeshRangeMetadata, mdl_metadata_from_mdl_bytes};
 use crate::model::{
-    ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelVertex, WeaponModelVertex,
+    ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelSubmeshInfo, ModelVertex,
+    WeaponModelVertex,
 };
 
 const MODEL_FILE_HEADER_SIZE: usize = 68;
@@ -19,9 +20,9 @@ pub(crate) struct MdlGeometryMesh {
     pub submeshes: Vec<MdlGeometrySubmesh>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MdlGeometrySubmesh {
-    pub submesh_index: usize,
+    pub info: ModelSubmeshInfo,
     pub index_offset: usize,
     pub index_count: usize,
 }
@@ -144,7 +145,15 @@ fn geometry_submeshes(mesh: &MdlMeshMetadata) -> Vec<MdlGeometrySubmesh> {
                         .map(|offset| offset as usize)
                 })?;
             Some(MdlGeometrySubmesh {
-                submesh_index: index,
+                info: ModelSubmeshInfo {
+                    index,
+                    table_index: submesh.table_index,
+                    attribute_index_mask: submesh.attribute_index_mask,
+                    attribute_index_mask_hex: submesh.attribute_index_mask_hex.clone(),
+                    attribute_names: submesh.attribute_names.clone(),
+                    bone_start_index: submesh.bone_start_index,
+                    bone_count: submesh.bone_count,
+                },
                 index_offset: offset,
                 index_count: submesh.index_count as usize,
             })
@@ -579,6 +588,7 @@ mod tests {
         assert_eq!(meshes[1].material_index, 1);
         assert_eq!(meshes[1].material_name, "/mt_glass.mtrl");
         assert_eq!(meshes[1].submeshes[0].index_offset, 0);
+        assert_eq!(meshes[1].submeshes[0].info.attribute_names, vec!["attr_a"]);
         assert_eq!(meshes[1].indices, vec![0, 1, 2]);
     }
 

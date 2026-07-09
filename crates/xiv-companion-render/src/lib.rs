@@ -7,9 +7,9 @@ pub mod test_support;
 pub use model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialRenderMode,
     MaterialShaderFamily, ModelBounds, ModelData, ModelMaterial, ModelMesh, ModelMeshDrawRole,
-    ModelRenderData, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId, PreparedMaterial,
-    PreparedMaterialFeatureFlags, PreparedMaterialUvSources, PreparedMesh, PreparedModel,
-    PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureBindings,
+    ModelRenderData, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
+    PreparedMaterial, PreparedMaterialFeatureFlags, PreparedMaterialUvSources, PreparedMesh,
+    PreparedModel, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureBindings,
     PreparedTextureColorSpace, PreparedTextureFilter, PreparedTextureSampling,
     PreparedTextureSamplingSet, PreparedTextureUvSources, PreparedUvSource, WeaponCatalogCounts,
     WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode,

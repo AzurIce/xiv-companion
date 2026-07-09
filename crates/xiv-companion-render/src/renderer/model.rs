@@ -2412,6 +2412,7 @@ mod tests {
             path: format!("test/{category}.mdl"),
             part_index: 0,
             mesh_category: Some(category.to_string()),
+            submesh: None,
             material_index: 0,
             material_slot: 0,
             material_name: "test".to_string(),

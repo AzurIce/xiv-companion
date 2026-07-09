@@ -169,6 +169,8 @@ pub struct ModelMesh {
     pub part_index: u32,
     #[serde(default)]
     pub mesh_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submesh: Option<ModelSubmeshInfo>,
     pub material_index: u16,
     #[serde(default)]
     pub material_slot: usize,
@@ -178,6 +180,18 @@ pub struct ModelMesh {
     pub bone_table: Option<ModelBoneTable>,
     pub vertices: Vec<ModelVertex>,
     pub indices: Vec<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSubmeshInfo {
+    pub index: usize,
+    pub table_index: usize,
+    pub attribute_index_mask: u32,
+    pub attribute_index_mask_hex: String,
+    pub attribute_names: Vec<String>,
+    pub bone_start_index: u16,
+    pub bone_count: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -423,13 +437,15 @@ pub struct PreparedModel {
     pub meshes: Vec<PreparedMesh>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMesh {
     pub mesh_index: usize,
     pub material_slot: usize,
     pub draw_role: ModelMeshDrawRole,
     pub renders_in_main_pass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submesh: Option<ModelSubmeshInfo>,
     pub prepared_material: PreparedMaterial,
 }
 
@@ -643,6 +659,7 @@ pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> Prepa
                     material_slot: mesh.material_slot,
                     draw_role,
                     renders_in_main_pass: draw_role.renders_in_main_pass(),
+                    submesh: mesh.submesh.clone(),
                     prepared_material: prepare_material_for_draw_role(
                         model.materials().get(mesh.material_slot),
                         draw_role,
@@ -1605,12 +1622,14 @@ mod color_table_bake_tests {
     fn prepared_model_reports_mesh_level_draw_decisions() {
         let mut glass_material = test_material();
         glass_material.shader_package_name = Some("characterglass.shpk".to_string());
+        let mut normal_mesh = test_model_mesh(None, 0);
+        normal_mesh.submesh = Some(test_model_submesh_info());
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
             materials: vec![test_material(), glass_material],
             textures: Vec::new(),
             meshes: vec![
-                test_model_mesh(None, 0),
+                normal_mesh,
                 test_model_mesh(Some("glass"), 1),
                 test_model_mesh(Some("lightShaft"), 99),
             ],
@@ -1622,6 +1641,7 @@ mod color_table_bake_tests {
         assert_eq!(prepared.meshes[0].material_slot, 0);
         assert_eq!(prepared.meshes[0].draw_role, ModelMeshDrawRole::Normal);
         assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(prepared.meshes[0].submesh, Some(test_model_submesh_info()));
         assert_eq!(
             prepared.meshes[0].prepared_material.render_pass,
             PreparedRenderPass::Opaque
@@ -1817,6 +1837,7 @@ mod color_table_bake_tests {
             path: "test.mdl".to_string(),
             part_index: 0,
             mesh_category: category.map(str::to_string),
+            submesh: None,
             material_index: material_slot as u16,
             material_slot,
             material_name: "test".to_string(),
@@ -1824,6 +1845,18 @@ mod color_table_bake_tests {
             bone_table: None,
             vertices: Vec::new(),
             indices: Vec::new(),
+        }
+    }
+
+    fn test_model_submesh_info() -> ModelSubmeshInfo {
+        ModelSubmeshInfo {
+            index: 2,
+            table_index: 4,
+            attribute_index_mask: 0x0000_0005,
+            attribute_index_mask_hex: "0x00000005".to_string(),
+            attribute_names: vec!["attr_a".to_string(), "attr_c".to_string()],
+            bone_start_index: 6,
+            bone_count: 2,
         }
     }
 

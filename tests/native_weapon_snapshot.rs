@@ -43,6 +43,7 @@ fn mock_weapon_model() -> WeaponModelData {
             path: "mock/native-demo-triangle.mdl".to_string(),
             part_index: 0,
             mesh_category: Some("normal".to_string()),
+            submesh: None,
             material_index: 0,
             material_slot: 0,
             material_name: "mock".to_string(),
