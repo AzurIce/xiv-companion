@@ -10,7 +10,8 @@ use anyhow::{Context, Result, anyhow};
 use physis::resource::{Resource, SqPackResource};
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    ModelBounds, ModelMaterial, ModelMesh, ModelTexture, WeaponCatalogItem, WeaponModelData,
+    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelTexture,
+    WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes,
@@ -146,6 +147,7 @@ struct MaterialSummary {
     sphere_properties_texture: Option<usize>,
     tile_matrix_texture: Option<usize>,
     debug_file: Option<String>,
+    semantic_summary: Option<MaterialSemanticSummaryDebug>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -156,6 +158,7 @@ struct MaterialDebugFileSummary {
     material_name: String,
     resource_path: Option<String>,
     debug_file: Option<String>,
+    semantic_summary: Option<MaterialSemanticSummaryDebug>,
     error: Option<String>,
 }
 
@@ -343,11 +346,8 @@ fn render_case(
     let material_debug_files = dump_material_debug(resource, &model, &case_dir)?;
     let material_debug_by_slot = material_debug_files
         .iter()
-        .filter_map(|file| {
-            file.debug_file
-                .clone()
-                .map(|debug_file| (file.slot, debug_file))
-        })
+        .cloned()
+        .map(|file| (file.slot, file))
         .collect::<HashMap<_, _>>();
     let texture_summaries = dump_decoded_textures(&model, &case_dir)?;
     let mesh_summaries = dump_meshes(&model, &case_dir, &model_metadata_by_path)?;
@@ -553,6 +553,7 @@ fn dump_material_debug(
                 material_name: material.name.clone(),
                 resource_path: None,
                 debug_file: None,
+                semantic_summary: None,
                 error: Some("fallback material has no .mtrl path".to_string()),
             });
             continue;
@@ -565,6 +566,7 @@ fn dump_material_debug(
                 material_name: material.name.clone(),
                 resource_path: Some(resource_path.clone()),
                 debug_file: None,
+                semantic_summary: None,
                 error: Some("material could not be read again from SqPack".to_string()),
             });
             continue;
@@ -587,6 +589,7 @@ fn dump_material_debug(
                     material_name: material.name.clone(),
                     resource_path: Some(resource_path.clone()),
                     debug_file: Some(path_relative_to_case(&debug_path, case_dir)),
+                    semantic_summary: Some(debug.summary.clone()),
                     error: None,
                 });
             }
@@ -596,6 +599,7 @@ fn dump_material_debug(
                 material_name: material.name.clone(),
                 resource_path: Some(resource_path.clone()),
                 debug_file: None,
+                semantic_summary: None,
                 error: Some(format!("{error:#}")),
             }),
         }
@@ -821,8 +825,9 @@ fn mesh_shape_summaries(metadata: &MdlMetadata, mesh_index: usize) -> Vec<MeshSh
 
 fn material_summary(
     material: &ModelMaterial,
-    debug_file_by_slot: &HashMap<usize, String>,
+    debug_by_slot: &HashMap<usize, MaterialDebugFileSummary>,
 ) -> MaterialSummary {
+    let debug = debug_by_slot.get(&material.slot);
     MaterialSummary {
         slot: material.slot,
         material_index: material.material_index,
@@ -854,7 +859,8 @@ fn material_summary(
         sheen_properties_texture: material.sheen_properties_texture,
         sphere_properties_texture: material.sphere_properties_texture,
         tile_matrix_texture: material.tile_matrix_texture,
-        debug_file: debug_file_by_slot.get(&material.slot).cloned(),
+        debug_file: debug.and_then(|debug| debug.debug_file.clone()),
+        semantic_summary: debug.and_then(|debug| debug.semantic_summary.clone()),
     }
 }
 

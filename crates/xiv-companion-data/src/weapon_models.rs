@@ -78,6 +78,7 @@ pub trait AsyncGameResource {
 #[serde(rename_all = "camelCase")]
 pub struct MaterialDebugInfo {
     pub path: String,
+    pub summary: MaterialSemanticSummaryDebug,
     pub file_header: Option<MaterialFileHeaderDebug>,
     pub shader_package_name: String,
     pub shader_header: Option<MaterialShaderHeaderDebug>,
@@ -98,6 +99,73 @@ pub struct MaterialDebugInfo {
     pub color_table: Option<MaterialColorTableDebug>,
     pub color_dye_table_kind: Option<String>,
     pub color_dye_table: Option<MaterialColorDyeTableDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialSemanticSummaryDebug {
+    pub shader_flags: u32,
+    pub shader_flags_hex: String,
+    pub shader_key_count: usize,
+    pub resolved_shader_key_count: usize,
+    pub resolved_constant_count: usize,
+    pub texture_flag_count: usize,
+    pub sampler_flag_count: usize,
+    pub shader_keys: Vec<MaterialResolvedShaderKeyDebug>,
+    pub constants: Vec<MaterialResolvedConstantDebug>,
+    pub texture_flags: Vec<MaterialTextureFlagSummaryDebug>,
+    pub sampler_flags: Vec<MaterialSamplerFlagSummaryDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialResolvedShaderKeyDebug {
+    pub category: u32,
+    pub category_hex: String,
+    pub category_name: Option<String>,
+    pub value: u32,
+    pub value_hex: String,
+    pub value_name: Option<String>,
+    pub source: String,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialResolvedConstantDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub value_count: usize,
+    pub values: Vec<f32>,
+    pub source: String,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialTextureFlagSummaryDebug {
+    pub index: usize,
+    pub flags: u16,
+    pub flags_hex: String,
+    pub path: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialSamplerFlagSummaryDebug {
+    pub texture_index: usize,
+    pub texture_path: Option<String>,
+    pub texture_usage: u32,
+    pub texture_usage_hex: String,
+    pub texture_usage_name: Option<String>,
+    pub flags: u32,
+    pub flags_hex: String,
+    pub kind: Option<WeaponModelTextureKind>,
+    pub kind_source: Option<String>,
 }
 
 #[cfg(feature = "game-data")]
@@ -610,12 +678,10 @@ pub fn material_debug_info_from_mtrl_bytes(
 
     let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, bytes)
         .ok_or_else(|| anyhow!("failed to parse material {path}"))?;
-    material_debug_info_from_parsed_material(
-        path,
-        bytes,
-        material,
-        &ComposedMaterialSemantics::default(),
-    )
+    let mut semantics = ComposedMaterialSemantics::default();
+    semantics.apply_material(&material);
+    semantics.apply_material_constants(bytes);
+    material_debug_info_from_parsed_material(path, bytes, material, &semantics)
 }
 
 #[cfg(feature = "game-data")]
@@ -628,9 +694,46 @@ fn material_debug_info_from_parsed_material(
     let sampler_records = parse_material_sampler_records(bytes, semantics);
     let shader_flags = parse_material_shader_flags(bytes);
     let low_level = material_low_level_debug(bytes, &material.texture_paths);
+    let texture_offsets = low_level
+        .as_ref()
+        .map(|debug| debug.texture_offsets.clone())
+        .unwrap_or_default();
+    let shader_keys = material
+        .shader_keys
+        .iter()
+        .map(|key| MaterialShaderKeyDebug {
+            category: key.category,
+            category_hex: hex_u32(key.category),
+            value: key.value,
+            value_hex: hex_u32(key.value),
+        })
+        .collect::<Vec<_>>();
+    let constants = material_constant_debug(bytes);
+    let samplers = sampler_records
+        .into_iter()
+        .map(|record| MaterialSamplerDebug {
+            texture_index: record.texture_index,
+            texture_path: material.texture_paths.get(record.texture_index).cloned(),
+            texture_usage: record.texture_usage,
+            texture_usage_hex: hex_u32(record.texture_usage),
+            texture_usage_name: record.texture_usage_name,
+            flags: record.flags,
+            flags_hex: hex_u32(record.flags),
+            kind: record.kind,
+            kind_source: record.kind_source.map(ToString::to_string),
+        })
+        .collect::<Vec<_>>();
+    let summary = material_semantic_summary(
+        shader_flags,
+        &shader_keys,
+        semantics,
+        &texture_offsets,
+        &samplers,
+    );
 
     Ok(MaterialDebugInfo {
         path: path.to_string(),
+        summary,
         file_header: low_level.as_ref().map(|debug| debug.file_header.clone()),
         shader_package_name: material.shader_package_name.clone(),
         shader_header: low_level
@@ -639,10 +742,7 @@ fn material_debug_info_from_parsed_material(
         shader_flags,
         shader_flags_hex: hex_u32(shader_flags),
         texture_paths: material.texture_paths.clone(),
-        texture_offsets: low_level
-            .as_ref()
-            .map(|debug| debug.texture_offsets.clone())
-            .unwrap_or_default(),
+        texture_offsets,
         uv_color_sets: low_level
             .as_ref()
             .map(|debug| debug.uv_color_sets.clone())
@@ -659,16 +759,7 @@ fn material_debug_info_from_parsed_material(
             .as_ref()
             .map(|debug| debug.data_set_size)
             .unwrap_or_default(),
-        shader_keys: material
-            .shader_keys
-            .iter()
-            .map(|key| MaterialShaderKeyDebug {
-                category: key.category,
-                category_hex: hex_u32(key.category),
-                value: key.value,
-                value_hex: hex_u32(key.value),
-            })
-            .collect(),
+        shader_keys,
         shader_value_list_size: low_level
             .as_ref()
             .map(|debug| debug.shader_value_list_size)
@@ -677,26 +768,13 @@ fn material_debug_info_from_parsed_material(
             .as_ref()
             .map(|debug| debug.shader_value_count)
             .unwrap_or_default(),
-        constants: material_constant_debug(bytes),
+        constants,
         constants_debug: material
             .constants
             .iter()
             .map(|constant| format!("{constant:?}"))
             .collect(),
-        samplers: sampler_records
-            .into_iter()
-            .map(|record| MaterialSamplerDebug {
-                texture_index: record.texture_index,
-                texture_path: material.texture_paths.get(record.texture_index).cloned(),
-                texture_usage: record.texture_usage,
-                texture_usage_hex: hex_u32(record.texture_usage),
-                texture_usage_name: record.texture_usage_name,
-                flags: record.flags,
-                flags_hex: hex_u32(record.flags),
-                kind: record.kind,
-                kind_source: record.kind_source.map(ToString::to_string),
-            })
-            .collect(),
+        samplers,
         color_table: material_color_table_debug(material.color_table.as_ref()),
         color_dye_table_kind: material
             .color_dye_table
@@ -704,6 +782,161 @@ fn material_debug_info_from_parsed_material(
             .map(material_color_dye_table_kind),
         color_dye_table: material_color_dye_table_debug(material.color_dye_table.as_ref()),
     })
+}
+
+#[cfg(feature = "game-data")]
+fn material_semantic_summary(
+    shader_flags: u32,
+    material_shader_keys: &[MaterialShaderKeyDebug],
+    semantics: &ComposedMaterialSemantics,
+    texture_offsets: &[MaterialTextureOffsetDebug],
+    samplers: &[MaterialSamplerDebug],
+) -> MaterialSemanticSummaryDebug {
+    let mut shader_keys = semantics
+        .material_keys
+        .iter()
+        .map(|(category, entry)| MaterialResolvedShaderKeyDebug {
+            category: *category,
+            category_hex: hex_u32(*category),
+            category_name: known_shader_label(*category),
+            value: entry.value,
+            value_hex: hex_u32(entry.value),
+            value_name: known_shader_label(entry.value),
+            source: entry.source.to_string(),
+        })
+        .collect::<Vec<_>>();
+    shader_keys.sort_by(|left, right| left.category.cmp(&right.category));
+
+    let mut constants = semantics
+        .material_constants
+        .iter()
+        .map(|(id, entry)| MaterialResolvedConstantDebug {
+            id: *id,
+            id_hex: hex_u32(*id),
+            name: known_material_constant_name(*id),
+            value_count: entry.value.len(),
+            values: entry.value.clone(),
+            source: entry.source.to_string(),
+        })
+        .collect::<Vec<_>>();
+    constants.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let texture_flags = texture_offsets
+        .iter()
+        .map(|texture| MaterialTextureFlagSummaryDebug {
+            index: texture.index,
+            flags: texture.flags,
+            flags_hex: texture.flags_hex.clone(),
+            path: texture.path.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let sampler_flags = samplers
+        .iter()
+        .map(|sampler| MaterialSamplerFlagSummaryDebug {
+            texture_index: sampler.texture_index,
+            texture_path: sampler.texture_path.clone(),
+            texture_usage: sampler.texture_usage,
+            texture_usage_hex: sampler.texture_usage_hex.clone(),
+            texture_usage_name: sampler.texture_usage_name.clone(),
+            flags: sampler.flags,
+            flags_hex: sampler.flags_hex.clone(),
+            kind: sampler.kind,
+            kind_source: sampler.kind_source.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    MaterialSemanticSummaryDebug {
+        shader_flags,
+        shader_flags_hex: hex_u32(shader_flags),
+        shader_key_count: material_shader_keys.len(),
+        resolved_shader_key_count: shader_keys.len(),
+        resolved_constant_count: constants.len(),
+        texture_flag_count: texture_flags.len(),
+        sampler_flag_count: sampler_flags.len(),
+        shader_keys,
+        constants,
+        texture_flags,
+        sampler_flags,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn known_material_constant_name(id: u32) -> Option<String> {
+    if id == 0x9A69_6A17 {
+        return Some("UvScrollMapping".to_string());
+    }
+    known_crc_label(
+        id,
+        &[
+            "g_NormalScale",
+            "g_MultiNormalScale",
+            "g_AlphaThreshold",
+            "g_TileIndex",
+            "g_TileAlpha",
+            "g_TileScale",
+            "g_DetailID",
+            "g_MultiDetailID",
+            "g_DetailColorUvScale",
+            "g_DetailNormalUvScale",
+            "g_DetailColor",
+            "g_MultiDetailColor",
+            "g_DetailNormalScale",
+            "g_MultiDetailNormalScale",
+            "g_Transparency",
+            "g_TexAnim",
+            "g_TexU",
+            "g_TexV",
+            "g_Ray",
+            "g_Color",
+            "g_DiffuseColor",
+            "g_EmissiveColor",
+            "g_MultiDiffuseColor",
+            "g_MultiEmissiveColor",
+        ],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn known_shader_label(id: u32) -> Option<String> {
+    known_crc_label(
+        id,
+        &[
+            "ApplyAlphaTest",
+            "ApplyAlphaTestOn",
+            "ApplyAlphaTestOff",
+            "ApplyVertexColor",
+            "ApplyVertexColorOn",
+            "ApplyVertexColorOff",
+            "GetValues",
+            "GetSingleValues",
+            "GetMultiValues",
+            "GetAlphaMultiValues",
+            "GetAlphaMultiValues2",
+            "GetAlphaMultiValues3",
+            "GetValuesTextureType",
+            "GetValuesCompatibility",
+            "Compatibility",
+            "GetMaterialValue",
+            "GetMaterialValueFace",
+            "GetMaterialValueBody",
+            "GetMaterialValueBodyJJM",
+            "GetMaterialValueFaceEmissive",
+            "GetDecalColor",
+            "GetDecalColorAlpha",
+            "GetSubColor",
+            "GetSubColorFace",
+            "GetSubColorHair",
+        ],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn known_crc_label(id: u32, labels: &[&'static str]) -> Option<String> {
+    labels
+        .iter()
+        .find(|label| physis::shpk::ShaderPackage::crc(label) == id)
+        .map(|label| (*label).to_string())
 }
 
 #[cfg(feature = "game-data")]
@@ -1940,15 +2173,22 @@ struct MaterialSamplerRecord {
 #[cfg(feature = "game-data")]
 #[derive(Default)]
 struct ComposedMaterialSemantics {
-    material_keys: HashMap<u32, u32>,
-    material_constants: HashMap<u32, Vec<f32>>,
+    material_keys: HashMap<u32, ResolvedMaterialValue<u32>>,
+    material_constants: HashMap<u32, ResolvedMaterialValue<Vec<f32>>>,
     resource_names: HashMap<u32, String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+struct ResolvedMaterialValue<T> {
+    value: T,
+    source: &'static str,
 }
 
 #[cfg(feature = "game-data")]
 impl ComposedMaterialSemantics {
     fn has_material_key(&self, key: u32, value: u32) -> bool {
-        self.material_keys.get(&key).copied() == Some(value)
+        self.material_keys.get(&key).map(|entry| entry.value) == Some(value)
     }
 
     fn sampler_kind_resolution(&self, texture_usage: u32) -> MaterialSamplerKindResolution {
@@ -1982,7 +2222,7 @@ impl ComposedMaterialSemantics {
     fn material_constant_first_f32(&self, constant_id: u32) -> Option<f32> {
         self.material_constants
             .get(&constant_id)
-            .and_then(|values| values.first())
+            .and_then(|entry| entry.value.first())
             .copied()
     }
 
@@ -2015,22 +2255,44 @@ impl ComposedMaterialSemantics {
 
     fn apply_shader_package_material_constants(&mut self, bytes: &[u8]) {
         for (id, values) in shader_package_material_defaults(bytes) {
-            self.material_constants.entry(id).or_insert(values);
+            self.material_constants
+                .entry(id)
+                .or_insert(ResolvedMaterialValue {
+                    value: values,
+                    source: "shaderPackageDefault",
+                });
         }
     }
 
     fn apply_material_constants(&mut self, bytes: &[u8]) {
         for (id, values) in material_constants(bytes) {
-            self.material_constants.insert(id, values);
+            self.material_constants.insert(
+                id,
+                ResolvedMaterialValue {
+                    value: values,
+                    source: "materialOverride",
+                },
+            );
         }
     }
 
     fn apply_shader_package_key_default(&mut self, key: u32, value: u32) {
-        self.material_keys.entry(key).or_insert(value);
+        self.material_keys
+            .entry(key)
+            .or_insert(ResolvedMaterialValue {
+                value,
+                source: "shaderPackageDefault",
+            });
     }
 
     fn apply_material_key(&mut self, key: u32, value: u32) {
-        self.material_keys.insert(key, value);
+        self.material_keys.insert(
+            key,
+            ResolvedMaterialValue {
+                value,
+                source: "materialOverride",
+            },
+        );
     }
 
     fn register_resource_parameter(&mut self, parameter: &physis::shpk::ResourceParameter) {
@@ -3550,6 +3812,75 @@ mod weapon_material_tests {
         assert_eq!(shader_header.flags_hex, "0x00000011");
         assert_eq!(debug.shader_value_list_size, 8);
         assert_eq!(debug.shader_value_count, 2);
+    }
+
+    #[test]
+    fn material_semantic_summary_compacts_keys_constants_and_flags() {
+        let bytes = test_mtrl_with_low_level_fields();
+        let low_level = material_low_level_debug(&bytes, &[]).expect("debug info");
+        let mut semantics = ComposedMaterialSemantics::default();
+        semantics.apply_shader_package_key_default(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_OFF);
+        semantics.apply_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
+        semantics.apply_material_constants(&bytes);
+        let samplers = parse_material_sampler_records(&bytes, &semantics)
+            .into_iter()
+            .map(|record| MaterialSamplerDebug {
+                texture_index: record.texture_index,
+                texture_path: Some("texture/base.tex".to_string()),
+                texture_usage: record.texture_usage,
+                texture_usage_hex: hex_u32(record.texture_usage),
+                texture_usage_name: record.texture_usage_name,
+                flags: record.flags,
+                flags_hex: hex_u32(record.flags),
+                kind: record.kind,
+                kind_source: record.kind_source.map(ToString::to_string),
+            })
+            .collect::<Vec<_>>();
+        let material_shader_keys = vec![MaterialShaderKeyDebug {
+            category: APPLY_ALPHA_TEST,
+            category_hex: hex_u32(APPLY_ALPHA_TEST),
+            value: APPLY_ALPHA_TEST_ON,
+            value_hex: hex_u32(APPLY_ALPHA_TEST_ON),
+        }];
+
+        let summary = material_semantic_summary(
+            0x11,
+            &material_shader_keys,
+            &semantics,
+            &low_level.texture_offsets,
+            &samplers,
+        );
+
+        assert_eq!(summary.shader_flags, 0x11);
+        assert_eq!(summary.shader_flags_hex, "0x00000011");
+        assert_eq!(summary.shader_key_count, 1);
+        assert_eq!(summary.resolved_shader_key_count, 1);
+        assert_eq!(
+            summary.shader_keys[0].category_name.as_deref(),
+            Some("ApplyAlphaTest")
+        );
+        assert_eq!(
+            summary.shader_keys[0].value_name.as_deref(),
+            Some("ApplyAlphaTestOn")
+        );
+        assert_eq!(summary.shader_keys[0].source, "materialOverride");
+        assert_eq!(summary.resolved_constant_count, 1);
+        assert_eq!(
+            summary.constants[0].name.as_deref(),
+            Some("g_AlphaThreshold")
+        );
+        assert_eq!(summary.constants[0].values, vec![0.25]);
+        assert_eq!(summary.constants[0].source, "materialOverride");
+        assert_eq!(summary.texture_flags[0].flags, 0x00f0);
+        assert_eq!(summary.sampler_flags[0].flags, 0x1234_5678);
+        assert_eq!(
+            summary.sampler_flags[0].kind,
+            Some(WeaponModelTextureKind::Normal)
+        );
+        assert_eq!(
+            summary.sampler_flags[0].kind_source.as_deref(),
+            Some("knownCrc")
+        );
     }
 
     #[test]
