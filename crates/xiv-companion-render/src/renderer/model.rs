@@ -1371,6 +1371,9 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         shader_multi_diffuse_color: material_shader_multi_diffuse_color(material),
         shader_emissive_color: material_shader_emissive_color(material),
         shader_multi_emissive_color: material_shader_multi_emissive_color(material),
+        outline_params: material_outline_params(material),
+        specular_color_mask: material_specular_color_mask(material),
+        surface_params: material_surface_params(material),
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
@@ -1994,6 +1997,12 @@ fn fallback_material() -> ModelMaterial {
         shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
         shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
         shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        outline_color: [0.0, 0.0, 0.0, 1.0],
+        outline_width: 0.0,
+        specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+        ssao_mask: 1.0,
+        texture_mip_bias: 0.0,
+        shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -2139,6 +2148,29 @@ fn material_shader_emissive_color(material: &ModelMaterial) -> [f32; 4] {
 
 fn material_shader_multi_emissive_color(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.shader_multi_emissive_color, [0.0, 0.0, 0.0, 1.0])
+}
+
+fn material_outline_params(material: &ModelMaterial) -> [f32; 4] {
+    let color = finite_vec4_or(material.outline_color, [0.0, 0.0, 0.0, 1.0]);
+    [
+        color[0],
+        color[1],
+        color[2],
+        finite_or(material.outline_width, 0.0),
+    ]
+}
+
+fn material_specular_color_mask(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.specular_color_mask, [1.0; 4])
+}
+
+fn material_surface_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.ssao_mask, 1.0),
+        finite_or(material.texture_mip_bias, 0.0),
+        finite_or(material.shadow_pos_offset, 0.0),
+        0.0,
+    ]
 }
 
 fn material_detail_color_uv_scale(material: &ModelMaterial) -> [f32; 4] {
@@ -2356,6 +2388,9 @@ struct MaterialUniform {
     shader_multi_diffuse_color: [f32; 4],
     shader_emissive_color: [f32; 4],
     shader_multi_emissive_color: [f32; 4],
+    outline_params: [f32; 4],
+    specular_color_mask: [f32; 4],
+    surface_params: [f32; 4],
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
@@ -3072,6 +3107,40 @@ mod tests {
             material_shader_emissive_color(&material),
             [0.0, 0.2, 0.3, 1.0]
         );
+    }
+
+    #[test]
+    fn material_outline_specular_surface_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_outline_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(material_specular_color_mask(&material), [1.0; 4]);
+        assert_eq!(material_surface_params(&material), [1.0, 0.0, 0.0, 0.0]);
+
+        material.outline_color = [0.1, 0.2, 0.3, 0.4];
+        material.outline_width = 0.05;
+        material.specular_color_mask = [0.7, 0.8, 0.9, 1.0];
+        material.ssao_mask = 0.6;
+        material.texture_mip_bias = -0.75;
+        material.shadow_pos_offset = 0.125;
+        assert_eq!(material_outline_params(&material), [0.1, 0.2, 0.3, 0.05]);
+        assert_eq!(
+            material_specular_color_mask(&material),
+            [0.7, 0.8, 0.9, 1.0]
+        );
+        assert_eq!(material_surface_params(&material), [0.6, -0.75, 0.125, 0.0]);
+
+        material.outline_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
+        material.outline_width = f32::NEG_INFINITY;
+        material.specular_color_mask = [f32::NAN, 0.3, f32::INFINITY, 0.5];
+        material.ssao_mask = f32::INFINITY;
+        material.texture_mip_bias = f32::NAN;
+        material.shadow_pos_offset = f32::NEG_INFINITY;
+        assert_eq!(material_outline_params(&material), [0.25, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            material_specular_color_mask(&material),
+            [1.0, 0.3, 1.0, 0.5]
+        );
+        assert_eq!(material_surface_params(&material), [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

@@ -79,6 +79,18 @@ const G_EMISSIVE_COLOR: u32 = 0x38A6_4362;
 #[cfg(feature = "game-data")]
 const G_MULTI_EMISSIVE_COLOR: u32 = 0xAA67_6D0F;
 #[cfg(feature = "game-data")]
+const G_OUTLINE_COLOR: u32 = 0x623C_C4FE;
+#[cfg(feature = "game-data")]
+const G_OUTLINE_WIDTH: u32 = 0x8870_C938;
+#[cfg(feature = "game-data")]
+const G_SPECULAR_COLOR_MASK: u32 = 0xCB03_38DC;
+#[cfg(feature = "game-data")]
+const G_SSAO_MASK: u32 = 0xB7FA_33E2;
+#[cfg(feature = "game-data")]
+const G_TEXTURE_MIP_BIAS: u32 = 0x3955_1220;
+#[cfg(feature = "game-data")]
+const G_SHADOW_POS_OFFSET: u32 = 0x5351_646E;
+#[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_TEX_ANIM: u32 = 0x14D8_E13D;
@@ -979,6 +991,12 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_EmissiveColor",
             "g_MultiDiffuseColor",
             "g_MultiEmissiveColor",
+            "g_OutlineColor",
+            "g_OutlineWidth",
+            "g_SpecularColorMask",
+            "g_SSAOMask",
+            "g_TextureMipBias",
+            "g_ShadowPosOffset",
             "g_GlassIOR",
             "g_GlassThicknessMax",
         ],
@@ -1537,6 +1555,12 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
         let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
         let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
+        let outline_color = composed_material_outline_color(&semantics);
+        let outline_width = composed_material_outline_width(&semantics);
+        let specular_color_mask = composed_material_specular_color_mask(&semantics);
+        let ssao_mask = composed_material_ssao_mask(&semantics);
+        let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -1608,6 +1632,12 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             shader_multi_diffuse_color,
             shader_emissive_color,
             shader_multi_emissive_color,
+            outline_color,
+            outline_width,
+            specular_color_mask,
+            ssao_mask,
+            texture_mip_bias,
+            shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -2050,6 +2080,12 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
         let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
         let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
+        let outline_color = composed_material_outline_color(&semantics);
+        let outline_width = composed_material_outline_width(&semantics);
+        let specular_color_mask = composed_material_specular_color_mask(&semantics);
+        let ssao_mask = composed_material_ssao_mask(&semantics);
+        let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -2122,6 +2158,12 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             shader_multi_diffuse_color,
             shader_emissive_color,
             shader_multi_emissive_color,
+            outline_color,
+            outline_width,
+            specular_color_mask,
+            ssao_mask,
+            texture_mip_bias,
+            shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -2969,6 +3011,36 @@ fn composed_material_shader_multi_emissive_color(
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_outline_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_OUTLINE_COLOR, [0.0, 0.0, 0.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_outline_width(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_OUTLINE_WIDTH, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_specular_color_mask(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_SPECULAR_COLOR_MASK, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_ssao_mask(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SSAO_MASK, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_texture_mip_bias(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TEXTURE_MIP_BIAS, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shadow_pos_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHADOW_POS_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_detail_color_uv_scale(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
     composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR_UV_SCALE, [4.0; 4])
 }
@@ -3416,6 +3488,12 @@ fn fallback_weapon_material(
         shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
         shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
         shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        outline_color: [0.0, 0.0, 0.0, 1.0],
+        outline_width: 0.0,
+        specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+        ssao_mask: 1.0,
+        texture_mip_bias: 0.0,
+        shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -5099,6 +5177,85 @@ mod weapon_material_tests {
             composed_material_shader_emissive_color(&semantics),
             [0.75, 0.0, 0.0, 0.25]
         );
+    }
+
+    #[test]
+    fn composed_material_outline_specular_occlusion_params_use_resolved_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_OUTLINE_COLOR, &[0.1, 0.2, 0.3, 0.4]),
+            (G_OUTLINE_WIDTH, &[0.05]),
+            (G_SPECULAR_COLOR_MASK, &[0.7, 0.8, 0.9, 1.0]),
+            (G_SSAO_MASK, &[0.6]),
+            (G_TEXTURE_MIP_BIAS, &[-0.75]),
+            (G_SHADOW_POS_OFFSET, &[0.125]),
+        ]);
+
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(composed_material_outline_width(&semantics), 0.0);
+        assert_eq!(composed_material_specular_color_mask(&semantics), [1.0; 4]);
+        assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), 0.0);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), 0.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(composed_material_outline_width(&semantics), 0.05);
+        assert_eq!(
+            composed_material_specular_color_mask(&semantics),
+            [0.7, 0.8, 0.9, 1.0]
+        );
+        assert_eq!(composed_material_ssao_mask(&semantics), 0.6);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), -0.75);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), 0.125);
+
+        let material = test_mtrl_with_constant(G_OUTLINE_COLOR, &[0.9, 0.8], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.9, 0.8, 0.0, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_OUTLINE_WIDTH, &[0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_outline_width(&semantics), 0.2);
+
+        let material = test_mtrl_with_constant(G_SPECULAR_COLOR_MASK, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_specular_color_mask(&semantics),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_SSAO_MASK, &[0.35], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ssao_mask(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_TEXTURE_MIP_BIAS, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_SHADOW_POS_OFFSET, &[-0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), -0.2);
+
+        let material =
+            test_mtrl_with_constant(G_OUTLINE_COLOR, &[0.3, f32::NAN, f32::INFINITY, 0.4], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.3, 0.0, 0.0, 0.4]
+        );
+
+        let material = test_mtrl_with_constant(G_SSAO_MASK, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
     }
 
     #[test]

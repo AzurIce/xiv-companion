@@ -57,6 +57,7 @@
 - `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `toonSheenParams` / `sheenSphereParams` uniform；MeddleTools 当前主要通过 ColorTable extra ramp 表达 sheen/sphere 属性，本仓暂不把这些常量直接混入现有高光/反射近似。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入；`g_DetailColor/g_MultiDetailColor` 已进入 phantom summary，但尚未绑定真实 detail map 或改变 fragment 输出。
 - `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 已按 Meddle `Names.cs` CRC/default 和 MeddleTools `ColorMapping` 结构化进 `ModelMaterial`、phantom summary 与 renderer uniforms；当前只作为 shader-family 后续颜色/发光节点的稳定输入，不覆盖现有 preview diffuse/emissive 结果。
+- `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `outlineParams` / `specularColorMask` / `surfaceParams` uniform；当前只作为后续 outline/specular/occlusion/shadow 公式输入，不改变现有高光、AO 或 mip 采样行为。
 - `g_GlassIOR`、`g_GlassThicknessMax` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `glassParams` uniform；当前不直接改变 glass opacity、tint 或折射，避免在没有确认 shader-family 公式前误改透明效果。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
 - `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已结构化进 `ModelMaterial` 和 phantom summary；renderer uniform 已传入 WGSL，`LightShaft` draw role 会启用保守的 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 和 `g_Ray` 强度近似。完整 MeddleTools 节点语义仍未复刻。
@@ -86,7 +87,7 @@
 
 - 染色仍停留在 `ColorDyeTable` debug，尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入，因此 `usesDye` 只能保守为 false。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
-- reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
+- reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
 
 计划：
@@ -180,6 +181,7 @@
 - 已完成：`g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 进入 `ModelMaterial`，默认值分别为 `0`、`2`、`0`、`0`、`1`、`0`；renderer uniform 已预留 `toonSheenParams` 与 `sheenSphereParams`，但当前 WGSL 还没有用它们改变 toon lighting、sheen 或 sphere reflection 行为。
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[0.5,0.5,0.5,1]`、`[0.5,0.5,0.5,1]`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已预留 detail id、detail tint 与 primary/multi UV scale，但当前 WGSL 还没有绑定或采样 detail map。
 - 已完成：`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 进入 `ModelMaterial`，默认值分别为白色、白色、黑色、黑色；renderer uniform 已预留 shader diffuse/emissive colors，但当前 WGSL 还没有用它们替代或调制 preview diffuse/emissive。
+- 已完成：`g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 进入 `ModelMaterial`，默认值分别为黑色、`0`、白色、`1`、`0`、`0`；renderer uniform 已预留 `outlineParams`、`specularColorMask` 与 `surfaceParams`，但当前 WGSL 还没有用它们驱动 outline、specular mask、SSAO、texture LOD 或 shadow offset 行为。
 - 已完成：`g_GlassIOR`、`g_GlassThicknessMax` 进入 `ModelMaterial`，默认值分别为 `1`、`0.01`；renderer uniform 已预留 `glassParams`，但当前 WGSL 还没有用它们驱动 glass opacity、tint 或折射。
 - 已完成：`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 进入 `ModelMaterial`，默认值分别为 `2`、`0`、`0.5`；renderer uniform 已预留 `alphaParams`，但当前 WGSL 还没有用它们驱动 alpha shaping、shadow alpha 或 transparency opacity。
 - 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`，分别对应 UV0 与 UV1 scroll multiplier；renderer 已用 `ModelRenderOptions.uv_scroll_time` / camera uniform 驱动 WGSL 对 `uv0` / `uv1` 来源做保守滚动采样，后续仍需按 shader family 和节点连接决定具体哪些 texture role 使用 scroll UV。
@@ -198,6 +200,7 @@
 - 已增加 toon/sheen/sphere focused tests，覆盖 `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 的 shader package default、material override、非 finite fallback 和 renderer uniform 预留。
 - 已增加 detail focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 预留。
 - 已增加 shader color focused tests，覆盖 `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 预留。
+- 已增加 outline/specular/occlusion focused tests，覆盖 `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 预留。
 - 已增加 glass params focused tests，覆盖 `g_GlassIOR`、`g_GlassThicknessMax` 的 shader package default、material override、非 finite fallback 和 renderer uniform 预留。
 - 已增加 alpha params focused tests，覆盖 `g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 的 shader package default、material override、clamp、非 finite fallback 和 renderer uniform 预留。
 - 已增加 UV scroll focused tests，覆盖 `g_UVScrollTime` / `0x9A696A17` 的 shader package default、material override、MeddleTools U 轴取反、renderer uniform 传递和默认时间稳定性。

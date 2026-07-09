@@ -373,6 +373,18 @@ pub struct ModelMaterial {
     pub shader_emissive_color: [f32; 4],
     #[serde(default = "default_material_shader_emissive_color")]
     pub shader_multi_emissive_color: [f32; 4],
+    #[serde(default = "default_material_outline_color")]
+    pub outline_color: [f32; 4],
+    #[serde(default)]
+    pub outline_width: f32,
+    #[serde(default = "default_material_specular_color_mask")]
+    pub specular_color_mask: [f32; 4],
+    #[serde(default = "default_material_ssao_mask")]
+    pub ssao_mask: f32,
+    #[serde(default)]
+    pub texture_mip_bias: f32,
+    #[serde(default)]
+    pub shadow_pos_offset: f32,
     #[serde(default = "default_material_detail_uv_scale")]
     pub detail_color_uv_scale: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
@@ -1083,6 +1095,18 @@ fn default_material_shader_diffuse_color() -> [f32; 4] {
 
 fn default_material_shader_emissive_color() -> [f32; 4] {
     [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_material_outline_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_material_specular_color_mask() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_ssao_mask() -> f32 {
+    1.0
 }
 
 fn default_material_lightshaft_color() -> [f32; 4] {
@@ -2254,6 +2278,12 @@ mod color_table_bake_tests {
             shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
             shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
             shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+            outline_color: [0.0, 0.0, 0.0, 1.0],
+            outline_width: 0.0,
+            specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+            ssao_mask: 1.0,
+            texture_mip_bias: 0.0,
+            shadow_pos_offset: 0.0,
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],

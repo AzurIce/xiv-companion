@@ -25,6 +25,9 @@ struct Material {
     shader_multi_diffuse_color: vec4<f32>,
     shader_emissive_color: vec4<f32>,
     shader_multi_emissive_color: vec4<f32>,
+    outline_params: vec4<f32>, // rgb: outline color, a: outline width
+    specular_color_mask: vec4<f32>,
+    surface_params: vec4<f32>, // x: ssao mask, y: texture mip bias, z: shadow pos offset
     detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
     detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
     uv_scroll: vec4<f32>, // xy: uv0 scroll multiplier, zw: uv1 scroll multiplier
