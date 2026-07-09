@@ -13,6 +13,7 @@ const TERRAIN_SHADOW_SUBMESH_SIZE: usize = 12;
 const SHAPE_SIZE: usize = 16;
 const SHAPE_MESH_SIZE: usize = 12;
 const SHAPE_VALUE_SIZE: usize = 4;
+const BOUNDING_BOX_SIZE: usize = 32;
 const MDL_VERSION_V5: u32 = 0x0100_0005;
 const MDL_VERSION_V6: u32 = 0x0100_0006;
 const V5_BONE_TABLE_SIZE: usize = 132;
@@ -41,6 +42,12 @@ pub struct MdlMetadata {
     pub shape_values: Vec<MdlShapeValueMetadata>,
     pub submesh_bone_map_byte_size: u32,
     pub submesh_bone_map: Vec<u16>,
+    pub bounding_box_padding: u8,
+    pub bounding_box: MdlBoundingBoxMetadata,
+    pub model_bounding_box: MdlBoundingBoxMetadata,
+    pub water_bounding_box: MdlBoundingBoxMetadata,
+    pub vertical_fog_bounding_box: MdlBoundingBoxMetadata,
+    pub bone_bounding_boxes: Vec<MdlBoneBoundingBoxMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -263,6 +270,21 @@ pub struct MdlShapeValueMetadata {
     pub replacing_vertex_index: u16,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlBoundingBoxMetadata {
+    pub min: [f32; 4],
+    pub max: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlBoneBoundingBoxMetadata {
+    pub index: usize,
+    pub bone_name: Option<String>,
+    pub bounding_box: MdlBoundingBoxMetadata,
+}
+
 pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<MdlMetadata> {
     let file_header = parse_file_header(bytes, 0)?;
     let mut offset = MODEL_FILE_HEADER_SIZE;
@@ -415,11 +437,30 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         submesh_bone_map_byte_count / 2,
         "submesh bone map",
     )?;
-    checked_advance(
+    offset = checked_advance(
         offset,
         submesh_bone_map_byte_count,
         bytes.len(),
         "submesh bone map",
+    )?;
+    let bounding_box_padding = read_u8(bytes, offset, "bounding box padding")?;
+    offset = checked_advance(offset, 1, bytes.len(), "bounding box padding")?;
+    offset = checked_advance(
+        offset,
+        usize::from(bounding_box_padding),
+        bytes.len(),
+        "bounding box padding bytes",
+    )?;
+    let bounding_box = read_bounding_box(bytes, &mut offset, "bounding box")?;
+    let model_bounding_box = read_bounding_box(bytes, &mut offset, "model bounding box")?;
+    let water_bounding_box = read_bounding_box(bytes, &mut offset, "water bounding box")?;
+    let vertical_fog_bounding_box =
+        read_bounding_box(bytes, &mut offset, "vertical fog bounding box")?;
+    let bone_bounding_boxes = read_bone_bounding_boxes(
+        bytes,
+        &mut offset,
+        usize::from(model_header.bone_count),
+        &bones,
     )?;
     let submeshes = raw_submeshes
         .into_iter()
@@ -461,6 +502,12 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         shape_values,
         submesh_bone_map_byte_size,
         submesh_bone_map,
+        bounding_box_padding,
+        bounding_box,
+        model_bounding_box,
+        water_bounding_box,
+        vertical_fog_bounding_box,
+        bone_bounding_boxes,
     })
 }
 
@@ -1020,6 +1067,37 @@ fn read_shape_values(
     Ok(shape_values)
 }
 
+fn read_bounding_box(
+    bytes: &[u8],
+    offset: &mut usize,
+    label: &str,
+) -> anyhow::Result<MdlBoundingBoxMetadata> {
+    let box_offset = *offset;
+    let bounding_box = MdlBoundingBoxMetadata {
+        min: read_f32x4(bytes, box_offset, label)?,
+        max: read_f32x4(bytes, box_offset + 16, label)?,
+    };
+    *offset = checked_advance(*offset, BOUNDING_BOX_SIZE, bytes.len(), label)?;
+    Ok(bounding_box)
+}
+
+fn read_bone_bounding_boxes(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+    bones: &[MdlNamedOffset],
+) -> anyhow::Result<Vec<MdlBoneBoundingBoxMetadata>> {
+    let mut bounding_boxes = Vec::with_capacity(count);
+    for index in 0..count {
+        bounding_boxes.push(MdlBoneBoundingBoxMetadata {
+            index,
+            bone_name: bones.get(index).and_then(|bone| bone.name.clone()),
+            bounding_box: read_bounding_box(bytes, offset, "bone bounding box")?,
+        });
+    }
+    Ok(bounding_boxes)
+}
+
 fn read_u32_table(
     bytes: &[u8],
     offset: &mut usize,
@@ -1123,6 +1201,15 @@ fn read_u32x3(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<[u32; 
     ])
 }
 
+fn read_f32x4(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<[f32; 4]> {
+    Ok([
+        read_f32_le(bytes, offset, label)?,
+        read_f32_le(bytes, offset + 4, label)?,
+        read_f32_le(bytes, offset + 8, label)?,
+        read_f32_le(bytes, offset + 12, label)?,
+    ])
+}
+
 fn read_f32_le(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<f32> {
     let bytes = read_bytes(bytes, offset, 4, label)?;
     Ok(f32::from_le_bytes(bytes.try_into()?))
@@ -1196,6 +1283,24 @@ mod tests {
         assert_eq!(metadata.shape_values[1].replacing_vertex_index, 5);
         assert_eq!(metadata.submesh_bone_map_byte_size, 4);
         assert_eq!(metadata.submesh_bone_map, vec![1, 2]);
+        assert_eq!(metadata.bounding_box_padding, 2);
+        assert_eq!(metadata.bounding_box.min, [-1.0, -2.0, -3.0, 1.0]);
+        assert_eq!(metadata.bounding_box.max, [1.0, 2.0, 3.0, 1.0]);
+        assert_eq!(metadata.model_bounding_box.min, [-4.0, -5.0, -6.0, 1.0]);
+        assert_eq!(metadata.water_bounding_box.max, [10.0, 11.0, 12.0, 1.0]);
+        assert_eq!(
+            metadata.vertical_fog_bounding_box.min,
+            [-13.0, -14.0, -15.0, 1.0]
+        );
+        assert_eq!(metadata.bone_bounding_boxes.len(), 3);
+        assert_eq!(
+            metadata.bone_bounding_boxes[1].bone_name.as_deref(),
+            Some("bone_b")
+        );
+        assert_eq!(
+            metadata.bone_bounding_boxes[2].bounding_box.max,
+            [31.0, 32.0, 33.0, 1.0]
+        );
     }
 
     fn fixture_mdl_bytes() -> Vec<u8> {
@@ -1320,6 +1425,36 @@ mod tests {
         bytes.extend_from_slice(&1_u16.to_le_bytes());
         bytes.extend_from_slice(&2_u16.to_le_bytes());
 
+        bytes.push(2);
+        bytes.extend_from_slice(&[0, 0]);
+        push_bounding_box(&mut bytes, [-1.0, -2.0, -3.0, 1.0], [1.0, 2.0, 3.0, 1.0]);
+        push_bounding_box(&mut bytes, [-4.0, -5.0, -6.0, 1.0], [4.0, 5.0, 6.0, 1.0]);
+        push_bounding_box(
+            &mut bytes,
+            [-10.0, -11.0, -12.0, 1.0],
+            [10.0, 11.0, 12.0, 1.0],
+        );
+        push_bounding_box(
+            &mut bytes,
+            [-13.0, -14.0, -15.0, 1.0],
+            [13.0, 14.0, 15.0, 1.0],
+        );
+        push_bounding_box(
+            &mut bytes,
+            [-20.0, -21.0, -22.0, 1.0],
+            [20.0, 21.0, 22.0, 1.0],
+        );
+        push_bounding_box(
+            &mut bytes,
+            [-24.0, -25.0, -26.0, 1.0],
+            [24.0, 25.0, 26.0, 1.0],
+        );
+        push_bounding_box(
+            &mut bytes,
+            [-31.0, -32.0, -33.0, 1.0],
+            [31.0, 32.0, 33.0, 1.0],
+        );
+
         bytes
     }
 
@@ -1341,5 +1476,11 @@ mod tests {
 
     fn write_f32(bytes: &mut [u8], offset: usize, value: f32) {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_bounding_box(bytes: &mut Vec<u8>, min: [f32; 4], max: [f32; 4]) {
+        for value in min.into_iter().chain(max) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
     }
 }
