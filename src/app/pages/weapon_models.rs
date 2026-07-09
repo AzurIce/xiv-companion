@@ -580,6 +580,10 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "ct-index", "CT Index" }
                     option { value: "material-map", "Mat Map" }
                     option { value: "multi-map", "Multi" }
+                    option { value: "tile-props", "Tile" }
+                    option { value: "sheen-props", "Sheen" }
+                    option { value: "sphere-props", "Sphere" }
+                    option { value: "tile-matrix", "Tile Matrix" }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -665,6 +669,10 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::ColorTableIndex => "ct-index",
         ModelDebugMode::MaterialMap => "material-map",
         ModelDebugMode::MultiMap => "multi-map",
+        ModelDebugMode::TileProperties => "tile-props",
+        ModelDebugMode::SheenProperties => "sheen-props",
+        ModelDebugMode::SphereProperties => "sphere-props",
+        ModelDebugMode::TileMatrix => "tile-matrix",
     }
 }
 
@@ -686,6 +694,10 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "ct-index" => ModelDebugMode::ColorTableIndex,
         "material-map" => ModelDebugMode::MaterialMap,
         "multi-map" => ModelDebugMode::MultiMap,
+        "tile-props" => ModelDebugMode::TileProperties,
+        "sheen-props" => ModelDebugMode::SheenProperties,
+        "sphere-props" => ModelDebugMode::SphereProperties,
+        "tile-matrix" => ModelDebugMode::TileMatrix,
         _ => ModelDebugMode::Final,
     }
 }

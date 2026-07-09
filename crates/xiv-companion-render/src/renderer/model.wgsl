@@ -241,9 +241,21 @@ fn debug_fragment_output(
     } else if mode < 15.5 {
         let material_map_uv = resolve_uv(input, material.uv_sources0.w);
         color = textureSample(material_map_texture, data_sampler, material_map_uv).rgb;
-    } else {
+    } else if mode < 16.5 {
         let multi_map_uv = resolve_uv(input, material.uv_sources1.x);
         color = textureSample(multi_map_texture, data_sampler, multi_map_uv).rgb;
+    } else if mode < 17.5 {
+        let tile_uv = resolve_uv(input, material.uv_sources2.x);
+        color = textureSample(tile_properties_texture, nearest_data_sampler, tile_uv).rgb;
+    } else if mode < 18.5 {
+        let sheen_uv = resolve_uv(input, material.uv_sources2.y);
+        color = textureSample(sheen_properties_texture, nearest_data_sampler, sheen_uv).rgb;
+    } else if mode < 19.5 {
+        let sphere_uv = resolve_uv(input, material.uv_sources2.z);
+        color = textureSample(sphere_properties_texture, nearest_data_sampler, sphere_uv).rgb;
+    } else {
+        let tile_matrix_uv = resolve_uv(input, material.uv_sources2.w);
+        color = textureSample(tile_matrix_texture, nearest_data_sampler, tile_matrix_uv).rgb;
     }
 
     var out: FragmentOutput;

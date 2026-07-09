@@ -28,6 +28,10 @@ pub enum ModelDebugMode {
     ColorTableIndex,
     MaterialMap,
     MultiMap,
+    TileProperties,
+    SheenProperties,
+    SphereProperties,
+    TileMatrix,
 }
 
 impl ModelDebugMode {
@@ -50,6 +54,10 @@ impl ModelDebugMode {
             ModelDebugMode::ColorTableIndex => 14.0,
             ModelDebugMode::MaterialMap => 15.0,
             ModelDebugMode::MultiMap => 16.0,
+            ModelDebugMode::TileProperties => 17.0,
+            ModelDebugMode::SheenProperties => 18.0,
+            ModelDebugMode::SphereProperties => 19.0,
+            ModelDebugMode::TileMatrix => 20.0,
         }
     }
 }
@@ -2348,6 +2356,10 @@ mod tests {
         assert_eq!(ModelDebugMode::ColorTableIndex.shader_value(), 14.0);
         assert_eq!(ModelDebugMode::MaterialMap.shader_value(), 15.0);
         assert_eq!(ModelDebugMode::MultiMap.shader_value(), 16.0);
+        assert_eq!(ModelDebugMode::TileProperties.shader_value(), 17.0);
+        assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 18.0);
+        assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 19.0);
+        assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 20.0);
     }
 
     #[test]
