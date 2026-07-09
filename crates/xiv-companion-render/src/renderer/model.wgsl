@@ -169,7 +169,11 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let specular_strength = clamp(properties.w, 0.0, 1.0);
     let extra = resolve_extra_properties(input);
     let tile_specular_scale = mix(1.0, mix(0.88, 1.16, extra.tile.y), extra.flags.x);
-    let specular_scale = specular_strength * mix(1.0, mask.r * 1.35, material.params.w) * tile_specular_scale;
+    let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
+    let specular_scale = specular_strength
+        * mix(1.0, mask.r * 1.35, material.params.w)
+        * tile_specular_scale
+        * specular_color_mask.a;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
@@ -177,7 +181,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
-    let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5);
+    let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5)
+        * specular_color_mask.rgb;
     let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
@@ -209,10 +214,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
     let specular_tint = mix(material_specular, base, metalness * 0.35);
     let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55);
-    let opaque_lit = base * (0.22 + diffuse * 0.74)
+    let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
+    let ambient = mix(0.08, 0.22, ssao_mask);
+    let glass_ambient = mix(0.06, 0.10, ssao_mask);
+    let opaque_lit = base * (ambient + diffuse * 0.74)
         + specular_tint * specular * specular_scale * 0.24
         + vec3<f32>(rim);
-    let glass_lit = glass_tint * (0.10 + diffuse * 0.18)
+    let glass_lit = glass_tint * (glass_ambient + diffuse * 0.18)
         + material_specular * specular * 0.65
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0);
     let lit = select(opaque_lit, glass_lit, is_glass);
