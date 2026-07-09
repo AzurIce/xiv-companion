@@ -23,6 +23,10 @@ const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
 const G_TRANSPARENCY: u32 = 0x53E8_417B;
 #[cfg(feature = "game-data")]
+const G_GLASS_IOR: u32 = 0x7801_E004;
+#[cfg(feature = "game-data")]
+const G_GLASS_THICKNESS_MAX: u32 = 0xC464_7F37;
+#[cfg(feature = "game-data")]
 const G_NORMAL_SCALE: u32 = 0xB554_5FBB;
 #[cfg(feature = "game-data")]
 const G_MULTI_NORMAL_SCALE: u32 = 0x793A_C5A3;
@@ -948,6 +952,8 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_EmissiveColor",
             "g_MultiDiffuseColor",
             "g_MultiEmissiveColor",
+            "g_GlassIOR",
+            "g_GlassThicknessMax",
         ],
     )
 }
@@ -1478,6 +1484,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let transparency = composed_material_transparency(&semantics);
+        let glass_ior = composed_material_glass_ior(&semantics);
+        let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -1538,6 +1546,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             alpha_mode,
             alpha_threshold,
             transparency,
+            glass_ior,
+            glass_thickness_max,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -1969,6 +1979,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let transparency = composed_material_transparency(&semantics);
+        let glass_ior = composed_material_glass_ior(&semantics);
+        let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -2030,6 +2042,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             alpha_mode,
             alpha_threshold,
             transparency,
+            glass_ior,
+            glass_thickness_max,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -2740,6 +2754,16 @@ fn composed_material_transparency(semantics: &ComposedMaterialSemantics) -> f32 
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_glass_ior(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_GLASS_IOR, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_glass_thickness_max(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_GLASS_THICKNESS_MAX, 0.01)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_normal_scale_constant(semantics, G_NORMAL_SCALE)
 }
@@ -3258,6 +3282,8 @@ fn fallback_weapon_material(
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         transparency: 0.0,
+        glass_ior: 1.0,
+        glass_thickness_max: 0.01,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
@@ -4581,6 +4607,38 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[8.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_transparency(&semantics), 1.0);
+    }
+
+    #[test]
+    fn composed_material_glass_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_GLASS_IOR, &[1.33]),
+            (G_GLASS_THICKNESS_MAX, &[0.08]),
+        ]);
+
+        assert_eq!(composed_material_glass_ior(&semantics), 1.0);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.01);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.33);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.08);
+
+        let material = test_mtrl_with_constant(G_GLASS_IOR, &[1.52], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.52);
+
+        let material = test_mtrl_with_constant(G_GLASS_THICKNESS_MAX, &[0.125], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.125);
+
+        let material = test_mtrl_with_constant(G_GLASS_IOR, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.0);
+
+        let material = test_mtrl_with_constant(G_GLASS_THICKNESS_MAX, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.01);
     }
 
     #[test]

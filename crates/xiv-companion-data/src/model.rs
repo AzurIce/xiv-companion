@@ -321,6 +321,10 @@ pub struct ModelMaterial {
     pub alpha_threshold: f32,
     #[serde(default)]
     pub transparency: f32,
+    #[serde(default = "default_material_glass_ior")]
+    pub glass_ior: f32,
+    #[serde(default = "default_material_glass_thickness_max")]
+    pub glass_thickness_max: f32,
     #[serde(default = "default_material_normal_scale")]
     pub normal_scale: f32,
     #[serde(default = "default_material_normal_scale")]
@@ -1013,6 +1017,14 @@ fn default_material_opacity() -> f32 {
 
 fn default_material_normal_scale() -> f32 {
     1.0
+}
+
+fn default_material_glass_ior() -> f32 {
+    1.0
+}
+
+fn default_material_glass_thickness_max() -> f32 {
+    0.01
 }
 
 fn default_material_tile_alpha() -> f32 {
@@ -2182,6 +2194,8 @@ mod color_table_bake_tests {
             alpha_mode: MaterialAlphaMode::Opaque,
             alpha_threshold: 0.0,
             transparency: 0.0,
+            glass_ior: 1.0,
+            glass_thickness_max: 0.01,
             normal_scale: 1.0,
             multi_normal_scale: 1.0,
             detail_normal_scale: 1.0,

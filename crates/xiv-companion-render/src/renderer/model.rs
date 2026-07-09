@@ -1357,6 +1357,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             alpha_mode_value(material.alpha_mode),
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
+        glass_params: material_glass_params(material),
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
@@ -1964,6 +1965,8 @@ fn fallback_material() -> ModelMaterial {
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
         transparency: 0.0,
+        glass_ior: 1.0,
+        glass_thickness_max: 0.01,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
@@ -2037,6 +2040,15 @@ fn texture_presence_flag<M: ModelRenderData + ?Sized>(
         .and_then(|index| model.textures().get(index))
         .map(|_| 1.0)
         .unwrap_or(0.0)
+}
+
+fn material_glass_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.glass_ior, 1.0),
+        finite_or(material.glass_thickness_max, 0.01),
+        0.0,
+        0.0,
+    ]
 }
 
 fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
@@ -2291,6 +2303,7 @@ struct MaterialUniform {
     params: [f32; 4],
     properties: [f32; 4],
     render: [f32; 4],
+    glass_params: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
     tile_params: [f32; 4],
@@ -2855,6 +2868,20 @@ mod tests {
         material.tile_alpha = 8.0;
         material.tile_scale = [f32::NAN, f32::NEG_INFINITY];
         assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
+    }
+
+    #[test]
+    fn material_glass_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_glass_params(&material), [1.0, 0.01, 0.0, 0.0]);
+
+        material.glass_ior = 1.52;
+        material.glass_thickness_max = 0.125;
+        assert_eq!(material_glass_params(&material), [1.52, 0.125, 0.0, 0.0]);
+
+        material.glass_ior = f32::NAN;
+        material.glass_thickness_max = f32::INFINITY;
+        assert_eq!(material_glass_params(&material), [1.0, 0.01, 0.0, 0.0]);
     }
 
     #[test]
