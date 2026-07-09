@@ -56,6 +56,7 @@
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入，尚未驱动实际 detail map 采样。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
 - `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已结构化进 `ModelMaterial` 和 phantom summary；renderer uniform 已传入 WGSL，`LightShaft` draw role 会启用保守的 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 和 `g_Ray` 强度近似。完整 MeddleTools 节点语义仍未复刻。
+- `g_Transparency` 已结构化进 `ModelMaterial.transparency` 和 phantom summary，默认 0.0，当前只作为 glass/transparency shader 后续实现的稳定输入；尚未直接改写 renderer opacity。
 - `ModelDebugMode` 已提供第一版 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、tile/sheen/sphere properties、tile matrix；Web 控件和 snapshot/test render options 共用同一入口。material/multi 和 ColorTable extra maps 当前可作为 texture-role debug preview，但不代表完整 shader 通道解释已完成。
 
 主要缺口集中在：
@@ -80,7 +81,7 @@
 
 - 染色仍停留在 `ColorDyeTable` debug，尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入，因此 `usesDye` 只能保守为 false。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
-- glass/transparency/reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；lightshaft 已有第一组结构化 constants，但 `g_Ray` 与节点级行为仍是近似。
+- glass/reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；transparency 已先接入 `g_Transparency` 字段但未驱动 alpha，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
 
 计划：
@@ -174,10 +175,11 @@
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已预留 detail id 与 primary/multi UV scale，但当前 WGSL 还没有绑定或采样 detail map。
 - 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`，分别对应 UV0 与 UV1 scroll multiplier；renderer 已用 `ModelRenderOptions.uv_scroll_time` / camera uniform 驱动 WGSL 对 `uv0` / `uv1` 来源做保守滚动采样，后续仍需按 shader family 和节点连接决定具体哪些 texture role 使用 scroll UV。
 - 已完成：`lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 进入 `ModelMaterial`，默认值分别为白色、零动画、identity U/V 和零 ray；renderer uniform 已按 draw role 只对 lightShaft batch 启用保守消费，其中 `g_Color` 控制 additive tint/alpha，`g_TexAnim.xy` 驱动 UV 动画，`g_TexU/V` 作为 UV 仿射基向量，`g_Ray` 当前只作强度近似。
+- 已完成：`g_Transparency` 进入 `ModelMaterial.transparency`，默认 0.0，材质 override 优先于 shader package default 并 clamp 到 0..1；当前不直接参与 opacity 计算，避免把“透明度”误解成 alpha。
 
 后续优先参数：
 
-- glass/transparency 相关 shader keys 和 constants；lightshaft 仍需补 `g_Ray` 的真实节点行为和 synthetic render fixture
+- glass 相关 shader keys/constants；transparency 还需要确认 `g_Transparency` 到 alpha/opacity 的方向和 shader-family 行为；lightshaft 仍需补 `g_Ray` 的真实节点行为和 synthetic render fixture
 
 验证：
 
@@ -187,6 +189,7 @@
 - 已增加 detail UV focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override 和 renderer uniform 预留。
 - 已增加 UV scroll focused tests，覆盖 `g_UVScrollTime` / `0x9A696A17` 的 shader package default、material override、MeddleTools U 轴取反、renderer uniform 传递和默认时间稳定性。
 - 已增加 lightshaft focused tests，覆盖 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 的 shader package default、material override、renderer uniform 默认值和 LightShaft draw-role shader 开关。
+- 已增加 transparency focused tests，覆盖 `g_Transparency` 的 shader package default、material override 和 clamp。
 - 用本地 SqPack 样本输出 material debug，对照 MeddleTools `node_configs.py` 中对应 mapping。
 
 ### P1: 处理染色数据入口
@@ -451,9 +454,10 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 
 ### P1: 改善 alpha/glass/transparency
 
-当前 glass 固定 opacity `0.28`。后续需要：
+当前 glass 固定 opacity `0.28`；`g_Transparency` 已解析但尚未驱动 opacity。后续需要：
 
-- 从 shader keys/constants 中解析 glass/transparency 参数。
+- 继续解析 glass 相关 shader keys/constants。
+- 确认 `g_Transparency` 在各 shader family 中是透明度还是 alpha，并接入 renderer alpha。
 - 区分 cutout、blend、glass、additive。
 - 对 alpha test 使用真实阈值和 shader package 规则。
 - 透明排序保留 mesh-level，但为复杂模型预留 per-triangle 或 weighted blended OIT 方案。

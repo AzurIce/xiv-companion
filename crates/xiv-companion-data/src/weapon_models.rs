@@ -21,6 +21,8 @@ const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
 const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
+const G_TRANSPARENCY: u32 = 0x53E8_417B;
+#[cfg(feature = "game-data")]
 const G_NORMAL_SCALE: u32 = 0xB554_5FBB;
 #[cfg(feature = "game-data")]
 const G_MULTI_NORMAL_SCALE: u32 = 0x793A_C5A3;
@@ -1463,6 +1465,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
+        let transparency = composed_material_transparency(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -1516,6 +1519,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            transparency,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -1940,6 +1944,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
+        let transparency = composed_material_transparency(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -1994,6 +1999,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            transparency,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -2693,6 +2699,11 @@ fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> O
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_transparency(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TRANSPARENCY, 0.0).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_normal_scale(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_normal_scale_constant(semantics, G_NORMAL_SCALE)
 }
@@ -3178,6 +3189,7 @@ fn fallback_weapon_material(
         render_mode: WeaponMaterialRenderMode::Opaque,
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        transparency: 0.0,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
@@ -4476,6 +4488,25 @@ mod weapon_material_tests {
 
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_alpha_threshold(&semantics), Some(0.7));
+    }
+
+    #[test]
+    fn composed_material_transparency_uses_resolved_material_constant() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[(G_TRANSPARENCY, &[0.35])]);
+
+        assert_eq!(composed_material_transparency(&semantics), 0.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_transparency(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_TRANSPARENCY, &[0.72], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_transparency(&semantics), 0.72);
+
+        let material = test_mtrl_with_constant(G_TRANSPARENCY, &[8.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_transparency(&semantics), 1.0);
     }
 
     #[test]

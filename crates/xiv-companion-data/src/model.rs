@@ -319,6 +319,8 @@ pub struct ModelMaterial {
     pub alpha_mode: MaterialAlphaMode,
     #[serde(default)]
     pub alpha_threshold: f32,
+    #[serde(default)]
+    pub transparency: f32,
     #[serde(default = "default_material_normal_scale")]
     pub normal_scale: f32,
     #[serde(default = "default_material_normal_scale")]
@@ -2147,6 +2149,7 @@ mod color_table_bake_tests {
             render_mode: MaterialRenderMode::Opaque,
             alpha_mode: MaterialAlphaMode::Opaque,
             alpha_threshold: 0.0,
+            transparency: 0.0,
             normal_scale: 1.0,
             multi_normal_scale: 1.0,
             detail_normal_scale: 1.0,

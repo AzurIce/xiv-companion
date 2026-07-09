@@ -163,6 +163,7 @@ WeaponMaterialRenderMode::Glass
 `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已解析进材质数据和 renderer uniform，当前预留给后续 detail color/normal 采样。
 `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 转换成 UV0/UV1 scroll multiplier 并进入 renderer uniform，Web 渲染循环会用 RAF 时间驱动保守滚动采样，native snapshot 默认时间为 0。
 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已解析进材质数据和 renderer uniform；LightShaft draw role 会启用保守 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 与 `g_Ray` 强度近似，尚未复刻完整节点语义。
+`g_Transparency` 已解析进材质数据和 phantom summary，当前只作为后续 transparency/glass alpha 行为的稳定输入，尚未直接改变 opacity。
 
 ### 7.2 Transparent
 
@@ -247,7 +248,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass/AdditiveLightShaft` prepared pass 分类，`AdditiveLightShaft` 已进入最小 additive wgpu pipeline 并消费第一组 lightshaft 参数；后续还需要 runtime shape visibility、独立 cutout/glass 行为和更完整的 lightshaft 节点语义。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags 和 UV source，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
-4. Material params：`g_AlphaThreshold`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale`、`g_UVScrollTime` 以及 `lightshaft.shpk` 的 `g_Color/g_TexAnim/g_TexU/g_TexV/g_Ray` 已进入结构化材质字段；后续要继续接入 glass/transparency 等其他参数，并让 multi/detail normal、tile select、detail UV 与 shader-family-specific UV scroll 更完整地参与 shader。
+4. Material params：`g_AlphaThreshold`、`g_Transparency`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale`、`g_UVScrollTime` 以及 `lightshaft.shpk` 的 `g_Color/g_TexAnim/g_TexU/g_TexV/g_Ray` 已进入结构化材质字段；后续要继续接入 glass 等其他参数，并让 transparency alpha、multi/detail normal、tile select、detail UV 与 shader-family-specific UV scroll 更完整地参与 shader。
 5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；PreparedMaterial 已保留第一版 UV source；后续要接入 tile array、shader-family-specific UV source 和更接近 MeddleTools 的 reflection/sphere 规则。
 6. 纹理采样配置：数据层已有第一版 role policy，renderer 已从 prepared policy 派生 color/data/nearest-data sampler，并已绑定 `_id.tex` 与 ColorTable extra maps；后续还要让真实 tile/detail array 等 nearest 资源进入 runtime 绑定。
 7. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。

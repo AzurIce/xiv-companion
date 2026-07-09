@@ -1897,6 +1897,7 @@ fn fallback_material() -> ModelMaterial {
         render_mode: MaterialRenderMode::Opaque,
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        transparency: 0.0,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
