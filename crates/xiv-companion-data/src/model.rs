@@ -398,7 +398,25 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
 pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
     pub shader_family: MaterialShaderFamily,
+    pub texture_bindings: PreparedTextureBindings,
     pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureBindings {
+    pub base_color: Option<usize>,
+    pub normal: Option<usize>,
+    pub mask: Option<usize>,
+    pub material_map: Option<usize>,
+    pub multi_map: Option<usize>,
+    pub specular: Option<usize>,
+    pub emissive: Option<usize>,
+    pub material_properties: Option<usize>,
+    pub tile_properties: Option<usize>,
+    pub sheen_properties: Option<usize>,
+    pub sphere_properties: Option<usize>,
+    pub tile_matrix: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -440,9 +458,31 @@ pub fn prepare_material_for_draw_role(
         shader_family: material_shader_family(
             material.and_then(|material| material.shader_package_name.as_deref()),
         ),
+        texture_bindings: prepared_texture_bindings(material),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
+    }
+}
+
+pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTextureBindings {
+    let Some(material) = material else {
+        return PreparedTextureBindings::default();
+    };
+
+    PreparedTextureBindings {
+        base_color: material.base_color_texture,
+        normal: material.normal_texture,
+        mask: material.mask_texture,
+        material_map: material.material_map_texture,
+        multi_map: material.multi_map_texture,
+        specular: material.specular_texture,
+        emissive: material.emissive_texture,
+        material_properties: material.material_properties_texture,
+        tile_properties: material.tile_properties_texture,
+        sheen_properties: material.sheen_properties_texture,
+        sphere_properties: material.sphere_properties_texture,
+        tile_matrix: material.tile_matrix_texture,
     }
 }
 
@@ -1097,6 +1137,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
+                texture_bindings: PreparedTextureBindings::default(),
                 render_backfaces: false,
             }
         );
@@ -1105,6 +1146,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                texture_bindings: PreparedTextureBindings::default(),
                 render_backfaces: true,
             }
         );
@@ -1120,6 +1162,46 @@ mod color_table_bake_tests {
         assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
+    }
+
+    #[test]
+    fn prepared_material_copies_texture_bindings() {
+        let mut material = test_material();
+        material.base_color_texture = Some(1);
+        material.normal_texture = Some(2);
+        material.mask_texture = Some(3);
+        material.material_map_texture = Some(4);
+        material.multi_map_texture = Some(5);
+        material.specular_texture = Some(6);
+        material.emissive_texture = Some(7);
+        material.material_properties_texture = Some(8);
+        material.tile_properties_texture = Some(9);
+        material.sheen_properties_texture = Some(10);
+        material.sphere_properties_texture = Some(11);
+        material.tile_matrix_texture = Some(12);
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .texture_bindings,
+            PreparedTextureBindings {
+                base_color: Some(1),
+                normal: Some(2),
+                mask: Some(3),
+                material_map: Some(4),
+                multi_map: Some(5),
+                specular: Some(6),
+                emissive: Some(7),
+                material_properties: Some(8),
+                tile_properties: Some(9),
+                sheen_properties: Some(10),
+                sphere_properties: Some(11),
+                tile_matrix: Some(12),
+            }
+        );
+        assert_eq!(
+            prepared_texture_bindings(None),
+            PreparedTextureBindings::default()
+        );
     }
 
     #[test]

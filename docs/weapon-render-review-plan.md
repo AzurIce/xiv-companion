@@ -43,6 +43,7 @@
 - renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass` 与 culling policy。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
+- `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 
 主要缺口集中在：
 
@@ -150,14 +151,15 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - 已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用。
 - 已增加第一版公共 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
 - `PreparedMaterial` 已包含第一版 `MaterialShaderFamily` 分类，覆盖 MeddleTools 映射中的 character/glass/transparency/scroll/bg/lightshaft/water 常见包。
+- `PreparedMaterial` 已包含第一版 `PreparedTextureBindings`，聚合 renderer 当前已知的材质贴图索引。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策。
-- 完整 `PreparedModel`、texture binding、UV source、feature flags 仍尚未建立。
+- 完整 `PreparedModel`、sampler config、UV source、feature flags 仍尚未建立。
 
 建议中间结构包含：
 
 - mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等
 - material shader family：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、unknown
-- texture bindings：base、normal、mask、material、multi、specular、emissive、index、tile/sheen/sphere/tileMatrix
+- texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；index 与 per-role sampler config 仍待补齐
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft
 - culling policy：render backfaces / cull backfaces
@@ -171,8 +173,8 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类，以及 culling policy fallback。
-- 后续仍需要为 texture bindings、UV source 构造 fixture。
+- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合，以及 culling policy fallback。
+- 后续仍需要为 UV source 和 sampler config 构造 fixture。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
 ### P0: mesh category 和 submesh attribute 决策前置

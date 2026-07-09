@@ -196,7 +196,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - material-properties texture
    - specular texture
 3. scene pass：
-   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类。
+   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类和 texture bindings。
    - opaque pipeline：写 depth，绘制 `Opaque` 与 `Cutout` batch；`Cutout` 仍由 WGSL alpha test discard。
    - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` 与 `Glass` batch。
    - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
