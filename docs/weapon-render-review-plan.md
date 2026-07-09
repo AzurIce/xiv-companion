@@ -534,6 +534,15 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 ## 建议实施顺序
 
+### 当前下一批工作队列
+
+从当前状态继续推进时，优先级应按依赖关系排：
+
+1. 数据解析：优先补染色输入链路。先把 `ColorDyeTable` 行语义、`stainingtemplate.stm`、EXD stain 参数和用户 stain 输入定义清楚，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
+2. 结果处理：把 stain、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
+3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数，顺序为 detail tint/UV、tile index/scale 的保守近似、alpha aperture/offset 的受限 alpha shaping、glass IOR/thickness 的轻量 fresnel/specular 调整；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
+4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。
+
 ### 第一阶段：可审计和不误画
 
 1. 已完成：更新过期文档。
@@ -550,10 +559,10 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 ### 第二阶段：让解析结果真正进 shader
 
-1. 已完成 GPU 顶点格式扩展，后续让 shader-family 逻辑实际消费 uv1/color1/flow。
-2. 增加 per-material texture/sampler config。
-3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；prepared UV source 和保守 scroll time 已驱动采样选择，后续让 tile array 和 shader-family-specific source/scroll 规则真正参与。
-4. 加入 shader family 和 alpha policy。
+1. 已完成 GPU 顶点格式扩展；prepared UV source 和保守 scroll time 已进入 WGSL。后续让 shader-family 逻辑实际消费 `uv1-uv3`、`color1`、secondary tangent frame 和 flow。
+2. 已完成第一版 per-material texture/sampler config，renderer 已派生 color/data/nearest 三组 sampler。后续补 per-texture independent sampler、shader 级 clip/extend 和真实 tile/detail array 绑定。
+3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 已进入 renderer；`g_DiffuseColor`、`g_EmissiveColor`、`g_SpecularColorMask`、`g_SSAOMask` 和 sheen/sphere 常量已有第一版 WGSL 消费。后续继续补 detail tint/UV、tile select、multi diffuse/detail normal 和 shader-family-specific source/scroll 规则。
+4. 已完成第一版 shader family 分类和 alpha policy/prepared pass 分类；后续把 character/glass/transparency/scroll/lightshaft/reflection 等 family 的关键节点拆成明确 WGSL 函数块，而不是继续扩大单个主 shader 分支。
 
 完成标准：
 
