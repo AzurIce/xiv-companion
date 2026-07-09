@@ -291,6 +291,9 @@ pub struct ModelTexture {
     pub width: u16,
     pub height: u16,
     pub rgba: Vec<u8>,
+    /// Optional per-pixel float channels for non-unorm semantic data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgba_f32: Option<Vec<[f32; 4]>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -462,8 +465,9 @@ impl Default for ColorTableRowColors {
 /// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
 /// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
 /// metalness / roughness / gloss strength / specular strength。
-/// 额外的 ColorTable 语义贴图同样为线性 unorm，用于保留 MeddleTools 中的
+/// 额外的 ColorTable 语义贴图同样为线性 unorm，用于预览 MeddleTools 中的
 /// TileProperties / SheenProperties / SphereProperties / TileMatrixProperties ramp。
+/// TileMatrix 同时在 `tile_matrix_rgba_f32` 中保留未 clamp 的 UU / UV / VU / VV。
 /// TileIndex 按 0..64 归一化，SphereIndex 按 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
@@ -474,6 +478,7 @@ pub struct BakedColorTableMaps {
     pub sheen_properties_rgba: Vec<u8>,
     pub sphere_properties_rgba: Vec<u8>,
     pub tile_matrix_rgba: Vec<u8>,
+    pub tile_matrix_rgba_f32: Vec<[f32; 4]>,
     /// 所有行 emissive 全黑时为 None
     pub emissive_rgba: Option<Vec<u8>>,
 }
@@ -501,6 +506,7 @@ pub fn bake_color_table_maps(
     let mut sheen_properties_rgba = Vec::with_capacity(pixel_count * 4);
     let mut sphere_properties_rgba = Vec::with_capacity(pixel_count * 4);
     let mut tile_matrix_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut tile_matrix_rgba_f32 = Vec::with_capacity(pixel_count);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
     let mut has_emissive = false;
 
@@ -549,6 +555,7 @@ pub fn bake_color_table_maps(
             &mut sphere_properties_rgba,
             [sphere_index / 255.0, sphere_mask, 1.0, 1.0],
         );
+        tile_matrix_rgba_f32.push(tile_matrix);
         push_unorm_pixel(&mut tile_matrix_rgba, tile_matrix);
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
     }
@@ -561,6 +568,7 @@ pub fn bake_color_table_maps(
         sheen_properties_rgba,
         sphere_properties_rgba,
         tile_matrix_rgba,
+        tile_matrix_rgba_f32,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
     })
 }
@@ -921,6 +929,26 @@ mod color_table_bake_tests {
         assert_eq!(&baked.sheen_properties_rgba[0..4], &[64, 128, 191, 255]);
         assert_eq!(&baked.sphere_properties_rgba[0..4], &[128, 64, 255, 255]);
         assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 191, 128, 64]);
+    }
+
+    #[test]
+    fn bake_preserves_tile_matrix_float_values() {
+        let rows = vec![
+            ColorTableRowColors {
+                tile_matrix: [2.0, -0.5, 0.25, 1.5],
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                tile_matrix: [0.0, 0.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        ];
+        let id_rgba = [0, 0, 0, 255];
+
+        let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
+
+        assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 0, 64, 255]);
+        assert_eq!(baked.tile_matrix_rgba_f32, vec![[2.0, -0.5, 0.25, 1.5]]);
     }
 
     #[test]

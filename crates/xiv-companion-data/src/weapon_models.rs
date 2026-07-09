@@ -1303,6 +1303,7 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
             width: texture.width,
             height: texture.height,
             rgba,
+            rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
         return Some(index);
@@ -1732,6 +1733,7 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
             width: texture.width,
             height: texture.height,
             rgba,
+            rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
         return Some(index);
@@ -2036,13 +2038,14 @@ fn bake_weapon_color_table_textures(
         baked.sphere_properties_rgba,
     );
 
-    let tile_matrix = push_or_replace_baked_texture(
+    let tile_matrix = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-tile-matrix"),
         WeaponModelTextureKind::TileMatrixProperties,
         width,
         height,
         baked.tile_matrix_rgba,
+        Some(baked.tile_matrix_rgba_f32),
     );
 
     let emissive = if bake_emissive {
@@ -2224,6 +2227,21 @@ fn push_or_replace_baked_texture(
     height: u16,
     rgba: Vec<u8>,
 ) -> usize {
+    push_or_replace_baked_texture_with_float_channels(
+        textures, path, kind, width, height, rgba, None,
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn push_or_replace_baked_texture_with_float_channels(
+    textures: &mut Vec<WeaponModelTexture>,
+    path: String,
+    kind: WeaponModelTextureKind,
+    width: u16,
+    height: u16,
+    rgba: Vec<u8>,
+    rgba_f32: Option<Vec<[f32; 4]>>,
+) -> usize {
     if let Some(index) = textures.iter().position(|texture| texture.path == path) {
         textures[index] = WeaponModelTexture {
             path,
@@ -2231,6 +2249,7 @@ fn push_or_replace_baked_texture(
             width,
             height,
             rgba,
+            rgba_f32,
         };
         return index;
     }
@@ -2242,6 +2261,7 @@ fn push_or_replace_baked_texture(
         width,
         height,
         rgba,
+        rgba_f32,
     });
     index
 }
@@ -3460,6 +3480,46 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn baked_tile_matrix_texture_preserves_float_channels() {
+        let mut row_a = test_dawntrail_color_table_row();
+        row_a.material_repeat = [2.0, -0.5];
+        row_a.material_skew = [0.25, 1.5];
+        let mut row_b = row_a;
+        row_b.material_repeat = [0.0, 0.0];
+        row_b.material_skew = [0.0, 0.0];
+        let color_table =
+            physis::mtrl::ColorTable::DawntrailColorTable(physis::mtrl::DawntrailColorTableData {
+                rows: vec![row_a, row_b],
+            });
+        let mut textures = vec![WeaponModelTexture {
+            path: "index.tex".to_string(),
+            kind: WeaponModelTextureKind::Index,
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
+        }];
+
+        let baked = bake_weapon_color_table_textures(
+            "material.mtrl",
+            Some(&color_table),
+            Some(0),
+            true,
+            None,
+            &mut textures,
+        )
+        .expect("bake");
+
+        let tile_matrix = &textures[baked.tile_matrix];
+        assert_eq!(
+            tile_matrix.kind,
+            WeaponModelTextureKind::TileMatrixProperties
+        );
+        assert_eq!(&tile_matrix.rgba[0..4], &[255, 0, 64, 255]);
+        assert_eq!(tile_matrix.rgba_f32, Some(vec![[2.0, -0.5, 0.25, 1.5]]));
+    }
+
+    #[test]
     fn color_dye_table_debug_preserves_legacy_rows() {
         let color_dye_table = physis::mtrl::ColorDyeTable::LegacyColorDyeTable(
             physis::mtrl::LegacyColorDyeTableData {
@@ -3798,6 +3858,7 @@ mod weapon_material_tests {
                 width: 1,
                 height: 1,
                 rgba: vec![255, 128, 64, 255],
+                rgba_f32: None,
             },
             WeaponModelTexture {
                 path: "colorset.tex".to_string(),
@@ -3805,6 +3866,7 @@ mod weapon_material_tests {
                 width: 1,
                 height: 1,
                 rgba: vec![255, 255, 255, 32],
+                rgba_f32: None,
             },
         ];
 
@@ -3952,6 +4014,7 @@ mod weapon_material_tests {
             width: 1,
             height: 1,
             rgba: vec![255, 255, 255, alpha],
+            rgba_f32: None,
         }
     }
 
