@@ -171,6 +171,8 @@ pub struct ModelMesh {
     pub mesh_category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submesh: Option<ModelSubmeshInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_influences: Vec<ModelShapeInfo>,
     pub material_index: u16,
     #[serde(default)]
     pub material_slot: usize,
@@ -192,6 +194,17 @@ pub struct ModelSubmeshInfo {
     pub attribute_names: Vec<String>,
     pub bone_start_index: u16,
     pub bone_count: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShapeInfo {
+    pub index: usize,
+    pub name: Option<String>,
+    pub shape_index_mask: u32,
+    pub shape_index_mask_hex: String,
+    pub shape_mesh_index: usize,
+    pub shape_value_count: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -449,11 +462,18 @@ pub struct PreparedModel {
 pub struct PreparedModelOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_attribute_mask: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_shape_mask: Option<u32>,
 }
 
 impl PreparedModelOptions {
     pub fn with_enabled_attribute_mask(mut self, enabled_attribute_mask: u32) -> Self {
         self.enabled_attribute_mask = Some(enabled_attribute_mask);
+        self
+    }
+
+    pub fn with_enabled_shape_mask(mut self, enabled_shape_mask: u32) -> Self {
+        self.enabled_shape_mask = Some(enabled_shape_mask);
         self
     }
 }
@@ -469,6 +489,10 @@ pub struct PreparedMesh {
     pub visibility: PreparedMeshVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submesh: Option<ModelSubmeshInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_influences: Vec<ModelShapeInfo>,
+    #[serde(default)]
+    pub shape_influence_state: PreparedMeshShapeInfluences,
     pub prepared_material: PreparedMaterial,
 }
 
@@ -489,6 +513,16 @@ impl Default for PreparedMeshVisibility {
             missing_attribute_mask: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMeshShapeInfluences {
+    pub available_shape_mask: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_shape_mask: Option<u32>,
+    pub active_shape_mask: u32,
+    pub inactive_shape_mask: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -710,6 +744,10 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
                 let visibility =
                     prepared_mesh_visibility(mesh.submesh.as_ref(), options.enabled_attribute_mask);
+                let shape_influence_state = prepared_mesh_shape_influences(
+                    &mesh.shape_influences,
+                    options.enabled_shape_mask,
+                );
                 let mut prepared_material = prepare_material_for_draw_role(
                     model.materials().get(mesh.material_slot),
                     draw_role,
@@ -723,10 +761,34 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                         && visibility.submesh_attributes_visible,
                     visibility,
                     submesh: mesh.submesh.clone(),
+                    shape_influences: mesh.shape_influences.clone(),
+                    shape_influence_state,
                     prepared_material,
                 }
             })
             .collect(),
+    }
+}
+
+fn prepared_mesh_shape_influences(
+    shape_influences: &[ModelShapeInfo],
+    enabled_shape_mask: Option<u32>,
+) -> PreparedMeshShapeInfluences {
+    let available_shape_mask = shape_influences
+        .iter()
+        .fold(0_u32, |mask, shape| mask | shape.shape_index_mask);
+    let Some(enabled_shape_mask) = enabled_shape_mask else {
+        return PreparedMeshShapeInfluences {
+            available_shape_mask,
+            ..PreparedMeshShapeInfluences::default()
+        };
+    };
+
+    PreparedMeshShapeInfluences {
+        available_shape_mask,
+        enabled_shape_mask: Some(enabled_shape_mask),
+        active_shape_mask: available_shape_mask & enabled_shape_mask,
+        inactive_shape_mask: available_shape_mask & !enabled_shape_mask,
     }
 }
 
@@ -1829,6 +1891,51 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_model_reports_enabled_shape_influences_without_filtering_meshes() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.shape_influences = vec![test_shape_info(0), test_shape_info(2)];
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        let prepared = prepare_model_for_render(&model);
+
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].shape_influences,
+            vec![test_shape_info(0), test_shape_info(2)]
+        );
+        assert_eq!(
+            prepared.meshes[0].shape_influence_state,
+            PreparedMeshShapeInfluences {
+                available_shape_mask: 0x0000_0005,
+                enabled_shape_mask: None,
+                active_shape_mask: 0,
+                inactive_shape_mask: 0,
+            }
+        );
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_shape_mask(0x0000_0001),
+        );
+
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].shape_influence_state,
+            PreparedMeshShapeInfluences {
+                available_shape_mask: 0x0000_0005,
+                enabled_shape_mask: Some(0x0000_0001),
+                active_shape_mask: 0x0000_0001,
+                inactive_shape_mask: 0x0000_0004,
+            }
+        );
+    }
+
+    #[test]
     fn prepared_model_reports_mesh_level_flow_feature_flags() {
         let mut plain_mesh = test_model_mesh(None, 0);
         plain_mesh.vertices = vec![test_model_vertex()];
@@ -2030,6 +2137,7 @@ mod color_table_bake_tests {
             part_index: 0,
             mesh_category: category.map(str::to_string),
             submesh: None,
+            shape_influences: Vec::new(),
             material_index: material_slot as u16,
             material_slot,
             material_name: "test".to_string(),
@@ -2069,6 +2177,18 @@ mod color_table_bake_tests {
             attribute_names: vec!["attr_a".to_string(), "attr_c".to_string()],
             bone_start_index: 6,
             bone_count: 2,
+        }
+    }
+
+    fn test_shape_info(index: usize) -> ModelShapeInfo {
+        let shape_index_mask = 1_u32 << index;
+        ModelShapeInfo {
+            index,
+            name: Some(format!("shape_{index}")),
+            shape_index_mask,
+            shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
+            shape_mesh_index: index + 10,
+            shape_value_count: index as u32 + 1,
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::mdl_metadata::{MdlMeshMetadata, MdlMeshRangeMetadata, mdl_metadata_from_mdl_bytes};
 use crate::model::{
-    ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelSubmeshInfo, ModelVertex,
-    WeaponModelVertex,
+    ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelShapeInfo, ModelSubmeshInfo,
+    ModelVertex, WeaponModelVertex,
 };
 
 const MODEL_FILE_HEADER_SIZE: usize = 68;
@@ -15,6 +15,7 @@ pub(crate) struct MdlGeometryMesh {
     pub material_index: u16,
     pub material_name: String,
     pub bone_table: Option<ModelBoneTable>,
+    pub shape_influences: Vec<ModelShapeInfo>,
     pub vertices: Vec<WeaponModelVertex>,
     pub indices: Vec<u16>,
     pub submeshes: Vec<MdlGeometrySubmesh>,
@@ -94,6 +95,7 @@ pub(crate) fn extract_mdl_lod0_geometry(
             material_index: mesh.material_index,
             material_name,
             bone_table: mesh.bone_table.as_ref().map(model_bone_table_from_metadata),
+            shape_influences: geometry_shape_influences(&metadata, mesh.start_index),
             vertices,
             indices,
             submeshes: geometry_submeshes(mesh),
@@ -128,6 +130,41 @@ fn mesh_indices_from_ranges(ranges: &[MdlMeshRangeMetadata]) -> Vec<(usize, Stri
         }
     }
     indices
+}
+
+fn geometry_shape_influences(
+    metadata: &crate::mdl_metadata::MdlMetadata,
+    mesh_start_index: u32,
+) -> Vec<ModelShapeInfo> {
+    let mut influences = Vec::new();
+    for shape in &metadata.shapes {
+        let start = usize::from(shape.shape_mesh_start_indices[0]);
+        let count = usize::from(shape.shape_mesh_counts[0]);
+        for shape_mesh_index in start..start.saturating_add(count) {
+            let Some(shape_mesh) = metadata.shape_meshes.get(shape_mesh_index) else {
+                continue;
+            };
+            if shape_mesh.mesh_index_offset != mesh_start_index {
+                continue;
+            }
+            let shape_index_mask = shape_index_mask(shape.index);
+            influences.push(ModelShapeInfo {
+                index: shape.index,
+                name: shape.name.clone(),
+                shape_index_mask,
+                shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
+                shape_mesh_index,
+                shape_value_count: shape_mesh.shape_value_count,
+            });
+        }
+    }
+
+    influences.sort_by_key(|shape| (shape.index, shape.shape_mesh_index));
+    influences
+}
+
+fn shape_index_mask(shape_index: usize) -> u32 {
+    1_u32.checked_shl(shape_index as u32).unwrap_or(0)
 }
 
 fn geometry_submeshes(mesh: &MdlMeshMetadata) -> Vec<MdlGeometrySubmesh> {
