@@ -6,24 +6,24 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use serde_json::json;
-use xiv_companion::{audit::audit_craft_data, game_data::export_craft_data};
+use xiv_companion::{audit::audit_craft_data, game_data::{export_craft_data, export_weapon_catalog}};
 
 #[derive(Parser)]
 #[command(
     author,
     version,
-    about = "Export XIV Companion crafting data from a game install"
+    about = "Export XIV Companion game data from a game install"
 )]
 struct Args {
     /// FFXIV game directory. Accepts either the install root or the inner game directory.
     #[arg(long, value_name = "DIR")]
     game_dir: Option<PathBuf>,
 
-    /// Output directory for craft-data.json and version.json.
+    /// Output directory for generated JSON files and version.json.
     #[arg(long, value_name = "DIR", default_value = "assets")]
     out_dir: PathBuf,
 
-    /// Only audit an existing craft-data.json without exporting.
+    /// Only audit existing JSON files without exporting.
     #[arg(long)]
     audit_only: bool,
 
@@ -36,10 +36,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let root = workspace_root()?;
     let out_dir = absolutize(&root, &args.out_dir);
-    let data_path = out_dir.join("craft-data.json");
+    let craft_data_path = out_dir.join("craft-data.json");
+    let weapon_catalog_path = out_dir.join("weapon-catalog.json");
 
     if args.audit_only {
-        audit_craft_data(&data_path)?;
+        audit_craft_data(&craft_data_path)?;
         return Ok(());
     }
 
@@ -48,13 +49,17 @@ fn main() -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow!("--game-dir is required unless --audit-only is set"))?;
     let generated_at = chrono_like_timestamp();
-    let data = export_craft_data(game_dir, generated_at.clone())?;
-    let game_version = data.game_version.clone();
+
+    let craft_data = export_craft_data(game_dir, generated_at.clone())?;
+    let weapon_catalog = export_weapon_catalog(game_dir, generated_at.clone())?;
+    let game_version = craft_data.game_version.clone();
 
     fs::create_dir_all(&out_dir)
         .with_context(|| format!("failed to create {}", out_dir.display()))?;
-    fs::write(&data_path, serde_json::to_string(&data)?)
-        .with_context(|| format!("failed to write {}", data_path.display()))?;
+    fs::write(&craft_data_path, serde_json::to_string(&craft_data)?)
+        .with_context(|| format!("failed to write {}", craft_data_path.display()))?;
+    fs::write(&weapon_catalog_path, serde_json::to_string(&weapon_catalog)?)
+        .with_context(|| format!("failed to write {}", weapon_catalog_path.display()))?;
     fs::write(
         out_dir.join("version.json"),
         serde_json::to_string(&json!({
@@ -64,13 +69,14 @@ fn main() -> Result<()> {
     )
     .with_context(|| format!("failed to write {}", out_dir.join("version.json").display()))?;
 
-    println!("Items: {}", data.counts.items);
-    println!("Recipes: {}", data.counts.recipes);
-    println!("Sources: {}", data.counts.sources);
-    println!("Output: {}", data_path.display());
+    println!("CraftData items: {}", craft_data.counts.items);
+    println!("CraftData recipes: {}", craft_data.counts.recipes);
+    println!("CraftData sources: {}", craft_data.counts.sources);
+    println!("WeaponCatalog items: {}", weapon_catalog.counts.items);
+    println!("Output: {}", out_dir.display());
 
     if !args.skip_audit {
-        audit_craft_data(&data_path)?;
+        audit_craft_data(&craft_data_path)?;
     }
 
     Ok(())

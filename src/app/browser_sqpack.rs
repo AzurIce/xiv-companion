@@ -148,51 +148,6 @@ impl BrowserSqPack {
         Ok(decoded)
     }
 
-    pub async fn craft_data_cache_fingerprint(&self) -> Result<String, String> {
-        self.exd_index_cache_fingerprint("craft-data", "CraftData")
-            .await
-    }
-
-    pub async fn weapon_catalog_cache_fingerprint(&self) -> Result<String, String> {
-        self.exd_index_cache_fingerprint("weapon-catalog", "WeaponCatalog")
-            .await
-    }
-
-    async fn exd_index_cache_fingerprint(
-        &self,
-        cache_name: &str,
-        label: &str,
-    ) -> Result<String, String> {
-        let mut parts = Vec::new();
-        for path in [
-            "sqpack/ffxiv/0a0000.win32.index",
-            "sqpack/ffxiv/0a0000.win32.index2",
-        ] {
-            if let Ok(file) = self.get_file(path).await {
-                let size = js_sys::Reflect::get(&file, &JsValue::from_str("size"))
-                    .ok()
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or_default();
-                let last_modified = js_sys::Reflect::get(&file, &JsValue::from_str("lastModified"))
-                    .ok()
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or_default();
-                parts.push(format!("{path}:{size:.0}:{last_modified:.0}"));
-            }
-        }
-
-        if parts.is_empty() {
-            Err(format!(
-                "无法读取 EXD SqPack 索引元数据，不能校验本地 {label} 缓存"
-            ))
-        } else {
-            Ok(format!(
-                "browser-sqpack-{cache_name}-v1|{}",
-                parts.join("|")
-            ))
-        }
-    }
-
     pub async fn preload_craft_data_resource(&mut self) -> Result<InMemoryPhysisResource, String> {
         let start_ms = log::now_ms();
         let plan = craft_data_sheet_plan();

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use xiv_companion::{CraftDataKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy};
+use xiv_companion::{
+    CraftDataKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy, WeaponCatalogKind,
+};
 #[cfg(feature = "game-data")]
 use xiv_companion::{LocalCraftDataProvider, LocalItemIconProvider};
 
@@ -17,15 +19,6 @@ pub enum SourcePreference {
 }
 
 impl SourcePreference {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::BuiltinFirst => "Builtin 优先",
-            Self::UserLocalFirst => "UserLocal 优先",
-            Self::BuiltinOnly => "仅 Builtin",
-            Self::UserLocalOnly => "仅 UserLocal",
-        }
-    }
-
     pub fn to_policy(self) -> SourcePolicy {
         match self {
             Self::BuiltinFirst => {
@@ -138,16 +131,28 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
         }
     }
 
-    hub.set_policy(
-        CraftDataKind.into(),
-        settings.craft_data_preference().to_policy(),
-    );
     if cfg!(target_arch = "wasm32") {
+        hub.set_policy(
+            CraftDataKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
+            WeaponCatalogKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
         hub.set_policy(
             ItemIconKind.into(),
             SourcePolicy::Fixed(ResourceSource::Builtin),
         );
     } else {
+        hub.set_policy(
+            CraftDataKind.into(),
+            settings.craft_data_preference().to_policy(),
+        );
+        hub.set_policy(
+            WeaponCatalogKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
         hub.set_policy(
             ItemIconKind.into(),
             settings.item_icon_preference().to_policy(),

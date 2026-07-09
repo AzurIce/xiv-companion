@@ -41,10 +41,7 @@ impl ResourceSpec for CraftDataResource {
     fn descriptor() -> ResourceDescriptor {
         ResourceDescriptor {
             kind: Self::kind(),
-            default_policy: SourcePolicy::Fallback(vec![
-                ResourceSource::Builtin,
-                ResourceSource::UserLocal,
-            ]),
+            default_policy: SourcePolicy::Fixed(ResourceSource::IndexedDb),
             fallback_policy: FallbackPolicy::default(),
             cache_policy: CachePolicy::ReadWrite,
             pipeline: "craft-data-json-v1",

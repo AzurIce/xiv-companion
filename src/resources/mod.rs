@@ -65,6 +65,9 @@ impl fmt::Display for ResourceKindKey {
 pub enum ResourceSource {
     /// Resources provided by xiv-companion itself, including bundled files and built-in network APIs.
     Builtin,
+    /// Resources cached in the browser's IndexedDB, seeded from builtin data and optionally updated
+    /// from a local game directory.
+    IndexedDb,
     /// Resources explicitly supplied from the user's local machine, such as a game directory.
     UserLocal,
 }
@@ -73,6 +76,7 @@ impl ResourceSource {
     pub fn id(&self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
+            Self::IndexedDb => "indexed-db",
             Self::UserLocal => "user-local",
         }
     }

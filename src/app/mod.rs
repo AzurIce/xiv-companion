@@ -4,6 +4,8 @@ use wasm_bindgen::JsCast;
 pub(crate) mod browser_sqpack;
 mod data;
 mod icons;
+#[cfg(target_arch = "wasm32")]
+mod indexed_db_cache;
 mod load_progress;
 mod log;
 #[cfg(target_arch = "wasm32")]

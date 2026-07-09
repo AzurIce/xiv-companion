@@ -35,6 +35,18 @@ pub fn export_craft_data(game_dir: &Path, generated_at: String) -> Result<CraftD
     export_craft_data_from_resource(resource, source_label, game_version, generated_at)
 }
 
+pub fn export_weapon_catalog(game_dir: &Path, generated_at: String) -> Result<WeaponCatalogPackage> {
+    let game_dir = normalize_game_dir(game_dir)?;
+    let game_version = game_version(&game_dir);
+    let source_label = game_dir.display().to_string();
+    let resource = SqPackResource::from_existing(
+        game_dir
+            .to_str()
+            .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?,
+    );
+    export_weapon_catalog_from_resource(resource, source_label, game_version, generated_at)
+}
+
 pub fn export_craft_data_from_resource<R: Resource>(
     resource: R,
     source_label: String,

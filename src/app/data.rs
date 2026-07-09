@@ -7,11 +7,12 @@ use dioxus::prelude::*;
 use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
 };
+use crate::app::resources::load_weapon_model_from_local;
 use xiv_companion::{
     CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
     CraftTreeNode, ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
     ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponCatalogResource, WeaponModelData, WeaponModelId, WeaponModelResource, build_craft_tree,
+    WeaponCatalogResource, WeaponModelData, WeaponModelId, build_craft_tree,
     craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
@@ -86,15 +87,13 @@ pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
 }
 
 pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
-    let data = configured_web_resource_hub()
-        .load::<WeaponModelResource>(WeaponModelId {
-            item_id: item.id,
-            item_name: item.name,
-            model_main: item.model_main,
-            model_sub: item.model_sub,
-        })
-        .await
-        .map_err(|error| error.to_string())?;
+    let data = load_weapon_model_from_local(WeaponModelId {
+        item_id: item.id,
+        item_name: item.name,
+        model_main: item.model_main,
+        model_sub: item.model_sub,
+    })
+    .await?;
     Ok(Rc::new(data))
 }
 
