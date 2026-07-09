@@ -659,6 +659,7 @@ pub enum PreparedRenderPass {
     Cutout,
     Transparent,
     Glass,
+    AdditiveLightShaft,
 }
 
 impl PreparedRenderPass {
@@ -674,6 +675,10 @@ impl PreparedRenderPass {
             self,
             PreparedRenderPass::Transparent | PreparedRenderPass::Glass
         )
+    }
+
+    pub fn uses_additive_pipeline(self) -> bool {
+        matches!(self, PreparedRenderPass::AdditiveLightShaft)
     }
 
     pub fn sorts_back_to_front(self) -> bool {
@@ -876,6 +881,9 @@ fn prepared_render_pass(
     material: Option<&ModelMaterial>,
     draw_role: ModelMeshDrawRole,
 ) -> PreparedRenderPass {
+    if matches!(draw_role, ModelMeshDrawRole::LightShaft) {
+        return PreparedRenderPass::AdditiveLightShaft;
+    }
     if matches!(draw_role, ModelMeshDrawRole::Glass) {
         return PreparedRenderPass::Glass;
     }
@@ -1526,6 +1534,14 @@ mod color_table_bake_tests {
             ),
             PreparedRenderPass::Glass
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::LightShaft
+            ),
+            PreparedRenderPass::AdditiveLightShaft
+        );
     }
 
     #[test]
@@ -1570,6 +1586,10 @@ mod color_table_bake_tests {
         assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
+        assert!(PreparedRenderPass::AdditiveLightShaft.uses_additive_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.sorts_back_to_front());
     }
 
     #[test]
@@ -1740,6 +1760,10 @@ mod color_table_bake_tests {
         assert_eq!(prepared.meshes[2].material_slot, 99);
         assert_eq!(prepared.meshes[2].draw_role, ModelMeshDrawRole::LightShaft);
         assert!(!prepared.meshes[2].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[2].prepared_material.render_pass,
+            PreparedRenderPass::AdditiveLightShaft
+        );
         assert_eq!(
             prepared.meshes[2].prepared_material.shader_family,
             MaterialShaderFamily::Unknown

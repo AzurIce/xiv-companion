@@ -1950,6 +1950,7 @@ mod tests {
             test_batch(1, PreparedRenderPass::Transparent, [0.0, 0.0, -2.0]),
             test_batch(2, PreparedRenderPass::Glass, [0.0, 0.0, 3.0]),
             test_batch(3, PreparedRenderPass::Cutout, [0.0, 0.0, -100.0]),
+            test_batch(4, PreparedRenderPass::AdditiveLightShaft, [0.0, 0.0, 200.0]),
         ];
 
         let sorted = sorted_transparent_batches(&batches, 0.0, 0.0);
@@ -2013,6 +2014,14 @@ mod tests {
             ),
             PreparedRenderPass::Glass
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::LightShaft
+            ),
+            PreparedRenderPass::AdditiveLightShaft
+        );
     }
 
     #[test]
@@ -2041,6 +2050,10 @@ mod tests {
         assert!(PreparedRenderPass::Glass.uses_transparent_pipeline());
         assert!(PreparedRenderPass::Transparent.sorts_back_to_front());
         assert!(PreparedRenderPass::Glass.sorts_back_to_front());
+        assert!(PreparedRenderPass::AdditiveLightShaft.uses_additive_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_opaque_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.uses_transparent_pipeline());
+        assert!(!PreparedRenderPass::AdditiveLightShaft.sorts_back_to_front());
     }
 
     #[test]

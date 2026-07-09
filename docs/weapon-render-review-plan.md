@@ -42,7 +42,7 @@
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 - renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
 - `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
-- `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass` 与 culling policy。
+- `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 仍不进入主 surface pass。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
@@ -179,7 +179,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - material shader family：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、unknown
 - texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；per-role sampler config 已有第一版；index 仍未作为可直接渲染绑定保留，因为当前 `_id.tex` 会先用于 ColorTable bake
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
-- alpha policy：opaque、cutout、blend、glass、additive/lightshaft
+- alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，实际 wgpu additive pass 仍待实现
 - culling policy：render backfaces / cull backfaces
 - feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，染色输入仍待补齐
 
@@ -191,7 +191,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、mesh-level flow feature flag、alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
+- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、submesh attribute metadata 传播、显式 enabled attribute mask visibility、mesh-level flow feature flag、alpha policy、lightshaft additive prepared pass 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
 - 后续仍需要用真实样本验证 sampler policy / UV source 到 renderer 绑定的覆盖率。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
@@ -203,7 +203,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 - `normal`、`glass` 默认渲染。
 - `glass` 会强制进入 transparent pass。
-- `lightShaft` 已标为独立 draw role；additive/lightshaft pass 尚未实现前，默认不进入主 surface pass。
+- `lightShaft` 已标为独立 draw role，并映射到 `AdditiveLightShaft` prepared pass；additive/lightshaft wgpu pass 尚未实现前，默认不进入主 surface pass。
 - `shadow`、`terrainShadow`、`verticalFog` 默认不作为主 surface 渲染。
 - `materialChange`、`crestChange` 暂时作为 `debugVisible` 继续渲染，并在 snapshot summary 中标出。
 - submesh attribute mask/name 已进入 `ModelMesh` 与 `PreparedMesh`，并随 phantom summary 输出；`PreparedModelOptions.enabledAttributeMask` 已支持显式运行时 mask，按 `requiredMask & !enabledMask == 0` 判断 submesh 是否可见。Web 离线默认仍不猜 mask；shape runtime mask 仍未应用。
@@ -300,12 +300,13 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 
 ### P0: 按 prepared draw role 分 pass
 
-当前进度：renderer batch 已记录 prepared render pass：
+当前进度：数据层已记录 prepared render pass：
 
 - `Opaque`
 - `Cutout`：当前仍复用 opaque pipeline，写 depth，并由 shader alpha test discard。
 - `Transparent`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
 - `Glass`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
+- `AdditiveLightShaft`：lightshaft 已有 prepared 分类，但 renderer 仍过滤出主 surface pass，独立 additive pipeline 尚未实现。
 
 尚未完成的是把它们拆成独立 wgpu pipeline：
 
