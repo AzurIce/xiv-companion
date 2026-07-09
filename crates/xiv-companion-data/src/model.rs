@@ -180,6 +180,48 @@ pub struct ModelMesh {
     pub indices: Vec<u32>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelMeshDrawRole {
+    #[default]
+    Normal,
+    Glass,
+    LightShaft,
+    ShadowOnly,
+    Ignored,
+    DebugVisible,
+}
+
+impl ModelMeshDrawRole {
+    pub fn renders_in_main_pass(self) -> bool {
+        matches!(
+            self,
+            ModelMeshDrawRole::Normal | ModelMeshDrawRole::Glass | ModelMeshDrawRole::DebugVisible
+        )
+    }
+
+    pub fn forces_transparent_pass(self) -> bool {
+        matches!(self, ModelMeshDrawRole::Glass)
+    }
+}
+
+pub fn mesh_draw_role_for_category(category: Option<&str>) -> ModelMeshDrawRole {
+    let Some(category) = category else {
+        return ModelMeshDrawRole::Normal;
+    };
+
+    match category.to_ascii_lowercase().as_str() {
+        "glass" => ModelMeshDrawRole::Glass,
+        "lightshaft" | "light_shaft" => ModelMeshDrawRole::LightShaft,
+        "shadow" | "terrainshadow" | "terrain_shadow" => ModelMeshDrawRole::ShadowOnly,
+        "verticalfog" | "vertical_fog" => ModelMeshDrawRole::Ignored,
+        "materialchange" | "material_change" | "crestchange" | "crest_change" => {
+            ModelMeshDrawRole::DebugVisible
+        }
+        _ => ModelMeshDrawRole::Normal,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelBoneTable {
@@ -843,6 +885,43 @@ fn push_unique_path(paths: &mut Vec<String>, path: String) {
 #[cfg(test)]
 mod color_table_bake_tests {
     use super::*;
+
+    #[test]
+    fn mesh_draw_role_maps_mdl_categories_to_render_decisions() {
+        assert_eq!(
+            mesh_draw_role_for_category(Some("normal")),
+            ModelMeshDrawRole::Normal
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("glass")),
+            ModelMeshDrawRole::Glass
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("lightShaft")),
+            ModelMeshDrawRole::LightShaft
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("shadow")),
+            ModelMeshDrawRole::ShadowOnly
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("terrainShadow")),
+            ModelMeshDrawRole::ShadowOnly
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("verticalFog")),
+            ModelMeshDrawRole::Ignored
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("materialChange")),
+            ModelMeshDrawRole::DebugVisible
+        );
+        assert_eq!(
+            mesh_draw_role_for_category(Some("crestChange")),
+            ModelMeshDrawRole::DebugVisible
+        );
+        assert_eq!(mesh_draw_role_for_category(None), ModelMeshDrawRole::Normal);
+    }
 
     fn rows_with_two_pairs() -> Vec<ColorTableRowColors> {
         // 行对 0: 纯红 <-> 纯绿；行对 1: 纯蓝 <-> 纯蓝（带 emissive）

@@ -35,6 +35,7 @@
 - Material debug 已输出 sampler 的 `textureUsageName` 和 `kindSource`；resource-aware debug 会加载对应 `.shpk`，区分 `shpkResourceName`、`knownCrc` 与未知来源。
 - Material debug 已新增 compact `summary`，聚合 resolved shader keys、resolved constants、shader flags、texture flags、sampler flags，并标出 shader package default 与 material override 来源；phantom `model-summary.json` 的 material 条目也会输出该摘要。
 - ignored phantom snapshot 的 `model-summary.json` 已把每个 mesh 的 metadata 文件、submesh attributes、bone table、shape 影响摘要提升出来，不必只靠逐个打开 raw model metadata。
+- `ModelMeshDrawRole` 已把 MDL mesh category 映射成 renderer-friendly draw role；renderer 当前会跳过 shadow、terrainShadow、verticalFog、lightShaft，不再把这些 mesh 当普通 surface 画，materialChange/crestChange 暂作为 debugVisible 绘制。
 - `WeaponModelData.loadDiagnostics` 已记录可选副手/子模型加载失败的 role、model、候选路径、失败状态和错误信息，phantom `model-summary.json` 会直接输出。
 - `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
@@ -43,7 +44,7 @@
 主要缺口集中在：
 
 - 数据层保存了很多字段，但 GPU 顶点格式和 WGSL 只消费了第一套 UV/normal/bitangent/color。
-- mesh category、submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息没有进入后续处理或渲染决策。
+- mesh category 已进入第一步 draw role 决策；submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息仍没有进入后续处理或渲染决策。
 - 材质语义被压缩成少量贴图和 Opaque/Mask/Blend/Glass；MeddleTools 中的 tile、sphere、sheen、scroll、transparency、reflection 等节点逻辑大多没有实现。
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
@@ -141,6 +142,8 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 目标是把“原始资源解析结果”和“渲染器可以直接绑定的数据”分开。
 
+当前进度：已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用；完整 `PreparedModel` / `PreparedMaterial` 结构尚未建立。
+
 建议中间结构包含：
 
 - mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等
@@ -164,19 +167,20 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 ### P0: mesh category 和 submesh attribute 决策前置
 
-当前 raw mesh category 只是 `mesh_category: Option<String>`，renderer 仍全部当普通 mesh 画。
+已完成第一步：raw mesh category 会通过 `ModelMeshDrawRole` 转成 draw role，renderer 不再全部当普通 mesh 画。
 
-建议策略：
+当前策略：
 
 - `normal`、`glass` 默认渲染。
-- `lightShaft` 进入 additive/lightshaft pass，未实现前可单独开关或按 debug color 显示。
+- `glass` 会强制进入 transparent pass。
+- `lightShaft` 已标为独立 draw role；additive/lightshaft pass 尚未实现前，默认不进入主 surface pass。
 - `shadow`、`terrainShadow`、`verticalFog` 默认不作为主 surface 渲染。
-- `materialChange`、`crestChange` 暂时保留为 normal-like，但在 debug 中标出。
-- submesh attribute mask 需要保留到 prepared mesh，用于后续 shape/attribute visibility。
+- `materialChange`、`crestChange` 暂时作为 `debugVisible` 继续渲染，并在 snapshot summary 中标出。
+- submesh attribute mask 已在 summary 中保留，但仍需要进入后续 prepared mesh，用于 shape/attribute visibility。
 
 验证：
 
-- 对含 glass/terrainShadow/lightShaft 的 synthetic MDL 测 draw role。
+- 已增加 draw role mapping 单元测试和 renderer flatten 过滤测试，覆盖 glass/terrainShadow/lightShaft/shadow/verticalFog/materialChange/crestChange。
 - 对 `冬雪之幻梦`、`茶歇之幻梦` 等样本做 snapshot 对比。
 
 ### P1: 把 ColorTable bake 产物转成稳定语义贴图集合
@@ -384,7 +388,7 @@ WebGPU bind group 需要支持每材质多个 sampler，或至少区分 color sa
 完成标准：
 
 - P0/P1 snapshot summary 能说明每个 mesh/material 为什么这样画。
-- 不再把明显非 surface mesh 当普通材质误画。
+- 不再把明显非 surface mesh 当普通材质误画。当前 shadow/terrainShadow/verticalFog/lightShaft 已默认不进主 surface pass；lightShaft 的 additive pass 仍在后续阶段。
 
 ### 第二阶段：让解析结果真正进 shader
 

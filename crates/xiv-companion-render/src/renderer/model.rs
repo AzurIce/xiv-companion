@@ -1,6 +1,9 @@
 use wgpu::util::DeviceExt;
 
-use crate::{MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData};
+use crate::{
+    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData,
+    mesh_draw_role_for_category,
+};
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
@@ -717,6 +720,11 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
     let mut draw_batches = Vec::new();
 
     for mesh in model.meshes() {
+        let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
+        if !draw_role.renders_in_main_pass() {
+            continue;
+        }
+
         let base = vertices.len() as u32;
         vertices.extend(mesh.vertices.iter().map(|vertex| GpuVertex {
             position: vertex.position,
@@ -731,7 +739,8 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             material_slot: mesh.material_slot,
             index_start,
             index_count: mesh.indices.len() as u32,
-            transparent: material_is_transparent(model, mesh.material_slot),
+            transparent: draw_role.forces_transparent_pass()
+                || material_is_transparent(model, mesh.material_slot),
             render_backfaces: material_renders_backfaces(model, mesh.material_slot),
             center: mesh_bounds_center(mesh),
         });
@@ -1634,6 +1643,40 @@ mod tests {
         assert_eq!(effective_mask_texture(&material), Some(1));
     }
 
+    #[test]
+    fn flatten_model_filters_meshes_outside_main_draw_roles() {
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![
+                test_mesh("normal", 0.0),
+                test_mesh("shadow", 1.0),
+                test_mesh("terrainShadow", 2.0),
+                test_mesh("verticalFog", 3.0),
+                test_mesh("lightShaft", 4.0),
+                test_mesh("materialChange", 5.0),
+                test_mesh("glass", 6.0),
+            ],
+        };
+
+        let (vertices, indices, batches) = flatten_model(&model);
+
+        assert_eq!(vertices.len(), 9);
+        assert_eq!(indices.len(), 9);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.center[0])
+                .collect::<Vec<_>>(),
+            vec![0.5, 5.5, 6.5]
+        );
+        assert!(!batches[0].transparent);
+        assert!(!batches[1].transparent);
+        assert!(batches[2].transparent);
+    }
+
     fn test_material_is_transparent(
         alpha_mode: MaterialAlphaMode,
         render_mode: MaterialRenderMode,
@@ -1658,6 +1701,45 @@ mod tests {
             transparent,
             render_backfaces: true,
             center,
+        }
+    }
+
+    fn test_mesh(category: &str, x: f32) -> crate::ModelMesh {
+        crate::ModelMesh {
+            path: format!("test/{category}.mdl"),
+            part_index: 0,
+            mesh_category: Some(category.to_string()),
+            material_index: 0,
+            material_slot: 0,
+            material_name: "test".to_string(),
+            color: [1.0, 1.0, 1.0],
+            bone_table: None,
+            vertices: vec![
+                test_vertex([x, 0.0, 0.0]),
+                test_vertex([x + 1.0, 0.0, 0.0]),
+                test_vertex([x, 1.0, 0.0]),
+            ],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    fn test_vertex(position: [f32; 3]) -> crate::ModelVertex {
+        crate::ModelVertex {
+            position,
+            blend_weights: None,
+            blend_indices: None,
+            normal: [0.0, 1.0, 0.0],
+            uv0: [0.0, 0.0],
+            uv1: [0.0, 0.0],
+            uv2: [0.0, 0.0],
+            uv3: [0.0, 0.0],
+            bitangent: [1.0, 0.0, 0.0, 1.0],
+            normal1: None,
+            bitangent1: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            color1: None,
+            flow0: None,
+            flow1: None,
         }
     }
 }

@@ -14,7 +14,7 @@ use xiv_companion::{
     WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
-    material_debug_info_from_resource, mdl_metadata_from_mdl_bytes,
+    material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, mesh_draw_role_for_category,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
@@ -78,6 +78,8 @@ struct MeshSummary {
     path: String,
     part_index: u32,
     mesh_category: Option<String>,
+    draw_role: xiv_companion::ModelMeshDrawRole,
+    rendered_in_main_pass: bool,
     metadata_file: Option<String>,
     submesh_index: Option<usize>,
     submeshes: Vec<MeshSubmeshSummary>,
@@ -735,12 +737,15 @@ fn mesh_summary(
     let metadata_file =
         metadata.map(|metadata| format!("models/{}.json", safe_resource_file(&metadata.path)));
     let raw_mesh = metadata.and_then(|metadata| metadata.meshes.get(mesh.part_index as usize));
+    let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
 
     MeshSummary {
         mesh_file,
         path: mesh.path.clone(),
         part_index: mesh.part_index,
         mesh_category: mesh.mesh_category.clone(),
+        draw_role,
+        rendered_in_main_pass: draw_role.renders_in_main_pass(),
         metadata_file,
         submesh_index,
         submeshes: raw_mesh

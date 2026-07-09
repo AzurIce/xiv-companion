@@ -62,6 +62,7 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 - 覆盖 normal/water/shadow/terrainShadow/verticalFog，以及 extra LOD 的 lightShaft/glass/materialChange/crestChange。
 - 每个 mesh/submesh range 转成 `WeaponModelMesh`。
 - 数据层保留：position、blend weights/indices、normal、uv0-uv3、bitangent、secondary normal/bitangent、color0/color1、flow0/flow1、index、material_index、mesh category、bone table。
+- mesh category 会映射成 `ModelMeshDrawRole`，作为 renderer-friendly 的第一步 prepared draw role。
 - ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
 
 注意：renderer 当前 GPU 顶点格式仍只上传 position、normal、uv0、bitangent、color0；其余字段已解析但还没有进入 WGSL。
@@ -198,6 +199,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - opaque pipeline：写 depth，不透明材质先画。
    - transparent pipeline：alpha blending，不写 depth，透明/glass 后画。
    - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
+   - `ModelMeshDrawRole` 先过滤非主 surface：shadow、terrainShadow、verticalFog、lightShaft 不进入当前主 pass；materialChange/crestChange 暂作为 debugVisible 绘制；glass 强制进 transparent pass。
 4. bloom pass：从 bright attachment 提取高亮并 blur。
 5. compose pass：scene + bloom 输出到 canvas。
 
@@ -228,7 +230,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 后续优先级：
 
-1. Prepared draw role / pass：把 normal、glass、lightShaft、shadow、terrainShadow、verticalFog 等 mesh category 转成明确渲染决策，避免非主 surface 误画。
+1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤；后续还需要独立 cutout/glass/additive-lightshaft pass。
 2. GPU 顶点格式：把 uv1-uv3、color1、secondary normal/bitangent、flow 等已解析字段逐步传入 shader。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Tile/Sphere/Sheen：让 renderer 消费 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
