@@ -45,6 +45,10 @@ const G_DETAIL_NORMAL_UV_SCALE: u32 = 0x025A_9BEE;
 #[cfg(feature = "game-data")]
 const G_MULTI_DETAIL_ID: u32 = 0xAC15_6136;
 #[cfg(feature = "game-data")]
+const G_DETAIL_COLOR: u32 = 0xDD93_D839;
+#[cfg(feature = "game-data")]
+const G_MULTI_DETAIL_COLOR: u32 = 0x11FD_4221;
+#[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_TEX_ANIM: u32 = 0x14D8_E13D;
@@ -1475,6 +1479,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let tile_scale = composed_material_tile_scale(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
+        let detail_color = composed_material_detail_color(&semantics);
+        let multi_detail_color = composed_material_multi_detail_color(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -1529,6 +1535,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             tile_scale,
             detail_id,
             multi_detail_id,
+            detail_color,
+            multi_detail_color,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -1954,6 +1962,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let tile_scale = composed_material_tile_scale(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
+        let detail_color = composed_material_detail_color(&semantics);
+        let multi_detail_color = composed_material_multi_detail_color(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -2009,6 +2019,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             tile_scale,
             detail_id,
             multi_detail_id,
+            detail_color,
+            multi_detail_color,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -2769,6 +2781,16 @@ fn composed_material_multi_detail_id(semantics: &ComposedMaterialSemantics) -> f
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_multi_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_DETAIL_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_detail_color_uv_scale(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
     composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR_UV_SCALE, [4.0; 4])
 }
@@ -3199,6 +3221,8 @@ fn fallback_weapon_material(
         tile_scale: [16.0, 16.0],
         detail_id: 0.0,
         multi_detail_id: 0.0,
+        detail_color: [1.0, 1.0, 1.0, 1.0],
+        multi_detail_color: [1.0, 1.0, 1.0, 1.0],
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -4634,6 +4658,50 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_detail_normal_uv_scale(&semantics),
             [3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn composed_material_detail_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_DETAIL_COLOR, &[0.2, 0.4, 0.6, 0.8]),
+            (G_MULTI_DETAIL_COLOR, &[0.1, 0.3, 0.5, 0.7]),
+        ]);
+
+        assert_eq!(composed_material_detail_color(&semantics), [1.0; 4]);
+        assert_eq!(composed_material_multi_detail_color(&semantics), [1.0; 4]);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.2, 0.4, 0.6, 0.8]
+        );
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.1, 0.3, 0.5, 0.7]
+        );
+
+        let material = test_mtrl_with_constant(G_DETAIL_COLOR, &[0.9, 0.8, 0.7, 0.6], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.9, 0.8, 0.7, 0.6]
+        );
+
+        let material = test_mtrl_with_constant(G_MULTI_DETAIL_COLOR, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+
+        let material =
+            test_mtrl_with_constant(G_DETAIL_COLOR, &[0.3, f32::NAN, f32::INFINITY, 0.4], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.3, 1.0, 1.0, 0.4]
         );
     }
 
