@@ -10,6 +10,9 @@ const MESH_SIZE: usize = 36;
 const TERRAIN_SHADOW_MESH_SIZE: usize = 20;
 const SUBMESH_SIZE: usize = 16;
 const TERRAIN_SHADOW_SUBMESH_SIZE: usize = 12;
+const SHAPE_SIZE: usize = 16;
+const SHAPE_MESH_SIZE: usize = 12;
+const SHAPE_VALUE_SIZE: usize = 4;
 const MDL_VERSION_V5: u32 = 0x0100_0005;
 const MDL_VERSION_V6: u32 = 0x0100_0006;
 const V5_BONE_TABLE_SIZE: usize = 132;
@@ -33,6 +36,11 @@ pub struct MdlMetadata {
     pub materials: Vec<MdlNamedOffset>,
     pub bones: Vec<MdlNamedOffset>,
     pub bone_tables: Vec<MdlBoneTableMetadata>,
+    pub shapes: Vec<MdlShapeMetadata>,
+    pub shape_meshes: Vec<MdlShapeMeshMetadata>,
+    pub shape_values: Vec<MdlShapeValueMetadata>,
+    pub submesh_bone_map_byte_size: u32,
+    pub submesh_bone_map: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -228,6 +236,33 @@ pub struct MdlBoneTableMetadata {
     pub bone_names: Vec<Option<String>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlShapeMetadata {
+    pub index: usize,
+    pub string_offset: u32,
+    pub name: Option<String>,
+    pub shape_mesh_start_indices: [u16; 3],
+    pub shape_mesh_counts: [u16; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlShapeMeshMetadata {
+    pub index: usize,
+    pub mesh_index_offset: u32,
+    pub shape_value_count: u32,
+    pub shape_value_offset: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlShapeValueMetadata {
+    pub index: usize,
+    pub base_indices_index: u16,
+    pub replacing_vertex_index: u16,
+}
+
 pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<MdlMetadata> {
     let file_header = parse_file_header(bytes, 0)?;
     let mut offset = MODEL_FILE_HEADER_SIZE;
@@ -350,6 +385,42 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         usize::from(model_header.bone_table_array_count_total),
         &bones,
     )?;
+    let shapes = read_shapes(
+        bytes,
+        &mut offset,
+        usize::from(model_header.shape_count),
+        string_table,
+    )?;
+    let shape_meshes = read_shape_meshes(
+        bytes,
+        &mut offset,
+        usize::from(model_header.shape_mesh_count),
+    )?;
+    let shape_values = read_shape_values(
+        bytes,
+        &mut offset,
+        usize::from(model_header.shape_value_count),
+    )?;
+    let submesh_bone_map_byte_size = read_u32_le(bytes, offset, "submesh bone map byte size")?;
+    offset = checked_advance(offset, 4, bytes.len(), "submesh bone map byte size")?;
+    let submesh_bone_map_byte_count =
+        usize::try_from(submesh_bone_map_byte_size).map_err(|_| {
+            anyhow::anyhow!(
+                "submesh bone map byte size does not fit usize: {submesh_bone_map_byte_size}"
+            )
+        })?;
+    let submesh_bone_map = read_u16_table(
+        bytes,
+        offset,
+        submesh_bone_map_byte_count / 2,
+        "submesh bone map",
+    )?;
+    checked_advance(
+        offset,
+        submesh_bone_map_byte_count,
+        bytes.len(),
+        "submesh bone map",
+    )?;
     let submeshes = raw_submeshes
         .into_iter()
         .map(|submesh| submesh.with_attribute_names(&attributes))
@@ -385,6 +456,11 @@ pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<M
         materials,
         bones,
         bone_tables,
+        shapes,
+        shape_meshes,
+        shape_values,
+        submesh_bone_map_byte_size,
+        submesh_bone_map,
     })
 }
 
@@ -873,6 +949,77 @@ fn bone_table_metadata(
     }
 }
 
+fn read_shapes(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+    string_table: &[u8],
+) -> anyhow::Result<Vec<MdlShapeMetadata>> {
+    let mut shapes = Vec::with_capacity(count);
+    for index in 0..count {
+        let shape_offset = *offset;
+        let string_offset = read_u32_le(bytes, shape_offset, "shape string offset")?;
+        shapes.push(MdlShapeMetadata {
+            index,
+            string_offset,
+            name: read_string_at(string_table, string_offset),
+            shape_mesh_start_indices: read_u16x3(
+                bytes,
+                shape_offset + 4,
+                "shape mesh start indices",
+            )?,
+            shape_mesh_counts: read_u16x3(bytes, shape_offset + 10, "shape mesh counts")?,
+        });
+        *offset = checked_advance(*offset, SHAPE_SIZE, bytes.len(), "shape table")?;
+    }
+    Ok(shapes)
+}
+
+fn read_shape_meshes(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+) -> anyhow::Result<Vec<MdlShapeMeshMetadata>> {
+    let mut shape_meshes = Vec::with_capacity(count);
+    for index in 0..count {
+        let shape_mesh_offset = *offset;
+        shape_meshes.push(MdlShapeMeshMetadata {
+            index,
+            mesh_index_offset: read_u32_le(bytes, shape_mesh_offset, "shape mesh index offset")?,
+            shape_value_count: read_u32_le(bytes, shape_mesh_offset + 4, "shape value count")?,
+            shape_value_offset: read_u32_le(bytes, shape_mesh_offset + 8, "shape value offset")?,
+        });
+        *offset = checked_advance(*offset, SHAPE_MESH_SIZE, bytes.len(), "shape mesh table")?;
+    }
+    Ok(shape_meshes)
+}
+
+fn read_shape_values(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+) -> anyhow::Result<Vec<MdlShapeValueMetadata>> {
+    let mut shape_values = Vec::with_capacity(count);
+    for index in 0..count {
+        let shape_value_offset = *offset;
+        shape_values.push(MdlShapeValueMetadata {
+            index,
+            base_indices_index: read_u16_le(
+                bytes,
+                shape_value_offset,
+                "shape value base indices index",
+            )?,
+            replacing_vertex_index: read_u16_le(
+                bytes,
+                shape_value_offset + 2,
+                "shape value replacing vertex index",
+            )?,
+        });
+        *offset = checked_advance(*offset, SHAPE_VALUE_SIZE, bytes.len(), "shape value table")?;
+    }
+    Ok(shape_values)
+}
+
 fn read_u32_table(
     bytes: &[u8],
     offset: &mut usize,
@@ -948,6 +1095,14 @@ fn read_u8(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<u8> {
 fn read_u8x3(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<[u8; 3]> {
     let bytes = read_bytes(bytes, offset, 3, label)?;
     Ok([bytes[0], bytes[1], bytes[2]])
+}
+
+fn read_u16x3(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<[u16; 3]> {
+    Ok([
+        read_u16_le(bytes, offset, label)?,
+        read_u16_le(bytes, offset + 2, label)?,
+        read_u16_le(bytes, offset + 4, label)?,
+    ])
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<u16> {
@@ -1026,6 +1181,21 @@ mod tests {
         assert!(metadata.lods[0].mesh_ranges.iter().any(|range| {
             range.category == "glass" && range.mesh_index == 2 && range.mesh_count == 1
         }));
+        assert_eq!(metadata.shapes.len(), 1);
+        assert_eq!(metadata.shapes[0].name.as_deref(), Some("shape_a"));
+        assert_eq!(metadata.shapes[0].shape_mesh_start_indices, [0, 0, 0]);
+        assert_eq!(metadata.shapes[0].shape_mesh_counts, [1, 0, 0]);
+        assert_eq!(metadata.shape_meshes.len(), 1);
+        assert_eq!(metadata.shape_meshes[0].mesh_index_offset, 6);
+        assert_eq!(metadata.shape_meshes[0].shape_value_count, 2);
+        assert_eq!(metadata.shape_meshes[0].shape_value_offset, 0);
+        assert_eq!(metadata.shape_values.len(), 2);
+        assert_eq!(metadata.shape_values[0].base_indices_index, 1);
+        assert_eq!(metadata.shape_values[0].replacing_vertex_index, 4);
+        assert_eq!(metadata.shape_values[1].base_indices_index, 2);
+        assert_eq!(metadata.shape_values[1].replacing_vertex_index, 5);
+        assert_eq!(metadata.submesh_bone_map_byte_size, 4);
+        assert_eq!(metadata.submesh_bone_map, vec![1, 2]);
     }
 
     fn fixture_mdl_bytes() -> Vec<u8> {
@@ -1037,10 +1207,11 @@ mod tests {
 
         bytes.extend_from_slice(&[0; VERTEX_DECLARATION_SIZE]);
 
-        let string_table = b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0bone_b\0bone_c\0";
+        let string_table =
+            b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0bone_b\0bone_c\0shape_a\0";
         let string_header = bytes.len();
         bytes.extend_from_slice(&[0; 8]);
-        write_u16(&mut bytes, string_header, 7);
+        write_u16(&mut bytes, string_header, 8);
         write_u32(&mut bytes, string_header + 4, string_table.len() as u32);
         bytes.extend_from_slice(string_table);
 
@@ -1053,6 +1224,9 @@ mod tests {
         write_u16(&mut bytes, model_header + 0x0a, 2);
         write_u16(&mut bytes, model_header + 0x0c, 3);
         write_u16(&mut bytes, model_header + 0x0e, 1);
+        write_u16(&mut bytes, model_header + 0x10, 1);
+        write_u16(&mut bytes, model_header + 0x12, 1);
+        write_u16(&mut bytes, model_header + 0x14, 2);
         write_u8(&mut bytes, model_header + 0x16, 1);
         write_u8(&mut bytes, model_header + 0x1a, 1);
         write_u8(&mut bytes, model_header + 0x1b, 0x10);
@@ -1122,6 +1296,27 @@ mod tests {
 
         bytes.extend_from_slice(&1_u16.to_le_bytes());
         bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+
+        let shape_a_offset =
+            b"attr_a\0attr_b\0/mt_a.mtrl\0/mt_b.mtrl\0bone_a\0bone_b\0bone_c\0".len() as u32;
+        let shape = bytes.len();
+        bytes.extend_from_slice(&[0; SHAPE_SIZE]);
+        write_u32(&mut bytes, shape, shape_a_offset);
+        write_u16(&mut bytes, shape + 10, 1);
+
+        let shape_mesh = bytes.len();
+        bytes.extend_from_slice(&[0; SHAPE_MESH_SIZE]);
+        write_u32(&mut bytes, shape_mesh, 6);
+        write_u32(&mut bytes, shape_mesh + 4, 2);
+
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&5_u16.to_le_bytes());
+
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
         bytes.extend_from_slice(&1_u16.to_le_bytes());
         bytes.extend_from_slice(&2_u16.to_le_bytes());
 
