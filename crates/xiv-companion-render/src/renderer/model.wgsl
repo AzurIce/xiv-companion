@@ -374,14 +374,27 @@ fn resolve_extra_lighting(
     base: vec3<f32>,
     is_glass: bool,
 ) -> vec3<f32> {
-    let sheen_rate = clamp(extra.sheen.x, 0.0, 1.0) * extra.flags.y;
-    let sheen_tint = clamp(extra.sheen.y, 0.0, 1.0);
-    let sheen_aptitude = clamp(extra.sheen.z, 0.0, 1.0);
+    let ramp_sheen_rate = clamp(extra.sheen.x, 0.0, 1.0) * extra.flags.y;
+    let shader_sheen_rate = clamp(material.toon_sheen_params.z, 0.0, 1.0);
+    let shader_sheen_active = select(0.0, 1.0, shader_sheen_rate > 0.001);
+    let sheen_rate = clamp(ramp_sheen_rate + shader_sheen_rate * (1.0 - ramp_sheen_rate), 0.0, 1.0);
+    let sheen_tint = max(
+        clamp(extra.sheen.y, 0.0, 1.0) * extra.flags.y,
+        clamp(material.toon_sheen_params.w, 0.0, 1.0) * shader_sheen_active,
+    );
+    let sheen_aptitude = mix(
+        clamp(extra.sheen.z, 0.0, 1.0),
+        clamp(material.sheen_sphere_params.x, 0.0, 1.0),
+        shader_sheen_active,
+    );
     let sheen_power = mix(24.0, 160.0, sheen_aptitude);
     let sheen_term = pow(max(dot(normal, half_dir), 0.0), sheen_power) * sheen_rate;
     let sheen_color = mix(material_specular, base, sheen_tint * 0.45) * sheen_term * 0.42;
 
-    let sphere_index = clamp(extra.sphere.x, 0.0, 1.0);
+    let sphere_index = max(
+        clamp(extra.sphere.x, 0.0, 1.0),
+        clamp(material.sheen_sphere_params.y, 0.0, 1.0),
+    );
     let sphere_mask = clamp(extra.sphere.y, 0.0, 1.0) * extra.flags.z;
     let sphere_tint = mix(vec3<f32>(0.55, 0.68, 0.82), material_specular, sphere_index);
     let sphere_term = rim * sphere_mask * select(0.18, 0.10, is_glass);
