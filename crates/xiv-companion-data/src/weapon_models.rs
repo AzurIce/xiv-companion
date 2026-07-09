@@ -1152,15 +1152,14 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
     for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let kind = classify_weapon_texture(
-            raw_texture_path,
-            sampler_kind_for_texture(sampler_roles, texture_order),
-        );
+        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+        let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_resource(
             resource,
             material_path,
             raw_texture_path,
             kind,
+            sampler_kind,
             textures,
             loaded_paths,
         ) else {
@@ -1275,6 +1274,7 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
     material_path: &str,
     raw_texture_path: &str,
     kind: WeaponModelTextureKind,
+    sampler_kind: Option<WeaponModelTextureKind>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> Option<usize> {
@@ -1282,7 +1282,8 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
 
     for path in weapon_texture_candidate_paths(material_path, raw_texture_path) {
         if let Some(index) = textures.iter().position(|texture| texture.path == path) {
-            textures[index].kind = merge_texture_kind(textures[index].kind, kind);
+            textures[index].kind =
+                merge_texture_kind(textures[index].kind, kind, sampler_kind.is_some());
             return Some(index);
         }
 
@@ -1578,15 +1579,14 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
     for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let kind = classify_weapon_texture(
-            raw_texture_path,
-            sampler_kind_for_texture(sampler_roles, texture_order),
-        );
+        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+        let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_async_resource(
             resource,
             material_path,
             raw_texture_path,
             kind,
+            sampler_kind,
             textures,
             loaded_paths,
         )
@@ -1703,6 +1703,7 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
     material_path: &str,
     raw_texture_path: &str,
     kind: WeaponModelTextureKind,
+    sampler_kind: Option<WeaponModelTextureKind>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> Option<usize> {
@@ -1710,7 +1711,8 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
 
     for path in weapon_texture_candidate_paths(material_path, raw_texture_path) {
         if let Some(index) = textures.iter().position(|texture| texture.path == path) {
-            textures[index].kind = merge_texture_kind(textures[index].kind, kind);
+            textures[index].kind =
+                merge_texture_kind(textures[index].kind, kind, sampler_kind.is_some());
             return Some(index);
         }
 
@@ -2940,6 +2942,10 @@ fn classify_weapon_texture(
     path: &str,
     sampler_kind: Option<WeaponModelTextureKind>,
 ) -> WeaponModelTextureKind {
+    if let Some(kind) = sampler_kind {
+        return kind;
+    }
+
     let path = path.to_ascii_lowercase();
     let stem = path
         .rsplit('/')
@@ -2949,10 +2955,6 @@ fn classify_weapon_texture(
 
     if stem.ends_with("_id") || stem.contains("_id_") || stem.contains("index") {
         return WeaponModelTextureKind::Index;
-    }
-
-    if let Some(kind) = sampler_kind {
-        return kind;
     }
 
     if stem.ends_with("_n") || stem.contains("_n_") || stem.contains("normal") {
@@ -2981,7 +2983,12 @@ fn classify_weapon_texture(
 fn merge_texture_kind(
     existing: WeaponModelTextureKind,
     incoming: WeaponModelTextureKind,
+    incoming_from_sampler: bool,
 ) -> WeaponModelTextureKind {
+    if incoming_from_sampler {
+        return incoming;
+    }
+
     match (existing, incoming) {
         (WeaponModelTextureKind::Other, kind) => kind,
         (kind, WeaponModelTextureKind::Other) => kind,
@@ -3565,6 +3572,44 @@ mod weapon_material_tests {
                 None
             ),
             WeaponModelTextureKind::Index
+        );
+    }
+
+    #[test]
+    fn explicit_sampler_kind_overrides_index_like_filename() {
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0001/obj/body/b0001/texture/w0001_index.tex",
+                Some(WeaponModelTextureKind::Normal),
+            ),
+            WeaponModelTextureKind::Normal
+        );
+        assert_eq!(
+            classify_weapon_texture(
+                "chara/weapon/w0001/obj/body/b0001/texture/w0001_id.tex",
+                Some(WeaponModelTextureKind::MaterialMap),
+            ),
+            WeaponModelTextureKind::MaterialMap
+        );
+    }
+
+    #[test]
+    fn explicit_sampler_kind_reclassifies_cached_filename_guess() {
+        assert_eq!(
+            merge_texture_kind(
+                WeaponModelTextureKind::Index,
+                WeaponModelTextureKind::Normal,
+                true,
+            ),
+            WeaponModelTextureKind::Normal
+        );
+        assert_eq!(
+            merge_texture_kind(
+                WeaponModelTextureKind::Normal,
+                WeaponModelTextureKind::Index,
+                false,
+            ),
+            WeaponModelTextureKind::Normal
         );
     }
 
