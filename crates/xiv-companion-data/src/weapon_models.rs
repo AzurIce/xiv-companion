@@ -47,6 +47,18 @@ const G_TILE_INDEX: u32 = 0x4255_F2F4;
 #[cfg(feature = "game-data")]
 const G_TILE_SCALE: u32 = 0x2E60_B071;
 #[cfg(feature = "game-data")]
+const G_TOON_INDEX: u32 = 0xDF15_112D;
+#[cfg(feature = "game-data")]
+const G_TOON_LIGHT_SCALE: u32 = 0x3CCE_9E4C;
+#[cfg(feature = "game-data")]
+const G_SHEEN_APERTURE: u32 = 0xF490_F76E;
+#[cfg(feature = "game-data")]
+const G_SHEEN_RATE: u32 = 0x800E_E35F;
+#[cfg(feature = "game-data")]
+const G_SHEEN_TINT_RATE: u32 = 0x1F26_4897;
+#[cfg(feature = "game-data")]
+const G_SPHERE_MAP_INDEX: u32 = 0x0749_53E9;
+#[cfg(feature = "game-data")]
 const G_DETAIL_COLOR_UV_SCALE: u32 = 0xC63D_9716;
 #[cfg(feature = "game-data")]
 const G_DETAIL_ID: u32 = 0x8981_D4D9;
@@ -940,6 +952,12 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_TileIndex",
             "g_TileAlpha",
             "g_TileScale",
+            "g_ToonIndex",
+            "g_ToonLightScale",
+            "g_SheenAperture",
+            "g_SheenRate",
+            "g_SheenTintRate",
+            "g_SphereMapIndex",
             "g_DetailID",
             "g_MultiDetailID",
             "g_DetailColorUvScale",
@@ -1505,6 +1523,12 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let tile_index = composed_material_tile_index(&semantics);
         let tile_alpha = composed_material_tile_alpha(&semantics);
         let tile_scale = composed_material_tile_scale(&semantics);
+        let toon_index = composed_material_toon_index(&semantics);
+        let toon_light_scale = composed_material_toon_light_scale(&semantics);
+        let sheen_rate = composed_material_sheen_rate(&semantics);
+        let sheen_tint_rate = composed_material_sheen_tint_rate(&semantics);
+        let sheen_aperture = composed_material_sheen_aperture(&semantics);
+        let sphere_map_index = composed_material_sphere_map_index(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color = composed_material_detail_color(&semantics);
@@ -1570,6 +1594,12 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             tile_index,
             tile_alpha,
             tile_scale,
+            toon_index,
+            toon_light_scale,
+            sheen_rate,
+            sheen_tint_rate,
+            sheen_aperture,
+            sphere_map_index,
             detail_id,
             multi_detail_id,
             detail_color,
@@ -2006,6 +2036,12 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let tile_index = composed_material_tile_index(&semantics);
         let tile_alpha = composed_material_tile_alpha(&semantics);
         let tile_scale = composed_material_tile_scale(&semantics);
+        let toon_index = composed_material_toon_index(&semantics);
+        let toon_light_scale = composed_material_toon_light_scale(&semantics);
+        let sheen_rate = composed_material_sheen_rate(&semantics);
+        let sheen_tint_rate = composed_material_sheen_tint_rate(&semantics);
+        let sheen_aperture = composed_material_sheen_aperture(&semantics);
+        let sphere_map_index = composed_material_sphere_map_index(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color = composed_material_detail_color(&semantics);
@@ -2072,6 +2108,12 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             tile_index,
             tile_alpha,
             tile_scale,
+            toon_index,
+            toon_light_scale,
+            sheen_rate,
+            sheen_tint_rate,
+            sheen_aperture,
+            sphere_map_index,
             detail_id,
             multi_detail_id,
             detail_color,
@@ -2855,6 +2897,36 @@ fn composed_material_tile_scale(semantics: &ComposedMaterialSemantics) -> [f32; 
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_toon_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_INDEX, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_toon_light_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_LIGHT_SCALE, 2.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_rate(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_RATE, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_tint_rate(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_TINT_RATE, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_APERTURE, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sphere_map_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SPHERE_MAP_INDEX, 0.0)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_detail_id(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_DETAIL_ID, 0.0)
 }
@@ -3330,6 +3402,12 @@ fn fallback_weapon_material(
         tile_index: 0.0,
         tile_alpha: 1.0,
         tile_scale: [16.0, 16.0],
+        toon_index: 0.0,
+        toon_light_scale: 2.0,
+        sheen_rate: 0.0,
+        sheen_tint_rate: 0.0,
+        sheen_aperture: 1.0,
+        sphere_map_index: 0.0,
         detail_id: 0.0,
         multi_detail_id: 0.0,
         detail_color: [0.5, 0.5, 0.5, 1.0],
@@ -4793,6 +4871,70 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_TILE_SCALE, &[4.0, 2.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_tile_scale(&semantics), [4.0, 2.0]);
+    }
+
+    #[test]
+    fn composed_material_toon_sheen_sphere_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_TOON_INDEX, &[3.0]),
+            (G_TOON_LIGHT_SCALE, &[1.5]),
+            (G_SHEEN_RATE, &[0.25]),
+            (G_SHEEN_TINT_RATE, &[0.35]),
+            (G_SHEEN_APERTURE, &[0.8]),
+            (G_SPHERE_MAP_INDEX, &[2.0]),
+        ]);
+
+        assert_eq!(composed_material_toon_index(&semantics), 0.0);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.0);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.0);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.0);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.0);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 0.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_toon_index(&semantics), 3.0);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 1.5);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.25);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.35);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 0.8);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_TOON_INDEX, &[5.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_index(&semantics), 5.0);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SCALE, &[2.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.25);
+
+        let material = test_mtrl_with_constant(G_SHEEN_RATE, &[0.45], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.45);
+
+        let material = test_mtrl_with_constant(G_SHEEN_TINT_RATE, &[0.55], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.55);
+
+        let material = test_mtrl_with_constant(G_SHEEN_APERTURE, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_SPHERE_MAP_INDEX, &[4.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 4.0);
+
+        let material = test_mtrl_with_constant(G_TOON_INDEX, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_index(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SCALE, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_SHEEN_APERTURE, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.0);
     }
 
     #[test]

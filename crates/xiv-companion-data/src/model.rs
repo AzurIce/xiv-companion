@@ -346,6 +346,18 @@ pub struct ModelMaterial {
     #[serde(default = "default_material_tile_scale")]
     pub tile_scale: [f32; 2],
     #[serde(default)]
+    pub toon_index: f32,
+    #[serde(default = "default_material_toon_light_scale")]
+    pub toon_light_scale: f32,
+    #[serde(default)]
+    pub sheen_rate: f32,
+    #[serde(default)]
+    pub sheen_tint_rate: f32,
+    #[serde(default = "default_material_sheen_aperture")]
+    pub sheen_aperture: f32,
+    #[serde(default)]
+    pub sphere_map_index: f32,
+    #[serde(default)]
     pub detail_id: f32,
     #[serde(default)]
     pub multi_detail_id: f32,
@@ -1047,6 +1059,14 @@ fn default_material_tile_alpha() -> f32 {
 
 fn default_material_tile_scale() -> [f32; 2] {
     [16.0, 16.0]
+}
+
+fn default_material_toon_light_scale() -> f32 {
+    2.0
+}
+
+fn default_material_sheen_aperture() -> f32 {
+    1.0
 }
 
 fn default_material_detail_uv_scale() -> [f32; 4] {
@@ -2220,6 +2240,12 @@ mod color_table_bake_tests {
             tile_index: 0.0,
             tile_alpha: 1.0,
             tile_scale: [16.0, 16.0],
+            toon_index: 0.0,
+            toon_light_scale: 2.0,
+            sheen_rate: 0.0,
+            sheen_tint_rate: 0.0,
+            sheen_aperture: 1.0,
+            sphere_map_index: 0.0,
             detail_id: 0.0,
             multi_detail_id: 0.0,
             detail_color: [0.5, 0.5, 0.5, 1.0],

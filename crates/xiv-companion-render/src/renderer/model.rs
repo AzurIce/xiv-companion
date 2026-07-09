@@ -1362,6 +1362,8 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
+        toon_sheen_params: material_toon_sheen_params(material),
+        sheen_sphere_params: material_sheen_sphere_params(material),
         detail_params: material_detail_params(material),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
@@ -1978,6 +1980,12 @@ fn fallback_material() -> ModelMaterial {
         tile_index: 0.0,
         tile_alpha: 1.0,
         tile_scale: [16.0, 16.0],
+        toon_index: 0.0,
+        toon_light_scale: 2.0,
+        sheen_rate: 0.0,
+        sheen_tint_rate: 0.0,
+        sheen_aperture: 1.0,
+        sphere_map_index: 0.0,
         detail_id: 0.0,
         multi_detail_id: 0.0,
         detail_color: [0.5, 0.5, 0.5, 1.0],
@@ -2079,6 +2087,24 @@ fn material_tile_params(material: &ModelMaterial) -> [f32; 4] {
         finite_or(material.tile_alpha, 1.0).clamp(0.0, 1.0),
         finite_or(material.tile_scale[0], 16.0),
         finite_or(material.tile_scale[1], 16.0),
+    ]
+}
+
+fn material_toon_sheen_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.toon_index, 0.0),
+        finite_or(material.toon_light_scale, 2.0),
+        finite_or(material.sheen_rate, 0.0),
+        finite_or(material.sheen_tint_rate, 0.0),
+    ]
+}
+
+fn material_sheen_sphere_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.sheen_aperture, 1.0),
+        finite_or(material.sphere_map_index, 0.0),
+        0.0,
+        0.0,
     ]
 }
 
@@ -2321,6 +2347,8 @@ struct MaterialUniform {
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
     tile_params: [f32; 4],
+    toon_sheen_params: [f32; 4],
+    sheen_sphere_params: [f32; 4],
     detail_params: [f32; 4],
     detail_color: [f32; 4],
     multi_detail_color: [f32; 4],
@@ -2882,6 +2910,43 @@ mod tests {
         material.tile_alpha = 8.0;
         material.tile_scale = [f32::NAN, f32::NEG_INFINITY];
         assert_eq!(material_tile_params(&material), [0.0, 1.0, 16.0, 16.0]);
+    }
+
+    #[test]
+    fn material_toon_sheen_sphere_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(
+            material_sheen_sphere_params(&material),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.toon_index = 5.0;
+        material.toon_light_scale = 1.5;
+        material.sheen_rate = 0.25;
+        material.sheen_tint_rate = 0.35;
+        material.sheen_aperture = 0.8;
+        material.sphere_map_index = 3.0;
+        assert_eq!(
+            material_toon_sheen_params(&material),
+            [5.0, 1.5, 0.25, 0.35]
+        );
+        assert_eq!(
+            material_sheen_sphere_params(&material),
+            [0.8, 3.0, 0.0, 0.0]
+        );
+
+        material.toon_index = f32::NAN;
+        material.toon_light_scale = f32::INFINITY;
+        material.sheen_rate = f32::NEG_INFINITY;
+        material.sheen_tint_rate = f32::NAN;
+        material.sheen_aperture = f32::INFINITY;
+        material.sphere_map_index = f32::NAN;
+        assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(
+            material_sheen_sphere_params(&material),
+            [1.0, 0.0, 0.0, 0.0]
+        );
     }
 
     #[test]

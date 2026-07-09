@@ -16,6 +16,8 @@ struct Material {
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
     tile_params: vec4<f32>, // x: tile index, y: tile alpha, zw: tile repeat uv
+    toon_sheen_params: vec4<f32>, // x: toon index, y: toon light scale, z: sheen rate, w: sheen tint rate
+    sheen_sphere_params: vec4<f32>, // x: sheen aperture, y: sphere map index
     detail_params: vec4<f32>, // x: detail id, y: multi detail id
     detail_color: vec4<f32>,
     multi_detail_color: vec4<f32>,
