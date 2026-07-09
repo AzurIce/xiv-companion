@@ -44,6 +44,7 @@
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass` 与 culling policy。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
+- `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
 
 主要缺口集中在：
 
@@ -152,14 +153,15 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - 已增加第一版公共 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
 - `PreparedMaterial` 已包含第一版 `MaterialShaderFamily` 分类，覆盖 MeddleTools 映射中的 character/glass/transparency/scroll/bg/lightshaft/water 常见包。
 - `PreparedMaterial` 已包含第一版 `PreparedTextureBindings`，聚合 renderer 当前已知的材质贴图索引。
+- `PreparedMaterial` 已包含第一版 `PreparedTextureSamplingSet`，把 texture role 的 sRGB/Non-Color、linear/nearest、repeat/clip 语义从 renderer 私有实现中拆出来；当前没有 decal texture kind，因此 clip 仍只是预留枚举。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策。
-- 完整 `PreparedModel`、sampler config、UV source、feature flags 仍尚未建立。
+- 完整 `PreparedModel`、UV source、feature flags 仍尚未建立；sampler config 已有公共语义，但尚未完整驱动所有 runtime 绑定。
 
 建议中间结构包含：
 
 - mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等
 - material shader family：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、unknown
-- texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；index 与 per-role sampler config 仍待补齐
+- texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；per-role sampler config 已有第一版；index 仍未作为可直接渲染绑定保留，因为当前 `_id.tex` 会先用于 ColorTable bake
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft
 - culling policy：render backfaces / cull backfaces
@@ -173,8 +175,8 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合，以及 culling policy fallback。
-- 后续仍需要为 UV source 和 sampler config 构造 fixture。
+- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy，以及 culling policy fallback。
+- 后续仍需要为 UV source 构造 fixture，并用真实样本验证 sampler policy 到 renderer 绑定的覆盖率。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
 ### P0: mesh category 和 submesh attribute 决策前置
@@ -212,13 +214,13 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 处理规则：
 
 - 如果材质已有 base texture，要明确是 multiply、replace 还是 shader-family-specific blend。
-- `_id.tex` 必须以 nearest/closest 采样，不应使用 linear filtering。
+- `_id.tex` 必须以 nearest/closest 采样，不应使用 linear filtering；当前 prepared sampling policy 已表达这一点，renderer 仍没有直接绑定 index texture。
 - material/special maps 需要 Non-Color，不走 sRGB。
 
 验证：
 
 - 继续保留现有 bake 单元测试。
-- 增加 prepared texture config 测试，确保 index 使用 nearest，base/specular 使用预期色彩空间。
+- 已增加 prepared texture config 测试，确保 index 使用 nearest，base/specular 使用预期色彩空间。
 
 ### P1: 引入 shader-family-specific texture interpretation
 
@@ -363,20 +365,22 @@ renderer 应开始使用已 bake 的：
 
 ### P1: 纹理采样配置
 
-当前所有材质贴图使用统一 repeat/linear。需要按 texture role 设置：
+当前进度：数据层已有第一版 `PreparedTextureSamplingSet`，renderer 的 material bind group 已分出 color sampler 与 data sampler；WGSL 现在用 color sampler 采 base/specular/emissive，用 data sampler 采 normal/mask/material-properties。
+
+仍需要按 texture role 完整落地：
 
 - base/specular/emissive: sRGB 视具体语义
-- normal/mask/material/multi/index: Non-Color
-- index: nearest/closest
-- tile/detail arrays: nearest 或 shader-family-specific
-- decal: clip/extend 语义
+- normal/mask/material/multi/material-properties: Non-Color，当前 renderer 已用 data sampler
+- index: nearest/closest，当前仅在 prepared policy 和 bake 入口语义上表达，未作为 runtime shader 绑定
+- tile/detail arrays 与 ColorTable extra maps: nearest 或 shader-family-specific，当前 policy 已把 extra maps 标为 nearest，但 renderer 尚未消费这些贴图
+- decal: clip/extend 语义，当前尚无独立 texture kind
 
-WebGPU bind group 需要支持每材质多个 sampler，或至少区分 color sampler 与 data/index sampler。
+WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接采 index/tile array，还需要 nearest sampler 或 per-texture sampler 选择。
 
 验证：
 
-- `_id.tex` nearest 采样测试，避免颜色边界被 linear 混合污染。
-- normal/mask 不被 sRGB 解码。
+- 已有 prepared texture sampling 测试覆盖 `_id.tex` nearest policy，避免颜色边界被 linear 混合污染。
+- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；仍需 synthetic shader fixture 验证可见效果。
 
 ### P2: 视觉验证和调试视图
 

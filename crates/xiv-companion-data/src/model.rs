@@ -399,6 +399,7 @@ pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
     pub shader_family: MaterialShaderFamily,
     pub texture_bindings: PreparedTextureBindings,
+    pub texture_sampling: PreparedTextureSamplingSet,
     pub render_backfaces: bool,
 }
 
@@ -417,6 +418,83 @@ pub struct PreparedTextureBindings {
     pub sheen_properties: Option<usize>,
     pub sphere_properties: Option<usize>,
     pub tile_matrix: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureSamplingSet {
+    pub base_color: PreparedTextureSampling,
+    pub normal: PreparedTextureSampling,
+    pub mask: PreparedTextureSampling,
+    pub material_map: PreparedTextureSampling,
+    pub multi_map: PreparedTextureSampling,
+    pub specular: PreparedTextureSampling,
+    pub emissive: PreparedTextureSampling,
+    pub material_properties: PreparedTextureSampling,
+    pub tile_properties: PreparedTextureSampling,
+    pub sheen_properties: PreparedTextureSampling,
+    pub sphere_properties: PreparedTextureSampling,
+    pub tile_matrix: PreparedTextureSampling,
+    pub index: PreparedTextureSampling,
+    pub other: PreparedTextureSampling,
+}
+
+impl Default for PreparedTextureSamplingSet {
+    fn default() -> Self {
+        Self {
+            base_color: prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
+            normal: prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
+            mask: prepared_texture_sampling_for_kind(ModelTextureKind::Mask),
+            material_map: prepared_texture_sampling_for_kind(ModelTextureKind::MaterialMap),
+            multi_map: prepared_texture_sampling_for_kind(ModelTextureKind::MultiMap),
+            specular: prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
+            emissive: prepared_texture_sampling_for_kind(ModelTextureKind::Emissive),
+            material_properties: prepared_texture_sampling_for_kind(
+                ModelTextureKind::MaterialProperties,
+            ),
+            tile_properties: prepared_texture_sampling_for_kind(ModelTextureKind::TileProperties),
+            sheen_properties: prepared_texture_sampling_for_kind(ModelTextureKind::SheenProperties),
+            sphere_properties: prepared_texture_sampling_for_kind(
+                ModelTextureKind::SphereProperties,
+            ),
+            tile_matrix: prepared_texture_sampling_for_kind(ModelTextureKind::TileMatrixProperties),
+            index: prepared_texture_sampling_for_kind(ModelTextureKind::Index),
+            other: prepared_texture_sampling_for_kind(ModelTextureKind::Other),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureSampling {
+    pub color_space: PreparedTextureColorSpace,
+    pub filter: PreparedTextureFilter,
+    pub address_mode: PreparedTextureAddressMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedTextureColorSpace {
+    #[default]
+    Srgb,
+    NonColor,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedTextureFilter {
+    #[default]
+    Linear,
+    Nearest,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedTextureAddressMode {
+    #[default]
+    Repeat,
+    ClampToEdge,
+    Clip,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -459,6 +537,7 @@ pub fn prepare_material_for_draw_role(
             material.and_then(|material| material.shader_package_name.as_deref()),
         ),
         texture_bindings: prepared_texture_bindings(material),
+        texture_sampling: PreparedTextureSamplingSet::default(),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -483,6 +562,37 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         sheen_properties: material.sheen_properties_texture,
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
+    }
+}
+
+pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTextureSampling {
+    match kind {
+        ModelTextureKind::BaseColor | ModelTextureKind::Specular | ModelTextureKind::Emissive => {
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::Srgb,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        }
+        ModelTextureKind::Index
+        | ModelTextureKind::TileProperties
+        | ModelTextureKind::SheenProperties
+        | ModelTextureKind::SphereProperties
+        | ModelTextureKind::TileMatrixProperties => PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Nearest,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        },
+        ModelTextureKind::Normal
+        | ModelTextureKind::Mask
+        | ModelTextureKind::MaterialMap
+        | ModelTextureKind::MultiMap
+        | ModelTextureKind::MaterialProperties
+        | ModelTextureKind::Other => PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        },
     }
 }
 
@@ -1138,6 +1248,7 @@ mod color_table_bake_tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
                 texture_bindings: PreparedTextureBindings::default(),
+                texture_sampling: PreparedTextureSamplingSet::default(),
                 render_backfaces: false,
             }
         );
@@ -1147,6 +1258,7 @@ mod color_table_bake_tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
+                texture_sampling: PreparedTextureSamplingSet::default(),
                 render_backfaces: true,
             }
         );
@@ -1201,6 +1313,66 @@ mod color_table_bake_tests {
         assert_eq!(
             prepared_texture_bindings(None),
             PreparedTextureBindings::default()
+        );
+    }
+
+    #[test]
+    fn prepared_texture_sampling_matches_meddletools_role_configs() {
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::Srgb,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::Srgb,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Mask),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::MaterialProperties),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Index),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Nearest,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::TileProperties),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Nearest,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
         );
     }
 

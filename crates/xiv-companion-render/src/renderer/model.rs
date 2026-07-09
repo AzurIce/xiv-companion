@@ -199,6 +199,12 @@ impl ModelRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
@@ -1238,8 +1244,18 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("weapon material sampler"),
+    let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("weapon material color sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    let data_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("weapon material data sampler"),
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::Repeat,
         address_mode_w: wgpu::AddressMode::Repeat,
@@ -1263,7 +1279,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
+                resource: wgpu::BindingResource::Sampler(&color_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -1284,6 +1300,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::TextureView(&specular_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(&data_sampler),
             },
         ],
     })
@@ -1636,7 +1656,10 @@ pub type WeaponRenderer = ModelRenderer;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MaterialShaderFamily, ModelMeshDrawRole, PreparedTextureBindings};
+    use crate::{
+        MaterialShaderFamily, ModelMeshDrawRole, PreparedTextureBindings,
+        PreparedTextureSamplingSet,
+    };
 
     #[test]
     fn transparent_batches_sort_back_to_front_without_moving_opaque() {
@@ -1718,6 +1741,7 @@ mod tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
+                texture_sampling: PreparedTextureSamplingSet::default(),
                 render_backfaces: true,
             }
         );
@@ -1752,6 +1776,7 @@ mod tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
+                texture_sampling: PreparedTextureSamplingSet::default(),
                 render_backfaces: false,
             }
         );
@@ -1981,6 +2006,7 @@ mod tests {
                 render_pass: pass,
                 shader_family: MaterialShaderFamily::Unknown,
                 texture_bindings: PreparedTextureBindings::default(),
+                texture_sampling: PreparedTextureSamplingSet::default(),
                 render_backfaces: true,
             },
             center,

@@ -64,6 +64,9 @@ var material_properties_texture: texture_2d<f32>;
 @group(1) @binding(7)
 var specular_texture: texture_2d<f32>;
 
+@group(1) @binding(8)
+var data_sampler: sampler;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
     @location(1) bright: vec4<f32>,
@@ -142,12 +145,12 @@ fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
     if material.params.w <= 0.5 {
         return vec3<f32>(1.0, material.specular_color.a, material.params.y);
     }
-    return textureSample(mask_texture, base_color_sampler, uv).rgb;
+    return textureSample(mask_texture, data_sampler, uv).rgb;
 }
 
 fn resolve_material_properties(uv: vec2<f32>) -> vec4<f32> {
     if material.properties.x > 0.5 {
-        return textureSample(material_properties_texture, base_color_sampler, uv);
+        return textureSample(material_properties_texture, data_sampler, uv);
     }
 
     let mask = resolve_mask(uv);
@@ -171,7 +174,7 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
 fn resolve_normal(input: VertexOutput, front_facing: bool) -> vec3<f32> {
     let face_sign = select(-1.0, 1.0, front_facing);
     let geometric_normal = normalize(input.normal) * face_sign;
-    let sampled = textureSample(normal_texture, base_color_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
+    let sampled = textureSample(normal_texture, data_sampler, input.uv0).xyz * 2.0 - vec3<f32>(1.0);
     if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
         return geometric_normal;
     }

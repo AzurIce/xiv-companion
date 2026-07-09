@@ -189,14 +189,15 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 2. 每个 material 建 bind group：
    - material uniform
    - base texture
-   - sampler（当前每材质仍是统一 repeat/linear）
+   - color sampler（repeat/linear，用于 base/specular/emissive）
    - normal texture
    - mask texture
    - emissive texture
    - material-properties texture
    - specular texture
+   - data sampler（repeat/linear，用于 normal/mask/material-properties）
 3. scene pass：
-   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类和 texture bindings。
+   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类、texture bindings 和 texture sampling policy。
    - opaque pipeline：写 depth，绘制 `Opaque` 与 `Cutout` batch；`Cutout` 仍由 WGSL alpha test discard。
    - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` 与 `Glass` batch。
    - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
@@ -235,6 +236,6 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；下一步是按 shader family 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Tile/Sphere/Sheen：让 renderer 消费 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
-5. 纹理采样配置：按 role 区分 sRGB/Non-Color、linear/nearest，尤其 `_id.tex` 不应统一 linear 采样。
+5. 纹理采样配置：数据层已有第一版 role policy，renderer 已区分 color/data sampler；后续还要让 index/tile array 等 nearest 采样进入 runtime 绑定，尤其 `_id.tex` 不应统一 linear 采样。
 6. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
 7. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。
