@@ -215,7 +215,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - tile-matrix texture
    - nearest data sampler（repeat/nearest，用于 ColorTable extra maps）
 3. scene pass：
-   - renderer 先计算第一版 `PreparedModel`，为每个 mesh 记录 draw role、main-pass 可见性、submesh attribute metadata、attribute visibility 和 `PreparedMaterial`；`PreparedMaterial` 会把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 五类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags 和 UV source。
+   - renderer 先计算第一版 `PreparedModel`，为每个 mesh 记录 draw role、main-pass 可见性、submesh attribute metadata、attribute visibility 和 `PreparedMaterial`；`PreparedMaterial` 会把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 五类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags、UV source 和 unsupported/runtime-only 输入摘要。
    - opaque pipeline：写 depth，绘制 `Opaque` batch。
    - cutout pipeline：写 depth，绘制 `Cutout` batch；当前仍由 WGSL alpha test discard。
    - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` batch。
@@ -254,10 +254,10 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 后续优先级：
 
 1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass/AdditiveLightShaft` prepared pass 分类，Cutout/Glass 已有独立 wgpu pipeline 入口，`AdditiveLightShaft` 已进入最小 additive wgpu pipeline 并消费第一组 lightshaft 参数；后续还需要 runtime shape visibility、更完整的 cutout/glass shader 行为和 lightshaft 节点语义。
-2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags 和 UV source，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
+2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags、UV source 和 unsupported/runtime-only 输入摘要，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总，`usesDye` 会在材质存在 `ColorDyeTable` 时置位；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Material params：`g_AlphaThreshold`、`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold`、`g_Transparency`、`g_GlassIOR`、`g_GlassThicknessMax`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor`、`g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset`、`g_DetailColorUvScale`、`g_DetailNormalUvScale`、`g_UVScrollTime` 以及 `lightshaft.shpk` 的 `g_Color/g_TexAnim/g_TexU/g_TexV/g_Ray` 已进入结构化材质字段；后续要继续接入其它 shader family 参数，并让 alpha shaping、transparency alpha、glass IOR/thickness、multi/detail normal、tile select、toon/sheen/sphere、outline/specular/occlusion、detail tint/UV、shader diffuse/emissive 与 shader-family-specific UV scroll 更完整地参与 shader。
 5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；PreparedMaterial 已保留第一版 UV source；后续要接入 tile array、shader-family-specific UV source 和更接近 MeddleTools 的 reflection/sphere 规则。
 6. 纹理采样配置：数据层已有第一版 role policy，renderer 已从 prepared policy 派生 color/data/nearest-data sampler，并已绑定 `_id.tex` 与 ColorTable extra maps；后续还要让真实 tile/detail array 等 nearest 资源进入 runtime 绑定。
-7. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
+7. 染色：`ColorDyeTable` 存在性已进入 `ModelMaterial.hasColorDyeTable`、`usesDye` 和 prepared unsupported summary；下一步接入 `chara/base_material/stainingtemplate.stm`、EXD stain 参数和用户 stain 输入，真正应用到 ColorTable 或 renderer override。
 8. 特殊 shader：lightshaft 已有最小 additive 参数消费；transparency、scroll、reflection、stockings、tattoo、occlusion 等已先进入 shader package 分类；后续还要补 emissive 与各 family 的实际 shader 行为。

@@ -407,6 +407,8 @@ pub struct ModelMaterial {
     pub render_backfaces: bool,
     #[serde(default)]
     pub apply_vertex_color: bool,
+    #[serde(default)]
+    pub has_color_dye_table: bool,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -596,6 +598,8 @@ pub struct PreparedMaterial {
     pub uv_sources: PreparedMaterialUvSources,
     #[serde(default)]
     pub feature_flags: PreparedMaterialFeatureFlags,
+    #[serde(default)]
+    pub unsupported_inputs: PreparedMaterialUnsupportedInputs,
     pub render_backfaces: bool,
 }
 
@@ -656,6 +660,17 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_scroll: bool,
     pub uses_flow: bool,
     pub uses_dye: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialUnsupportedInputs {
+    pub dye_application: bool,
+    pub runtime_color_table: bool,
+    pub decal_or_crest: bool,
+    pub tile_array: bool,
+    pub detail_array: bool,
+    pub incomplete_shader_family_logic: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -896,6 +911,12 @@ pub fn prepare_material_for_draw_role(
         texture_sampling: PreparedTextureSamplingSet::default(),
         uv_sources: PreparedMaterialUvSources::default(),
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
+        unsupported_inputs: prepared_material_unsupported_inputs(
+            material,
+            draw_role,
+            shader_family,
+            texture_bindings,
+        ),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -947,6 +968,7 @@ pub fn prepared_material_feature_flags(
     };
 
     flags.uses_vertex_color = material.apply_vertex_color;
+    flags.uses_dye = material.has_color_dye_table;
     flags.uses_tile |= material_scalar_differs(material.tile_index, 0.0)
         || material_scalar_differs(material.tile_alpha, 1.0)
         || material_vec2_differs(material.tile_scale, [16.0, 16.0]);
@@ -963,6 +985,41 @@ pub fn prepared_material_feature_flags(
         || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
 
     flags
+}
+
+pub fn prepared_material_unsupported_inputs(
+    material: Option<&ModelMaterial>,
+    draw_role: ModelMeshDrawRole,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> PreparedMaterialUnsupportedInputs {
+    let feature_flags = prepared_material_feature_flags(material, shader_family, texture_bindings);
+    let has_color_dye_table = material
+        .map(|material| material.has_color_dye_table)
+        .unwrap_or(false);
+
+    PreparedMaterialUnsupportedInputs {
+        dye_application: has_color_dye_table,
+        runtime_color_table: feature_flags.uses_color_table,
+        decal_or_crest: matches!(draw_role, ModelMeshDrawRole::DebugVisible),
+        tile_array: feature_flags.uses_tile,
+        detail_array: feature_flags.uses_detail,
+        incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
+    }
+}
+
+fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) -> bool {
+    matches!(
+        shader_family,
+        MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+            | MaterialShaderFamily::LightShaft
+    )
 }
 
 pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTextureSampling {
@@ -1756,6 +1813,7 @@ mod color_table_bake_tests {
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 render_backfaces: false,
             }
         );
@@ -1768,6 +1826,7 @@ mod color_table_bake_tests {
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 render_backfaces: true,
             }
         );
@@ -1839,6 +1898,7 @@ mod color_table_bake_tests {
     fn prepared_material_reports_material_feature_flags() {
         let mut material = test_material();
         material.apply_vertex_color = true;
+        material.has_color_dye_table = true;
         material.material_properties_texture = Some(8);
         material.tile_properties_texture = Some(9);
         material.multi_map_texture = Some(10);
@@ -1856,7 +1916,7 @@ mod color_table_bake_tests {
                 uses_detail: true,
                 uses_scroll: true,
                 uses_flow: false,
-                uses_dye: false,
+                uses_dye: true,
             }
         );
 
@@ -1883,6 +1943,34 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
             PreparedMaterialFeatureFlags::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unsupported_runtime_inputs() {
+        let mut material = test_material();
+        material.has_color_dye_table = true;
+        material.index_texture = Some(4);
+        material.tile_index = 3.0;
+        material.multi_map_texture = Some(5);
+        material.shader_package_name = Some("characterReflection.shpk".to_string());
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::DebugVisible)
+                .unsupported_inputs,
+            PreparedMaterialUnsupportedInputs {
+                dye_application: true,
+                runtime_color_table: true,
+                decal_or_crest: true,
+                tile_array: true,
+                detail_array: true,
+                incomplete_shader_family_logic: true,
+            }
+        );
+
+        assert_eq!(
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
+            PreparedMaterialUnsupportedInputs::default()
         );
     }
 
@@ -2295,6 +2383,7 @@ mod color_table_bake_tests {
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,
+            has_color_dye_table: false,
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],
             specular_color: [1.0, 1.0, 1.0],

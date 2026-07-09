@@ -2014,6 +2014,7 @@ fn fallback_material() -> ModelMaterial {
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
+        has_color_dye_table: false,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],
@@ -2556,10 +2557,10 @@ mod tests {
     use super::*;
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
-        PreparedMaterialUvSources, PreparedTextureAddressMode, PreparedTextureBindings,
-        PreparedTextureColorSpace, PreparedTextureFilter, PreparedTextureSampling,
-        PreparedTextureSamplingSet, PreparedTextureUvSources, PreparedUvSource,
-        prepare_material_for_draw_role,
+        PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources, PreparedTextureAddressMode,
+        PreparedTextureBindings, PreparedTextureColorSpace, PreparedTextureFilter,
+        PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureUvSources,
+        PreparedUvSource, prepare_material_for_draw_role,
     };
 
     #[test]
@@ -2654,6 +2655,7 @@ mod tests {
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 render_backfaces: true,
             }
         );
@@ -2771,6 +2773,7 @@ mod tests {
             },
             uv_sources: PreparedMaterialUvSources::default(),
             feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
             render_backfaces: true,
         };
 
@@ -2844,6 +2847,7 @@ mod tests {
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 render_backfaces: false,
             }
         );
@@ -3217,6 +3221,7 @@ mod tests {
                 uv1_scroll: PreparedUvSource::Uv1,
             },
             feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
             render_backfaces: true,
         };
 
@@ -3433,6 +3438,7 @@ mod tests {
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 render_backfaces: true,
             },
             center,
