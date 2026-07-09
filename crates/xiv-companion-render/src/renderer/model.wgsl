@@ -183,7 +183,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || material.render.x > 0.5;
-    let base = material.diffuse_color.rgb * texture_mix * vertex_tint;
+    let shader_tint = resolve_shader_diffuse_tint();
+    let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
@@ -390,12 +391,29 @@ fn resolve_extra_lighting(
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
     let material_emissive = clamp(material.emissive_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+    let shader_emissive = clamp(
+        material.shader_emissive_color.rgb * material.shader_emissive_color.a,
+        vec3<f32>(0.0),
+        vec3<f32>(8.0),
+    );
+    let shader_multi_emissive = clamp(
+        material.shader_multi_emissive_color.rgb * material.shader_multi_emissive_color.a,
+        vec3<f32>(0.0),
+        vec3<f32>(8.0),
+    );
     let texture_strength = material.emissive_color.a;
     let texture_luma = dot(emissive_tex, vec3<f32>(0.2126, 0.7152, 0.0722));
     let texture_gate = smoothstep(0.02, 0.28, texture_luma) * texture_strength;
     let mask_gate = smoothstep(0.88, 1.0, mask.b) * material.params.w * 0.18;
     let vertex_gate = 0.35 + clamp(vertex_alpha, 0.0, 1.0) * 0.65;
-    return emissive_tex * texture_strength + material_emissive * (texture_gate + mask_gate) * vertex_gate;
+    return emissive_tex * texture_strength
+        + material_emissive * (texture_gate + mask_gate) * vertex_gate
+        + shader_emissive * vertex_gate
+        + shader_multi_emissive * mask_gate * vertex_gate;
+}
+
+fn resolve_shader_diffuse_tint() -> vec3<f32> {
+    return clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
 }
 
 fn resolve_lightshaft_uv(input: VertexOutput) -> vec2<f32> {
