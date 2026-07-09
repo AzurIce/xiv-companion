@@ -63,6 +63,74 @@
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
+## 分层审查结论与计划总览
+
+### 1. 数据解析
+
+审查结论：
+
+- 本仓已经对齐 Meddle 的 LOD0 mesh range 和 extra LOD 分类方式，能区分 normal/water/shadow/terrainShadow/verticalFog/lightShaft/glass/materialChange/crestChange，且顶点层保留了多套 UV、secondary normal/bitangent/color、flow、blend weights/indices。
+- MTRL 解析已经不只靠文件名猜测：sampler role 会优先使用 `.shpk` resource parameter name，再退回 known CRC 和路径后缀；shader package default 与 material override 也已经进入 debug summary。
+- ColorTable 解析已覆盖 Dawntrail 与 Legacy，并按 Meddle/MeddleTools 语义产出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图；TileAlpha 已明确不再被误当作材质 alpha。
+
+主要不足：
+
+- 染色仍停留在 `ColorDyeTable` debug，尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入，因此 `usesDye` 只能保守为 false。
+- Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
+- glass/transparency/lightshaft/reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖。
+- texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，但还没全部变成 runtime 可绑定资源。
+
+计划：
+
+1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
+2. 把染色作为下一批解析入口：解析 `ColorDyeTable` 行标志，加载 `chara/base_material/stainingtemplate.stm`，定义 item/user stain 输入，再生成染色后的 ColorTable 或 renderer-friendly override。
+3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
+4. 对 runtime-only 数据不盲猜：decal/crest 先提供空白或显式输入 fallback，GPU ColorTable 先只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
+
+### 2. 解析后的结果处理
+
+审查结论：
+
+- `PreparedModel` / `PreparedMaterial` 已经把 raw parsed data 和 renderer binding 决策分开，renderer 与 phantom summary 共用 draw role、main-pass visibility、prepared pass、texture bindings、sampling policy、feature flags 和第一版 UV source。
+- submesh attribute mask/name、显式 `enabledAttributeMask`、mesh-level flow presence 已进入 preparation；这与 Meddle 的 shape/attribute group 思路一致，但目前只覆盖 attribute mask 的显式输入。
+- `PreparedRenderPass` 已能表达 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft`；lightshaft 不再误进主 surface pass。
+
+主要不足：
+
+- preparation 还没有 `enabledShapeMask`、shape mesh/morph 决策、skinning/morph runtime 输入，也没有 per-submesh draw batch 级别的可见性拆分。
+- `PreparedMaterialUvSources` 和 `PreparedTextureSamplingSet` 目前主要用于 debug/规划，renderer 仍没有按该表选择 UV set 或 per-role sampler。
+- shader-family-specific 规则还没有进入中间层，例如 character base texture 如何与 ColorTable diffuse 混合、material/multi map 通道如何解释、scroll/reflection 使用哪套 UV/flow。
+- `usesDye`、decal/crest、runtime ColorTable、tile/detail array 这些 capability flags 还不完整，导致 snapshot 很难区分“资源不存在”和“准备层还没启用”。
+
+计划：
+
+1. 扩展 `PreparedModelOptions`：加入 stain 输入、enabled shape mask、decal/crest fallback 或显式资源入口；默认仍保持离线保守行为。
+2. 把 prepared texture/sampler/UV source 从“输出给 debug”推进到“驱动 renderer binding”：先接入 uv0/uv1 选择和 nearest data resources，再考虑 per-texture sampler。
+3. 将 shader-family-specific 规则下沉到 prepared 层：为 character/glass/transparency/scroll/lightshaft/reflection 等输出明确的 feature flags、UV source、blend/alpha policy 和需要的 texture roles。
+4. 继续让 phantom `model-summary.json` 输出 preparation 结果，新增“为什么没画/为什么用了 fallback”的原因字段，作为后续真实样本验证的主要入口。
+
+### 3. 渲染器与着色器管线
+
+审查结论：
+
+- renderer 已上传扩展顶点格式，并已将 base/normal/mask/emissive/specular/material-properties/tile/sheen/sphere/tile-matrix 绑定到 material bind group；color/data/nearest data sampler 已初步分开。
+- 透明 batch 已按 mesh-level back-to-front 排序；glass 已进入透明管线；cutout 有 alpha test；ColorTable extra maps 已在 WGSL 中产生可观察的保守高光/反射近似。
+- 当前 `model.wgsl` 仍是单个近似 shader，实际主要消费 `uv0`、primary normal/bitangent、`color0`，与 MeddleTools 节点图和 bake pass 的差距仍集中在 shader 行为，而不是字段缺失。
+
+主要不足：
+
+- 没有独立 cutout/glass/additive-lightshaft pipeline；`AdditiveLightShaft` 只存在于 prepared pass，renderer 主 pass 仍过滤它。
+- 多套 UV、secondary tangent frame、`color1`、flow、detail/multi maps、UV scroll 参数、tile/detail arrays 还没有真正参与 shading。
+- alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
+- renderer 缺少 debug view，后续对照 MeddleTools bake 输出时仍难快速判断是 UV、sampler、ColorTable、alpha 还是 shader family 分支的问题。
+
+计划：
+
+1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
+2. 让 WGSL 按 prepared UV source 和 feature flags 消费 uv1/flow/detail/tile 信息：优先 scroll UV/time、tile matrix/tile index、detail map，再做 secondary normal/bitangent。
+3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
+4. 增加 debug render modes：base、normal、mask/material、specular、emissive、alpha、mesh category、UV set、ColorTable row index，作为真实武器样本回归的主要判断工具。
+
 ## 1. 数据解析改进
 
 ### P0: 让已解析语义可审计
