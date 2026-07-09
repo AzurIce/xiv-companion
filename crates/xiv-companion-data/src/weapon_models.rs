@@ -2580,7 +2580,9 @@ fn material_constants(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
         let Some(value_size) = read_u16_le(bytes, constant_offset + 6).map(usize::from) else {
             return constants;
         };
-        if value_size >= 4 {
+        if value_size >= 4
+            && value_offset.saturating_add(value_size) <= layout.shader_value_list_size
+        {
             let value_start = match layout.shader_values_offset.checked_add(value_offset) {
                 Some(value_start) => value_start,
                 None => return constants,
@@ -3297,6 +3299,25 @@ mod weapon_material_tests {
             material_constants(&bytes),
             vec![(G_ALPHA_THRESHOLD, vec![0.25])]
         );
+    }
+
+    #[test]
+    fn material_constants_reject_values_outside_shader_value_list() {
+        let mut bytes = test_mtrl_with_constant(G_ALPHA_THRESHOLD, &[], 0);
+        let constant_offset = material_shader_table_layout(&bytes)
+            .expect("layout")
+            .constant_offset;
+        bytes[constant_offset + 4..constant_offset + 6].copy_from_slice(&4_u16.to_le_bytes());
+        bytes[constant_offset + 6..constant_offset + 8].copy_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&0.75_f32.to_le_bytes());
+
+        assert_eq!(material_constants(&bytes), Vec::<(u32, Vec<f32>)>::new());
+        let constants = material_constant_debug(&bytes);
+        assert_eq!(constants.len(), 1);
+        assert_eq!(constants[0].value_offset, 4);
+        assert_eq!(constants[0].value_size, 4);
+        assert!(constants[0].values.is_empty());
+        assert!(constants[0].raw_values.is_empty());
     }
 
     #[test]
