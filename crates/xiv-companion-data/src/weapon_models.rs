@@ -91,6 +91,7 @@ pub struct MaterialDebugInfo {
     pub shader_keys: Vec<MaterialShaderKeyDebug>,
     pub shader_value_list_size: usize,
     pub shader_value_count: usize,
+    pub constants: Vec<MaterialConstantDebug>,
     pub constants_debug: Vec<String>,
     pub samplers: Vec<MaterialSamplerDebug>,
     pub color_table: Option<MaterialColorTableDebug>,
@@ -156,6 +157,20 @@ pub struct MaterialShaderKeyDebug {
     pub category_hex: String,
     pub value: u32,
     pub value_hex: String,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialConstantDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub value_offset: u16,
+    pub value_size: u16,
+    pub value_count: usize,
+    pub raw_values: Vec<u32>,
+    pub raw_values_hex: Vec<String>,
+    pub values: Vec<f32>,
 }
 
 #[cfg(feature = "game-data")]
@@ -563,6 +578,7 @@ pub fn material_debug_info_from_mtrl_bytes(
             .as_ref()
             .map(|debug| debug.shader_value_count)
             .unwrap_or_default(),
+        constants: material_constant_debug(bytes),
         constants_debug: material
             .constants
             .iter()
@@ -2583,6 +2599,71 @@ fn material_constants(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
 }
 
 #[cfg(feature = "game-data")]
+fn material_constant_debug(bytes: &[u8]) -> Vec<MaterialConstantDebug> {
+    let Some(layout) = material_shader_table_layout(bytes) else {
+        return Vec::new();
+    };
+    let mut constant_offset = layout.constant_offset;
+    let mut constants = Vec::new();
+
+    for _ in 0..layout.constant_count {
+        let Some(id) = read_u32_le(bytes, constant_offset) else {
+            return constants;
+        };
+        let Some(value_offset) = read_u16_le(bytes, constant_offset + 4) else {
+            return constants;
+        };
+        let Some(value_size) = read_u16_le(bytes, constant_offset + 6) else {
+            return constants;
+        };
+
+        let value_offset_usize = usize::from(value_offset);
+        let value_size_usize = usize::from(value_size);
+        let mut raw_values = Vec::new();
+        let mut values = Vec::new();
+
+        if value_size_usize >= 4
+            && value_offset_usize.saturating_add(value_size_usize) <= layout.shader_value_list_size
+        {
+            let Some(value_start) = layout.shader_values_offset.checked_add(value_offset_usize)
+            else {
+                return constants;
+            };
+            let value_count = value_size_usize / 4;
+            for index in 0..value_count {
+                let value_offset = value_start + index * 4;
+                let Some(raw_value) = read_u32_le(bytes, value_offset) else {
+                    return constants;
+                };
+                let Some(value) = read_f32_le(bytes, value_offset) else {
+                    return constants;
+                };
+                raw_values.push(raw_value);
+                values.push(value);
+            }
+        }
+
+        constants.push(MaterialConstantDebug {
+            id,
+            id_hex: hex_u32(id),
+            value_offset,
+            value_size,
+            value_count: raw_values.len(),
+            raw_values_hex: raw_values.iter().copied().map(hex_u32).collect(),
+            raw_values,
+            values,
+        });
+
+        let Some(next) = checked_advance(constant_offset, 8, bytes.len()) else {
+            return constants;
+        };
+        constant_offset = next;
+    }
+
+    constants
+}
+
+#[cfg(feature = "game-data")]
 fn shader_package_material_defaults(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
     let Some(layout) = shader_package_material_defaults_layout(bytes) else {
         return Vec::new();
@@ -2698,6 +2779,7 @@ struct MaterialShaderTableLayout {
     constant_offset: usize,
     sampler_offset: usize,
     shader_values_offset: usize,
+    shader_value_list_size: usize,
     constant_count: usize,
     sampler_count: usize,
 }
@@ -2770,6 +2852,7 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
         constant_offset,
         sampler_offset,
         shader_values_offset,
+        shader_value_list_size,
         constant_count,
         sampler_count,
     })
@@ -3184,6 +3267,26 @@ mod weapon_material_tests {
             material_constants(&bytes),
             vec![(G_ALPHA_THRESHOLD, vec![0.42])]
         );
+    }
+
+    #[test]
+    fn material_constant_debug_preserves_raw_constant_entries() {
+        let bytes = test_mtrl_with_constant(G_ALPHA_THRESHOLD, &[0.42], 0);
+
+        let constants = material_constant_debug(&bytes);
+
+        assert_eq!(constants.len(), 1);
+        assert_eq!(constants[0].id, G_ALPHA_THRESHOLD);
+        assert_eq!(constants[0].id_hex, hex_u32(G_ALPHA_THRESHOLD));
+        assert_eq!(constants[0].value_offset, 0);
+        assert_eq!(constants[0].value_size, 4);
+        assert_eq!(constants[0].value_count, 1);
+        assert_eq!(constants[0].raw_values, vec![0.42_f32.to_bits()]);
+        assert_eq!(
+            constants[0].raw_values_hex,
+            vec![hex_u32(0.42_f32.to_bits())]
+        );
+        assert_eq!(constants[0].values, vec![0.42]);
     }
 
     #[test]
