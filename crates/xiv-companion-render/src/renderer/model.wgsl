@@ -192,6 +192,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let detail_tint = resolve_detail_tint(input);
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
+    if uses_alpha && !is_glass && !is_lightshaft {
+        alpha = resolve_alpha_shaping(alpha);
+    }
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
     }
@@ -431,6 +434,20 @@ fn resolve_tile_specular_scale(input: VertexOutput, extra: ExtraProperties) -> f
     let shader_alpha_scale = mix(0.97, 1.03, shader_tile_alpha);
     let shader_pattern_scale = mix(0.98, 1.02, tile_pattern);
     return ramp_scale * mix(1.0, shader_alpha_scale * shader_pattern_scale, shader_tile_enabled);
+}
+
+fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
+    let aperture = clamp(material.alpha_params.x, 0.001, 8.0);
+    let offset = clamp(material.alpha_params.y, -1.0, 1.0);
+    let shaping_enabled = select(
+        0.0,
+        1.0,
+        abs(aperture - 2.0) > 0.001 || abs(offset) > 0.001,
+    );
+    let adjusted = clamp(raw_alpha + offset, 0.0, 1.0);
+    let exponent = clamp(2.0 / aperture, 0.25, 4.0);
+    let shaped = pow(adjusted, exponent);
+    return mix(raw_alpha, shaped, shaping_enabled);
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
