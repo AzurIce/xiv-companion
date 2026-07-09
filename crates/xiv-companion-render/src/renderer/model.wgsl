@@ -189,7 +189,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || material.render.x > 0.5;
     let shader_tint = resolve_shader_diffuse_tint();
-    let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint;
+    let detail_tint = resolve_detail_tint(input);
+    let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if is_glass {
         alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
@@ -435,6 +436,42 @@ fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>)
 
 fn resolve_shader_diffuse_tint() -> vec3<f32> {
     return clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0));
+}
+
+fn resolve_detail_tint(input: VertexOutput) -> vec3<f32> {
+    let detail = resolve_single_detail_tint(
+        material.detail_params.x,
+        material.detail_color,
+        material.detail_color_uv_scale.xy,
+        input.uv0,
+        1.0,
+    );
+    let multi_detail = resolve_single_detail_tint(
+        material.detail_params.y,
+        material.multi_detail_color,
+        material.detail_color_uv_scale.zw,
+        input.uv0,
+        0.65,
+    );
+    return detail * multi_detail;
+}
+
+fn resolve_single_detail_tint(
+    detail_id: f32,
+    detail_color: vec4<f32>,
+    uv_scale: vec2<f32>,
+    uv: vec2<f32>,
+    strength_scale: f32,
+) -> vec3<f32> {
+    let tint = clamp(detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
+    let color_delta = length(detail_color.rgb - vec3<f32>(0.5));
+    let detail_enabled = select(0.0, 1.0, abs(detail_id) > 0.001 || color_delta > 0.001);
+    let repeat = max(abs(uv_scale), vec2<f32>(0.001));
+    let scaled_uv = uv * repeat;
+    let wave = sin((scaled_uv.x + scaled_uv.y + detail_id * 0.073) * 6.2831853);
+    let pattern = 0.5 + 0.5 * wave;
+    let strength = detail_enabled * clamp(detail_color.a, 0.0, 1.0) * (0.08 + pattern * 0.12) * strength_scale;
+    return mix(vec3<f32>(1.0), tint, strength);
 }
 
 fn resolve_lightshaft_uv(input: VertexOutput) -> vec2<f32> {
