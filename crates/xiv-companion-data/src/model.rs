@@ -393,9 +393,13 @@ pub enum MaterialAlphaMode {
 #[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
+    CharacterStockings,
     CharacterGlass,
+    CharacterReflection,
     CharacterTransparency,
     CharacterScroll,
+    CharacterTattoo,
+    CharacterOcclusion,
     Bg,
     LightShaft,
     Water,
@@ -417,13 +421,16 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         .to_ascii_lowercase();
 
     match file_name.as_str() {
-        "character.shpk"
-        | "characterlegacy.shpk"
-        | "characterstockings.shpk"
-        | "characterinc.shpk" => MaterialShaderFamily::Character,
+        "character.shpk" | "characterlegacy.shpk" | "characterinc.shpk" => {
+            MaterialShaderFamily::Character
+        }
+        "characterstockings.shpk" => MaterialShaderFamily::CharacterStockings,
         "characterglass.shpk" => MaterialShaderFamily::CharacterGlass,
+        "characterreflection.shpk" => MaterialShaderFamily::CharacterReflection,
         "charactertransparency.shpk" => MaterialShaderFamily::CharacterTransparency,
         "characterscroll.shpk" => MaterialShaderFamily::CharacterScroll,
+        "charactertattoo.shpk" => MaterialShaderFamily::CharacterTattoo,
+        "characterocclusion.shpk" => MaterialShaderFamily::CharacterOcclusion,
         "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
         "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
         "water.shpk" | "river.shpk" => MaterialShaderFamily::Water,
@@ -1903,7 +1910,7 @@ mod color_table_bake_tests {
     }
 
     #[test]
-    fn material_shader_family_maps_meddletools_shader_packages() {
+    fn material_shader_family_maps_known_character_shader_packages() {
         assert_eq!(
             material_shader_family(Some("character.shpk")),
             MaterialShaderFamily::Character
@@ -1913,8 +1920,16 @@ mod color_table_bake_tests {
             MaterialShaderFamily::Character
         );
         assert_eq!(
+            material_shader_family(Some("chara/weapon/test/CHARACTERSTOCKINGS.SHPK")),
+            MaterialShaderFamily::CharacterStockings
+        );
+        assert_eq!(
             material_shader_family(Some("characterglass.shpk")),
             MaterialShaderFamily::CharacterGlass
+        );
+        assert_eq!(
+            material_shader_family(Some("characterreflection.shpk")),
+            MaterialShaderFamily::CharacterReflection
         );
         assert_eq!(
             material_shader_family(Some("charactertransparency.shpk")),
@@ -1937,8 +1952,12 @@ mod color_table_bake_tests {
             MaterialShaderFamily::Water
         );
         assert_eq!(
-            material_shader_family(Some("chara/weapon/test/CHARACTERSTOCKINGS.SHPK")),
-            MaterialShaderFamily::Character
+            material_shader_family(Some("charactertattoo.shpk")),
+            MaterialShaderFamily::CharacterTattoo
+        );
+        assert_eq!(
+            material_shader_family(Some("characterocclusion.shpk")),
+            MaterialShaderFamily::CharacterOcclusion
         );
         assert_eq!(material_shader_family(None), MaterialShaderFamily::Unknown);
         assert_eq!(

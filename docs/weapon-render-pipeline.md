@@ -249,4 +249,4 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 做第一版近似；PreparedMaterial 已保留第一版 UV source；后续要接入 tile array、shader-family-specific UV source 和更接近 MeddleTools 的 reflection/sphere 规则。
 6. 纹理采样配置：数据层已有第一版 role policy，renderer 已区分 color/data/nearest-data sampler；后续还要让 index/tile array 等 nearest 采样进入 runtime 绑定，尤其 `_id.tex` 不应统一 linear 采样。
 7. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
-8. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。
+8. 特殊 shader：transparency、scroll、reflection、stockings、tattoo、occlusion 等已先进入 shader package 分类；后续还要补 emissive 与各 family 的实际 shader 行为。
