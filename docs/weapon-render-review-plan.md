@@ -35,14 +35,14 @@
 - Material debug 已输出 sampler 的 `textureUsageName` 和 `kindSource`；resource-aware debug 会加载对应 `.shpk`，区分 `shpkResourceName`、`knownCrc` 与未知来源。
 - Material debug 已新增 compact `summary`，聚合 resolved shader keys、resolved constants、shader flags、texture flags、sampler flags，并标出 shader package default 与 material override 来源；phantom `model-summary.json` 的 material 条目也会输出该摘要。
 - ignored phantom snapshot 的 `model-summary.json` 已把每个 mesh 的 metadata 文件、submesh attributes、bone table、shape 影响摘要提升出来，不必只靠逐个打开 raw model metadata。
-- `ModelMeshDrawRole` 已把 MDL mesh category 映射成 renderer-friendly draw role；renderer 当前会跳过 shadow、terrainShadow、verticalFog、lightShaft，不再把这些 mesh 当普通 surface 画，materialChange/crestChange 暂作为 debugVisible 绘制。
+- `ModelMeshDrawRole` 已把 MDL mesh category 映射成 renderer-friendly draw role；renderer 当前会跳过 shadow、terrainShadow、verticalFog，不再把这些 mesh 当普通 surface 画；lightShaft 会作为 additive pass 绘制，materialChange/crestChange 暂作为 debugVisible 绘制。
 - `WeaponModelData.loadDiagnostics` 已记录可选副手/子模型加载失败的 role、model、候选路径、失败状态和错误信息，phantom `model-summary.json` 会直接输出。
 - `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 - renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已把 `uv1-uv3` 传到 fragment，并按 prepared UV source 选择 texture-role 采样 UV，但当前规则仍基本选择 `uv0`，secondary normal/bitangent、`color1` 和 flow 尚未参与实际 shader。
 - `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
-- `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 仍不进入主 surface pass。
+- `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 不进入普通 surface pass，但 renderer 会保留为 additive batch。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`；新增特殊 character family 目前只用于准备层分类和 debug，尚未改变 shader 行为。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
@@ -121,14 +121,14 @@
 
 主要不足：
 
-- 没有独立 cutout/glass/additive-lightshaft pipeline；`AdditiveLightShaft` 只存在于 prepared pass，renderer 主 pass 仍过滤它。
+- cutout 仍复用 opaque pipeline，glass 仍复用 transparent pipeline；additive-lightshaft 已有最小 additive pipeline，但 lightshaft shader-family-specific 参数和纹理动画尚未实现。
 - 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；secondary tangent frame、`color1`、flow、detail/multi maps、tile/detail arrays 还没有真正参与 shading，scroll 仍缺少 shader node 级别的 texture-role 路由。
 - alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
 - renderer 已有第一版 debug view，能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color、ColorTable index、material map、multi map 与 ColorTable extra maps；更细的 per-texture independent sampler policy、真实 tile/detail array 诊断仍未实现。
 
 计划：
 
-1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
+1. 先让 prepared pass 真正分管 pipeline：additive lightshaft 已有最小管线；后续继续拆独立 cutout、transparent/glass 行为，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
 2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择和保守 scroll time 已接入，后续优先补 shader-family-specific scroll 路由、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
 4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 已有第一版；后续补 per-texture independent sampler policy 和真实 tile/detail array 诊断，作为真实武器样本回归的主要判断工具。
@@ -249,7 +249,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - material shader family：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、unknown；已有第一版分类，后续逐个补 shader-family-specific 行为
 - texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix、ColorTable index 已有第一版；per-role sampler config 已有第一版，renderer 当前把它折叠成 color/data/nearest 三组 sampler；index 当前主要用于 ColorTable bake 和 debug preview，material/multi 已可用 Non-Color + linear sampler 做 debug preview，tile/sheen/sphere/tileMatrix 已可用 nearest sampler 做 debug preview；这些贴图尚未进入完整 shader 通道解释
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
-- alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，实际 wgpu additive pass 仍待实现
+- alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，并进入最小 wgpu additive pass
 - culling policy：render backfaces / cull backfaces
 - feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，染色输入仍待补齐
 
@@ -273,14 +273,14 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 - `normal`、`glass` 默认渲染。
 - `glass` 会强制进入 transparent pass。
-- `lightShaft` 已标为独立 draw role，并映射到 `AdditiveLightShaft` prepared pass；additive/lightshaft wgpu pass 尚未实现前，默认不进入主 surface pass。
+- `lightShaft` 已标为独立 draw role，并映射到 `AdditiveLightShaft` prepared pass；renderer 会保留为 additive batch，不再作为普通 surface 绘制。
 - `shadow`、`terrainShadow`、`verticalFog` 默认不作为主 surface 渲染。
 - `materialChange`、`crestChange` 暂时作为 `debugVisible` 继续渲染，并在 snapshot summary 中标出。
 - submesh attribute mask/name 已进入 `ModelMesh` 与 `PreparedMesh`，并随 phantom summary 输出；`PreparedModelOptions.enabledAttributeMask` 已支持显式运行时 mask，按 `requiredMask & !enabledMask == 0` 判断 submesh 是否可见。mesh-level shape influence 已进入 `ModelMesh` 与 `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 已支持 active/inactive 审计；Web 离线默认仍不猜 mask，实际 shape morph 仍未应用。
 
 验证：
 
-- 已增加 draw role mapping 单元测试和 renderer flatten 过滤测试，覆盖 glass/terrainShadow/lightShaft/shadow/verticalFog/materialChange/crestChange。
+- 已增加 draw role mapping 单元测试和 renderer flatten 测试，覆盖 glass/terrainShadow/lightShaft/shadow/verticalFog/materialChange/crestChange，并确认 lightShaft 作为 additive batch 保留。
 - 对 `冬雪之幻梦`、`茶歇之幻梦` 等样本做 snapshot 对比。
 
 ### P1: 把 ColorTable bake 产物转成稳定语义贴图集合
@@ -377,17 +377,17 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 - `Cutout`：当前仍复用 opaque pipeline，写 depth，并由 shader alpha test discard。
 - `Transparent`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
 - `Glass`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
-- `AdditiveLightShaft`：lightshaft 已有 prepared 分类，但 renderer 仍过滤出主 surface pass，独立 additive pipeline 尚未实现。
+- `AdditiveLightShaft`：lightshaft 已有 prepared 分类，renderer 会保留为 additive batch，使用加法混合且不写 depth。
 
-尚未完成的是把它们拆成独立 wgpu pipeline：
+当前仍未完成的是把 cutout/glass/lightshaft 行为做成更完整的 shader-family-specific 管线：
 
 - opaque pass：写 depth
 - cutout pass：写 depth，alpha test discard
 - transparent pass：不写 depth，mesh-level sorted
 - glass pass：不写 depth，单独 blend/参数
-- additive/lightshaft pass：加法或 screen-like blend，不写 depth 或只读 depth
+- additive/lightshaft pass：已有最小加法混合、不写 depth；尚未解析 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU/V` 等节点语义
 
-shadow、terrainShadow、verticalFog、lightShaft 在主预览中默认不画，避免错误 surface；lightShaft 的 additive pass 仍未实现。
+shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 surface；lightShaft 不作为普通 surface，但会通过 additive pass 绘制。
 
 验证：
 
@@ -516,7 +516,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 完成标准：
 
 - P0/P1 snapshot summary 能说明每个 mesh/material 为什么这样画。
-- 不再把明显非 surface mesh 当普通材质误画。当前 shadow/terrainShadow/verticalFog/lightShaft 已默认不进主 surface pass；lightShaft 的 additive pass 仍在后续阶段。
+- 不再把明显非 surface mesh 当普通材质误画。当前 shadow/terrainShadow/verticalFog 已默认不进主 surface pass；lightShaft 已从普通 surface 分离并进入 additive pass。
 
 ### 第二阶段：让解析结果真正进 shader
 

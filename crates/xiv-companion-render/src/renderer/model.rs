@@ -119,6 +119,8 @@ pub struct ModelRenderer {
     culled_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
     transparent_culled_pipeline: wgpu::RenderPipeline,
+    additive_pipeline: wgpu::RenderPipeline,
+    additive_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -460,7 +462,7 @@ impl ModelRenderer {
             &shader,
             &pipeline_layout,
             "weapon model pipeline",
-            false,
+            ModelPipelineBlend::Opaque,
             false,
         );
         let culled_pipeline = create_model_pipeline(
@@ -468,7 +470,7 @@ impl ModelRenderer {
             &shader,
             &pipeline_layout,
             "weapon culled model pipeline",
-            false,
+            ModelPipelineBlend::Opaque,
             true,
         );
         let transparent_pipeline = create_model_pipeline(
@@ -476,7 +478,7 @@ impl ModelRenderer {
             &shader,
             &pipeline_layout,
             "weapon transparent model pipeline",
-            true,
+            ModelPipelineBlend::Alpha,
             false,
         );
         let transparent_culled_pipeline = create_model_pipeline(
@@ -484,7 +486,23 @@ impl ModelRenderer {
             &shader,
             &pipeline_layout,
             "weapon transparent culled model pipeline",
+            ModelPipelineBlend::Alpha,
             true,
+        );
+        let additive_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon additive model pipeline",
+            ModelPipelineBlend::Additive,
+            false,
+        );
+        let additive_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon additive culled model pipeline",
+            ModelPipelineBlend::Additive,
             true,
         );
 
@@ -548,6 +566,8 @@ impl ModelRenderer {
             culled_pipeline,
             transparent_pipeline,
             transparent_culled_pipeline,
+            additive_pipeline,
+            additive_culled_pipeline,
             blur_pipeline,
             compose_pipeline,
             vertex_buffer,
@@ -675,6 +695,19 @@ impl ModelRenderer {
                     &self.transparent_pipeline
                 } else {
                     &self.transparent_culled_pipeline
+                });
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.pass().uses_additive_pipeline())
+            {
+                render_pass.set_pipeline(if batch.render_backfaces() {
+                    &self.additive_pipeline
+                } else {
+                    &self.additive_culled_pipeline
                 });
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
@@ -877,7 +910,12 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
 
     let prepared_model = prepare_model_for_render(model);
     for prepared_mesh in &prepared_model.meshes {
-        if !prepared_mesh.renders_in_main_pass {
+        if !prepared_mesh.renders_in_main_pass
+            && !prepared_mesh
+                .prepared_material
+                .render_pass
+                .uses_additive_pipeline()
+        {
             continue;
         }
         let Some(mesh) = model.meshes().get(prepared_mesh.mesh_index) else {
@@ -972,10 +1010,10 @@ fn create_model_pipeline(
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     label: &str,
-    transparent: bool,
+    blend_mode: ModelPipelineBlend,
     cull_backfaces: bool,
 ) -> wgpu::RenderPipeline {
-    let blend = transparent.then_some(wgpu::BlendState::ALPHA_BLENDING);
+    let blend = blend_mode.blend_state();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
@@ -1013,7 +1051,7 @@ fn create_model_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(!transparent),
+            depth_write_enabled: Some(blend_mode.writes_depth()),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -1022,6 +1060,38 @@ fn create_model_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelPipelineBlend {
+    Opaque,
+    Alpha,
+    Additive,
+}
+
+impl ModelPipelineBlend {
+    fn blend_state(self) -> Option<wgpu::BlendState> {
+        match self {
+            ModelPipelineBlend::Opaque => None,
+            ModelPipelineBlend::Alpha => Some(wgpu::BlendState::ALPHA_BLENDING),
+            ModelPipelineBlend::Additive => Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        }
+    }
+
+    fn writes_depth(self) -> bool {
+        matches!(self, ModelPipelineBlend::Opaque)
+    }
 }
 
 fn create_post_pipeline(
@@ -2363,6 +2433,27 @@ mod tests {
     }
 
     #[test]
+    fn model_pipeline_blend_modes_report_blend_and_depth_policy() {
+        assert_eq!(ModelPipelineBlend::Opaque.blend_state(), None);
+        assert!(ModelPipelineBlend::Opaque.writes_depth());
+        assert_eq!(
+            ModelPipelineBlend::Alpha.blend_state(),
+            Some(wgpu::BlendState::ALPHA_BLENDING)
+        );
+        assert!(!ModelPipelineBlend::Alpha.writes_depth());
+
+        let additive = ModelPipelineBlend::Additive
+            .blend_state()
+            .expect("additive blend");
+        assert_eq!(additive.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(additive.color.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(additive.color.operation, wgpu::BlendOperation::Add);
+        assert_eq!(additive.alpha.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(additive.alpha.dst_factor, wgpu::BlendFactor::One);
+        assert!(!ModelPipelineBlend::Additive.writes_depth());
+    }
+
+    #[test]
     fn camera_uniform_preserves_finite_uv_scroll_time() {
         let mut options = ModelRenderOptions {
             uv_scroll_time: 12.5,
@@ -2789,7 +2880,7 @@ mod tests {
     }
 
     #[test]
-    fn flatten_model_filters_meshes_outside_main_draw_roles() {
+    fn flatten_model_filters_non_surface_roles_but_keeps_additive_lightshafts() {
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
             materials: vec![fallback_material()],
@@ -2807,19 +2898,20 @@ mod tests {
 
         let (vertices, indices, batches) = flatten_model(&model);
 
-        assert_eq!(vertices.len(), 9);
-        assert_eq!(indices.len(), 9);
-        assert_eq!(batches.len(), 3);
+        assert_eq!(vertices.len(), 12);
+        assert_eq!(indices.len(), 12);
+        assert_eq!(batches.len(), 4);
         assert_eq!(
             batches
                 .iter()
                 .map(|batch| batch.center[0])
                 .collect::<Vec<_>>(),
-            vec![0.5, 5.5, 6.5]
+            vec![0.5, 4.5, 5.5, 6.5]
         );
         assert_eq!(batches[0].pass(), PreparedRenderPass::Opaque);
-        assert_eq!(batches[1].pass(), PreparedRenderPass::Opaque);
-        assert_eq!(batches[2].pass(), PreparedRenderPass::Glass);
+        assert_eq!(batches[1].pass(), PreparedRenderPass::AdditiveLightShaft);
+        assert_eq!(batches[2].pass(), PreparedRenderPass::Opaque);
+        assert_eq!(batches[3].pass(), PreparedRenderPass::Glass);
         assert_eq!(
             batches
                 .iter()
@@ -2827,6 +2919,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ModelMeshDrawRole::Normal,
+                ModelMeshDrawRole::LightShaft,
                 ModelMeshDrawRole::DebugVisible,
                 ModelMeshDrawRole::Glass
             ]
