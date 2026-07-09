@@ -1,8 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::app::icons::{Icon, IconKind};
-use crate::app::modules::{APP_MODULES, ModuleGroup, module_group_label};
+use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
+use crate::app::ui::{Badge, BadgeVariant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -115,6 +116,7 @@ fn NavButton(
     icon: IconKind,
     #[props(default = false)] compact: bool,
     #[props(default = false)] collapsed: bool,
+    #[props(default = false)] experimental: bool,
 ) -> Element {
     let button_class = match (compact, collapsed, active) {
         (true, _, true) => {
@@ -152,6 +154,9 @@ fn NavButton(
             span {
                 class: label_class,
                 "{label}"
+            }
+            if experimental && !collapsed {
+                Badge { variant: BadgeVariant::Warning, "实验" }
             }
         }
     };
@@ -258,6 +263,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                                     active: current.path() == module.href,
                                     icon: module_icon(module.id),
                                     collapsed: collapsed(),
+                                    experimental: module.status == ModuleStatus::Experimental,
                                 }
                             }
                         }
@@ -303,6 +309,7 @@ fn MobileHeader(current: Route) -> Element {
                             active: current.path() == module.href,
                             icon: module_icon(module.id),
                             compact: true,
+                            experimental: module.status == ModuleStatus::Experimental,
                         }
                     }
                 }

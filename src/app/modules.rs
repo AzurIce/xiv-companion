@@ -11,6 +11,7 @@ pub enum ModuleGroup {
 pub enum ModuleStatus {
     Ready,
     Planned,
+    Experimental,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,7 +43,7 @@ pub const APP_MODULES: &[AppModule] = &[
         label: "武器模型",
         href: "/weapon-models",
         group: ModuleGroup::Preview,
-        status: ModuleStatus::Ready,
+        status: ModuleStatus::Experimental,
     },
 ];
 
