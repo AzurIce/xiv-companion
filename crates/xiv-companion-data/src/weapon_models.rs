@@ -2898,6 +2898,7 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_NormalMapSampler", WeaponModelTextureKind::Normal),
         ("g_SamplerNormalMap0", WeaponModelTextureKind::Normal),
         ("g_SamplerNormalMap1", WeaponModelTextureKind::Normal),
+        ("g_SamplerSkinNormal", WeaponModelTextureKind::Normal),
         ("g_SamplerEmissive", WeaponModelTextureKind::Emissive),
         ("g_EmissiveSampler", WeaponModelTextureKind::Emissive),
         ("g_SamplerEmission", WeaponModelTextureKind::Emissive),
@@ -2908,6 +2909,7 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_IndexSampler", WeaponModelTextureKind::Index),
         ("g_SamplerMask", WeaponModelTextureKind::Mask),
         ("g_MaskSampler", WeaponModelTextureKind::Mask),
+        ("g_SamplerSkinMask", WeaponModelTextureKind::Mask),
         ("g_SamplerMaterial", WeaponModelTextureKind::MaterialMap),
         ("g_MaterialSampler", WeaponModelTextureKind::MaterialMap),
         ("g_SamplerMulti", WeaponModelTextureKind::MultiMap),
@@ -2927,13 +2929,17 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_ColorMapSampler", WeaponModelTextureKind::BaseColor),
         ("g_SamplerColorMap0", WeaponModelTextureKind::BaseColor),
         ("g_SamplerColorMap1", WeaponModelTextureKind::BaseColor),
+        ("g_SamplerSkinDiffuse", WeaponModelTextureKind::BaseColor),
         ("g_SamplerAlbedo", WeaponModelTextureKind::BaseColor),
         ("g_AlbedoSampler", WeaponModelTextureKind::BaseColor),
         ("g_SamplerBaseColor", WeaponModelTextureKind::BaseColor),
         ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
         ("g_Sampler0", WeaponModelTextureKind::BaseColor),
         ("g_Sampler1", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerEnvMap", WeaponModelTextureKind::Specular),
+        ("g_SamplerEnvMap", WeaponModelTextureKind::Other),
+        ("g_SamplerWaveMap", WeaponModelTextureKind::Other),
+        ("g_SamplerWaveMap1", WeaponModelTextureKind::Other),
+        ("g_SamplerWhitecapMap", WeaponModelTextureKind::Other),
     ]
 }
 
@@ -3644,6 +3650,34 @@ mod weapon_material_tests {
                 Some(WeaponModelTextureKind::MultiMap),
             ),
             WeaponModelTextureKind::MultiMap
+        );
+    }
+
+    #[test]
+    fn sampler_classification_covers_meddletools_texture_roles() {
+        assert_eq!(
+            classify_sampler_name("g_SamplerSkinDiffuse"),
+            Some(WeaponModelTextureKind::BaseColor)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerSkinNormal"),
+            Some(WeaponModelTextureKind::Normal)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerSkinMask"),
+            Some(WeaponModelTextureKind::Mask)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerEnvMap"),
+            Some(WeaponModelTextureKind::Other)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerWaveMap"),
+            Some(WeaponModelTextureKind::Other)
+        );
+        assert_eq!(
+            classify_sampler_usage(physis::shpk::ShaderPackage::crc("g_SamplerWhitecapMap")),
+            Some(WeaponModelTextureKind::Other)
         );
     }
 
