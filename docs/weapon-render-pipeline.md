@@ -51,15 +51,20 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 4. `101`
 5. `201`
 
-候选读取使用静默探测：缺失候选不输出 warn，只有全部失败才返回错误。
+候选读取仍按顺序探测。主模型全部失败时返回错误；可选副手/子模型失败时不阻塞主模型，但会写入
+`WeaponModelData.loadDiagnostics`，记录 role、model、候选路径、missing/read/parse 状态和错误原因。
 
 ## 3. MDL → Mesh
 
 使用 Physis 解析 MDL：
 
-- 取 LOD0。
-- 每个 part 转成 `WeaponModelMesh`。
-- 保留：position、normal、uv0、uv1、bitangent、vertex color、index、material_index。
+- 取 raw LOD0 mesh range，而不是只依赖 Physis 暴露的普通 LOD part。
+- 覆盖 normal/water/shadow/terrainShadow/verticalFog，以及 extra LOD 的 lightShaft/glass/materialChange/crestChange。
+- 每个 mesh/submesh range 转成 `WeaponModelMesh`。
+- 数据层保留：position、blend weights/indices、normal、uv0-uv3、bitangent、secondary normal/bitangent、color0/color1、flow0/flow1、index、material_index、mesh category、bone table。
+- ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
+
+注意：renderer 当前 GPU 顶点格式仍只上传 position、normal、uv0、bitangent、color0；其余字段已解析但还没有进入 WGSL。
 
 注意：顶点色在 FFXIV 角色/武器 shader 里不一定是纯颜色，常参与遮罩/alpha/材质调制；当前 renderer 只作近似 tint 使用。
 
@@ -105,9 +110,14 @@ MTRL 贴图需要分类为：
 
 `_id.tex` 不是颜色图，不能当 mask 或 diffuse 直接采样。
 
-当前实现：先解析 MTRL sampler usage，路径后缀 `_id` 强制覆盖为 `Index`。
+当前实现：
 
-## 6. Dawntrail ColorTable + `_id.tex` 烘焙
+- 优先解析 MTRL sampler records，并结合 `.shpk` resource parameter name 判定 sampler role。
+- `.shpk` 名称缺失时使用 known CRC 表兜底；再结合文件名后缀分类。
+- 路径后缀 `_id` / `g_SamplerIndex` 会识别为 `Index`，不会当 mask 或 diffuse 直接采样。
+- material debug 会输出 sampler 的 `textureUsageName` 和 `kindSource`，用于判断来源是 `.shpk` resource name、known CRC 还是 unknown。
+
+## 6. ColorTable + `_id.tex` 烘焙
 
 许多当前武器没有传统 diffuse/base 贴图，颜色来自：
 
@@ -124,13 +134,14 @@ MTRL 贴图需要分类为：
 
 1. 读取 `_id.tex` RGBA。
 2. 按 R/G 查 ColorTable。
-3. 烘焙出 diffuse、specular、material-properties、emissive 贴图：
+3. 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix、emissive 贴图：
    - diffuse RGB 为 sRGB，Alpha 固定不透明；`TileAlpha` 是 tile 属性，不作为材质透明度。
    - specular RGB 为 sRGB，Alpha 保存 ColorTable `Anisotropy`。
    - material-properties 为线性 unorm，通道为 metalness / roughness / gloss strength / specular strength。
+   - tile/sheen/sphere/tile-matrix 与 MeddleTools 的 extra ramps 对齐，tile-matrix 同时保留 float channels。
 4. 若 ColorTable 有 emissive，则额外启用 emissive texture。
 
-只对 Dawntrail 32 行 ColorTable 启用；旧 16 行格式先保守回退，避免误烘焙。
+当前实现同时支持 Dawntrail 32 行和 Legacy 16 行 ColorTable。renderer 已消费 diffuse/base、specular、material-properties、emissive；tile、sheen、sphere、tile-matrix 仍主要用于 debug/后续 shader 扩展。
 
 ## 7. 材质模式
 
@@ -177,16 +188,20 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 2. 每个 material 建 bind group：
    - material uniform
    - base texture
+   - sampler（当前每材质仍是统一 repeat/linear）
    - normal texture
    - mask texture
    - emissive texture
+   - material-properties texture
+   - specular texture
 3. scene pass：
    - opaque pipeline：写 depth，不透明材质先画。
    - transparent pipeline：alpha blending，不写 depth，透明/glass 后画。
+   - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
 4. bloom pass：从 bright attachment 提取高亮并 blur。
 5. compose pass：scene + bloom 输出到 canvas。
 
-透明排序目前只做到“透明材质在不透明之后”，还没有逐三角/逐 mesh 按深度排序。
+透明排序目前做到 mesh-level：透明 batch 按相机方向和 mesh center back-to-front 排序。还没有逐三角排序或 weighted blended OIT。
 
 ## 9. Meddle 调研结论
 
@@ -213,9 +228,10 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 后续优先级：
 
-1. 透明排序：对透明 mesh 按相机距离排序，至少 mesh-level back-to-front。
-2. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
-3. Tile/Sphere/Sheen：补齐 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
-4. Legacy ColorTable：补旧 16 行格式的正确索引路径。
-5. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
-6. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。
+1. Prepared draw role / pass：把 normal、glass、lightShaft、shadow、terrainShadow、verticalFog 等 mesh category 转成明确渲染决策，避免非主 surface 误画。
+2. GPU 顶点格式：把 uv1-uv3、color1、secondary normal/bitangent、flow 等已解析字段逐步传入 shader。
+3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
+4. Tile/Sphere/Sheen：让 renderer 消费 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
+5. 纹理采样配置：按 role 区分 sRGB/Non-Color、linear/nearest，尤其 `_id.tex` 不应统一 linear 采样。
+6. 染色：接入 ColorDyeTable + `chara/base_material/stainingtemplate.stm`。
+7. 特殊 shader：emissive、scroll、reflection、transparency、stockings 等按 shader package 分类实现。

@@ -35,6 +35,7 @@
 - Material debug 已输出 sampler 的 `textureUsageName` 和 `kindSource`；resource-aware debug 会加载对应 `.shpk`，区分 `shpkResourceName`、`knownCrc` 与未知来源。
 - ignored phantom snapshot 的 `model-summary.json` 已把每个 mesh 的 metadata 文件、submesh attributes、bone table、shape 影响摘要提升出来，不必只靠逐个打开 raw model metadata。
 - `WeaponModelData.loadDiagnostics` 已记录可选副手/子模型加载失败的 role、model、候选路径、失败状态和错误信息，phantom `model-summary.json` 会直接输出。
+- `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 
@@ -64,10 +65,9 @@
 
 ### P0: 修正文档和实现不一致
 
-当前 `weapon-render-pipeline.md` 仍写着 Legacy ColorTable 未实现、透明排序只分 pass。实际代码已经有 Legacy bake 和 mesh-level 排序。
+已完成：`weapon-render-pipeline.md` 已同步 Legacy ColorTable bake、mesh-level transparent sorting、GPU material bind group、顶点字段保留和剩余限制。
 
-- 更新管线文档的当前实现说明。
-- 把仍未完成的内容移入本文或专门的 roadmap，避免误导后续维护。
+- 后续 roadmap 仍以本文为准，避免把 prepared draw role、per-role sampler config 等未完成内容写成当前能力。
 
 验证：
 
