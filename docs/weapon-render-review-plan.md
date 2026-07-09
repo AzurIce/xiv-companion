@@ -59,7 +59,7 @@
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms；WGSL 当前把 detail color 与 UV scale 作为缺少真实 detail array 时的保守 tint fallback，真实 detail color/normal 贴图阵列仍未绑定。
 - `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 已按 Meddle `Names.cs` CRC/default 和 MeddleTools `ColorMapping` 结构化进 `ModelMaterial`、phantom summary 与 renderer uniforms；WGSL 已把 `g_DiffuseColor` 作为 base tint，把 `g_EmissiveColor` 作为附加发光，并在 mask/material 通道存在时保守加入 `g_MultiEmissiveColor`，`g_MultiDiffuseColor` 仍等待完整 multi map 通道解释。
 - `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `outlineParams` / `specularColorMask` / `surfaceParams` uniform；WGSL 已用 `g_SpecularColorMask` 调制高光颜色/强度，并用 `g_SSAOMask` 保守调制环境底光，outline、mip bias 和 shadow offset 仍未驱动实际行为。
-- `g_GlassIOR`、`g_GlassThicknessMax` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `glassParams` uniform；当前不直接改变 glass opacity、tint 或折射，避免在没有确认 shader-family 公式前误改透明效果。
+- `g_GlassIOR`、`g_GlassThicknessMax` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `glassParams` uniform；WGSL 当前把非默认 IOR/thickness 用作 glass tint、specular 与 rim fresnel 的轻量调节，不改变 glass opacity 或折射。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
 - `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已结构化进 `ModelMaterial` 和 phantom summary；renderer uniform 已传入 WGSL，`LightShaft` draw role 会启用保守的 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 和 `g_Ray` 强度近似。完整 MeddleTools 节点语义仍未复刻。
 - `g_Transparency` 已结构化进 `ModelMaterial.transparency` 和 phantom summary，默认 0.0，当前只作为 glass/transparency shader 后续实现的稳定输入；尚未直接改写 renderer opacity。
@@ -185,7 +185,7 @@
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[0.5,0.5,0.5,1]`、`[0.5,0.5,0.5,1]`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已进入 WGSL，当前在 detail id 或 detail color 非默认时做轻量 tint fallback，UV scale 只影响这个 fallback 的弱纹理感；真实 detail map / detail normal array 仍待后续绑定。
 - 已完成：`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 进入 `ModelMaterial`，默认值分别为白色、白色、黑色、黑色；renderer uniform 已进入 WGSL，当前 `g_DiffuseColor` 会调制 base，`g_EmissiveColor` 会加到 emissive，`g_MultiEmissiveColor` 只在 mask/material 通道存在时保守加权，`g_MultiDiffuseColor` 仍等待完整 multi map 通道解释。
 - 已完成：`g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 进入 `ModelMaterial`，默认值分别为黑色、`0`、白色、`1`、`0`、`0`；renderer uniform 已进入 WGSL，其中 `g_SpecularColorMask` 会调制高光颜色/强度，`g_SSAOMask` 会保守调制环境底光；outline、texture LOD 和 shadow offset 仍待后续实现。
-- 已完成：`g_GlassIOR`、`g_GlassThicknessMax` 进入 `ModelMaterial`，默认值分别为 `1`、`0.01`；renderer uniform 已预留 `glassParams`，但当前 WGSL 还没有用它们驱动 glass opacity、tint 或折射。
+- 已完成：`g_GlassIOR`、`g_GlassThicknessMax` 进入 `ModelMaterial`，默认值分别为 `1`、`0.01`；renderer uniform 已进入 WGSL，当前在非默认时轻量调节 glass tint、specular 与 rim fresnel；opacity、折射与真实厚度传输仍待后续 shader-family 语义确认。
 - 已完成：`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 进入 `ModelMaterial`，默认值分别为 `2`、`0`、`0.5`；renderer uniform 已进入 WGSL，其中 aperture/offset 非默认时会对非 glass/lightshaft alpha 做受限 shaping；shadow alpha 与 transparency opacity 仍待后续 shader-family 语义确认。
 - 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`，分别对应 UV0 与 UV1 scroll multiplier；renderer 已用 `ModelRenderOptions.uv_scroll_time` / camera uniform 驱动 WGSL 对 `uv0` / `uv1` 来源做保守滚动采样，后续仍需按 shader family 和节点连接决定具体哪些 texture role 使用 scroll UV。
 - 已完成：`lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 进入 `ModelMaterial`，默认值分别为白色、零动画、identity U/V 和零 ray；renderer uniform 已按 draw role 只对 lightShaft batch 启用保守消费，其中 `g_Color` 控制 additive tint/alpha，`g_TexAnim.xy` 驱动 UV 动画，`g_TexU/V` 作为 UV 仿射基向量，`g_Ray` 当前只作强度近似。
@@ -204,7 +204,7 @@
 - 已增加 detail focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；detail tint fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 shader color focused tests，覆盖 `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；WGSL 编译通过 native snapshot 验证。
 - 已增加 outline/specular/occlusion focused tests，覆盖 `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；`g_SpecularColorMask` / `g_SSAOMask` 的 WGSL 消费通过 native snapshot 编译验证。
-- 已增加 glass params focused tests，覆盖 `g_GlassIOR`、`g_GlassThicknessMax` 的 shader package default、material override、非 finite fallback 和 renderer uniform 预留。
+- 已增加 glass params focused tests，覆盖 `g_GlassIOR`、`g_GlassThicknessMax` 的 shader package default、material override、非 finite fallback 和 renderer uniform 传递；glass IOR/thickness 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 alpha params focused tests，覆盖 `g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 的 shader package default、material override、clamp、非 finite fallback 和 renderer uniform 传递；aperture/offset alpha shaping 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 UV scroll focused tests，覆盖 `g_UVScrollTime` / `0x9A696A17` 的 shader package default、material override、MeddleTools U 轴取反、renderer uniform 传递和默认时间稳定性。
 - 已增加 lightshaft focused tests，覆盖 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 的 shader package default、material override、renderer uniform 默认值和 LightShaft draw-role shader 开关。
@@ -540,7 +540,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：优先补染色输入链路。先把 `ColorDyeTable` 行语义、`stainingtemplate.stm`、EXD stain 参数和用户 stain 输入定义清楚，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
 2. 结果处理：把 stain、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
-3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale 和 alpha aperture/offset 已有保守 fallback，下一步顺序为 glass IOR/thickness 的轻量 fresnel/specular 调整；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
+3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset 和 glass IOR/thickness 已有保守 fallback，下一步顺序为 multi diffuse/detail normal 或 outline 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
 4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。
 
 ### 第一阶段：可审计和不误画
@@ -561,7 +561,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 已完成 GPU 顶点格式扩展；prepared UV source 和保守 scroll time 已进入 WGSL。后续让 shader-family 逻辑实际消费 `uv1-uv3`、`color1`、secondary tangent frame 和 flow。
 2. 已完成第一版 per-material texture/sampler config，renderer 已派生 color/data/nearest 三组 sampler。后续补 per-texture independent sampler、shader 级 clip/extend 和真实 tile/detail array 绑定。
-3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 已进入 renderer；`g_DiffuseColor`、`g_EmissiveColor`、`g_SpecularColorMask`、`g_SSAOMask`、sheen/sphere 常量、detail tint/UV 和 tile index/scale 已有第一版 WGSL 消费。后续继续补真实 tile array、multi diffuse/detail normal 和 shader-family-specific source/scroll 规则。
+3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 已进入 renderer；`g_DiffuseColor`、`g_EmissiveColor`、`g_SpecularColorMask`、`g_SSAOMask`、sheen/sphere 常量、detail tint/UV、tile index/scale、alpha aperture/offset 和 glass IOR/thickness 已有第一版 WGSL 消费。后续继续补真实 tile array、multi diffuse/detail normal 和 shader-family-specific source/scroll 规则。
 4. 已完成第一版 shader family 分类和 alpha policy/prepared pass 分类；后续把 character/glass/transparency/scroll/lightshaft/reflection 等 family 的关键节点拆成明确 WGSL 函数块，而不是继续扩大单个主 shader 分支。
 
 完成标准：

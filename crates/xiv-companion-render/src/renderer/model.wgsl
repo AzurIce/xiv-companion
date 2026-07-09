@@ -217,7 +217,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     }
     let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
     let specular_tint = mix(material_specular, base, metalness * 0.35);
-    let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55);
+    let glass_factors = resolve_glass_factors();
+    let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55 + glass_factors.y * 0.18);
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
     let ambient = mix(0.08, 0.22, ssao_mask);
     let glass_ambient = mix(0.06, 0.10, ssao_mask);
@@ -225,8 +226,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         + specular_tint * specular * specular_scale * 0.24
         + vec3<f32>(rim);
     let glass_lit = glass_tint * (glass_ambient + diffuse * 0.18)
-        + material_specular * specular * 0.65
-        + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0);
+        + material_specular * specular * (0.65 + glass_factors.z * 0.25)
+        + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
     let lit = select(opaque_lit, glass_lit, is_glass);
     let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
     let color = lit + extra_lit + emissive;
@@ -448,6 +449,12 @@ fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
     let exponent = clamp(2.0 / aperture, 0.25, 4.0);
     let shaped = pow(adjusted, exponent);
     return mix(raw_alpha, shaped, shaping_enabled);
+}
+
+fn resolve_glass_factors() -> vec3<f32> {
+    let ior_delta = clamp((clamp(material.glass_params.x, 1.0, 2.5) - 1.0) / 1.5, 0.0, 1.0);
+    let thickness_delta = clamp((max(material.glass_params.y, 0.0) - 0.01) * 8.0, 0.0, 1.0);
+    return vec3<f32>(ior_delta, thickness_delta, max(ior_delta, thickness_delta * 0.35));
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
