@@ -18,6 +18,7 @@ use xiv_companion::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
 };
+use xiv_companion_data::{MdlMeshMetadata, MdlMetadata, ModelBoneTable};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,12 +76,39 @@ struct MeshSummary {
     path: String,
     part_index: u32,
     mesh_category: Option<String>,
+    metadata_file: Option<String>,
+    submesh_index: Option<usize>,
+    submeshes: Vec<MeshSubmeshSummary>,
+    bone_table: Option<ModelBoneTable>,
+    shapes: Vec<MeshShapeSummary>,
     material_index: u16,
     material_slot: usize,
     material_name: String,
     vertex_count: usize,
     index_count: usize,
     bounds: ModelBounds,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeshSubmeshSummary {
+    table_index: usize,
+    index_offset: u32,
+    relative_index_offset: Option<i64>,
+    index_count: u32,
+    attribute_index_mask_hex: String,
+    attribute_names: Vec<String>,
+    bone_start_index: u16,
+    bone_count: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeshShapeSummary {
+    shape_index: usize,
+    name: Option<String>,
+    shape_mesh_index: usize,
+    shape_value_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +167,8 @@ struct ModelDebugFileSummary {
     submesh_count: Option<usize>,
     material_count: Option<usize>,
     attribute_count: Option<usize>,
+    bone_table_count: Option<usize>,
+    shape_count: Option<usize>,
     has_extra_lods: Option<bool>,
     error: Option<String>,
 }
@@ -307,7 +337,8 @@ fn render_case(
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
 
     let raw_files = dump_raw_files(resource, &model, &case_dir)?;
-    let model_debug_files = dump_model_debug(resource, &model, &case_dir)?;
+    let (model_debug_files, model_metadata_by_path) =
+        dump_model_debug(resource, &model, &case_dir)?;
     let material_debug_files = dump_material_debug(resource, &model, &case_dir)?;
     let material_debug_by_slot = material_debug_files
         .iter()
@@ -318,7 +349,7 @@ fn render_case(
         })
         .collect::<HashMap<_, _>>();
     let texture_summaries = dump_decoded_textures(&model, &case_dir)?;
-    let mesh_summaries = dump_meshes(&model, &case_dir)?;
+    let mesh_summaries = dump_meshes(&model, &case_dir, &model_metadata_by_path)?;
     let material_summaries = model
         .materials
         .iter()
@@ -436,12 +467,13 @@ fn dump_model_debug(
     resource: &mut SqPackResource,
     model: &WeaponModelData,
     case_dir: &Path,
-) -> Result<Vec<ModelDebugFileSummary>> {
+) -> Result<(Vec<ModelDebugFileSummary>, HashMap<String, MdlMetadata>)> {
     let model_dir = case_dir.join("models");
     fs::create_dir_all(&model_dir)
         .with_context(|| format!("failed to create {}", model_dir.display()))?;
 
     let mut summaries = Vec::new();
+    let mut metadata_by_path = HashMap::new();
     for resource_path in model
         .loaded_paths
         .iter()
@@ -455,6 +487,8 @@ fn dump_model_debug(
                 submesh_count: None,
                 material_count: None,
                 attribute_count: None,
+                bone_table_count: None,
+                shape_count: None,
                 has_extra_lods: None,
                 error: Some("model could not be read again from SqPack".to_string()),
             });
@@ -472,10 +506,13 @@ fn dump_model_debug(
                     submesh_count: Some(metadata.submeshes.len()),
                     material_count: Some(metadata.materials.len()),
                     attribute_count: Some(metadata.attributes.len()),
+                    bone_table_count: Some(metadata.bone_tables.len()),
+                    shape_count: Some(metadata.shapes.len()),
                     has_extra_lods: Some(metadata.model_header.has_extra_lods),
                     error: None,
                 };
                 write_json(&debug_path, &metadata)?;
+                metadata_by_path.insert(resource_path.clone(), metadata);
                 summaries.push(summary);
             }
             Err(error) => summaries.push(ModelDebugFileSummary {
@@ -485,13 +522,15 @@ fn dump_model_debug(
                 submesh_count: None,
                 material_count: None,
                 attribute_count: None,
+                bone_table_count: None,
+                shape_count: None,
                 has_extra_lods: None,
                 error: Some(format!("{error:#}")),
             }),
         }
     }
 
-    Ok(summaries)
+    Ok((summaries, metadata_by_path))
 }
 
 fn dump_material_debug(
@@ -653,7 +692,11 @@ fn texture_pixel_stats(texture: &ModelTexture) -> Option<TexturePixelStats> {
     })
 }
 
-fn dump_meshes(model: &WeaponModelData, case_dir: &Path) -> Result<Vec<MeshSummary>> {
+fn dump_meshes(
+    model: &WeaponModelData,
+    case_dir: &Path,
+    metadata_by_path: &HashMap<String, MdlMetadata>,
+) -> Result<Vec<MeshSummary>> {
     let mesh_dir = case_dir.join("meshes");
     fs::create_dir_all(&mesh_dir)
         .with_context(|| format!("failed to create {}", mesh_dir.display()))?;
@@ -668,18 +711,39 @@ fn dump_meshes(model: &WeaponModelData, case_dir: &Path) -> Result<Vec<MeshSumma
         summaries.push(mesh_summary(
             mesh,
             path_relative_to_case(&mesh_path, case_dir),
+            metadata_by_path,
         ));
     }
 
     Ok(summaries)
 }
 
-fn mesh_summary(mesh: &ModelMesh, mesh_file: String) -> MeshSummary {
+fn mesh_summary(
+    mesh: &ModelMesh,
+    mesh_file: String,
+    metadata_by_path: &HashMap<String, MdlMetadata>,
+) -> MeshSummary {
+    let resource_path = mesh_resource_path(&mesh.path);
+    let metadata = metadata_by_path.get(resource_path);
+    let submesh_index = mesh_submesh_index(&mesh.path);
+    let metadata_file =
+        metadata.map(|metadata| format!("models/{}.json", safe_resource_file(&metadata.path)));
+    let raw_mesh = metadata.and_then(|metadata| metadata.meshes.get(mesh.part_index as usize));
+
     MeshSummary {
         mesh_file,
         path: mesh.path.clone(),
         part_index: mesh.part_index,
         mesh_category: mesh.mesh_category.clone(),
+        metadata_file,
+        submesh_index,
+        submeshes: raw_mesh
+            .map(|raw_mesh| mesh_submesh_summaries(raw_mesh, submesh_index))
+            .unwrap_or_default(),
+        bone_table: mesh.bone_table.clone(),
+        shapes: metadata
+            .map(|metadata| mesh_shape_summaries(metadata, mesh.part_index as usize))
+            .unwrap_or_default(),
         material_index: mesh.material_index,
         material_slot: mesh.material_slot,
         material_name: mesh.material_name.clone(),
@@ -687,6 +751,70 @@ fn mesh_summary(mesh: &ModelMesh, mesh_file: String) -> MeshSummary {
         index_count: mesh.indices.len(),
         bounds: xiv_companion::calculate_model_bounds(std::slice::from_ref(mesh)),
     }
+}
+
+fn mesh_resource_path(mesh_path: &str) -> &str {
+    mesh_path
+        .split_once('#')
+        .map_or(mesh_path, |(path, _)| path)
+}
+
+fn mesh_submesh_index(mesh_path: &str) -> Option<usize> {
+    mesh_path
+        .split_once("#part-")
+        .and_then(|(_, fragment)| fragment.rsplit_once("-submesh-"))
+        .and_then(|(_, submesh)| submesh.parse().ok())
+}
+
+fn mesh_submesh_summaries(
+    mesh: &MdlMeshMetadata,
+    selected_submesh_index: Option<usize>,
+) -> Vec<MeshSubmeshSummary> {
+    let selected = selected_submesh_index
+        .and_then(|index| mesh.submeshes.get(index).map(std::slice::from_ref));
+
+    selected
+        .unwrap_or(mesh.submeshes.as_slice())
+        .iter()
+        .map(|submesh| MeshSubmeshSummary {
+            table_index: submesh.table_index,
+            index_offset: submesh.index_offset,
+            relative_index_offset: submesh.relative_index_offset,
+            index_count: submesh.index_count,
+            attribute_index_mask_hex: submesh.attribute_index_mask_hex.clone(),
+            attribute_names: submesh.attribute_names.clone(),
+            bone_start_index: submesh.bone_start_index,
+            bone_count: submesh.bone_count,
+        })
+        .collect()
+}
+
+fn mesh_shape_summaries(metadata: &MdlMetadata, mesh_index: usize) -> Vec<MeshShapeSummary> {
+    let Some(mesh) = metadata.meshes.get(mesh_index) else {
+        return Vec::new();
+    };
+
+    let mut summaries = Vec::new();
+    for shape in &metadata.shapes {
+        let start = usize::from(shape.shape_mesh_start_indices[0]);
+        let count = usize::from(shape.shape_mesh_counts[0]);
+        for shape_mesh_index in start..start.saturating_add(count) {
+            let Some(shape_mesh) = metadata.shape_meshes.get(shape_mesh_index) else {
+                continue;
+            };
+            if shape_mesh.mesh_index_offset != mesh.start_index {
+                continue;
+            }
+            summaries.push(MeshShapeSummary {
+                shape_index: shape.index,
+                name: shape.name.clone(),
+                shape_mesh_index,
+                shape_value_count: shape_mesh.shape_value_count,
+            });
+        }
+    }
+
+    summaries
 }
 
 fn material_summary(
