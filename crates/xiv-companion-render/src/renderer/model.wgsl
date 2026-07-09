@@ -17,6 +17,7 @@ struct Material {
     detail_params: vec4<f32>, // x: detail id, y: multi detail id
     detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
     detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
+    uv_scroll: vec4<f32>, // xy: uv0 scroll multiplier, zw: uv1 scroll multiplier
 };
 
 struct VertexInput {

@@ -314,6 +314,8 @@ pub struct ModelMaterial {
     pub detail_color_uv_scale: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
     pub detail_normal_uv_scale: [f32; 4],
+    #[serde(default)]
+    pub uv_scroll: [f32; 4],
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -1491,6 +1493,7 @@ mod color_table_bake_tests {
             multi_detail_id: 0.0,
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
+            uv_scroll: [0.0, 0.0, 0.0, 0.0],
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,

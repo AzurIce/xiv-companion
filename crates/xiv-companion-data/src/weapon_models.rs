@@ -42,6 +42,8 @@ const G_DETAIL_NORMAL_UV_SCALE: u32 = 0x025A_9BEE;
 #[cfg(feature = "game-data")]
 const G_MULTI_DETAIL_ID: u32 = 0xAC15_6136;
 #[cfg(feature = "game-data")]
+const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
+#[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
 #[cfg(feature = "game-data")]
@@ -1455,6 +1457,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
+        let uv_scroll = composed_material_uv_scroll(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -1502,6 +1505,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             multi_detail_id,
             detail_color_uv_scale,
             detail_normal_uv_scale,
+            uv_scroll,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -1919,6 +1923,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
+        let uv_scroll = composed_material_uv_scroll(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -1967,6 +1972,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             multi_detail_id,
             detail_color_uv_scale,
             detail_normal_uv_scale,
+            uv_scroll,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2723,6 +2729,12 @@ fn composed_material_detail_normal_uv_scale(semantics: &ComposedMaterialSemantic
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_uv_scroll(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    let raw = composed_material_finite_vec4_constant(semantics, G_UV_SCROLL_TIME, [0.0; 4]);
+    [-raw[0], raw[1], -raw[2], raw[3]]
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_finite_vec4_constant(
     semantics: &ComposedMaterialSemantics,
     constant_id: u32,
@@ -3113,6 +3125,7 @@ fn fallback_weapon_material(
         multi_detail_id: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
+        uv_scroll: [0.0, 0.0, 0.0, 0.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -4520,6 +4533,35 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_detail_normal_uv_scale(&semantics),
             [3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn composed_material_uv_scroll_uses_meddletools_multiplier_mapping() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package =
+            test_shpk_with_material_defaults(&[(G_UV_SCROLL_TIME, &[10.0, 20.0, 30.0, 40.0])]);
+
+        assert_eq!(composed_material_uv_scroll(&semantics), [0.0; 4]);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_uv_scroll(&semantics),
+            [-10.0, 20.0, -30.0, 40.0]
+        );
+
+        let material = test_mtrl_with_constant(G_UV_SCROLL_TIME, &[1.0, 2.0, 3.0, 4.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_uv_scroll(&semantics),
+            [-1.0, 2.0, -3.0, 4.0]
+        );
+
+        let material = test_mtrl_with_constant(G_UV_SCROLL_TIME, &[5.0, 6.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_uv_scroll(&semantics),
+            [-5.0, 6.0, 0.0, 0.0]
         );
     }
 

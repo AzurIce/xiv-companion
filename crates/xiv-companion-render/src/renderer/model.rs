@@ -1123,6 +1123,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         detail_params: material_detail_params(material),
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
+        uv_scroll: material_uv_scroll(material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1587,6 +1588,7 @@ fn fallback_material() -> ModelMaterial {
         multi_detail_id: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
+        uv_scroll: [0.0, 0.0, 0.0, 0.0],
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -1671,6 +1673,10 @@ fn material_detail_color_uv_scale(material: &ModelMaterial) -> [f32; 4] {
 
 fn material_detail_normal_uv_scale(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.detail_normal_uv_scale, [4.0; 4])
+}
+
+fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.uv_scroll, [0.0; 4])
 }
 
 fn finite_vec4_or(values: [f32; 4], default: [f32; 4]) -> [f32; 4] {
@@ -1783,6 +1789,7 @@ struct MaterialUniform {
     detail_params: [f32; 4],
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
+    uv_scroll: [f32; 4],
 }
 
 #[repr(C)]
@@ -2188,6 +2195,18 @@ mod tests {
             material_detail_normal_uv_scale(&material),
             [4.0, 3.0, 4.0, 4.0]
         );
+    }
+
+    #[test]
+    fn material_uv_scroll_preserves_scroll_multipliers() {
+        let mut material = fallback_material();
+        assert_eq!(material_uv_scroll(&material), [0.0; 4]);
+
+        material.uv_scroll = [-10.0, 20.0, -30.0, 40.0];
+        assert_eq!(material_uv_scroll(&material), [-10.0, 20.0, -30.0, 40.0]);
+
+        material.uv_scroll = [1.0, f32::NAN, f32::INFINITY, 2.0];
+        assert_eq!(material_uv_scroll(&material), [1.0, 0.0, 0.0, 2.0]);
     }
 
     #[test]
