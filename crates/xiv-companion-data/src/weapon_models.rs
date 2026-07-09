@@ -2099,13 +2099,32 @@ fn weapon_material_alpha_mode(
         WeaponMaterialAlphaMode::Glass
     } else if shader_flags & ENABLE_TRANSLUCENCY != 0 {
         WeaponMaterialAlphaMode::Blend
-    } else if alpha_test {
+    } else if alpha_test && apply_alpha_test_material_key_applies(&shader) {
         WeaponMaterialAlphaMode::Mask
     } else if texture_set.has_alpha {
         WeaponMaterialAlphaMode::Blend
     } else {
         WeaponMaterialAlphaMode::Opaque
     }
+}
+
+#[cfg(feature = "game-data")]
+fn apply_alpha_test_material_key_applies(shader_package_name: &str) -> bool {
+    let shader = shader_package_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(shader_package_name)
+        .to_ascii_lowercase();
+    matches!(
+        shader.as_str(),
+        "bg.shpk"
+            | "bgcolorchange.shpk"
+            | "bgcrestchange.shpk"
+            | "bgprop.shpk"
+            | "bguvscroll.shpk"
+            | "crystal.shpk"
+            | "lightshaft.shpk"
+    )
 }
 
 #[cfg(feature = "game-data")]
@@ -3831,15 +3850,28 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn alpha_test_prefers_mask_over_final_base_alpha() {
+    fn alpha_test_only_masks_supported_shader_packages() {
         let texture_set = WeaponTextureSet {
             has_alpha: true,
             ..Default::default()
         };
 
         assert_eq!(
-            weapon_material_alpha_mode("character.shpk", 0, &texture_set, true),
+            weapon_material_alpha_mode("bg.shpk", 0, &texture_set, true),
             WeaponMaterialAlphaMode::Mask
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("character.shpk", 0, &texture_set, true),
+            WeaponMaterialAlphaMode::Blend
+        );
+        assert_eq!(
+            weapon_material_alpha_mode(
+                "chara/weapon/material/character.shpk",
+                0,
+                &texture_set,
+                true
+            ),
+            WeaponMaterialAlphaMode::Blend
         );
     }
 
