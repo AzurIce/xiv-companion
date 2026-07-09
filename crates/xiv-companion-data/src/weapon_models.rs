@@ -77,16 +77,75 @@ pub trait AsyncGameResource {
 #[serde(rename_all = "camelCase")]
 pub struct MaterialDebugInfo {
     pub path: String,
+    pub file_header: Option<MaterialFileHeaderDebug>,
     pub shader_package_name: String,
+    pub shader_header: Option<MaterialShaderHeaderDebug>,
     pub shader_flags: u32,
     pub shader_flags_hex: String,
     pub texture_paths: Vec<String>,
+    pub texture_offsets: Vec<MaterialTextureOffsetDebug>,
+    pub uv_color_sets: Vec<MaterialNamedSetDebug>,
+    pub color_sets: Vec<MaterialNamedSetDebug>,
+    pub additional_data: Vec<u8>,
+    pub data_set_size: usize,
     pub shader_keys: Vec<MaterialShaderKeyDebug>,
+    pub shader_value_list_size: usize,
+    pub shader_value_count: usize,
     pub constants_debug: Vec<String>,
     pub samplers: Vec<MaterialSamplerDebug>,
     pub color_table: Option<MaterialColorTableDebug>,
     pub color_dye_table_kind: Option<String>,
     pub color_dye_table: Option<MaterialColorDyeTableDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialFileHeaderDebug {
+    pub version: u32,
+    pub version_hex: String,
+    pub file_size: u16,
+    pub data_set_size: u16,
+    pub string_table_size: u16,
+    pub shader_package_name_offset: u16,
+    pub texture_count: u8,
+    pub uv_set_count: u8,
+    pub color_set_count: u8,
+    pub additional_data_size: u8,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialShaderHeaderDebug {
+    pub shader_value_list_size: u16,
+    pub shader_key_count: u16,
+    pub constant_count: u16,
+    pub sampler_count: u16,
+    pub flags: u32,
+    pub flags_hex: String,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialTextureOffsetDebug {
+    pub index: usize,
+    pub offset: u16,
+    pub flags: u16,
+    pub flags_hex: String,
+    pub path: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialNamedSetDebug {
+    pub index: usize,
+    pub name_offset: u16,
+    pub set_index: u8,
+    pub unknown1: u8,
+    pub name: Option<String>,
 }
 
 #[cfg(feature = "game-data")]
@@ -107,6 +166,8 @@ pub struct MaterialSamplerDebug {
     pub texture_path: Option<String>,
     pub texture_usage: u32,
     pub texture_usage_hex: String,
+    pub flags: u32,
+    pub flags_hex: String,
     pub kind: Option<WeaponModelTextureKind>,
 }
 
@@ -507,13 +568,38 @@ pub fn material_debug_info_from_mtrl_bytes(
     let sampler_records =
         parse_material_sampler_records(bytes, &ComposedMaterialSemantics::default());
     let shader_flags = parse_material_shader_flags(bytes);
+    let low_level = material_low_level_debug(bytes, &material.texture_paths);
 
     Ok(MaterialDebugInfo {
         path: path.to_string(),
+        file_header: low_level.as_ref().map(|debug| debug.file_header.clone()),
         shader_package_name: material.shader_package_name.clone(),
+        shader_header: low_level
+            .as_ref()
+            .and_then(|debug| debug.shader_header.clone()),
         shader_flags,
         shader_flags_hex: hex_u32(shader_flags),
         texture_paths: material.texture_paths.clone(),
+        texture_offsets: low_level
+            .as_ref()
+            .map(|debug| debug.texture_offsets.clone())
+            .unwrap_or_default(),
+        uv_color_sets: low_level
+            .as_ref()
+            .map(|debug| debug.uv_color_sets.clone())
+            .unwrap_or_default(),
+        color_sets: low_level
+            .as_ref()
+            .map(|debug| debug.color_sets.clone())
+            .unwrap_or_default(),
+        additional_data: low_level
+            .as_ref()
+            .map(|debug| debug.additional_data.clone())
+            .unwrap_or_default(),
+        data_set_size: low_level
+            .as_ref()
+            .map(|debug| debug.data_set_size)
+            .unwrap_or_default(),
         shader_keys: material
             .shader_keys
             .iter()
@@ -524,6 +610,14 @@ pub fn material_debug_info_from_mtrl_bytes(
                 value_hex: hex_u32(key.value),
             })
             .collect(),
+        shader_value_list_size: low_level
+            .as_ref()
+            .map(|debug| debug.shader_value_list_size)
+            .unwrap_or_default(),
+        shader_value_count: low_level
+            .as_ref()
+            .map(|debug| debug.shader_value_count)
+            .unwrap_or_default(),
         constants_debug: material
             .constants
             .iter()
@@ -536,6 +630,8 @@ pub fn material_debug_info_from_mtrl_bytes(
                 texture_path: material.texture_paths.get(record.texture_index).cloned(),
                 texture_usage: record.texture_usage,
                 texture_usage_hex: hex_u32(record.texture_usage),
+                flags: record.flags,
+                flags_hex: hex_u32(record.flags),
                 kind: record.kind,
             })
             .collect(),
@@ -551,6 +647,176 @@ pub fn material_debug_info_from_mtrl_bytes(
 #[cfg(feature = "game-data")]
 fn hex_u32(value: u32) -> String {
     format!("0x{value:08x}")
+}
+
+#[cfg(feature = "game-data")]
+fn hex_u16(value: u16) -> String {
+    format!("0x{value:04x}")
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+struct MaterialLowLevelDebug {
+    file_header: MaterialFileHeaderDebug,
+    shader_header: Option<MaterialShaderHeaderDebug>,
+    texture_offsets: Vec<MaterialTextureOffsetDebug>,
+    uv_color_sets: Vec<MaterialNamedSetDebug>,
+    color_sets: Vec<MaterialNamedSetDebug>,
+    additional_data: Vec<u8>,
+    data_set_size: usize,
+    shader_value_list_size: usize,
+    shader_value_count: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn material_low_level_debug(
+    bytes: &[u8],
+    texture_paths: &[String],
+) -> Option<MaterialLowLevelDebug> {
+    let version = read_u32_le(bytes, 0)?;
+    let file_size = read_u16_le(bytes, 4)?;
+    let data_set_size = read_u16_le(bytes, 6)?;
+    let string_table_size = read_u16_le(bytes, 8)?;
+    let shader_package_name_offset = read_u16_le(bytes, 10)?;
+    let texture_count = *bytes.get(12)?;
+    let uv_set_count = *bytes.get(13)?;
+    let color_set_count = *bytes.get(14)?;
+    let additional_data_size = *bytes.get(15)?;
+
+    let mut offset = 16_usize;
+    let mut texture_offsets_raw = Vec::with_capacity(usize::from(texture_count));
+    for index in 0..usize::from(texture_count) {
+        let raw = read_u32_le(bytes, offset)?;
+        texture_offsets_raw.push((index, raw as u16, (raw >> 16) as u16));
+        offset = checked_advance(offset, 4, bytes.len())?;
+    }
+
+    let mut uv_color_sets_raw = Vec::with_capacity(usize::from(uv_set_count));
+    for index in 0..usize::from(uv_set_count) {
+        uv_color_sets_raw.push((
+            index,
+            read_u16_le(bytes, offset)?,
+            *bytes.get(offset + 2)?,
+            *bytes.get(offset + 3)?,
+        ));
+        offset = checked_advance(offset, 4, bytes.len())?;
+    }
+
+    let mut color_sets_raw = Vec::with_capacity(usize::from(color_set_count));
+    for index in 0..usize::from(color_set_count) {
+        color_sets_raw.push((
+            index,
+            read_u16_le(bytes, offset)?,
+            *bytes.get(offset + 2)?,
+            *bytes.get(offset + 3)?,
+        ));
+        offset = checked_advance(offset, 4, bytes.len())?;
+    }
+
+    let string_table = read_bytes(bytes, offset, usize::from(string_table_size))?;
+    offset = checked_advance(offset, usize::from(string_table_size), bytes.len())?;
+
+    let additional_data = read_bytes(bytes, offset, usize::from(additional_data_size))?.to_vec();
+    offset = checked_advance(offset, usize::from(additional_data_size), bytes.len())?;
+
+    offset = checked_advance(offset, usize::from(data_set_size), bytes.len())?;
+
+    let shader_header = if offset < bytes.len() {
+        let shader_value_list_size = read_u16_le(bytes, offset)?;
+        let shader_key_count = read_u16_le(bytes, offset + 2)?;
+        let constant_count = read_u16_le(bytes, offset + 4)?;
+        let sampler_count = read_u16_le(bytes, offset + 6)?;
+        let flags = read_u32_le(bytes, offset + 8)?;
+        let mut shader_offset = checked_advance(offset, 12, bytes.len())?;
+        shader_offset = checked_advance(
+            shader_offset,
+            usize::from(shader_key_count) * 8,
+            bytes.len(),
+        )?;
+        shader_offset =
+            checked_advance(shader_offset, usize::from(constant_count) * 8, bytes.len())?;
+        shader_offset =
+            checked_advance(shader_offset, usize::from(sampler_count) * 12, bytes.len())?;
+        checked_advance(
+            shader_offset,
+            usize::from(shader_value_list_size),
+            bytes.len(),
+        )?;
+
+        Some(MaterialShaderHeaderDebug {
+            shader_value_list_size,
+            shader_key_count,
+            constant_count,
+            sampler_count,
+            flags,
+            flags_hex: hex_u32(flags),
+        })
+    } else {
+        None
+    };
+
+    let texture_offsets = texture_offsets_raw
+        .into_iter()
+        .map(|(index, string_offset, flags)| MaterialTextureOffsetDebug {
+            index,
+            offset: string_offset,
+            flags,
+            flags_hex: hex_u16(flags),
+            path: read_string_at(string_table, usize::from(string_offset))
+                .or_else(|| texture_paths.get(index).cloned()),
+        })
+        .collect();
+    let uv_color_sets = uv_color_sets_raw
+        .into_iter()
+        .map(
+            |(index, name_offset, set_index, unknown1)| MaterialNamedSetDebug {
+                index,
+                name_offset,
+                set_index,
+                unknown1,
+                name: read_string_at(string_table, usize::from(name_offset)),
+            },
+        )
+        .collect();
+    let color_sets = color_sets_raw
+        .into_iter()
+        .map(
+            |(index, name_offset, set_index, unknown1)| MaterialNamedSetDebug {
+                index,
+                name_offset,
+                set_index,
+                unknown1,
+                name: read_string_at(string_table, usize::from(name_offset)),
+            },
+        )
+        .collect();
+    let shader_value_list_size = shader_header
+        .as_ref()
+        .map(|header| usize::from(header.shader_value_list_size))
+        .unwrap_or_default();
+
+    Some(MaterialLowLevelDebug {
+        file_header: MaterialFileHeaderDebug {
+            version,
+            version_hex: hex_u32(version),
+            file_size,
+            data_set_size,
+            string_table_size,
+            shader_package_name_offset,
+            texture_count,
+            uv_set_count,
+            color_set_count,
+            additional_data_size,
+        },
+        shader_header,
+        texture_offsets,
+        uv_color_sets,
+        color_sets,
+        additional_data,
+        data_set_size: usize::from(data_set_size),
+        shader_value_list_size,
+        shader_value_count: shader_value_list_size / 4,
+    })
 }
 
 #[cfg(feature = "game-data")]
@@ -1573,6 +1839,7 @@ struct MaterialSamplerRole {
 struct MaterialSamplerRecord {
     texture_index: usize,
     texture_usage: u32,
+    flags: u32,
     kind: Option<WeaponModelTextureKind>,
 }
 
@@ -2284,6 +2551,9 @@ fn parse_material_sampler_records(
         let Some(texture_usage) = read_u32_le(bytes, sampler_offset) else {
             return records;
         };
+        let Some(flags) = read_u32_le(bytes, sampler_offset + 4) else {
+            return records;
+        };
         let Some(texture_index) = bytes.get(sampler_offset + 8).copied().map(usize::from) else {
             return records;
         };
@@ -2291,6 +2561,7 @@ fn parse_material_sampler_records(
             records.push(MaterialSamplerRecord {
                 texture_index,
                 texture_usage,
+                flags,
                 kind: semantics.sampler_kind(texture_usage),
             });
         }
@@ -2693,6 +2964,23 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 #[cfg(feature = "game-data")]
+fn read_bytes(bytes: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
+    bytes.get(offset..offset.checked_add(len)?)
+}
+
+#[cfg(feature = "game-data")]
+fn read_string_at(bytes: &[u8], offset: usize) -> Option<String> {
+    let bytes = bytes.get(offset..)?;
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..end])
+        .ok()
+        .map(ToString::to_string)
+}
+
+#[cfg(feature = "game-data")]
 fn read_u32_usize(bytes: &[u8], offset: usize) -> Option<usize> {
     usize::try_from(read_u32_le(bytes, offset)?).ok()
 }
@@ -2850,6 +3138,77 @@ mod weapon_material_tests {
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 0);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Index);
+    }
+
+    #[test]
+    fn parse_material_sampler_records_preserves_sampler_flags() {
+        let texture_usage = physis::shpk::ShaderPackage::crc("g_SamplerNormal");
+        let mut bytes = vec![0; 16];
+        bytes[12] = 1;
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x10_u32.to_le_bytes());
+        bytes.extend_from_slice(&texture_usage.to_le_bytes());
+        bytes.extend_from_slice(&0x1234_5678_u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 3]);
+
+        let records = parse_material_sampler_records(&bytes, &ComposedMaterialSemantics::default());
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].texture_usage, texture_usage);
+        assert_eq!(records[0].flags, 0x1234_5678);
+        assert_eq!(records[0].texture_index, 0);
+    }
+
+    #[test]
+    fn material_low_level_debug_preserves_meddle_mtrl_fields() {
+        let bytes = test_mtrl_with_low_level_fields();
+        let debug = material_low_level_debug(&bytes, &[]).expect("debug info");
+
+        assert_eq!(debug.file_header.version, 0x0103_0000);
+        assert_eq!(debug.file_header.version_hex, "0x01030000");
+        assert_eq!(debug.file_header.file_size, bytes.len() as u16);
+        assert_eq!(debug.file_header.data_set_size, 3);
+        assert_eq!(debug.file_header.texture_count, 1);
+        assert_eq!(debug.file_header.uv_set_count, 1);
+        assert_eq!(debug.file_header.color_set_count, 1);
+        assert_eq!(debug.file_header.additional_data_size, 2);
+
+        assert_eq!(debug.texture_offsets.len(), 1);
+        assert_eq!(debug.texture_offsets[0].offset, 0);
+        assert_eq!(debug.texture_offsets[0].flags, 0x00f0);
+        assert_eq!(debug.texture_offsets[0].flags_hex, "0x00f0");
+        assert_eq!(
+            debug.texture_offsets[0].path.as_deref(),
+            Some("texture/base.tex")
+        );
+
+        assert_eq!(debug.uv_color_sets.len(), 1);
+        assert_eq!(debug.uv_color_sets[0].name.as_deref(), Some("uv0"));
+        assert_eq!(debug.uv_color_sets[0].set_index, 2);
+        assert_eq!(debug.uv_color_sets[0].unknown1, 3);
+
+        assert_eq!(debug.color_sets.len(), 1);
+        assert_eq!(debug.color_sets[0].name.as_deref(), Some("color0"));
+        assert_eq!(debug.color_sets[0].set_index, 4);
+        assert_eq!(debug.color_sets[0].unknown1, 5);
+
+        assert_eq!(debug.additional_data, vec![0x30, 0x05]);
+        assert_eq!(debug.data_set_size, 3);
+
+        let shader_header = debug.shader_header.expect("shader header");
+        assert_eq!(shader_header.shader_value_list_size, 8);
+        assert_eq!(shader_header.shader_key_count, 1);
+        assert_eq!(shader_header.constant_count, 1);
+        assert_eq!(shader_header.sampler_count, 1);
+        assert_eq!(shader_header.flags, 0x11);
+        assert_eq!(shader_header.flags_hex, "0x00000011");
+        assert_eq!(debug.shader_value_list_size, 8);
+        assert_eq!(debug.shader_value_count, 2);
     }
 
     #[test]
@@ -3436,6 +3795,62 @@ mod weapon_material_tests {
         for value in values {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        bytes
+    }
+
+    fn test_mtrl_with_low_level_fields() -> Vec<u8> {
+        let mut strings = Vec::new();
+        let texture_offset = strings.len() as u16;
+        strings.extend_from_slice(b"texture/base.tex\0");
+        let shader_package_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"character.shpk\0");
+        let uv_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"uv0\0");
+        let color_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"color0\0");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0103_0000_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&(strings.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&shader_package_name_offset.to_le_bytes());
+        bytes.push(1);
+        bytes.push(1);
+        bytes.push(1);
+        bytes.push(2);
+
+        let packed_texture_offset = u32::from(texture_offset) | (0x00f0_u32 << 16);
+        bytes.extend_from_slice(&packed_texture_offset.to_le_bytes());
+        bytes.extend_from_slice(&uv_name_offset.to_le_bytes());
+        bytes.push(2);
+        bytes.push(3);
+        bytes.extend_from_slice(&color_name_offset.to_le_bytes());
+        bytes.push(4);
+        bytes.push(5);
+        bytes.extend_from_slice(&strings);
+        bytes.extend_from_slice(&[0x30, 0x05]);
+        bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+        bytes.extend_from_slice(&8_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x11_u32.to_le_bytes());
+        bytes.extend_from_slice(&0xAAAA_0001_u32.to_le_bytes());
+        bytes.extend_from_slice(&0xBBBB_0002_u32.to_le_bytes());
+        bytes.extend_from_slice(&G_ALPHA_THRESHOLD.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&physis::shpk::ShaderPackage::crc("g_SamplerNormal").to_le_bytes());
+        bytes.extend_from_slice(&0x1234_5678_u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 3]);
+        bytes.extend_from_slice(&0.25_f32.to_le_bytes());
+        bytes.extend_from_slice(&0.5_f32.to_le_bytes());
+
+        let file_size = bytes.len() as u16;
+        bytes[4..6].copy_from_slice(&file_size.to_le_bytes());
         bytes
     }
 
