@@ -1,7 +1,7 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
-    options: vec4<f32>, // x: normal mapping, y: normal y sign
+    options: vec4<f32>, // x: normal mapping, y: normal y sign, z: uv scroll time
 };
 
 struct Material {
@@ -310,7 +310,7 @@ fn resolve_uv(input: VertexOutput, source: f32) -> vec2<f32> {
         return input.uv2;
     }
     if source > 0.5 {
-        return input.uv1;
+        return input.uv1 + material.uv_scroll.zw * camera.options.z;
     }
-    return input.uv0;
+    return input.uv0 + material.uv_scroll.xy * camera.options.z;
 }

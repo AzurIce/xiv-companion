@@ -698,11 +698,13 @@ fn start_weapon_render_loop(
     let callback_slot_for_loop = callback_slot.clone();
     let renderer_for_loop = renderer.clone();
 
-    *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |_time_ms: f64| {
+    *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
         let connected = {
             let mut renderer = renderer_for_loop.borrow_mut();
             if renderer.canvas_connected() {
-                renderer.render_with_options(render_options());
+                let mut options = render_options();
+                options.uv_scroll_time = (time_ms as f32) / 1000.0;
+                renderer.render_with_options(options);
                 true
             } else {
                 false

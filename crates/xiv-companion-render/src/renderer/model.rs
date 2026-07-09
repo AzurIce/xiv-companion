@@ -14,6 +14,7 @@ pub struct ModelRenderOptions {
     pub normal_y_sign: f32,
     pub bloom: bool,
     pub bloom_strength: f32,
+    pub uv_scroll_time: f32,
 }
 
 impl Default for ModelRenderOptions {
@@ -23,6 +24,7 @@ impl Default for ModelRenderOptions {
             normal_y_sign: -1.0,
             bloom: true,
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
+            uv_scroll_time: 0.0,
         }
     }
 }
@@ -34,6 +36,11 @@ impl ModelRenderOptions {
             normal_y_sign: if self.normal_y_sign < 0.0 { -1.0 } else { 1.0 },
             bloom: self.bloom,
             bloom_strength: self.bloom_strength.clamp(0.0, 2.0),
+            uv_scroll_time: if self.uv_scroll_time.is_finite() {
+                self.uv_scroll_time
+            } else {
+                0.0
+            },
         }
     }
 
@@ -1810,7 +1817,7 @@ fn camera_uniform(
         options: [
             if options.normal_mapping { 1.0 } else { 0.0 },
             options.normal_y_sign,
-            0.0,
+            options.uv_scroll_time,
             0.0,
         ],
     }
@@ -2108,6 +2115,20 @@ mod tests {
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_opaque_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.uses_transparent_pipeline());
         assert!(!PreparedRenderPass::AdditiveLightShaft.sorts_back_to_front());
+    }
+
+    #[test]
+    fn camera_uniform_preserves_finite_uv_scroll_time() {
+        let mut options = ModelRenderOptions {
+            uv_scroll_time: 12.5,
+            ..ModelRenderOptions::default()
+        };
+        let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
+        assert_eq!(uniform.options[2], 12.5);
+
+        options.uv_scroll_time = f32::NAN;
+        let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
+        assert_eq!(uniform.options[2], 0.0);
     }
 
     #[test]

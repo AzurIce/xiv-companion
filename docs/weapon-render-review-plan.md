@@ -47,14 +47,14 @@
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已先区分 color sampler 与 data sampler。
 - `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总，`usesDye` 仍保守为 false，等待染色入口。
-- `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties 与 ColorTable extra maps 的采样 UV，但当前 source 规则仍基本保守为 `uv0`。
+- `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties 与 ColorTable extra maps 的采样 UV，并会按 render time 对 `uv0` / `uv1` 来源叠加已解析的 scroll multiplier；当前 source 规则仍基本保守为 `uv0`，scroll 也尚未做到节点级 texture-role 路由。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`，当前作为后续 multi/detail normal 组合的稳定输入，尚未改变 fragment shader 的实际法线混合。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`，当前作为后续 tile array / UV repeat 逻辑的稳定输入，尚未驱动实际 tile 贴图选择。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms，当前作为后续 detail color/normal 采样的稳定输入，尚未驱动实际 detail map 采样。
-- `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform，当前保存 UV0/UV1 scroll multiplier，尚未引入 time uniform 或实际滚动采样。
+- `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，WGSL 会对 `uv0` / `uv1` 来源叠加 UV0/UV1 scroll multiplier，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。
 
 主要缺口集中在：
 
@@ -121,14 +121,14 @@
 主要不足：
 
 - 没有独立 cutout/glass/additive-lightshaft pipeline；`AdditiveLightShaft` 只存在于 prepared pass，renderer 主 pass 仍过滤它。
-- 多套 UV、secondary tangent frame、`color1`、flow、detail/multi maps、UV scroll 参数、tile/detail arrays 还没有真正参与 shading。
+- 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；secondary tangent frame、`color1`、flow、detail/multi maps、tile/detail arrays 还没有真正参与 shading，scroll 仍缺少 shader node 级别的 texture-role 路由。
 - alpha/glass/transparency 仍是经验近似：glass opacity 固定范围，transparency/reflection/stockings/tattoo/occlusion 没有 family-specific WGSL 行为。
 - renderer 缺少 debug view，后续对照 MeddleTools bake 输出时仍难快速判断是 UV、sampler、ColorTable、alpha 还是 shader family 分支的问题。
 
 计划：
 
 1. 先让 prepared pass 真正分管 pipeline：独立 cutout、transparent/glass、additive lightshaft，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
-2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择已接入，后续优先 scroll UV/time、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
+2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：UV source 选择和保守 scroll time 已接入，后续优先补 shader-family-specific scroll 路由、tile matrix/tile index、detail map、flow，再做 secondary normal/bitangent。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
 4. 增加 debug render modes：base、normal、mask/material、specular、emissive、alpha、mesh category、UV set、ColorTable row index，作为真实武器样本回归的主要判断工具。
 
@@ -170,7 +170,7 @@
 - 已完成：`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 进入 `ModelMaterial`，默认 1.0，材质 override 优先于 shader package default；renderer uniform 已预留 y/z/w 三个通道并 clamp 到 0..4，但当前 WGSL 仍只消费 `normalScale`。
 - 已完成：`g_TileIndex`、`g_TileAlpha`、`g_TileScale` 进入 `ModelMaterial`，默认值分别为 `0`、`1`、`[16,16]`；renderer uniform 已预留 `tileParams`，但当前 WGSL 仍只使用 ColorTable extra tile ramp 的第一版高光调制，没有实际选择 tile array。
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[4,4,4,4]`、`[4,4,4,4]`；renderer uniform 已预留 detail id 与 primary/multi UV scale，但当前 WGSL 还没有绑定或采样 detail map。
-- 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`，分别对应 UV0 与 UV1 scroll multiplier；renderer uniform 已预留，但当前 WGSL 还没有 time uniform 或滚动 UV 采样。
+- 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`，分别对应 UV0 与 UV1 scroll multiplier；renderer 已用 `ModelRenderOptions.uv_scroll_time` / camera uniform 驱动 WGSL 对 `uv0` / `uv1` 来源做保守滚动采样，后续仍需按 shader family 和节点连接决定具体哪些 texture role 使用 scroll UV。
 
 后续优先参数：
 
@@ -182,7 +182,7 @@
 - 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp。
 - 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 预留。
 - 已增加 detail UV focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override 和 renderer uniform 预留。
-- 已增加 UV scroll focused tests，覆盖 `g_UVScrollTime` / `0x9A696A17` 的 shader package default、material override、MeddleTools U 轴取反和 renderer uniform 预留。
+- 已增加 UV scroll focused tests，覆盖 `g_UVScrollTime` / `0x9A696A17` 的 shader package default、material override、MeddleTools U 轴取反、renderer uniform 传递和默认时间稳定性。
 - 用本地 SqPack 样本输出 material debug，对照 MeddleTools `node_configs.py` 中对应 mapping。
 
 ### P1: 处理染色数据入口
@@ -316,7 +316,7 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 - base/color map
 - normal map + normal scale：`g_NormalScale` 已实际用于 primary normal；`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已进入数据/renderer 参数，后续需要接入 shader-family-specific normal map 组合
 - mask/material map 的通道解释
-- multi map/detail map 的第二层颜色/法线影响；tile select、detail UV 和 UV scroll 参数已进入数据/renderer 参数，后续需要接入 tile array、detail map、time uniform 与滚动 UV 采样
+- multi map/detail map 的第二层颜色/法线影响；tile select、detail UV 和 UV scroll 参数已进入数据/renderer 参数，scroll time 已接入保守滚动采样，后续需要接入 tile array、detail map 与 shader-family-specific scroll 路由
 - vertex color 的具体启用条件
 
 然后再支持：
@@ -360,13 +360,13 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 - `normal1` / `bitangent1`，缺省回落到 primary normal/bitangent
 - `flow0` / `flow1`，缺省为零，用于后续 scroll 或特殊 shader
 
-当前仍保持现有视觉行为：fragment shader 已按 prepared UV source 选择 texture-role 采样 UV，但 source 规则仍基本默认 `uv0`，并且 primary normal/bitangent 与 `color0` 仍是主要着色输入。后续按 shader family、UV source 和 feature flag 决定何时让 `uv1-uv3` 产生差异、以及何时消费 `color1`、secondary tangent frame 和 flow，避免一次性改变太多材质表现。
+当前仍保持近似视觉行为：fragment shader 已按 prepared UV source 选择 texture-role 采样 UV，并会用 render time 对 `uv0` / `uv1` 来源做保守 scroll 偏移；source 规则仍基本默认 `uv0`，并且 primary normal/bitangent 与 `color0` 仍是主要着色输入。后续按 shader family、UV source 和 feature flag 决定何时让 `uv1-uv3` 产生差异、哪些 texture role 使用 scroll UV，以及何时消费 `color1`、secondary tangent frame 和 flow。
 
 验证：
 
 - 已增加单元测试 `GpuVertex::layout` stride/offset。
 - 已增加 flatten 单元测试，确认 `ModelVertex` 的扩展字段不会在 CPU -> GPU 顶点转换时丢失，并覆盖 optional 字段 fallback。
-- renderer 已把 `uv1-uv3` 传入 fragment，并按 prepared UV source uniform 选择各 texture role 的采样 UV；后续仍需要 synthetic model 渲染不同 UV 层贴图，确认 shader-family-specific source 规则能产生可见差异。
+- renderer 已把 `uv1-uv3` 传入 fragment，并按 prepared UV source uniform 选择各 texture role 的采样 UV；`uv0` / `uv1` 来源已可按 render time 应用 scroll multiplier。后续仍需要 synthetic model 渲染不同 UV 层与 scroll 路由贴图，确认 shader-family-specific source 规则能产生可见差异。
 
 ### P0: 按 prepared draw role 分 pass
 
@@ -512,7 +512,7 @@ WebGPU bind group 已支持每材质 color/data 两个 sampler；后续若直接
 
 1. 已完成 GPU 顶点格式扩展，后续让 shader-family 逻辑实际消费 uv1/color1/flow。
 2. 增加 per-material texture/sampler config。
-3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；prepared UV source 已驱动采样选择，后续让 tile array 和 shader-family-specific source 规则真正参与。
+3. material/tile/sheen/sphere/tile-matrix 已进入 renderer；prepared UV source 和保守 scroll time 已驱动采样选择，后续让 tile array 和 shader-family-specific source/scroll 规则真正参与。
 4. 加入 shader family 和 alpha policy。
 
 完成标准：
