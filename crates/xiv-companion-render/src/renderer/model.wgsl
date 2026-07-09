@@ -168,7 +168,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let gloss_strength = clamp(properties.z, 0.0, 1.0);
     let specular_strength = clamp(properties.w, 0.0, 1.0);
     let extra = resolve_extra_properties(input);
-    let tile_specular_scale = mix(1.0, mix(0.88, 1.16, extra.tile.y), extra.flags.x);
+    let tile_specular_scale = resolve_tile_specular_scale(input, extra);
     let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
     let specular_scale = specular_strength
         * mix(1.0, mask.r * 1.35, material.params.w)
@@ -409,6 +409,28 @@ fn resolve_extra_lighting(
     let matrix_term = clamp(length(matrix_delta) * 0.16, 0.0, 0.18) * extra.flags.w;
 
     return sheen_color + sphere_tint * sphere_term + material_specular * matrix_term * 0.18;
+}
+
+fn resolve_tile_specular_scale(input: VertexOutput, extra: ExtraProperties) -> f32 {
+    let ramp_tile_alpha = clamp(extra.tile.y, 0.0, 1.0);
+    let ramp_scale = mix(1.0, mix(0.88, 1.16, ramp_tile_alpha), extra.flags.x);
+
+    let shader_tile_alpha = clamp(material.tile_params.y, 0.0, 1.0);
+    let tile_repeat = max(abs(material.tile_params.zw), vec2<f32>(0.001));
+    let repeat_delta = length((tile_repeat - vec2<f32>(16.0)) / 16.0);
+    let shader_tile_enabled = select(
+        0.0,
+        1.0,
+        abs(material.tile_params.x) > 0.001 ||
+            abs(shader_tile_alpha - 1.0) > 0.001 ||
+            repeat_delta > 0.001,
+    );
+    let tile_uv = resolve_uv(input, material.uv_sources2.x) * tile_repeat;
+    let tile_phase = dot(tile_uv, vec2<f32>(1.0, 0.618)) + material.tile_params.x * 0.137;
+    let tile_pattern = 0.5 + 0.5 * sin(tile_phase * 6.2831853);
+    let shader_alpha_scale = mix(0.97, 1.03, shader_tile_alpha);
+    let shader_pattern_scale = mix(0.98, 1.02, tile_pattern);
+    return ramp_scale * mix(1.0, shader_alpha_scale * shader_pattern_scale, shader_tile_enabled);
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {
