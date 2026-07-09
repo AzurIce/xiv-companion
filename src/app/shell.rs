@@ -2,13 +2,14 @@ use dioxus::prelude::*;
 
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, module_group_label};
-use crate::app::pages::{CraftingPage, NotesPage, WorkspacePage};
+use crate::app::pages::{CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Workspace,
     Crafting,
     Notes,
+    WeaponModels,
 }
 
 impl Route {
@@ -28,6 +29,7 @@ impl Route {
         match path {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
+            "/weapon-models" => Route::WeaponModels,
             _ => Route::Workspace,
         }
     }
@@ -37,6 +39,7 @@ impl Route {
             Route::Workspace => "/",
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
+            Route::WeaponModels => "/weapon-models",
         }
     }
 
@@ -45,6 +48,7 @@ impl Route {
             Route::Workspace => "工作台",
             Route::Crafting => "合成检索",
             Route::Notes => "笔记",
+            Route::WeaponModels => "武器模型",
         }
     }
 }
@@ -72,6 +76,7 @@ fn navigate(route: Route) {
 fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
+        "weapon-models" => IconKind::Sword,
         "crafting" => IconKind::Wrench,
         _ => IconKind::Wrench,
     }
@@ -238,20 +243,22 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                     collapsed: collapsed(),
                 }
 
-                section { class: "mb-5 mt-4",
-                    if !collapsed() {
-                        div { class: "mb-2 px-3 text-xs font-medium text-muted-foreground",
-                            "{module_group_label(ModuleGroup::Tools)}"
+                for group in [ModuleGroup::Tools, ModuleGroup::Preview] {
+                    section { class: "mb-5 mt-4",
+                        if !collapsed() {
+                            div { class: "mb-2 px-3 text-xs font-medium text-muted-foreground",
+                                "{module_group_label(group)}"
+                            }
                         }
-                    }
-                    nav { class: "space-y-1", aria_label: module_group_label(ModuleGroup::Tools),
-                        for module in APP_MODULES {
-                            NavButton {
-                                label: module.label,
-                                route: Route::from_path(module.href),
-                                active: current.path() == module.href,
-                                icon: module_icon(module.id),
-                                collapsed: collapsed(),
+                        nav { class: "space-y-1", aria_label: module_group_label(group),
+                            for module in APP_MODULES.iter().filter(move |module| module.group == group) {
+                                NavButton {
+                                    label: module.label,
+                                    route: Route::from_path(module.href),
+                                    active: current.path() == module.href,
+                                    icon: module_icon(module.id),
+                                    collapsed: collapsed(),
+                                }
                             }
                         }
                     }
@@ -311,6 +318,7 @@ fn PageContent(current: Route) -> Element {
             Route::Workspace => rsx! { WorkspacePage {} },
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
+            Route::WeaponModels => rsx! { WeaponModelsPage {} },
         }
     }
 }

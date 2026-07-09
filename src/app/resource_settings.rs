@@ -143,7 +143,10 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
         settings.craft_data_preference().to_policy(),
     );
     if cfg!(target_arch = "wasm32") {
-        hub.set_policy(ItemIconKind.into(), SourcePolicy::Fixed(ResourceSource::Builtin));
+        hub.set_policy(
+            ItemIconKind.into(),
+            SourcePolicy::Fixed(ResourceSource::Builtin),
+        );
     } else {
         hub.set_policy(
             ItemIconKind.into(),

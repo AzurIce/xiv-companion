@@ -6,12 +6,15 @@ mod data;
 mod icons;
 mod load_progress;
 mod log;
+#[cfg(target_arch = "wasm32")]
+mod model_canvas_renderer;
 mod modules;
 mod pages;
 mod resource_settings;
 mod resources;
 mod shell;
 mod ui;
+mod user_local_directory;
 mod utils;
 
 use shell::{AppShell, Route};

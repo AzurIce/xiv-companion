@@ -6,6 +6,7 @@ use std::pin::Pin;
 
 pub mod craft_data;
 pub mod item_icon;
+pub mod weapon_model;
 
 pub type ResourceFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 

@@ -6,16 +6,17 @@ use dioxus::prelude::*;
 
 use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
-    load_resource_settings,
 };
 use xiv_companion::{
     CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
-    CraftTreeNode, ItemIconResourceInfo, ItemSource, MaterialSummary, ResourceSource, SourceChoice,
-    build_craft_tree, builtin_icon_urls, craftable_recipes as planner_craftable_recipes,
-    create_craft_data_index, default_source_index as planner_default_source_index,
-    get_item as planner_get_item, get_item_name as planner_get_item_name,
-    resolve_source as planner_resolve_source, source_label as planner_source_label,
-    source_priority as planner_source_priority, summarize_materials as planner_summarize_materials,
+    CraftTreeNode, ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
+    ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem, WeaponCatalogPackage,
+    WeaponCatalogResource, WeaponModelData, WeaponModelId, WeaponModelResource, build_craft_tree,
+    craftable_recipes as planner_craftable_recipes, create_craft_data_index,
+    default_source_index as planner_default_source_index, get_item as planner_get_item,
+    get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
+    source_label as planner_source_label, source_priority as planner_source_priority,
+    summarize_materials as planner_summarize_materials,
 };
 
 pub const CRAFT_TYPE_NAMES: [&str; 8] = [
@@ -76,6 +77,27 @@ pub async fn load_craft_data() -> Result<Rc<CraftDataPackage>, String> {
     Ok(Rc::new(data))
 }
 
+pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<WeaponCatalogResource>(WeaponCatalogId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
+    let data = configured_web_resource_hub()
+        .load::<WeaponModelResource>(WeaponModelId {
+            item_id: item.id,
+            item_name: item.name,
+            model_main: item.model_main,
+            model_sub: item.model_sub,
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
 pub fn create_craft_data_engine(data: Rc<CraftDataPackage>) -> CraftDataEngine {
     CraftDataEngine {
         index: Rc::new(create_craft_data_index(&data)),
@@ -101,22 +123,24 @@ pub fn get_item_name(data: &CraftDataPackage, item_id: u32) -> String {
 }
 
 pub async fn load_item_icon(icon_id: u32) -> Result<ItemIconResourceInfo, String> {
-    let settings = load_resource_settings();
-    let settings_key = serde_json::to_string(&settings).unwrap_or_default();
-    let cache_key = format!("{}|{}", icon_id, settings_key);
+    let settings = crate::app::resource_settings::load_resource_settings();
+    let cache_key = format!(
+        "{}|{}",
+        icon_id,
+        serde_json::to_string(&settings).unwrap_or_default()
+    );
     if let Some(info) = ITEM_ICON_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
         return Ok(info);
     }
 
-    let info = ItemIconResourceInfo {
-        icon_id,
-        urls: builtin_icon_urls(icon_id),
-        local_image: None,
-    };
+    let loaded = crate::app::resource_settings::configured_web_resource_hub()
+        .load_with_source::<ItemIconResource>(ItemIconId { icon_id })
+        .await
+        .map_err(|error| error.to_string())?;
     ITEM_ICON_CACHE.with(|cache| {
-        cache.borrow_mut().insert(cache_key, info.clone());
+        cache.borrow_mut().insert(cache_key, loaded.value.clone());
     });
-    Ok(info)
+    Ok(loaded.value)
 }
 
 pub fn clear_item_icon_cache() {

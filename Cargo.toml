@@ -10,26 +10,38 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-game-data = ["dep:anyhow", "dep:binrw", "dep:flate2", "dep:physis"]
+game-data = [
+    "dep:anyhow",
+    "dep:binrw",
+    "dep:flate2",
+    "dep:physis",
+    "xiv-companion-data/game-data",
+]
+renderer = ["xiv-companion-render/renderer"]
+render-test-support = ["renderer", "xiv-companion-render/test-support"]
 web = [
     "game-data",
+    "renderer",
     "dep:console_error_panic_hook",
     "dep:dioxus",
-    "dep:dioxus-free-icons",
     "dep:gloo-net",
     "dep:indexed-db",
     "dep:js-sys",
     "dep:raphael-simulator",
     "dep:raphael-solver",
+    "dep:raw-window-handle",
     "dep:urlencoding",
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
+    "dep:wgpu",
+    "dep:dioxus-free-icons",
 ]
 wasm = [
     "dep:raphael-simulator",
     "dep:raphael-solver",
     "dep:tsify",
     "tsify/js",
+    "xiv-companion-data/wasm",
 ]
 
 [dependencies]
@@ -48,27 +60,43 @@ dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true
 gloo-net = { version = "0.6.0", optional = true }
 indexed-db = { version = "0.4", optional = true }
 js-sys = { version = "0.3.83", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 urlencoding = { version = "2.1.3", optional = true }
 wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = { version = "0.4.53", optional = true }
 web-sys = { version = "0.3.83", features = [
     "Clipboard",
+    "CanvasRenderingContext2d",
     "console",
     "Crypto",
     "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "History",
+    "HtmlCanvasElement",
     "HtmlInputElement",
+    "ImageData",
+    "MouseEvent",
     "Navigator",
     "ErrorEvent",
     "MessageEvent",
     "Storage",
+    "WheelEvent",
     "Window",
+    "Worker",
 ], optional = true }
+wgpu = { version = "29", features = ["webgl"], optional = true }
+xiv-companion-data = { path = "crates/xiv-companion-data", default-features = false }
+xiv-companion-render = { path = "crates/xiv-companion-render", default-features = false }
 
 [dev-dependencies]
 futures-executor = "0.3.32"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [workspace]
-members = ["xtask/*"]
+members = ["crates/*", "xtask/*"]
 resolver = "3"
 
 [workspace.package]

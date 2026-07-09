@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::app::utils::cx;
+use super::utils::cx;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]

@@ -1,0 +1,239 @@
+{
+  "schemaVersion": 1,
+  "name": "phantom-weapons",
+  "description": "Render correctness cases for all Chinese item names matching xx之幻梦.",
+  "source": "assets/craft-data.json item names containing 之幻梦",
+  "routeTemplate": "#/weapon-models?item={itemId}",
+  "cases": [
+    {
+      "caseId": "phantom-45047",
+      "priority": "P2",
+      "itemId": 45047,
+      "name": "烹饪之幻梦",
+      "itemUiCategory": 2,
+      "icon": 30689,
+      "route": "#/weapon-models?item=45047",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45048",
+      "priority": "P2",
+      "itemId": 45048,
+      "name": "鲨滩之幻梦",
+      "itemUiCategory": 1,
+      "icon": 30853,
+      "route": "#/weapon-models?item=45048",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45049",
+      "priority": "P2",
+      "itemId": 45049,
+      "name": "刺球之幻梦",
+      "itemUiCategory": 3,
+      "icon": 31263,
+      "route": "#/weapon-models?item=45049",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45050",
+      "priority": "P1",
+      "itemId": 45050,
+      "name": "逗猫之幻梦",
+      "itemUiCategory": 5,
+      "icon": 31665,
+      "route": "#/weapon-models?item=45050",
+      "focus": ["material-path-resolution"]
+    },
+    {
+      "caseId": "phantom-45051",
+      "priority": "P2",
+      "itemId": 45051,
+      "name": "丛林之幻梦",
+      "itemUiCategory": 4,
+      "icon": 32053,
+      "route": "#/weapon-models?item=45051",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45052",
+      "priority": "P0",
+      "itemId": 45052,
+      "name": "奶油之幻梦",
+      "itemUiCategory": 9,
+      "icon": 32484,
+      "route": "#/weapon-models?item=45052",
+      "focus": ["depth", "occlusion"]
+    },
+    {
+      "caseId": "phantom-45053",
+      "priority": "P0",
+      "itemId": 45053,
+      "name": "茶歇之幻梦",
+      "itemUiCategory": 7,
+      "icon": 32899,
+      "route": "#/weapon-models?item=45053",
+      "focus": ["transparency", "color", "gray-backfaces"]
+    },
+    {
+      "caseId": "phantom-45054",
+      "priority": "P2",
+      "itemId": 45054,
+      "name": "旅途之幻梦",
+      "itemUiCategory": 10,
+      "icon": 37828,
+      "route": "#/weapon-models?item=45054",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45055",
+      "priority": "P2",
+      "itemId": 45055,
+      "name": "仙韵之幻梦",
+      "itemUiCategory": 98,
+      "icon": 37829,
+      "route": "#/weapon-models?item=45055",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45056",
+      "priority": "P2",
+      "itemId": 45056,
+      "name": "聚餐之幻梦",
+      "itemUiCategory": 84,
+      "icon": 33639,
+      "route": "#/weapon-models?item=45056",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45057",
+      "priority": "P2",
+      "itemId": 45057,
+      "name": "春意之幻梦",
+      "itemUiCategory": 87,
+      "icon": 34018,
+      "route": "#/weapon-models?item=45057",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45058",
+      "priority": "P1",
+      "itemId": 45058,
+      "name": "浪漫之幻梦",
+      "itemUiCategory": 88,
+      "icon": 34512,
+      "route": "#/weapon-models?item=45058",
+      "focus": ["packed-model-id", "body-variant-order"]
+    },
+    {
+      "caseId": "phantom-45059",
+      "priority": "P1",
+      "itemId": 45059,
+      "name": "冬雪之幻梦",
+      "itemUiCategory": 89,
+      "icon": 34711,
+      "route": "#/weapon-models?item=45059",
+      "focus": ["glass", "transparency", "inner-depth"]
+    },
+    {
+      "caseId": "phantom-45060",
+      "priority": "P2",
+      "itemId": 45060,
+      "name": "花伞之幻梦",
+      "itemUiCategory": 96,
+      "icon": 36567,
+      "route": "#/weapon-models?item=45060",
+      "focus": ["thin-surface", "broad-surface"]
+    },
+    {
+      "caseId": "phantom-45061",
+      "priority": "P2",
+      "itemId": 45061,
+      "name": "雨滴之幻梦",
+      "itemUiCategory": 97,
+      "icon": 36866,
+      "route": "#/weapon-models?item=45061",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45062",
+      "priority": "P2",
+      "itemId": 45062,
+      "name": "深海之幻梦",
+      "itemUiCategory": 106,
+      "icon": 36109,
+      "route": "#/weapon-models?item=45062",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45063",
+      "priority": "P2",
+      "itemId": 45063,
+      "name": "夏火之幻梦",
+      "itemUiCategory": 107,
+      "icon": 36308,
+      "route": "#/weapon-models?item=45063",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45064",
+      "priority": "P2",
+      "itemId": 45064,
+      "name": "秋收之幻梦",
+      "itemUiCategory": 108,
+      "icon": 37279,
+      "route": "#/weapon-models?item=45064",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45065",
+      "priority": "P2",
+      "itemId": 45065,
+      "name": "盛宴之幻梦",
+      "itemUiCategory": 109,
+      "icon": 37075,
+      "route": "#/weapon-models?item=45065",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45066",
+      "priority": "P2",
+      "itemId": 45066,
+      "name": "馋扠之幻梦",
+      "itemUiCategory": 110,
+      "icon": 37442,
+      "route": "#/weapon-models?item=45066",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45067",
+      "priority": "P2",
+      "itemId": 45067,
+      "name": "艺术之幻梦",
+      "itemUiCategory": 111,
+      "icon": 37652,
+      "route": "#/weapon-models?item=45067",
+      "focus": ["baseline"]
+    },
+    {
+      "caseId": "phantom-45068",
+      "priority": "P2",
+      "itemId": 45068,
+      "name": "菜蔬之幻梦",
+      "itemUiCategory": 11,
+      "icon": 30278,
+      "route": "#/weapon-models?item=45068",
+      "focus": ["off-hand", "shield"]
+    },
+    {
+      "caseId": "phantom-45069",
+      "priority": "P2",
+      "itemId": 45069,
+      "name": "好戏之幻梦",
+      "itemUiCategory": 105,
+      "icon": 39909,
+      "route": "#/weapon-models?item=45069",
+      "focus": ["baseline"]
+    }
+  ]
+}

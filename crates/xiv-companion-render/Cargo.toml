@@ -1,0 +1,18 @@
+[package]
+name = "xiv-companion-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+renderer = ["dep:bytemuck", "dep:glam", "dep:wgpu"]
+test-support = ["renderer", "dep:image", "dep:pollster"]
+
+[dependencies]
+bytemuck = { version = "1.22", features = ["derive"], optional = true }
+glam = { version = "0.30", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "29", features = ["webgl"], optional = true }
+xiv-companion-data = { path = "../xiv-companion-data", default-features = false }
