@@ -41,6 +41,7 @@
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
 - renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已声明这些输入 location，但当前 fragment 逻辑仍主要消费 `uv0`、primary normal/bitangent 和 `color0`。
+- `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass` 与 culling policy。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix，并随 prepared material 输出。
@@ -57,7 +58,7 @@
 主要缺口集中在：
 
 - 多套 UV、secondary normal/bitangent、`color1`、flow 已进 GPU 输入，但 shader-family-specific 逻辑还没有使用这些通道。
-- mesh category 已进入第一步 draw role 决策；submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息仍没有进入后续处理或渲染决策。
+- mesh category 已进入第一版 `PreparedModel` draw role 决策；submesh attribute mask、shape/attribute runtime mask、bone/skin/morph 等信息仍没有进入后续处理或渲染决策。
 - 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps 已有第一版实时消费，但 MeddleTools 中完整 tile array、scroll、transparency、reflection 等节点逻辑大多没有实现。
 - 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
@@ -83,7 +84,7 @@
 
 已完成：`weapon-render-pipeline.md` 已同步 Legacy ColorTable bake、mesh-level transparent sorting、GPU material bind group、顶点字段保留和剩余限制。
 
-- 后续 roadmap 仍以本文为准，避免把 prepared draw role、per-role sampler config 等未完成内容写成当前能力。
+- 后续 roadmap 仍以本文为准，避免把独立 cutout/glass/lightshaft pipeline、submesh/shape visibility、tile/detail array 等未完成内容写成当前能力。
 
 验证：
 
@@ -162,18 +163,19 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 当前进度：
 
 - 已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用。
+- 已增加第一版公共 `PreparedModel` / `PreparedMesh`，把每个 raw mesh 的 `meshIndex`、`materialSlot`、draw role、main-pass 可见性和 prepared material 汇总到数据层；renderer flatten 与 phantom summary 已改为消费该结果。
 - 已增加第一版公共 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
 - `PreparedMaterial` 已包含第一版 `MaterialShaderFamily` 分类，覆盖 MeddleTools 映射中的 character/glass/transparency/scroll/bg/lightshaft/water 常见包。
 - `PreparedMaterial` 已包含第一版 `PreparedTextureBindings`，聚合 renderer 当前已知的材质贴图索引。
 - `PreparedMaterial` 已包含第一版 `PreparedTextureSamplingSet`，把 texture role 的 sRGB/Non-Color、linear/nearest、repeat/clip 语义从 renderer 私有实现中拆出来；当前没有 decal texture kind，因此 clip 仍只是预留枚举。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialFeatureFlags`，聚合 `usesVertexColor`、`usesColorTable`、`usesTile`、`usesDetail`、`usesScroll`，并显式保留 `usesFlow` / `usesDye` 为后续 mesh/stain preparation 入口。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialUvSources`，常规贴图源保守为 `uv0`，scroll 源显式分为 `uv0Scroll=uv0` 和 `uv1Scroll=uv1`，与 MeddleTools `UvScrollMapping` 的 `UV0Scroll` / `UV1Scroll` 节点对应。
-- phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策。
-- 完整 `PreparedModel` 仍尚未建立；sampler config、feature flags 与第一版 UV source 已有公共语义，但尚未完整驱动所有 runtime 绑定。
+- phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策，并通过第一版 `PreparedModel` 获得 mesh draw role / main pass 可见性。
+- `PreparedModel` 仍是第一版：尚未包含 submesh attribute visibility、shape/attribute runtime mask、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与第一版 UV source 已有公共语义，但尚未完整驱动所有 runtime 绑定。
 
 建议中间结构包含：
 
-- mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等
+- mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、debugVisible 等；已有第一版 `PreparedMesh`
 - material shader family：character、characterGlass、characterTransparency、characterScroll、bg、lightShaft、unknown
 - texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix 已有第一版；per-role sampler config 已有第一版；index 仍未作为可直接渲染绑定保留，因为当前 `_id.tex` 会先用于 ColorTable bake
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
@@ -189,13 +191,13 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 验证：
 
-- 已增加 focused tests 断言 alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
+- 已增加 focused tests 断言 `PreparedModel` mesh-level 决策、alpha policy 与 mesh glass override 到 prepared render pass 的映射、shader family 分类、texture bindings 聚合、texture sampling policy、feature flags、UV source，以及 culling policy fallback。
 - 后续仍需要用真实样本验证 sampler policy / UV source 到 renderer 绑定的覆盖率。
 - P0/P1 phantom weapon 样本已具备 prepared summary 字段，仍需要跑 ignored snapshot 对比真实输出。
 
 ### P0: mesh category 和 submesh attribute 决策前置
 
-已完成第一步：raw mesh category 会通过 `ModelMeshDrawRole` 转成 draw role，renderer 不再全部当普通 mesh 画。
+已完成第一步：raw mesh category 会通过 `ModelMeshDrawRole` 转成 draw role，并进入第一版 `PreparedModel`；renderer 不再全部当普通 mesh 画。
 
 当前策略：
 
@@ -204,7 +206,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `lightShaft` 已标为独立 draw role；additive/lightshaft pass 尚未实现前，默认不进入主 surface pass。
 - `shadow`、`terrainShadow`、`verticalFog` 默认不作为主 surface 渲染。
 - `materialChange`、`crestChange` 暂时作为 `debugVisible` 继续渲染，并在 snapshot summary 中标出。
-- submesh attribute mask 已在 summary 中保留，但仍需要进入后续 prepared mesh，用于 shape/attribute visibility。
+- submesh attribute mask 已在 summary 中保留，但仍需要进入 `PreparedMesh` / 后续 prepared submesh，用于 shape/attribute visibility。
 
 验证：
 

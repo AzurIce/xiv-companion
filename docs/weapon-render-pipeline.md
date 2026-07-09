@@ -62,7 +62,7 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 - 覆盖 normal/water/shadow/terrainShadow/verticalFog，以及 extra LOD 的 lightShaft/glass/materialChange/crestChange。
 - 每个 mesh/submesh range 转成 `WeaponModelMesh`。
 - 数据层保留：position、blend weights/indices、normal、uv0-uv3、bitangent、secondary normal/bitangent、color0/color1、flow0/flow1、index、material_index、mesh category、bone table。
-- mesh category 会映射成 `ModelMeshDrawRole`，作为 renderer-friendly 的第一步 prepared draw role。
+- mesh category 会映射成 `ModelMeshDrawRole`，并进入第一版 `PreparedModel` / `PreparedMesh`，作为 renderer-friendly 的第一步 prepared draw role。
 - ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
 
 注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；`PreparedMaterial` 已记录第一版 UV source，但 fragment shader 目前仍主要消费 uv0、primary normal/bitangent 和 color0。
@@ -207,11 +207,11 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - tile-matrix texture
    - nearest data sampler（repeat/nearest，用于 ColorTable extra maps）
 3. scene pass：
-   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags 和 UV source。
+   - renderer 先计算第一版 `PreparedModel`，为每个 mesh 记录 draw role、main-pass 可见性和 `PreparedMaterial`；`PreparedMaterial` 会把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags 和 UV source。
    - opaque pipeline：写 depth，绘制 `Opaque` 与 `Cutout` batch；`Cutout` 仍由 WGSL alpha test discard。
    - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` 与 `Glass` batch。
    - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
-   - `ModelMeshDrawRole` 先过滤非主 surface：shadow、terrainShadow、verticalFog、lightShaft 不进入当前主 pass；materialChange/crestChange 暂作为 debugVisible 绘制；mesh category glass 会强制进入 `Glass` prepared pass。
+   - `PreparedMesh` 先过滤非主 surface：shadow、terrainShadow、verticalFog、lightShaft 不进入当前主 pass；materialChange/crestChange 暂作为 debugVisible 绘制；mesh category glass 会强制进入 `Glass` prepared pass。
 4. bloom pass：从 bright attachment 提取高亮并 blur。
 5. compose pass：scene + bloom 输出到 canvas。
 
@@ -242,7 +242,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 后续优先级：
 
-1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤，renderer 内部已有 `Opaque/Cutout/Transparent/Glass` prepared pass；后续还需要独立 cutout/glass/additive-lightshaft wgpu pipeline。
+1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤，renderer 内部已有 `Opaque/Cutout/Transparent/Glass` prepared pass；后续还需要 submesh/shape visibility、独立 cutout/glass/additive-lightshaft wgpu pipeline。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版材质级 feature flags 和 UV source；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Material params：`g_AlphaThreshold`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 与 `g_UVScrollTime` 已进入结构化材质字段；后续要继续接入 glass/transparency 等其他参数，并让 multi/detail normal、tile select、detail UV 与 UV scroll 实际参与 shader。

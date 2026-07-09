@@ -11,11 +11,10 @@ use physis::resource::{Resource, SqPackResource};
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
     MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelTexture,
-    PreparedMaterial, WeaponCatalogItem, WeaponModelData,
+    PreparedMaterial, PreparedMesh, WeaponCatalogItem, WeaponModelData,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
-    material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, mesh_draw_role_for_category,
-    prepare_material_for_draw_role,
+    material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
@@ -724,7 +723,12 @@ fn dump_meshes(
         .with_context(|| format!("failed to create {}", mesh_dir.display()))?;
 
     let mut summaries = Vec::new();
+    let prepared_model = prepare_model_for_render(model);
     for (index, mesh) in model.meshes.iter().enumerate() {
+        let prepared_mesh = prepared_model
+            .meshes
+            .get(index)
+            .with_context(|| format!("missing prepared mesh for mesh {index}"))?;
         let mesh_path = mesh_dir.join(format!(
             "{index:03}-m{:04}-p{}.json",
             mesh.material_index, mesh.part_index
@@ -733,7 +737,7 @@ fn dump_meshes(
         summaries.push(mesh_summary(
             mesh,
             path_relative_to_case(&mesh_path, case_dir),
-            &model.materials,
+            prepared_mesh,
             metadata_by_path,
         ));
     }
@@ -744,7 +748,7 @@ fn dump_meshes(
 fn mesh_summary(
     mesh: &ModelMesh,
     mesh_file: String,
-    materials: &[ModelMaterial],
+    prepared_mesh: &PreparedMesh,
     metadata_by_path: &HashMap<String, MdlMetadata>,
 ) -> MeshSummary {
     let resource_path = mesh_resource_path(&mesh.path);
@@ -753,8 +757,8 @@ fn mesh_summary(
     let metadata_file =
         metadata.map(|metadata| format!("models/{}.json", safe_resource_file(&metadata.path)));
     let raw_mesh = metadata.and_then(|metadata| metadata.meshes.get(mesh.part_index as usize));
-    let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
-    let rendered_in_main_pass = draw_role.renders_in_main_pass();
+    let draw_role = prepared_mesh.draw_role;
+    let rendered_in_main_pass = prepared_mesh.renders_in_main_pass;
 
     MeshSummary {
         mesh_file,
@@ -763,8 +767,7 @@ fn mesh_summary(
         mesh_category: mesh.mesh_category.clone(),
         draw_role,
         rendered_in_main_pass,
-        prepared_material: rendered_in_main_pass
-            .then(|| prepare_material_for_draw_role(materials.get(mesh.material_slot), draw_role)),
+        prepared_material: rendered_in_main_pass.then_some(prepared_mesh.prepared_material),
         metadata_file,
         submesh_index,
         submeshes: raw_mesh

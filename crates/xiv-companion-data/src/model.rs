@@ -417,6 +417,22 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedModel {
+    pub meshes: Vec<PreparedMesh>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMesh {
+    pub mesh_index: usize,
+    pub material_slot: usize,
+    pub draw_role: ModelMeshDrawRole,
+    pub renders_in_main_pass: bool,
+    pub prepared_material: PreparedMaterial,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMaterial {
@@ -611,6 +627,29 @@ impl PreparedRenderPass {
 
     pub fn sorts_back_to_front(self) -> bool {
         self.uses_transparent_pipeline()
+    }
+}
+
+pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> PreparedModel {
+    PreparedModel {
+        meshes: model
+            .meshes()
+            .iter()
+            .enumerate()
+            .map(|(mesh_index, mesh)| {
+                let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
+                PreparedMesh {
+                    mesh_index,
+                    material_slot: mesh.material_slot,
+                    draw_role,
+                    renders_in_main_pass: draw_role.renders_in_main_pass(),
+                    prepared_material: prepare_material_for_draw_role(
+                        model.materials().get(mesh.material_slot),
+                        draw_role,
+                    ),
+                }
+            })
+            .collect(),
     }
 }
 
@@ -1563,6 +1602,54 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_model_reports_mesh_level_draw_decisions() {
+        let mut glass_material = test_material();
+        glass_material.shader_package_name = Some("characterglass.shpk".to_string());
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material(), glass_material],
+            textures: Vec::new(),
+            meshes: vec![
+                test_model_mesh(None, 0),
+                test_model_mesh(Some("glass"), 1),
+                test_model_mesh(Some("lightShaft"), 99),
+            ],
+        };
+
+        let prepared = prepare_model_for_render(&model);
+        assert_eq!(prepared.meshes.len(), 3);
+        assert_eq!(prepared.meshes[0].mesh_index, 0);
+        assert_eq!(prepared.meshes[0].material_slot, 0);
+        assert_eq!(prepared.meshes[0].draw_role, ModelMeshDrawRole::Normal);
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].prepared_material.render_pass,
+            PreparedRenderPass::Opaque
+        );
+
+        assert_eq!(prepared.meshes[1].mesh_index, 1);
+        assert_eq!(prepared.meshes[1].draw_role, ModelMeshDrawRole::Glass);
+        assert!(prepared.meshes[1].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[1].prepared_material.shader_family,
+            MaterialShaderFamily::CharacterGlass
+        );
+        assert_eq!(
+            prepared.meshes[1].prepared_material.render_pass,
+            PreparedRenderPass::Glass
+        );
+
+        assert_eq!(prepared.meshes[2].mesh_index, 2);
+        assert_eq!(prepared.meshes[2].material_slot, 99);
+        assert_eq!(prepared.meshes[2].draw_role, ModelMeshDrawRole::LightShaft);
+        assert!(!prepared.meshes[2].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[2].prepared_material.shader_family,
+            MaterialShaderFamily::Unknown
+        );
+    }
+
+    #[test]
     fn prepared_texture_sampling_matches_meddletools_role_configs() {
         assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
@@ -1722,6 +1809,21 @@ mod color_table_bake_tests {
             sheen_properties_texture: None,
             sphere_properties_texture: None,
             tile_matrix_texture: None,
+        }
+    }
+
+    fn test_model_mesh(category: Option<&str>, material_slot: usize) -> ModelMesh {
+        ModelMesh {
+            path: "test.mdl".to_string(),
+            part_index: 0,
+            mesh_category: category.map(str::to_string),
+            material_index: material_slot as u16,
+            material_slot,
+            material_name: "test".to_string(),
+            color: [1.0, 1.0, 1.0],
+            bone_table: None,
+            vertices: Vec::new(),
+            indices: Vec::new(),
         }
     }
 

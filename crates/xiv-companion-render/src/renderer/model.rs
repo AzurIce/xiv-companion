@@ -2,7 +2,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData, PreparedMaterial,
-    PreparedRenderPass, mesh_draw_role_for_category, prepare_material_for_draw_role,
+    PreparedRenderPass, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -775,24 +775,24 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
 
-    for mesh in model.meshes() {
-        let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
-        if !draw_role.renders_in_main_pass() {
+    let prepared_model = prepare_model_for_render(model);
+    for prepared_mesh in &prepared_model.meshes {
+        if !prepared_mesh.renders_in_main_pass {
             continue;
         }
+        let Some(mesh) = model.meshes().get(prepared_mesh.mesh_index) else {
+            continue;
+        };
 
         let base = vertices.len() as u32;
         vertices.extend(mesh.vertices.iter().map(GpuVertex::from_model_vertex));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
         draw_batches.push(DrawBatch {
-            material_slot: mesh.material_slot,
+            material_slot: prepared_mesh.material_slot,
             index_start,
             index_count: mesh.indices.len() as u32,
-            prepared_material: prepare_material_for_draw_role(
-                model.materials().get(mesh.material_slot),
-                draw_role,
-            ),
+            prepared_material: prepared_mesh.prepared_material,
             center: mesh_bounds_center(mesh),
         });
     }
@@ -1940,6 +1940,7 @@ mod tests {
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
         PreparedMaterialUvSources, PreparedTextureBindings, PreparedTextureSamplingSet,
+        prepare_material_for_draw_role,
     };
 
     #[test]
