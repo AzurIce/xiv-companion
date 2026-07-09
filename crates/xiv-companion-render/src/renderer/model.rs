@@ -26,6 +26,8 @@ pub enum ModelDebugMode {
     VertexColor,
     MeshRole,
     ColorTableIndex,
+    MaterialMap,
+    MultiMap,
 }
 
 impl ModelDebugMode {
@@ -46,6 +48,8 @@ impl ModelDebugMode {
             ModelDebugMode::VertexColor => 12.0,
             ModelDebugMode::MeshRole => 13.0,
             ModelDebugMode::ColorTableIndex => 14.0,
+            ModelDebugMode::MaterialMap => 15.0,
+            ModelDebugMode::MultiMap => 16.0,
         }
     }
 }
@@ -305,6 +309,26 @@ impl ModelRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -1508,6 +1532,58 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    let material_map_texture_view = material
+        .material_map_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon material map texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral material map texture",
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let multi_map_texture_view = material
+        .multi_map_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon multi map texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral multi map texture",
+                1,
+                1,
+                &[0, 0, 0, 255],
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("weapon material color sampler"),
@@ -1603,6 +1679,14 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 14,
                 resource: wgpu::BindingResource::TextureView(&index_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 15,
+                resource: wgpu::BindingResource::TextureView(&material_map_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 16,
+                resource: wgpu::BindingResource::TextureView(&multi_map_texture_view),
             },
         ],
     })
@@ -2262,6 +2346,8 @@ mod tests {
         assert_eq!(ModelDebugMode::VertexColor.shader_value(), 12.0);
         assert_eq!(ModelDebugMode::MeshRole.shader_value(), 13.0);
         assert_eq!(ModelDebugMode::ColorTableIndex.shader_value(), 14.0);
+        assert_eq!(ModelDebugMode::MaterialMap.shader_value(), 15.0);
+        assert_eq!(ModelDebugMode::MultiMap.shader_value(), 16.0);
     }
 
     #[test]

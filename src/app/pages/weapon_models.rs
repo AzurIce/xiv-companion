@@ -578,6 +578,8 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "vertex", "Vertex" }
                     option { value: "mesh", "Mesh" }
                     option { value: "ct-index", "CT Index" }
+                    option { value: "material-map", "Mat Map" }
+                    option { value: "multi-map", "Multi" }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -661,6 +663,8 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::VertexColor => "vertex",
         ModelDebugMode::MeshRole => "mesh",
         ModelDebugMode::ColorTableIndex => "ct-index",
+        ModelDebugMode::MaterialMap => "material-map",
+        ModelDebugMode::MultiMap => "multi-map",
     }
 }
 
@@ -680,6 +684,8 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "vertex" => ModelDebugMode::VertexColor,
         "mesh" => ModelDebugMode::MeshRole,
         "ct-index" => ModelDebugMode::ColorTableIndex,
+        "material-map" => ModelDebugMode::MaterialMap,
+        "multi-map" => ModelDebugMode::MultiMap,
         _ => ModelDebugMode::Final,
     }
 }

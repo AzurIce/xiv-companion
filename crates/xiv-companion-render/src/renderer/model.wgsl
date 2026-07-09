@@ -100,6 +100,12 @@ var nearest_data_sampler: sampler;
 @group(1) @binding(14)
 var color_table_index_texture: texture_2d<f32>;
 
+@group(1) @binding(15)
+var material_map_texture: texture_2d<f32>;
+
+@group(1) @binding(16)
+var multi_map_texture: texture_2d<f32>;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
     @location(1) bright: vec4<f32>,
@@ -228,10 +234,16 @@ fn debug_fragment_output(
         color = input.color.rgb;
     } else if mode < 13.5 {
         color = material.debug_color.rgb;
-    } else {
+    } else if mode < 14.5 {
         let index_uv = resolve_uv(input, material.uv_sources3.x);
         let index_sample = textureSample(color_table_index_texture, nearest_data_sampler, index_uv);
         color = vec3<f32>(index_sample.r, index_sample.g, 0.5);
+    } else if mode < 15.5 {
+        let material_map_uv = resolve_uv(input, material.uv_sources0.w);
+        color = textureSample(material_map_texture, data_sampler, material_map_uv).rgb;
+    } else {
+        let multi_map_uv = resolve_uv(input, material.uv_sources1.x);
+        color = textureSample(multi_map_texture, data_sampler, multi_map_uv).rgb;
     }
 
     var out: FragmentOutput;
