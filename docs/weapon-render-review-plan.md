@@ -143,7 +143,11 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 
 目标是把“原始资源解析结果”和“渲染器可以直接绑定的数据”分开。
 
-当前进度：已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用；完整 `PreparedModel` / `PreparedMaterial` 结构尚未建立。
+当前进度：
+
+- 已先抽出 `ModelMeshDrawRole` 作为 mesh-level preparation 语义，并被 renderer 和 phantom summary 共用。
+- renderer 内部已增加第一版 `PreparedMaterial`，把 material alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass，同时保留 culling policy。
+- 完整 `PreparedModel`、shader family、texture binding、UV source、feature flags 仍尚未建立，prepared 决策也还没有输出到 snapshot summary。
 
 建议中间结构包含：
 
@@ -271,9 +275,14 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 
 ### P0: 按 prepared draw role 分 pass
 
-现有 pass 只有 opaque 和 transparent。
+当前进度：renderer batch 已记录 prepared render pass：
 
-建议拆分：
+- `Opaque`
+- `Cutout`：当前仍复用 opaque pipeline，写 depth，并由 shader alpha test discard。
+- `Transparent`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
+- `Glass`：复用 transparent pipeline，不写 depth，参与 mesh-level sorting。
+
+尚未完成的是把它们拆成独立 wgpu pipeline：
 
 - opaque pass：写 depth
 - cutout pass：写 depth，alpha test discard
@@ -281,11 +290,12 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 - glass pass：不写 depth，单独 blend/参数
 - additive/lightshaft pass：加法或 screen-like blend，不写 depth 或只读 depth
 
-shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 surface。
+shadow、terrainShadow、verticalFog、lightShaft 在主预览中默认不画，避免错误 surface；lightShaft 的 additive pass 仍未实现。
 
 验证：
 
-- 透明/glass/lightshaft synthetic fixture。
+- 已增加 prepared material / render pass 单元测试，覆盖 opaque、cutout、transparent、glass、mesh glass override 和 culling policy。
+- 后续仍需要透明/glass/lightshaft synthetic fixture。
 - P0 样本 snapshot。
 
 ### P1: 着色器模块化

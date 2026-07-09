@@ -196,14 +196,15 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - material-properties texture
    - specular texture
 3. scene pass：
-   - opaque pipeline：写 depth，不透明材质先画。
-   - transparent pipeline：alpha blending，不写 depth，透明/glass 后画。
+   - renderer 先为每个 draw batch 计算 `PreparedMaterial`，把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass` 四类 prepared render pass。
+   - opaque pipeline：写 depth，绘制 `Opaque` 与 `Cutout` batch；`Cutout` 仍由 WGSL alpha test discard。
+   - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` 与 `Glass` batch。
    - opaque/transparent 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
-   - `ModelMeshDrawRole` 先过滤非主 surface：shadow、terrainShadow、verticalFog、lightShaft 不进入当前主 pass；materialChange/crestChange 暂作为 debugVisible 绘制；glass 强制进 transparent pass。
+   - `ModelMeshDrawRole` 先过滤非主 surface：shadow、terrainShadow、verticalFog、lightShaft 不进入当前主 pass；materialChange/crestChange 暂作为 debugVisible 绘制；mesh category glass 会强制进入 `Glass` prepared pass。
 4. bloom pass：从 bright attachment 提取高亮并 blur。
 5. compose pass：scene + bloom 输出到 canvas。
 
-透明排序目前做到 mesh-level：透明 batch 按相机方向和 mesh center back-to-front 排序。还没有逐三角排序或 weighted blended OIT。
+透明排序目前做到 mesh-level：`Transparent` 与 `Glass` batch 按相机方向和 mesh center back-to-front 排序。还没有逐三角排序或 weighted blended OIT。
 
 ## 9. Meddle 调研结论
 
@@ -230,7 +231,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 后续优先级：
 
-1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤；后续还需要独立 cutout/glass/additive-lightshaft pass。
+1. Prepared draw role / pass：`ModelMeshDrawRole` 已完成第一步主 pass 过滤，renderer 内部已有 `Opaque/Cutout/Transparent/Glass` prepared pass；后续还需要独立 cutout/glass/additive-lightshaft wgpu pipeline。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；下一步是按 shader family 实际消费这些通道。
 3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
 4. Tile/Sphere/Sheen：让 renderer 消费 MeddleTools 节点层的 TileProperties、TileMatrix、Sphere、Sheen 语义。
