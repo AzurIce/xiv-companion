@@ -576,6 +576,7 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "uv2", "UV2" }
                     option { value: "uv3", "UV3" }
                     option { value: "vertex", "Vertex" }
+                    option { value: "mesh", "Mesh" }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -657,6 +658,7 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::Uv2 => "uv2",
         ModelDebugMode::Uv3 => "uv3",
         ModelDebugMode::VertexColor => "vertex",
+        ModelDebugMode::MeshRole => "mesh",
     }
 }
 
@@ -674,6 +676,7 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "uv2" => ModelDebugMode::Uv2,
         "uv3" => ModelDebugMode::Uv3,
         "vertex" => ModelDebugMode::VertexColor,
+        "mesh" => ModelDebugMode::MeshRole,
         _ => ModelDebugMode::Final,
     }
 }

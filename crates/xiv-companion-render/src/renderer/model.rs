@@ -1,8 +1,8 @@
 use wgpu::util::DeviceExt;
 
 use crate::{
-    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelRenderData, PreparedMaterial,
-    PreparedRenderPass, PreparedUvSource, prepare_model_for_render,
+    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
+    PreparedMaterial, PreparedRenderPass, PreparedUvSource, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -24,6 +24,7 @@ pub enum ModelDebugMode {
     Uv2,
     Uv3,
     VertexColor,
+    MeshRole,
 }
 
 impl ModelDebugMode {
@@ -42,6 +43,7 @@ impl ModelDebugMode {
             ModelDebugMode::Uv2 => 10.0,
             ModelDebugMode::Uv3 => 11.0,
             ModelDebugMode::VertexColor => 12.0,
+            ModelDebugMode::MeshRole => 13.0,
         }
     }
 }
@@ -844,6 +846,7 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
         draw_batches.push(DrawBatch {
             material_slot: prepared_mesh.material_slot,
             material_bind_group_index: draw_batches.len(),
+            draw_role: prepared_mesh.draw_role,
             index_start,
             index_count: mesh.indices.len() as u32,
             prepared_material: prepared_mesh.prepared_material,
@@ -1098,6 +1101,7 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
                 material,
                 model,
                 batch.prepared_material,
+                batch.draw_role,
             )
         })
         .collect()
@@ -1110,6 +1114,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     material: &ModelMaterial,
     model: &M,
     prepared_material: PreparedMaterial,
+    draw_role: ModelMeshDrawRole,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
     let uv_sources = material_uv_source_params(prepared_material);
@@ -1187,6 +1192,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_sources0: uv_sources.0,
         uv_sources1: uv_sources.1,
         uv_sources2: uv_sources.2,
+        debug_color: draw_role_debug_color(draw_role),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1777,6 +1783,17 @@ fn prepared_uv_source_value(source: PreparedUvSource) -> f32 {
     }
 }
 
+fn draw_role_debug_color(draw_role: ModelMeshDrawRole) -> [f32; 4] {
+    match draw_role {
+        ModelMeshDrawRole::Normal => [0.16, 0.72, 1.0, 1.0],
+        ModelMeshDrawRole::Glass => [0.66, 0.92, 1.0, 1.0],
+        ModelMeshDrawRole::LightShaft => [1.0, 0.82, 0.22, 1.0],
+        ModelMeshDrawRole::ShadowOnly => [0.18, 0.18, 0.22, 1.0],
+        ModelMeshDrawRole::Ignored => [0.55, 0.55, 0.55, 1.0],
+        ModelMeshDrawRole::DebugVisible => [1.0, 0.34, 0.76, 1.0],
+    }
+}
+
 fn finite_vec4_or(values: [f32; 4], default: [f32; 4]) -> [f32; 4] {
     let mut resolved = default;
     for (target, value) in resolved.iter_mut().zip(values) {
@@ -1891,6 +1908,7 @@ struct MaterialUniform {
     uv_sources0: [f32; 4],
     uv_sources1: [f32; 4],
     uv_sources2: [f32; 4],
+    debug_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -1903,6 +1921,7 @@ struct PostUniform {
 struct DrawBatch {
     material_slot: usize,
     material_bind_group_index: usize,
+    draw_role: ModelMeshDrawRole,
     index_start: u32,
     index_count: u32,
     prepared_material: PreparedMaterial,
@@ -2190,6 +2209,23 @@ mod tests {
         assert_eq!(ModelDebugMode::Uv2.shader_value(), 10.0);
         assert_eq!(ModelDebugMode::Uv3.shader_value(), 11.0);
         assert_eq!(ModelDebugMode::VertexColor.shader_value(), 12.0);
+        assert_eq!(ModelDebugMode::MeshRole.shader_value(), 13.0);
+    }
+
+    #[test]
+    fn draw_role_debug_colors_distinguish_visible_roles() {
+        assert_eq!(
+            draw_role_debug_color(ModelMeshDrawRole::Normal),
+            [0.16, 0.72, 1.0, 1.0]
+        );
+        assert_eq!(
+            draw_role_debug_color(ModelMeshDrawRole::Glass),
+            [0.66, 0.92, 1.0, 1.0]
+        );
+        assert_eq!(
+            draw_role_debug_color(ModelMeshDrawRole::DebugVisible),
+            [1.0, 0.34, 0.76, 1.0]
+        );
     }
 
     #[test]
@@ -2525,6 +2561,17 @@ mod tests {
         assert_eq!(batches[0].pass(), PreparedRenderPass::Opaque);
         assert_eq!(batches[1].pass(), PreparedRenderPass::Opaque);
         assert_eq!(batches[2].pass(), PreparedRenderPass::Glass);
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.draw_role)
+                .collect::<Vec<_>>(),
+            vec![
+                ModelMeshDrawRole::Normal,
+                ModelMeshDrawRole::DebugVisible,
+                ModelMeshDrawRole::Glass
+            ]
+        );
     }
 
     #[test]
@@ -2583,6 +2630,7 @@ mod tests {
         DrawBatch {
             material_slot,
             material_bind_group_index: material_slot,
+            draw_role: ModelMeshDrawRole::Normal,
             index_start: 0,
             index_count: 3,
             prepared_material: PreparedMaterial {

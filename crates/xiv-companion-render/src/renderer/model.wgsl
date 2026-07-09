@@ -21,6 +21,7 @@ struct Material {
     uv_sources0: vec4<f32>, // x: base, y: normal, z: mask, w: material map
     uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
     uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
+    debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
 
 struct VertexInput {
@@ -219,8 +220,10 @@ fn debug_fragment_output(
         color = uv_debug_color(input.uv2);
     } else if mode < 11.5 {
         color = uv_debug_color(input.uv3);
-    } else {
+    } else if mode < 12.5 {
         color = input.color.rgb;
+    } else {
+        color = material.debug_color.rgb;
     }
 
     var out: FragmentOutput;
