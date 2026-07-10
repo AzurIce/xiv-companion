@@ -197,10 +197,10 @@ WeaponMaterialRenderMode::Glass
 `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前把 `g_DiffuseColor` 作为 base tint，把 `g_MultiDiffuseColor` 作为 mask-gated 的保守 base tint 补充，把 `g_EmissiveColor` 作为附加发光，并在 mask/material 通道存在时保守加入 `g_MultiEmissiveColor`。完整 multi map 通道解释仍未实现。
 `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前用 `g_OutlineColor/g_OutlineWidth` 做受限 silhouette rim fallback，用 `g_SpecularColorMask` 调制高光颜色/强度，用 `g_SSAOMask` 保守调制环境底光。真实 outline pass、texture LOD 和 shadow offset 仍未实现。
 `g_GlassIOR`、`g_GlassThicknessMax` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前把非默认 IOR/thickness 用作 glass tint、specular 与 rim fresnel 的轻量调节，不改变固定 glass opacity 或折射。
-`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前只在 aperture/offset 非默认时对非 glass/lightshaft alpha 做受限 shaping，`g_ShadowAlphaThreshold` 仍未驱动 shadow pass，`g_Transparency` 仍不参与 opacity。
+`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前只在 aperture/offset 非默认时对非 glass/lightshaft alpha 做受限 shaping，`g_ShadowAlphaThreshold` 仍未驱动 shadow pass。
 `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 转换成 UV0/UV1 scroll multiplier 并进入 renderer uniform，Web 渲染循环会用 RAF 时间驱动保守滚动采样，native snapshot 默认时间为 0。
 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已解析进材质数据和 renderer uniform；LightShaft draw role 会启用保守 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 与 `g_Ray` 强度近似，尚未复刻完整节点语义。
-`g_Transparency` 已解析进材质数据和 phantom summary，当前只作为后续 transparency/glass alpha 行为的稳定输入，尚未直接改变 opacity。
+`g_Transparency` 已解析进材质数据和 phantom summary，但 Meddle `Names.cs` 与 MeddleTools 均表明它属于 water/river，不是 character transparency/glass 的 opacity 参数。当前不会让它改变 character/glass opacity。
 
 ### 7.2 Transparent
 
@@ -224,7 +224,11 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 - WGSL 中降低 diffuse、增加蓝白 tint、增强 fresnel/specular。
 - 进入透明 pass。
 
-这不是完整游戏 glass shader，但能避免“实心灰球”，并显示内部模型。
+真实 45059 `characterglass.shpk` 样本只有 normal/mask/index 与 ColorTable 派生 base，没有独立 base texture；MTRL 覆盖 `DrawDepthMode_Dither`，`g_GlassIOR=1`、`g_GlassThicknessMax=0`。当前固定 opacity 与偏暗 tint 仍会把雪景玻璃罩画成灰暗球体，是下一批需要修正的明确回归样本。
+
+Meddle 还表明 `DrawDepthMode` 是 character glass/transparency 的 material key，`EnableLighting` 是 character transparency material key；`GlassBlendMode` 是 scene key而非 MTRL material key。后续 prepared alpha policy 应消费前两者，并把 scene-level blend mode 保持为显式 renderer 输入或有来源的默认值。
+
+这不是完整游戏 glass shader，目前只能显示内部模型并提供近似透明外壳。
 
 ## 8. GPU 渲染管线
 
