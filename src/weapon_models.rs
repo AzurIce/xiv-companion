@@ -11,12 +11,12 @@ pub use xiv_companion_data::model::{
     WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
     WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
     WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
-    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
-    calculate_model_bounds, is_weapon_equip_slot_category, material_color, material_shader_family,
-    mesh_draw_role_for_category, prepare_material_for_draw_role, prepare_model_for_render,
-    prepare_model_for_render_with_options, prepared_material_feature_flags,
-    prepared_texture_bindings, prepared_texture_sampling_for_kind, weapon_material_candidate_paths,
-    weapon_model_candidate_paths, weapon_slot_label,
+    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, WeaponStain,
+    bake_color_table_maps, calculate_model_bounds, is_weapon_equip_slot_category, material_color,
+    material_shader_family, mesh_draw_role_for_category, prepare_material_for_draw_role,
+    prepare_model_for_render, prepare_model_for_render_with_options,
+    prepared_material_feature_flags, prepared_texture_bindings, prepared_texture_sampling_for_kind,
+    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]

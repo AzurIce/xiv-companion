@@ -51,6 +51,7 @@
 - `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，请求级 stain IDs 已接入实际 model load。
 - 数据层已实现 Legacy `chara/base_material/stainingtemplate.stm` 与 Dawntrail `chara/base_material/stainingtemplate_gud.stm` 的通用 parser，覆盖 v1.1/v2.0/v2.1、u16/u32 keys、singleton/direct/indexed column 编码、1-based stain ID lookup，以及 Dawntrail template ID 减 1000 后回退 Legacy STM；同时已有按 Legacy/Dawntrail dye flags 覆盖 renderer-friendly ColorTable rows 的纯函数与诊断报告。
 - `WeaponModelLoadRequest.stainIds` 已作为请求级 `[stain0, stain1]` 输入进入同步/异步 SqPack 加载；请求仅在存在非零 stain 时各加载一次 Legacy/GUD STM，材质会在 summary 和 ColorTable bake 前应用染色。`WeaponModelData.stainIds` 与 `ModelMaterial.stainingApplication` 会保留输入、模板路径、行统计和错误，phantom summary 可直接审计；资源 key 也包含 stain IDs，避免不同染色请求冲突。
+- `WeaponCatalogPackage.stains` 已从 `Stain` EXD 导出 ID、中文名称、原始 BGR 色值、UI RGBA、shade、sub-order 和 metallic；当前本地客户端有 125 个具名染剂。Web 武器预览已提供 stain0/stain1 选择器、色块、金属标记和 URL 状态，并使用请求级 stain IDs 重新加载模型。EXD 色值仅用于 UI，不参与实际 ColorTable 覆盖。
 - `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总。
 - `PreparedMaterialUnsupportedInputs` 已有第一版，按当前可可靠判断的数据标出 dye application、runtime ColorTable、decal/crest、tile array、detail array、incomplete shader family logic，phantom summary 会随 prepared material 输出这些缺口。
 - `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties、material/multi debug view 与 ColorTable extra map debug view 的采样 UV，并会按 render time 对 `uv0` / `uv1` 来源叠加已解析的 scroll multiplier；当前 source 规则仍基本保守为 `uv0`，scroll 也尚未做到节点级 texture-role 路由。
@@ -75,7 +76,7 @@
 - 多套 UV、secondary normal/bitangent、`color1`、flow 已进 GPU 输入，但 shader-family-specific 逻辑还没有使用这些通道。
 - mesh category、submesh attribute mask/name 和 shape influence 摘要已进入第一版 `PreparedModel` / `PreparedMesh`；`PreparedModelOptions.enabledAttributeMask` 已可按显式运行时 attribute mask 隐藏 disabled submesh，`enabledShapeMask` 已可审计 active/inactive shape influence，但 Web 离线默认仍不猜这些 mask。bone/skin/morph 和实际 shape vertex replacement 仍没有进入后续渲染决策。
 - 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps 已有第一版实时消费，但 MeddleTools 中完整 tile array、scroll、transparency、reflection 等节点逻辑大多没有实现。
-- 染色、运行时 ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。
+- 运行时 GPU ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。静态 stain0/stain1 已有完整离线输入和 STM 应用路径。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
 ## 分层审查结论与计划总览
@@ -90,7 +91,7 @@
 
 主要不足：
 
-- 染色已接入同步/异步 weapon model load、material summary 和 ColorTable bake；默认请求仍是 `[0,0]` 无染色。当前主要缺口是 Web UI 尚未提供 stain0/stain1 选择器，EXD stain 名称/色块 metadata 尚未导出，也还没有纳入正式视觉 snapshot 组合。
+- 染色已接入同步/异步 weapon model load、material summary、ColorTable bake 和 Web stain0/stain1 选择器；EXD 名称、UI 色块、排序和 metallic metadata 也已导出。当前主要缺口是还没有把染色组合纳入正式视觉 snapshot。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
 - reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
@@ -98,7 +99,7 @@
 计划：
 
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
-2. 继续染色体验链路：请求级 stain IDs、STM 缓存和 bake 前应用已完成；下一步导出 EXD `Stain` 选择器 metadata，在 Web UI 提供 stain0/stain1 输入，并为染色明显的武器增加视觉 snapshot。EXD 颜色只用于 UI，不作为实际覆盖值。
+2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器和 URL 状态；下一步为染色明显的武器增加正式视觉 snapshot。EXD 颜色继续只用于 UI，不作为实际覆盖值。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
 4. 对 runtime-only 数据不盲猜：decal/crest 先提供空白或显式输入 fallback，GPU ColorTable 先只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
@@ -229,10 +230,11 @@
 
 请求级 stain IDs 已接入 `WeaponModelLoadRequest`、同步/异步 resource path、resource key、`WeaponModelData` 和 `ModelMaterial.stainingApplication`。材质会先把原始 ColorTable 转成统一 rows，应用 STM，再用同一份 rows 计算 summary 与 bake textures；无 stain 请求不会读取 STM。
 
-仍需接入：
+EXD 与 Web 输入已接入：
 
-- 可选加载 EXD `Stain` 名称、UI 颜色和 metallic 标记，用于选择器显示，不参与 STM ColorTable 覆盖计算
-- Web stain0/stain1 选择器；底层 `load_weapon_model_with_stains` API 已存在，默认 `load_weapon_model` 继续使用 `[0,0]`
+- `WeaponCatalogPackage.stains` 保存 `Stain` ID、名称、原始 BGR 色值、转换后的 UI RGBA、shade、sub-order 和 metallic；浏览器本地 SqPack 目录缓存已升级版本并预加载 `Item` 与 `Stain` sheet
+- Web stain0/stain1 选择器按 `shade/sub-order/id` 排序，显示色块和 metallic 标记；URL 使用 `stain0/stain1`，模型资源 key、canvas key 和旧结果过滤都包含两个 stain ID
+- 当前本地 `Stain` EXD 有 125 个具名行；STM 的 254 是 1-based 调色板容量上限，不代表 EXD 必须有 254 个可选名称
 
 离线 Web 预览不能拿到 Meddle 的 runtime GPU ColorTable，因此需要在静态 MTRL ColorTable bake 前应用 STM。Meddle 从运行时装备实例读取 stain0/stain1，不存在可从静态 Item 可靠推断的默认 stain。
 
@@ -242,6 +244,7 @@
 - 已增加 STM focused tests，覆盖 Legacy/GUD header、u16/u32 key、singleton/direct/indexed column、1-based stain ID、单色/双色 channel、逐 flag 覆盖、黑色 specular 保留和 kind mismatch。
 - 已用本地 SqPack ignored test 验证当前 Legacy STM 为 v1.1、GUD STM 为 v2.1，均有 43 个模板；key 范围分别为 100..612 与 1100..1612，验证了 GUD 到 Legacy 的 `-1000` fallback 关系。
 - 已用真实武器 `45052` 做 ignored integration test：stain `[1,0]` 只处理启用 dye flags 的行，application report 无 missing template/error，且 baked base texture 与 `[0,0]` 未染色版本不同。
+- 已用本地 `Stain` sheet ignored test 验证当前 125 个具名染剂、BGR 到 RGBA 转换、shade/sub-order 排序和 metallic 字段；Web URL parser 覆盖双通道与保留值 255 拒绝。
 - 再选几件游戏中染色效果明显的武器做 visual snapshot。
 
 ### P2: 解析更多 runtime-only 或 shader-specific 信息的替代输入
@@ -553,10 +556,10 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 从当前状态继续推进时，优先级应按依赖关系排：
 
-1. 数据解析：Legacy/GUD STM、请求级 stain IDs、同步/异步加载和 bake 前应用已完成；下一步导出 EXD Stain 名称/UI 颜色/metallic metadata，供 Web 选择器使用。runtime GPU ColorTable 仍只作为 unsupported 输入标记。
-2. 结果处理：stain application report 已进入 `ModelMaterial`、phantom summary 和 prepared unsupported 决策；下一步把 decal/crest fallback、tile/detail array availability 变成显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
-3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset、glass IOR/thickness、multi diffuse、outline rim 和 multi/detail normal scale 已有保守 fallback，下一步顺序为 texture mip/shadow offset 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
-4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。
+1. 数据解析：染色数据与 Web 输入链路已完成；下一步调查并表达 decal/crest 的静态替代输入，以及真实 tile/detail array 的资源路径和可用性。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
+2. 结果处理：把 decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
+3. 渲染器：优先接入真实 tile/detail array；同时继续消费结构化但尚未实际影响画面的参数。`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
+4. 验证：先为染色明显的武器增加正式视觉 snapshot；每个后续语义修正继续配 focused unit test，涉及 WGSL 时至少跑 renderer 单测、native snapshot、wasm check 和真实 phantom 回归。
 
 ### 第一阶段：可审计和不误画
 
@@ -587,7 +590,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 ### 第三阶段：shader family 和运行时替代输入
 
 1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；其中这些 shader package 已先进入 `MaterialShaderFamily` 分类，具体节点逻辑仍待实现。
-2. 已完成 STM lookup/row override、同步/异步 weapon load 和 prepared diagnostics；后续补 Web stain0/stain1 选择器与 EXD metadata。
+2. 已完成 STM lookup/row override、同步/异步 weapon load、prepared diagnostics、EXD metadata 和 Web stain0/stain1 选择器；后续补正式染色视觉 snapshot。
 3. 设计 decal/crest fallback 或显式输入。
 4. 评估离线 bake/atlas 路线。
 

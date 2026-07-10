@@ -26,7 +26,7 @@ const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 const LOCAL_RESOURCE_CACHE_DB: &str = "xiv-companion-resource-cache";
 const LOCAL_RESOURCE_CACHE_STORE: &str = "resources";
 const LOCAL_CRAFT_DATA_CACHE_KEY: &str = "user-local-craft-data";
-const LOCAL_WEAPON_CATALOG_CACHE_KEY: &str = "user-local-weapon-catalog";
+const LOCAL_WEAPON_CATALOG_CACHE_KEY: &str = "user-local-weapon-catalog-v2";
 const ITEM_ICON_READ_WINDOW: u64 = 2 * 1024 * 1024;
 
 pub fn default_web_resource_hub() -> ResourceHub {
@@ -370,9 +370,10 @@ async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
     log::info(
         "resource",
         format!(
-            "WeaponCatalog export_weapon_catalog_from_resource completed in {} ({} items)",
+            "WeaponCatalog export_weapon_catalog_from_resource completed in {} ({} items, {} stains)",
             log::format_elapsed(export_elapsed_ms),
             data.counts.items,
+            data.counts.stains,
         ),
     );
 

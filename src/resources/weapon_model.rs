@@ -36,7 +36,7 @@ impl ResourceSpec for WeaponCatalogResource {
             default_policy: SourcePolicy::Fixed(ResourceSource::UserLocal),
             fallback_policy: FallbackPolicy::default(),
             cache_policy: CachePolicy::ReadWrite,
-            pipeline: "weapon-catalog-json-v1",
+            pipeline: "weapon-catalog-json-v2",
         }
     }
 
@@ -172,6 +172,23 @@ pub fn parse_weapon_model_request_key(key: &str) -> Result<WeaponModelId, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weapon_catalog_defaults_missing_stain_metadata() {
+        let catalog = serde_json::from_str::<WeaponCatalogPackage>(
+            r#"{
+                "generatedAt":"old",
+                "gameVersion":"old",
+                "source":"old",
+                "counts":{"items":0},
+                "items":[]
+            }"#,
+        )
+        .expect("legacy weapon catalog");
+
+        assert_eq!(catalog.counts.stains, 0);
+        assert!(catalog.stains.is_empty());
+    }
 
     #[test]
     fn weapon_model_request_key_round_trips_stain_ids() {

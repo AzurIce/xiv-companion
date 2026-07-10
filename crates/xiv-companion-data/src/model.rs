@@ -7,6 +7,8 @@ pub struct WeaponCatalogPackage {
     pub game_version: String,
     pub source: String,
     pub counts: WeaponCatalogCounts,
+    #[serde(default)]
+    pub stains: Vec<WeaponStain>,
     pub items: Vec<WeaponCatalogItem>,
 }
 
@@ -14,6 +16,20 @@ pub struct WeaponCatalogPackage {
 #[serde(rename_all = "camelCase")]
 pub struct WeaponCatalogCounts {
     pub items: usize,
+    #[serde(default)]
+    pub stains: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponStain {
+    pub id: u8,
+    pub name: String,
+    pub se_color: u32,
+    pub ui_color: [u8; 4],
+    pub shade: u8,
+    pub sub_order: u8,
+    pub metallic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

@@ -14,7 +14,8 @@ use physis::{
 use crate::{
     CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe, ItemSource,
     MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
-    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, is_weapon_equip_slot_category,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponStain,
+    is_weapon_equip_slot_category,
 };
 
 pub struct GameExcel<R: Resource> {
@@ -76,12 +77,17 @@ pub fn export_weapon_catalog_from_resource<R: Resource>(
 ) -> Result<WeaponCatalogPackage> {
     let mut game = GameExcel::new(resource, source_label, game_version);
     let items = game.load_weapon_catalog_items()?;
+    let stains = game.load_weapon_stains()?;
 
     Ok(WeaponCatalogPackage {
         generated_at,
         game_version: game.game_version.clone(),
         source: game.source_label.clone(),
-        counts: WeaponCatalogCounts { items: items.len() },
+        counts: WeaponCatalogCounts {
+            items: items.len(),
+            stains: stains.len(),
+        },
+        stains,
         items,
     })
 }
@@ -169,6 +175,36 @@ impl<R: Resource> GameExcel<R> {
                 .then(a.id.cmp(&b.id))
         });
         Ok(items)
+    }
+
+    pub fn load_weapon_stains(&mut self) -> Result<Vec<WeaponStain>> {
+        let sheet = self.sheet("Stain", Language::ChineseSimplified)?;
+        let mut stains = Vec::new();
+
+        for_each_row(&sheet, |row_id, row| {
+            let Ok(id) = u8::try_from(row_id) else {
+                return;
+            };
+            if id == 0 {
+                return;
+            }
+            let Some(name) = string_value(row, 3).filter(|name| !name.is_empty()) else {
+                return;
+            };
+            let se_color = number_value(row, 0);
+            stains.push(WeaponStain {
+                id,
+                name: name.to_owned(),
+                se_color,
+                ui_color: se_color_to_rgba(se_color),
+                shade: number_value(row, 1) as u8,
+                sub_order: number_value(row, 2) as u8,
+                metallic: bool_value(row, 5),
+            });
+        });
+
+        stains.sort_by_key(|stain| (stain.shade, stain.sub_order, stain.id));
+        Ok(stains)
     }
 
     pub fn load_recipes(&mut self) -> Result<Vec<CraftRecipe>> {
@@ -484,6 +520,59 @@ fn model_id_value(row: &Row, col: usize) -> u64 {
         Some(Field::UInt64(value)) => *value,
         Some(field) => field_number_value(field) as u64,
         None => 0,
+    }
+}
+
+fn se_color_to_rgba(color: u32) -> [u8; 4] {
+    [
+        (color & 0xff) as u8,
+        ((color >> 8) & 0xff) as u8,
+        ((color >> 16) & 0xff) as u8,
+        0xff,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn se_color_to_rgba_matches_meddle_bgr_conversion() {
+        assert_eq!(se_color_to_rgba(0x12_34_56), [0x56, 0x34, 0x12, 0xff]);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn loads_installed_game_stains() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let resource = SqPackResource::from_existing(&game_dir);
+        let catalog = export_weapon_catalog_from_resource(
+            resource,
+            game_dir,
+            "installed".to_string(),
+            "test".to_string(),
+        )
+        .expect("installed weapon catalog");
+        let stains = &catalog.stains;
+
+        eprintln!(
+            "stains: count={}, first={:#?}, last={:#?}",
+            stains.len(),
+            stains.first(),
+            stains.last()
+        );
+        assert_eq!(catalog.counts.items, catalog.items.len());
+        assert_eq!(catalog.counts.stains, stains.len());
+        assert!(!catalog.items.is_empty());
+        assert!(stains.len() >= 100);
+        assert!(stains.iter().all(|stain| !stain.name.is_empty()));
+        assert!(stains.iter().all(|stain| stain.id <= 254));
+        assert!(stains.windows(2).all(|pair| {
+            (pair[0].shade, pair[0].sub_order, pair[0].id)
+                <= (pair[1].shade, pair[1].sub_order, pair[1].id)
+        }));
+        assert!(stains.iter().any(|stain| stain.metallic));
     }
 }
 

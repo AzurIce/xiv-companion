@@ -85,10 +85,6 @@ pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
     Ok(Rc::new(data))
 }
 
-pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
-    load_weapon_model_with_stains(item, [0, 0]).await
-}
-
 pub async fn load_weapon_model_with_stains(
     item: WeaponCatalogItem,
     stain_ids: [u8; 2],

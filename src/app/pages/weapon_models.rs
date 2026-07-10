@@ -22,11 +22,11 @@ use xiv_companion::renderer::{ModelDebugMode, WeaponRenderOptions};
 
 use xiv_companion::{
     PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
-    WeaponModelTextureKind, weapon_slot_label,
+    WeaponModelTextureKind, WeaponStain, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
-use crate::app::data::{load_weapon_catalog, load_weapon_model};
+use crate::app::data::{load_weapon_catalog, load_weapon_model_with_stains};
 
 const RESULT_LIMIT: usize = 220;
 
@@ -95,6 +95,7 @@ struct WeaponUrlState {
     query: String,
     filter: WeaponSlotFilter,
     item_id: Option<u32>,
+    stain_ids: [u8; 2],
 }
 
 #[component]
@@ -103,17 +104,20 @@ pub fn WeaponModelsPage() -> Element {
     let initial_query = initial_url_state.query;
     let initial_filter = initial_url_state.filter;
     let initial_item_id = initial_url_state.item_id;
+    let initial_stain_ids = initial_url_state.stain_ids;
 
     let catalog = use_resource(load_weapon_catalog);
     let mut query = use_signal(move || initial_query.clone());
     let mut slot_filter = use_signal(move || initial_filter);
     let mut selected_id = use_signal(move || initial_item_id);
     let mut selected_item = use_signal(|| None::<WeaponCatalogItem>);
+    let mut stain_ids = use_signal(move || initial_stain_ids);
     let model = use_resource(move || {
         let item = selected_item();
+        let stain_ids = stain_ids();
         async move {
             match item {
-                Some(item) => load_weapon_model(item).await,
+                Some(item) => load_weapon_model_with_stains(item, stain_ids).await,
                 None => Err("未选择武器".to_string()),
             }
         }
@@ -140,7 +144,7 @@ pub fn WeaponModelsPage() -> Element {
     });
 
     use_effect(move || {
-        sync_weapon_url_state(&query(), slot_filter(), selected_id());
+        sync_weapon_url_state(&query(), slot_filter(), selected_id(), stain_ids());
     });
 
     let catalog_snapshot = catalog.read().as_ref().cloned();
@@ -148,6 +152,7 @@ pub fn WeaponModelsPage() -> Element {
     let selected_id_snapshot = selected_id();
     let query_snapshot = query();
     let slot_filter_snapshot = slot_filter();
+    let stain_ids_snapshot = stain_ids();
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
@@ -162,6 +167,7 @@ pub fn WeaponModelsPage() -> Element {
                             Badge { variant: BadgeVariant::Outline, "UserLocal" }
                             span { "{catalog.game_version}" }
                             span { "{format_integer(catalog.counts.items as f64)} 件武器" }
+                            span { "{format_integer(catalog.counts.stains as f64)} 种染剂" }
                         }
                     }
                 }
@@ -200,7 +206,7 @@ pub fn WeaponModelsPage() -> Element {
                     rsx! {
                         div { class: "grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[380px_minmax(0,1fr)]",
                             WeaponSearchPane {
-                                catalog,
+                                catalog: catalog.clone(),
                                 query: query_snapshot,
                                 filter: slot_filter_snapshot,
                                 result: search,
@@ -215,6 +221,15 @@ pub fn WeaponModelsPage() -> Element {
                             WeaponModelPane {
                                 selected: selected_snapshot,
                                 model,
+                                stains: catalog.stains.clone(),
+                                stain_ids: stain_ids_snapshot,
+                                on_stain_change: move |(channel, stain_id): (usize, u8)| {
+                                    let mut next = stain_ids();
+                                    if let Some(value) = next.get_mut(channel) {
+                                        *value = stain_id;
+                                        stain_ids.set(next);
+                                    }
+                                },
                             }
                         }
                     }
@@ -332,6 +347,9 @@ fn WeaponListRow(
 fn WeaponModelPane(
     selected: Option<WeaponCatalogItem>,
     model: Resource<Result<Rc<WeaponModelData>, String>>,
+    stains: Vec<WeaponStain>,
+    stain_ids: [u8; 2],
+    on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let render_options = use_signal(WeaponRenderOptions::default);
 
@@ -358,12 +376,18 @@ fn WeaponModelPane(
                             "{item.description}"
                         }
                     }
+                    WeaponStainControls {
+                        stains,
+                        stain_ids,
+                        on_stain_change,
+                    }
                 }
 
                 div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
                     div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
                         match model.read().as_ref() {
-                            Some(Ok(data)) if data.item_id == item.id => {
+                            Some(Ok(data))
+                                if data.item_id == item.id && data.stain_ids == stain_ids => {
                                 let key = model_canvas_key(data);
                                 rsx! {
                                     div { key: "{key}", class: "absolute inset-0",
@@ -394,7 +418,8 @@ fn WeaponModelPane(
 
                     aside { class: "h-56 shrink-0 overflow-y-auto border-t bg-card p-4 xl:h-auto xl:w-80 xl:border-l xl:border-t-0",
                         match model.read().as_ref() {
-                            Some(Ok(data)) if data.item_id == item.id => rsx! {
+                            Some(Ok(data))
+                                if data.item_id == item.id && data.stain_ids == stain_ids => rsx! {
                                 WeaponModelStats { model: data.clone() }
                             },
                             _ => rsx! {
@@ -650,6 +675,83 @@ fn parse_render_slider_value(value: &str) -> f32 {
     value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 160.0)
 }
 
+#[component]
+fn WeaponStainControls(
+    stains: Vec<WeaponStain>,
+    stain_ids: [u8; 2],
+    on_stain_change: EventHandler<(usize, u8)>,
+) -> Element {
+    rsx! {
+        div { class: "mt-3 flex flex-wrap items-end gap-3 border-t pt-3",
+            div { class: "pb-2 text-xs font-medium text-muted-foreground", "染色" }
+            WeaponStainControl {
+                label: "通道 1",
+                stains: stains.clone(),
+                value: stain_ids[0],
+                onchange: move |value| on_stain_change.call((0, value)),
+            }
+            WeaponStainControl {
+                label: "通道 2",
+                stains,
+                value: stain_ids[1],
+                onchange: move |value| on_stain_change.call((1, value)),
+            }
+        }
+    }
+}
+
+#[component]
+fn WeaponStainControl(
+    label: &'static str,
+    stains: Vec<WeaponStain>,
+    value: u8,
+    onchange: EventHandler<u8>,
+) -> Element {
+    let selected = stains.iter().find(|stain| stain.id == value);
+    let swatch_style = selected
+        .map(|stain| {
+            format!(
+                "background-color: rgb({}, {}, {});",
+                stain.ui_color[0], stain.ui_color[1], stain.ui_color[2]
+            )
+        })
+        .unwrap_or_else(|| "background-color: transparent;".to_string());
+    let swatch_title = selected
+        .map(|stain| stain.name.clone())
+        .unwrap_or_else(|| "无染色".to_string());
+    let select_class = input_class("h-9 min-w-40 cursor-pointer py-1 text-xs");
+
+    rsx! {
+        label { class: "min-w-0 space-y-1",
+            span { class: "block text-[11px] text-muted-foreground", "{label}" }
+            div { class: "flex items-center gap-2",
+                span {
+                    class: "h-7 w-7 shrink-0 rounded border border-border shadow-sm",
+                    style: "{swatch_style}",
+                    title: "{swatch_title}",
+                }
+                select {
+                    class: "{select_class}",
+                    value: "{value}",
+                    onchange: move |event| {
+                        onchange.call(parse_stain_id(&event.value()));
+                    },
+                    option { value: "0", "无染色" }
+                    for stain in stains {
+                        option { value: "{stain.id}",
+                            if stain.metallic {
+                                "{stain.name} · 金属"
+                            } else {
+                                "{stain.name}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
     match mode {
         ModelDebugMode::Final => "final",
@@ -708,10 +810,12 @@ fn WeaponModelCanvas(
     render_options: Signal<WeaponRenderOptions>,
 ) -> Element {
     let canvas_id = format!(
-        "weapon-model-canvas-{}-{}-{}",
+        "weapon-model-canvas-{}-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
+        model.stain_ids[0],
+        model.stain_ids[1],
     );
     let init_error = use_signal(|| None::<String>);
 
@@ -874,6 +978,7 @@ fn initial_weapon_url_state() -> WeaponUrlState {
             query: String::new(),
             filter: WeaponSlotFilter::All,
             item_id: None,
+            stain_ids: [0, 0],
         }
     }
 }
@@ -884,6 +989,7 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
         query: String::new(),
         filter: WeaponSlotFilter::All,
         item_id: None,
+        stain_ids: [0, 0],
     };
 
     let route = hash.trim_start_matches('#');
@@ -904,6 +1010,8 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
             "item" | "itemId" | "id" => {
                 state.item_id = value.parse::<u32>().ok();
             }
+            "stain0" | "dye0" => state.stain_ids[0] = parse_stain_id(&value),
+            "stain1" | "dye1" => state.stain_ids[1] = parse_stain_id(&value),
             _ => {}
         }
     }
@@ -918,8 +1026,21 @@ fn decode_query_value(value: &str) -> String {
         .unwrap_or_else(|_| value.to_string())
 }
 
+fn parse_stain_id(value: &str) -> u8 {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|stain_id| *stain_id <= 254)
+        .unwrap_or(0)
+}
+
 #[allow(unused_variables)]
-fn sync_weapon_url_state(query: &str, filter: WeaponSlotFilter, item_id: Option<u32>) {
+fn sync_weapon_url_state(
+    query: &str,
+    filter: WeaponSlotFilter,
+    item_id: Option<u32>,
+    stain_ids: [u8; 2],
+) {
     #[cfg(target_arch = "wasm32")]
     {
         let Some(window) = web_sys::window() else {
@@ -936,6 +1057,12 @@ fn sync_weapon_url_state(query: &str, filter: WeaponSlotFilter, item_id: Option<
         }
         if let Some(item_id) = item_id {
             params.push(format!("item={item_id}"));
+        }
+        if stain_ids[0] != 0 {
+            params.push(format!("stain0={}", stain_ids[0]));
+        }
+        if stain_ids[1] != 0 {
+            params.push(format!("stain1={}", stain_ids[1]));
         }
 
         let hash = if params.is_empty() {
@@ -980,10 +1107,12 @@ fn format_vec3(value: [f32; 3]) -> String {
 
 fn model_canvas_key(model: &WeaponModelData) -> String {
     format!(
-        "{}-{}-{}",
+        "{}-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
+        model.stain_ids[0],
+        model.stain_ids[1],
     )
 }
 
@@ -993,11 +1122,20 @@ mod weapon_url_tests {
 
     #[test]
     fn parses_weapon_url_state_from_hash() {
-        let state =
-            weapon_url_state_from_hash("#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058");
+        let state = weapon_url_state_from_hash(
+            "#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058&stain0=17&stain1=93",
+        );
         assert_eq!(state.query, "浪漫");
         assert_eq!(state.filter, WeaponSlotFilter::TwoHanded);
         assert_eq!(state.item_id, Some(45058));
+        assert_eq!(state.stain_ids, [17, 93]);
+    }
+
+    #[test]
+    fn stain_id_parser_rejects_reserved_and_invalid_values() {
+        assert_eq!(parse_stain_id("254"), 254);
+        assert_eq!(parse_stain_id("255"), 0);
+        assert_eq!(parse_stain_id("invalid"), 0);
     }
 
     #[test]

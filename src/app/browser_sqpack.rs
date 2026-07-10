@@ -154,7 +154,7 @@ impl BrowserSqPack {
     }
 
     pub async fn weapon_catalog_cache_fingerprint(&self) -> Result<String, String> {
-        self.exd_index_cache_fingerprint("weapon-catalog", "WeaponCatalog")
+        self.exd_index_cache_fingerprint("weapon-catalog-v2", "WeaponCatalog")
             .await
     }
 
@@ -237,9 +237,11 @@ impl BrowserSqPack {
         &mut self,
     ) -> Result<InMemoryPhysisResource, String> {
         let start_ms = log::now_ms();
-        log::info("sqpack", "preloading WeaponCatalog Item sheet");
+        log::info("sqpack", "preloading WeaponCatalog Item and Stain sheets");
         let mut files = HashMap::new();
         self.preload_sheet(&mut files, "Item", &[Language::ChineseSimplified])
+            .await?;
+        self.preload_sheet(&mut files, "Stain", &[Language::ChineseSimplified])
             .await?;
         log::info(
             "sqpack",
