@@ -7,6 +7,8 @@ mod mdl_geometry;
 pub mod mdl_metadata;
 pub mod model;
 #[cfg(feature = "game-data")]
+pub mod staining;
+#[cfg(feature = "game-data")]
 mod texture_decode;
 pub mod weapon_models;
 

@@ -1358,6 +1358,8 @@ pub struct ColorTableRowColors {
     pub diffuse: [f32; 3],
     pub specular: [f32; 3],
     pub emissive: [f32; 3],
+    /// Dawntrail ColorTable Scalar11，受 ColorDyeTable 的 Scalar3 flag 控制。
+    pub scalar3: f32,
     pub gloss_strength: f32,
     pub specular_strength: f32,
     pub roughness: f32,
@@ -1382,6 +1384,7 @@ impl Default for ColorTableRowColors {
             diffuse: [0.0; 3],
             specular: [0.0; 3],
             emissive: [0.0; 3],
+            scalar3: 0.0,
             gloss_strength: 1.0,
             specular_strength: 1.0,
             roughness: 0.5,

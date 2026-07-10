@@ -23,6 +23,7 @@
 - `E:\repos\Meddle\Meddle\Meddle.Utils\Constants\Names.cs`：已知 material parameter CRC、默认值和 shader 覆盖范围。
 - `E:\repos\Meddle\Meddle\Meddle.Utils\Files\Structs\Material\ColorTableRow.cs`：Dawntrail/Legacy ColorTable 字段语义。
 - `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`、`node_mappings.py`、`bake\bake_utils.py`：texture node config、UV scroll、ColorTable extra ramps、shader package mapping、diffuse/normal/roughness/glossy/transmission/emission bake。
+- Penumbra.GameData `StmFile.cs`、`DyePack.cs`、`LegacyDyePack.cs` 与 ColorTable `ApplyDye`：Legacy/GUD STM 路径、1-based stain ID、column 编码和逐 flag ColorTable 覆盖规则。Meddle 的 `ColorDyeTableRow.cs` 注释直接引用该实现。
 
 ## 当前状态摘要
 
@@ -47,7 +48,8 @@
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`；lightshaft 已有最小 additive/tint/UV 动画 shader 行为，其它新增特殊 character family 目前仍主要用于准备层分类和 debug。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
-- `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，但尚未应用 stain。
+- `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，但尚未把 stain 输入接入实际 model load。
+- 数据层已实现 Legacy `chara/base_material/stainingtemplate.stm` 与 Dawntrail `chara/base_material/stainingtemplate_gud.stm` 的通用 parser，覆盖 v1.1/v2.0/v2.1、u16/u32 keys、singleton/direct/indexed column 编码、1-based stain ID lookup，以及 Dawntrail template ID 减 1000 后回退 Legacy STM；同时已有按 Legacy/Dawntrail dye flags 覆盖 renderer-friendly ColorTable rows 的纯函数与诊断报告。
 - `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总。
 - `PreparedMaterialUnsupportedInputs` 已有第一版，按当前可可靠判断的数据标出 dye application、runtime ColorTable、decal/crest、tile array、detail array、incomplete shader family logic，phantom summary 会随 prepared material 输出这些缺口。
 - `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties、material/multi debug view 与 ColorTable extra map debug view 的采样 UV，并会按 render time 对 `uv0` / `uv1` 来源叠加已解析的 scroll multiplier；当前 source 规则仍基本保守为 `uv0`，scroll 也尚未做到节点级 texture-role 路由。
@@ -87,7 +89,7 @@
 
 主要不足：
 
-- 染色的 MTRL 行语义已结构化进 `ModelMaterial.colorDyeTable`，覆盖 Legacy 的 diffuse/specular/emissive/gloss/specular-strength flag，以及 Dawntrail 的 template/channel 和 diffuse/specular/emissive/scalar/metalness/roughness/sheen/anisotropy/sphere flag；尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入，因此仍不能生成实际染色 override。
+- 染色的 MTRL 行语义、Legacy/GUD STM 解析和逐 flag ColorTable row 覆盖函数已完成；尚未把 stain ID 输入接入 `WeaponModelLoadRequest` / Web UI，也没有在实际材质加载时选择 STM 并在 ColorTable bake 前应用，因此当前模型输出仍是未染色版本。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
 - reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
@@ -95,7 +97,7 @@
 计划：
 
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
-2. 继续染色解析链路：`ColorDyeTable` 行标志已结构化；下一步加载 `chara/base_material/stainingtemplate.stm`，定义 EXD/item/user stain 输入，再生成染色后的 ColorTable 或 renderer-friendly override。
+2. 继续染色接入链路：`ColorDyeTable`、Legacy/GUD STM parser 和 row override 已完成；下一步定义请求级 stain0/stain1 输入，加载/缓存对应 STM，并在 ColorTable bake 与 material summary 前应用。EXD `Stain` 的名称/颜色只作为可选 UI metadata，不作为实际覆盖值。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
 4. 对 runtime-only 数据不盲猜：decal/crest 先提供空白或显式输入 fallback，GPU ColorTable 先只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
@@ -214,21 +216,30 @@
 
 ### P1: 处理染色数据入口
 
-当前已把 Legacy/Dawntrail `ColorDyeTable` 的 template、channel 和可染通道 flag 结构化到 `ModelMaterial.colorDyeTable`；`ModelMaterial.hasColorDyeTable` 继续作为兼容字段，`PreparedMaterialFeatureFlags.usesDye` 和 `unsupportedInputs.dyeApplication` 会识别两种入口。现有 material debug 复用同一转换逻辑，但还没有应用染色。
+当前已把 Legacy/Dawntrail `ColorDyeTable` 的 template、channel 和可染通道 flag 结构化到 `ModelMaterial.colorDyeTable`；`ModelMaterial.hasColorDyeTable` 继续作为兼容字段，`PreparedMaterialFeatureFlags.usesDye` 和 `unsupportedInputs.dyeApplication` 会识别两种入口。现有 material debug 复用同一转换逻辑。
 
-需要解析或加载：
+数据层还已实现：
 
-- MTRL `ColorDyeTable`
-- `chara/base_material/stainingtemplate.stm`
-- EXD `Stain` / `StainTransient` 中可用于预览的颜色参数
-- item 的默认 stain 或用户选择 stain 输入
+- Legacy `chara/base_material/stainingtemplate.stm` v1.1 parser。
+- Dawntrail `chara/base_material/stainingtemplate_gud.stm` v2.0/v2.1 parser。
+- 254 个 1-based stain ID 的 singleton、direct、indexed palette column 解码。
+- Legacy/Dawntrail dye pack lookup。
+- 按 dye row channel/flags 覆盖 `ColorTableRowColors` 的纯函数；包含黑色 specular 不覆盖、Legacy-on-Dawntrail fallback 和 kind mismatch/missing input 诊断。
 
-离线 Web 预览不能拿到 Meddle 的 runtime GPU ColorTable，因此需要静态复刻染色表应用逻辑。
+尚未完成的是把请求级 stain ID 接到真实 weapon material load/bake 路径。
+
+仍需接入：
+
+- 请求或用户选择的 stain0/stain1 ID；默认无染色
+- 可选加载 EXD `Stain` 名称、UI 颜色和 metallic 标记，用于选择器显示，不参与 STM ColorTable 覆盖计算
+
+离线 Web 预览不能拿到 Meddle 的 runtime GPU ColorTable，因此需要在静态 MTRL ColorTable bake 前应用 STM。Meddle 从运行时装备实例读取 stain0/stain1，不存在可从静态 Item 可靠推断的默认 stain。
 
 验证：
 
 - 已增加 focused tests，覆盖 Legacy/Dawntrail `ColorDyeTable` 到结构化 model rows 的字段保真，以及 structured table 独立于旧 bool 时仍会触发 prepared dye/unsupported 标记。
-- 先用单色、双色染色 fixture 验证 ColorTable row flag 应用。
+- 已增加 STM focused tests，覆盖 Legacy/GUD header、u16/u32 key、singleton/direct/indexed column、1-based stain ID、单色/双色 channel、逐 flag 覆盖、黑色 specular 保留和 kind mismatch。
+- 已用本地 SqPack ignored test 验证当前 Legacy STM 为 v1.1、GUD STM 为 v2.1，均有 43 个模板；key 范围分别为 100..612 与 1100..1612，验证了 GUD 到 Legacy 的 `-1000` fallback 关系。
 - 再选几件游戏中染色效果明显的武器做 visual snapshot。
 
 ### P2: 解析更多 runtime-only 或 shader-specific 信息的替代输入
@@ -540,8 +551,8 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 从当前状态继续推进时，优先级应按依赖关系排：
 
-1. 数据解析：继续补染色输入链路。`ColorDyeTable` 行语义已结构化进 model；下一步解析 `stainingtemplate.stm`、EXD stain 参数和用户 stain 输入，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
-2. 结果处理：把 stain、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
+1. 数据解析：Legacy/GUD STM parser 与 ColorTable row override 已完成；下一步把 stain0/stain1 ID 加入 weapon model load request，加载/缓存正确 STM，并在 summary/bake 前应用。EXD Stain 只补选择器 metadata；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
+2. 结果处理：把 stain application report、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
 3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset、glass IOR/thickness、multi diffuse、outline rim 和 multi/detail normal scale 已有保守 fallback，下一步顺序为 texture mip/shadow offset 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
 4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。
 
@@ -574,7 +585,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 ### 第三阶段：shader family 和运行时替代输入
 
 1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；其中这些 shader package 已先进入 `MaterialShaderFamily` 分类，具体节点逻辑仍待实现。
-2. 接入染色。
+2. 把已完成的 STM lookup/row override 接入同步/异步 weapon load、Web stain0/stain1 输入和 prepared diagnostics。
 3. 设计 decal/crest fallback 或显式输入。
 4. 评估离线 bake/atlas 路线。
 
