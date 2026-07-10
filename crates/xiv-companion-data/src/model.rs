@@ -82,6 +82,8 @@ pub struct WeaponModelData {
     pub item_name: String,
     pub model_main: PackedModelId,
     pub model_sub: Option<PackedModelId>,
+    #[serde(default)]
+    pub stain_ids: [u8; 2],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub load_diagnostics: Vec<WeaponModelLoadDiagnostic>,
     pub loaded_paths: Vec<String>,
@@ -343,6 +345,27 @@ pub enum ModelColorDyeTable {
     Opaque,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StainingApplicationReport {
+    pub rows_considered: usize,
+    pub rows_changed: usize,
+    pub rows_skipped_no_stain: usize,
+    pub rows_skipped_missing_template: usize,
+    pub rows_unavailable: usize,
+    pub template_kind_mismatch: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStainingApplication {
+    pub stain_ids: [u8; 2],
+    pub template_path: String,
+    pub report: StainingApplicationReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelMaterial {
@@ -449,6 +472,8 @@ pub struct ModelMaterial {
     pub has_color_dye_table: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_dye_table: Option<ModelColorDyeTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staining_application: Option<ModelStainingApplication>,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -1034,10 +1059,12 @@ pub fn prepared_material_unsupported_inputs(
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialUnsupportedInputs {
     let feature_flags = prepared_material_feature_flags(material, shader_family, texture_bindings);
-    let has_color_dye_table = material.map(material_has_color_dye_table).unwrap_or(false);
+    let dye_application = material
+        .and_then(|material| material.staining_application.as_ref())
+        .is_some_and(staining_application_is_incomplete);
 
     PreparedMaterialUnsupportedInputs {
-        dye_application: has_color_dye_table,
+        dye_application,
         runtime_color_table: feature_flags.uses_color_table,
         decal_or_crest: matches!(draw_role, ModelMeshDrawRole::DebugVisible),
         tile_array: feature_flags.uses_tile,
@@ -1048,6 +1075,13 @@ pub fn prepared_material_unsupported_inputs(
 
 fn material_has_color_dye_table(material: &ModelMaterial) -> bool {
     material.has_color_dye_table || material.color_dye_table.is_some()
+}
+
+fn staining_application_is_incomplete(application: &ModelStainingApplication) -> bool {
+    application.error.is_some()
+        || application.report.template_kind_mismatch
+        || application.report.rows_skipped_missing_template != 0
+        || application.report.rows_unavailable != 0
 }
 
 fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) -> bool {
@@ -1969,7 +2003,19 @@ mod color_table_bake_tests {
         material.color_dye_table = Some(ModelColorDyeTable::Opaque);
         let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(prepared.feature_flags.uses_dye);
-        assert!(prepared.unsupported_inputs.dye_application);
+        assert!(!prepared.unsupported_inputs.dye_application);
+
+        material.staining_application = Some(ModelStainingApplication {
+            stain_ids: [1, 0],
+            template_path: String::new(),
+            report: StainingApplicationReport::default(),
+            error: Some("opaque ColorDyeTable cannot be applied".to_string()),
+        });
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .dye_application
+        );
 
         material = test_material();
         material.shader_package_name = Some("characterScroll.shpk".to_string());
@@ -2005,6 +2051,15 @@ mod color_table_bake_tests {
         material.tile_index = 3.0;
         material.multi_map_texture = Some(5);
         material.shader_package_name = Some("characterReflection.shpk".to_string());
+        material.staining_application = Some(ModelStainingApplication {
+            stain_ids: [1, 0],
+            template_path: "chara/base_material/stainingtemplate_gud.stm".to_string(),
+            report: StainingApplicationReport {
+                rows_skipped_missing_template: 1,
+                ..StainingApplicationReport::default()
+            },
+            error: None,
+        });
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::DebugVisible)
@@ -2436,6 +2491,7 @@ mod color_table_bake_tests {
             apply_vertex_color: false,
             has_color_dye_table: false,
             color_dye_table: None,
+            staining_application: None,
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],
             specular_color: [1.0, 1.0, 1.0],

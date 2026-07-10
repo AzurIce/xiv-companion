@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     ColorTableRowColors, ModelColorDyeTable, ModelDawntrailColorDyeTableRow,
-    ModelLegacyColorDyeTableRow,
+    ModelLegacyColorDyeTableRow, StainingApplicationReport,
 };
 
 pub const LEGACY_STAINING_TEMPLATE_PATH: &str = "chara/base_material/stainingtemplate.stm";
@@ -58,17 +58,6 @@ pub struct DawntrailStainingTemplateDye {
 pub enum StainingTemplateDye {
     Legacy(LegacyStainingTemplateDye),
     Dawntrail(DawntrailStainingTemplateDye),
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StainingApplicationReport {
-    pub rows_considered: usize,
-    pub rows_changed: usize,
-    pub rows_skipped_no_stain: usize,
-    pub rows_skipped_missing_template: usize,
-    pub rows_unavailable: usize,
-    pub template_kind_mismatch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -299,10 +288,17 @@ fn apply_legacy_rows(
     template: &StainingTemplate,
 ) -> StainingApplicationReport {
     let mut report = StainingApplicationReport {
-        rows_unavailable: dye_rows.len().saturating_sub(rows.len()),
+        rows_unavailable: dye_rows
+            .iter()
+            .skip(rows.len())
+            .filter(|dye_row| legacy_dye_row_has_flags(dye_row))
+            .count(),
         ..StainingApplicationReport::default()
     };
     for (row, dye_row) in rows.iter_mut().zip(dye_rows) {
+        if !legacy_dye_row_has_flags(dye_row) {
+            continue;
+        }
         report.rows_considered += 1;
         let Some(stain_id) = stain_ids
             .first()
@@ -331,10 +327,17 @@ fn apply_dawntrail_rows(
     template: &StainingTemplate,
 ) -> StainingApplicationReport {
     let mut report = StainingApplicationReport {
-        rows_unavailable: dye_rows.len().saturating_sub(rows.len()),
+        rows_unavailable: dye_rows
+            .iter()
+            .skip(rows.len())
+            .filter(|dye_row| dawntrail_dye_row_has_flags(dye_row))
+            .count(),
         ..StainingApplicationReport::default()
     };
     for (row, dye_row) in rows.iter_mut().zip(dye_rows) {
+        if !dawntrail_dye_row_has_flags(dye_row) {
+            continue;
+        }
         report.rows_considered += 1;
         let Some(stain_id) = stain_ids
             .get(usize::from(dye_row.channel))
@@ -457,6 +460,25 @@ fn replace_if<T: Copy + PartialEq>(target: &mut T, value: T, enabled: bool) -> b
 
 fn is_black(color: [f32; 3]) -> bool {
     color == [0.0; 3]
+}
+
+fn legacy_dye_row_has_flags(row: &ModelLegacyColorDyeTableRow) -> bool {
+    row.diffuse || row.specular || row.emissive || row.gloss || row.specular_strength
+}
+
+fn dawntrail_dye_row_has_flags(row: &ModelDawntrailColorDyeTableRow) -> bool {
+    row.diffuse
+        || row.specular
+        || row.emissive
+        || row.scalar3
+        || row.metalness
+        || row.roughness
+        || row.sheen_rate
+        || row.sheen_tint_rate
+        || row.sheen_aperture
+        || row.anisotropy
+        || row.sphere_map_index
+        || row.sphere_map_mask
 }
 
 fn parse_entry(
@@ -825,6 +847,29 @@ mod tests {
 
         assert!(report.template_kind_mismatch);
         assert_eq!(report.rows_changed, 0);
+    }
+
+    #[test]
+    fn ignores_dye_rows_without_enabled_flags() {
+        let template = StainingTemplate {
+            kind: StainingTemplateKind::Legacy,
+            version: STM_VERSION_LEGACY,
+            entries: HashMap::new(),
+        };
+        let dye_table = ModelColorDyeTable::Legacy(vec![ModelLegacyColorDyeTableRow {
+            template: 0,
+            diffuse: false,
+            specular: false,
+            emissive: false,
+            gloss: false,
+            specular_strength: false,
+        }]);
+        let mut rows = vec![ColorTableRowColors::default()];
+
+        let report = apply_staining_template_to_rows(&mut rows, &dye_table, &[1], &template);
+
+        assert_eq!(report.rows_considered, 0);
+        assert_eq!(report.rows_skipped_missing_template, 0);
     }
 
     #[test]

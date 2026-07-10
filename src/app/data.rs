@@ -86,12 +86,20 @@ pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
 }
 
 pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
+    load_weapon_model_with_stains(item, [0, 0]).await
+}
+
+pub async fn load_weapon_model_with_stains(
+    item: WeaponCatalogItem,
+    stain_ids: [u8; 2],
+) -> Result<Rc<WeaponModelData>, String> {
     let data = configured_web_resource_hub()
         .load::<WeaponModelResource>(WeaponModelId {
             item_id: item.id,
             item_name: item.name,
             model_main: item.model_main,
             model_sub: item.model_sub,
+            stain_ids,
         })
         .await
         .map_err(|error| error.to_string())?;

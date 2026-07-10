@@ -1,19 +1,26 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelColorDyeTable,
     ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
-    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelSubmeshInfo, ModelTexture,
-    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
-    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
-    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
-    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelStainingApplication, ModelSubmeshInfo,
+    ModelTexture, ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility,
+    PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem,
+    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
+    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
+    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
+    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
+    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
+    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
+    weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
 use std::collections::HashMap;
+
+#[cfg(feature = "game-data")]
+use crate::staining::{
+    DAWNTRAIL_STAINING_TEMPLATE_PATH, LEGACY_STAINING_TEMPLATE_PATH, MAX_STAIN_ID,
+    StainingTemplate, apply_staining_template_to_rows,
+};
 
 #[cfg(feature = "game-data")]
 const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
@@ -121,6 +128,7 @@ pub struct WeaponModelLoadRequest {
     pub item_name: String,
     pub model_main: u64,
     pub model_sub: u64,
+    pub stain_ids: [u8; 2],
 }
 
 #[cfg(feature = "game-data")]
@@ -132,6 +140,16 @@ impl WeaponModelLoadRequest {
     pub fn secondary_model(&self) -> Option<PackedModelId> {
         (self.model_sub != 0).then(|| PackedModelId::from_raw(self.model_sub))
     }
+
+    pub fn with_stain_ids(mut self, stain_ids: [u8; 2]) -> Self {
+        self.stain_ids = stain_ids;
+        self
+    }
+
+    fn normalized_stain_ids(&self) -> [u8; 2] {
+        self.stain_ids
+            .map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0))
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -142,7 +160,37 @@ impl From<&WeaponCatalogItem> for WeaponModelLoadRequest {
             item_name: item.name.clone(),
             model_main: item.model_main,
             model_sub: item.model_sub,
+            stain_ids: [0, 0],
         }
+    }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Default)]
+struct WeaponStainingTemplateLoad {
+    template: Option<StainingTemplate>,
+    error: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+struct WeaponStainingTemplates {
+    stain_ids: [u8; 2],
+    legacy: WeaponStainingTemplateLoad,
+    dawntrail: WeaponStainingTemplateLoad,
+}
+
+#[cfg(feature = "game-data")]
+impl WeaponStainingTemplates {
+    fn disabled(stain_ids: [u8; 2]) -> Self {
+        Self {
+            stain_ids,
+            legacy: WeaponStainingTemplateLoad::default(),
+            dawntrail: WeaponStainingTemplateLoad::default(),
+        }
+    }
+
+    fn requested(&self) -> bool {
+        self.stain_ids.iter().any(|stain_id| *stain_id != 0)
     }
 }
 
@@ -491,6 +539,190 @@ fn model_load_candidate(
 }
 
 #[cfg(feature = "game-data")]
+fn load_weapon_staining_templates_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    stain_ids: [u8; 2],
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplates {
+    if !stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        return WeaponStainingTemplates::disabled(stain_ids);
+    }
+
+    WeaponStainingTemplates {
+        stain_ids,
+        legacy: load_staining_template_from_resource(
+            resource,
+            LEGACY_STAINING_TEMPLATE_PATH,
+            loaded_paths,
+        ),
+        dawntrail: load_staining_template_from_resource(
+            resource,
+            DAWNTRAIL_STAINING_TEMPLATE_PATH,
+            loaded_paths,
+        ),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn load_staining_template_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplateLoad {
+    let Some(bytes) = resource.read(path) else {
+        return WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to read {path}")),
+        };
+    };
+    match StainingTemplate::from_bytes(&bytes) {
+        Ok(template) => {
+            push_loaded_path(loaded_paths, path.to_string());
+            WeaponStainingTemplateLoad {
+                template: Some(template),
+                error: None,
+            }
+        }
+        Err(error) => WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to parse {path}: {error:#}")),
+        },
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_staining_templates_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    stain_ids: [u8; 2],
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplates {
+    if !stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        return WeaponStainingTemplates::disabled(stain_ids);
+    }
+
+    let legacy = load_staining_template_from_async_resource(
+        resource,
+        LEGACY_STAINING_TEMPLATE_PATH,
+        loaded_paths,
+    )
+    .await;
+    let dawntrail = load_staining_template_from_async_resource(
+        resource,
+        DAWNTRAIL_STAINING_TEMPLATE_PATH,
+        loaded_paths,
+    )
+    .await;
+    WeaponStainingTemplates {
+        stain_ids,
+        legacy,
+        dawntrail,
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_staining_template_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    path: &str,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplateLoad {
+    let bytes = match resource.read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return WeaponStainingTemplateLoad {
+                template: None,
+                error: Some(format!("failed to read {path}: {error}")),
+            };
+        }
+    };
+    match StainingTemplate::from_bytes(&bytes) {
+        Ok(template) => {
+            push_loaded_path(loaded_paths, path.to_string());
+            WeaponStainingTemplateLoad {
+                template: Some(template),
+                error: None,
+            }
+        }
+        Err(error) => WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to parse {path}: {error:#}")),
+        },
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn apply_weapon_staining(
+    rows: Option<&mut [ColorTableRowColors]>,
+    dye_table: Option<&ModelColorDyeTable>,
+    staining: &WeaponStainingTemplates,
+) -> Option<ModelStainingApplication> {
+    if !staining.requested() {
+        return None;
+    }
+    let dye_table = dye_table?;
+
+    let (template_path, template, load_error) = match dye_table {
+        ModelColorDyeTable::Legacy(_) => (
+            LEGACY_STAINING_TEMPLATE_PATH,
+            staining.legacy.template.as_ref(),
+            staining.legacy.error.clone(),
+        ),
+        ModelColorDyeTable::Dawntrail(_) => {
+            if let Some(template) = staining.dawntrail.template.as_ref() {
+                (DAWNTRAIL_STAINING_TEMPLATE_PATH, Some(template), None)
+            } else if let Some(template) = staining.legacy.template.as_ref() {
+                (LEGACY_STAINING_TEMPLATE_PATH, Some(template), None)
+            } else {
+                let error = [
+                    staining.dawntrail.error.as_deref(),
+                    staining.legacy.error.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; ");
+                (
+                    DAWNTRAIL_STAINING_TEMPLATE_PATH,
+                    None,
+                    (!error.is_empty()).then_some(error),
+                )
+            }
+        }
+        ModelColorDyeTable::Opaque => {
+            return Some(ModelStainingApplication {
+                stain_ids: staining.stain_ids,
+                template_path: String::new(),
+                report: StainingApplicationReport::default(),
+                error: Some("opaque ColorDyeTable cannot be applied".to_string()),
+            });
+        }
+    };
+
+    let Some(rows) = rows else {
+        return Some(ModelStainingApplication {
+            stain_ids: staining.stain_ids,
+            template_path: template_path.to_string(),
+            report: StainingApplicationReport::default(),
+            error: Some("material has no supported ColorTable rows".to_string()),
+        });
+    };
+    let Some(template) = template else {
+        return Some(ModelStainingApplication {
+            stain_ids: staining.stain_ids,
+            template_path: template_path.to_string(),
+            report: StainingApplicationReport::default(),
+            error: load_error.or_else(|| Some(format!("{template_path} is unavailable"))),
+        });
+    };
+
+    Some(ModelStainingApplication {
+        stain_ids: staining.stain_ids,
+        template_path: template_path.to_string(),
+        report: apply_staining_template_to_rows(rows, dye_table, &staining.stain_ids, template),
+        error: None,
+    })
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     resource: &mut R,
     request: &WeaponModelLoadRequest,
@@ -502,10 +734,14 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     let mut materials = Vec::new();
     let mut textures = Vec::new();
     let mut meshes = Vec::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_resource(resource, stain_ids, &mut loaded_paths);
 
     load_weapon_model_meshes_from_resource(
         resource,
         model_main,
+        &staining,
         &mut loaded_paths,
         &mut materials,
         &mut textures,
@@ -518,6 +754,7 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
             if let Err(failure) = load_weapon_model_meshes_from_resource(
                 resource,
                 model_sub,
+                &staining,
                 &mut loaded_paths,
                 &mut materials,
                 &mut textures,
@@ -540,6 +777,7 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        stain_ids,
         load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
@@ -1437,6 +1675,7 @@ fn model_color_dye_table(
 fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
+    staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
@@ -1473,6 +1712,7 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
             resource,
             model,
             &path,
+            staining,
             &mut path_meshes,
             materials,
             textures,
@@ -1490,6 +1730,7 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
@@ -1512,6 +1753,7 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
             resource,
             model,
             model_path,
+            staining,
             material_index,
             material_name,
             slot,
@@ -1537,6 +1779,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     material_index: u16,
     material_name: String,
     slot: usize,
@@ -1558,7 +1801,17 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
-        let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
+        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
+        let mut color_table_rows = material
+            .color_table
+            .as_ref()
+            .and_then(weapon_color_table_rows);
+        let staining_application = apply_weapon_staining(
+            color_table_rows.as_deref_mut(),
+            color_dye_table.as_ref(),
+            staining,
+        );
+        let summary = summarize_material_colors(color_table_rows.as_deref(), fallback);
         let semantics = load_composed_material_semantics_from_resource(
             resource,
             &shader_package_name,
@@ -1617,6 +1870,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             resource,
             &path,
             &material,
+            color_table_rows.as_deref(),
             &sampler_roles,
             textures,
             loaded_paths,
@@ -1639,7 +1893,6 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             summary.diffuse
         };
         let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
-        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
 
         return WeaponModelMaterial {
             slot,
@@ -1696,6 +1949,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             apply_vertex_color,
             has_color_dye_table: color_dye_table.is_some(),
             color_dye_table,
+            staining_application,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -1727,6 +1981,7 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     material_path: &str,
     material: &physis::mtrl::Material,
+    color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
@@ -1798,7 +2053,7 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
-        material.color_table.as_ref(),
+        color_table_rows,
         set.index,
         set.emissive.is_none(),
         shader_opacity_override(&material.shader_package_name),
@@ -1905,10 +2160,15 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
     let mut materials = Vec::new();
     let mut textures = Vec::new();
     let mut meshes = Vec::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_async_resource(resource, stain_ids, &mut loaded_paths)
+            .await;
 
     load_weapon_model_meshes_from_async_resource(
         resource,
         model_main,
+        &staining,
         &mut loaded_paths,
         &mut materials,
         &mut textures,
@@ -1922,6 +2182,7 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
             if let Err(failure) = load_weapon_model_meshes_from_async_resource(
                 resource,
                 model_sub,
+                &staining,
                 &mut loaded_paths,
                 &mut materials,
                 &mut textures,
@@ -1946,6 +2207,7 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        stain_ids,
         load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
@@ -1959,6 +2221,7 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
 async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
+    staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
@@ -1998,6 +2261,7 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
             resource,
             model,
             &path,
+            staining,
             &mut path_meshes,
             materials,
             textures,
@@ -2016,6 +2280,7 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
@@ -2038,6 +2303,7 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
             resource,
             model,
             model_path,
+            staining,
             material_index,
             material_name,
             slot,
@@ -2064,6 +2330,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     material_index: u16,
     material_name: String,
     slot: usize,
@@ -2085,7 +2352,17 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
-        let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
+        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
+        let mut color_table_rows = material
+            .color_table
+            .as_ref()
+            .and_then(weapon_color_table_rows);
+        let staining_application = apply_weapon_staining(
+            color_table_rows.as_deref_mut(),
+            color_dye_table.as_ref(),
+            staining,
+        );
+        let summary = summarize_material_colors(color_table_rows.as_deref(), fallback);
         let semantics = load_composed_material_semantics_from_async_resource(
             resource,
             &shader_package_name,
@@ -2145,6 +2422,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             resource,
             &path,
             &material,
+            color_table_rows.as_deref(),
             &sampler_roles,
             textures,
             loaded_paths,
@@ -2168,7 +2446,6 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             summary.diffuse
         };
         let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
-        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
 
         return WeaponModelMaterial {
             slot,
@@ -2225,6 +2502,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             apply_vertex_color,
             has_color_dye_table: color_dye_table.is_some(),
             color_dye_table,
+            staining_application,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -2256,6 +2534,7 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
     resource: &mut R,
     material_path: &str,
     material: &physis::mtrl::Material,
+    color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
@@ -2329,7 +2608,7 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
-        material.color_table.as_ref(),
+        color_table_rows,
         set.index,
         set.emissive.is_none(),
         shader_opacity_override(&material.shader_package_name),
@@ -2714,18 +2993,18 @@ fn add_unique_index(indices: &mut Vec<usize>, index: usize) {
 #[cfg(feature = "game-data")]
 fn bake_weapon_color_table_textures(
     material_path: &str,
-    color_table: Option<&physis::mtrl::ColorTable>,
+    rows: Option<&[ColorTableRowColors]>,
     index_texture: Option<usize>,
     bake_emissive: bool,
     opacity_override: Option<f32>,
     textures: &mut Vec<WeaponModelTexture>,
 ) -> Option<BakedWeaponTextureIndices> {
-    let rows = weapon_color_table_rows(color_table?)?;
+    let rows = rows?;
     let index_texture = textures.get(index_texture?)?;
     let width = index_texture.width;
     let height = index_texture.height;
     let id_rgba = index_texture.rgba.clone();
-    let mut baked = bake_color_table_maps(&rows, &id_rgba)?;
+    let mut baked = bake_color_table_maps(rows, &id_rgba)?;
     if let Some(opacity) = opacity_override {
         apply_alpha_override(&mut baked.diffuse_rgba, opacity);
     }
@@ -3417,7 +3696,7 @@ fn preview_emissive_color(emissive: [f32; 3], texture_set: &WeaponTextureSet) ->
 
 #[cfg(feature = "game-data")]
 fn summarize_material_colors(
-    color_table: Option<&physis::mtrl::ColorTable>,
+    rows: Option<&[ColorTableRowColors]>,
     fallback: [f32; 3],
 ) -> MaterialColorSummary {
     let mut diffuse = ColorAccumulator::default();
@@ -3427,27 +3706,15 @@ fn summarize_material_colors(
     let mut metalness_total = 0.0;
     let mut physical_rows = 0_u32;
 
-    match color_table {
-        Some(physis::mtrl::ColorTable::LegacyColorTable(table)) => {
-            for row in &table.rows {
-                diffuse.add_nonzero(row.diffuse_color);
-                specular.add_nonzero(row.specular_color);
-                emissive = brighter_color(emissive, row.emissive_color);
-            }
+    for row in rows.unwrap_or_default() {
+        diffuse.add_nonzero(row.diffuse);
+        specular.add_nonzero(row.specular);
+        emissive = brighter_color(emissive, row.emissive);
+        if row.roughness.is_finite() && row.metalness.is_finite() {
+            roughness_total += row.roughness.clamp(0.0, 1.0);
+            metalness_total += row.metalness.clamp(0.0, 1.0);
+            physical_rows += 1;
         }
-        Some(physis::mtrl::ColorTable::DawntrailColorTable(table)) => {
-            for row in &table.rows {
-                diffuse.add_nonzero(row.diffuse_color);
-                specular.add_nonzero(row.specular_color);
-                emissive = brighter_color(emissive, row.emissive_color);
-                if row.roughness.is_finite() && row.metalness.is_finite() {
-                    roughness_total += row.roughness.clamp(0.0, 1.0);
-                    metalness_total += row.metalness.clamp(0.0, 1.0);
-                    physical_rows += 1;
-                }
-            }
-        }
-        Some(physis::mtrl::ColorTable::OpaqueColorTable(_)) | None => {}
     }
 
     MaterialColorSummary {
@@ -3558,6 +3825,7 @@ fn fallback_weapon_material(
         apply_vertex_color: false,
         has_color_dye_table: false,
         color_dye_table: None,
+        staining_application: None,
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -4235,6 +4503,90 @@ mod weapon_material_tests {
     use super::*;
 
     #[test]
+    fn weapon_model_load_request_normalizes_stain_ids() {
+        let request = WeaponModelLoadRequest {
+            item_id: 1,
+            item_name: "test".to_string(),
+            model_main: 2,
+            model_sub: 3,
+            stain_ids: [MAX_STAIN_ID, u8::MAX],
+        };
+
+        assert_eq!(request.normalized_stain_ids(), [MAX_STAIN_ID, 0]);
+        assert_eq!(request.clone().with_stain_ids([17, 93]).stain_ids, [17, 93]);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_weapon_stain_changes_baked_color_table() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45052,
+            item_name: "奶油之幻梦".to_string(),
+            model_main: 4_295_295_803,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let unstained =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("unstained");
+        let stained = load_weapon_model_from_resource_request(
+            &mut resource,
+            &request.clone().with_stain_ids([1, 0]),
+        )
+        .expect("stained");
+
+        assert_eq!(unstained.stain_ids, [0, 0]);
+        assert_eq!(stained.stain_ids, [1, 0]);
+        assert!(
+            stained
+                .loaded_paths
+                .iter()
+                .any(|path| path == DAWNTRAIL_STAINING_TEMPLATE_PATH)
+        );
+
+        let stained_material = stained
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .staining_application
+                    .as_ref()
+                    .is_some_and(|application| {
+                        application.error.is_none() && application.report.rows_changed != 0
+                    })
+            })
+            .expect("stained material");
+        let unstained_material = unstained
+            .materials
+            .iter()
+            .find(|material| material.path == stained_material.path)
+            .expect("matching unstained material");
+        let stained_texture = &stained.textures[stained_material
+            .base_color_texture
+            .expect("stained base texture")];
+        let unstained_texture = &unstained.textures[unstained_material
+            .base_color_texture
+            .expect("unstained base texture")];
+
+        eprintln!(
+            "staining application: {:#?}",
+            stained_material.staining_application
+        );
+        assert_ne!(stained_texture.rgba, unstained_texture.rgba);
+        assert!(
+            !crate::model::prepare_material_for_draw_role(
+                Some(stained_material),
+                ModelMeshDrawRole::Normal
+            )
+            .unsupported_inputs
+            .dye_application
+        );
+    }
+
+    #[test]
     fn sub_model_load_failure_diagnostic_preserves_candidate_errors() {
         let model = PackedModelId::from_raw(0x0001_0002_0064);
         let failure = WeaponModelMeshLoadFailure::new(
@@ -4718,10 +5070,11 @@ mod weapon_material_tests {
             rgba: vec![0, 0, 0, 255],
             rgba_f32: None,
         }];
+        let rows = weapon_color_table_rows(&color_table).expect("color table rows");
 
         let baked = bake_weapon_color_table_textures(
             "material.mtrl",
-            Some(&color_table),
+            Some(&rows),
             Some(0),
             true,
             None,

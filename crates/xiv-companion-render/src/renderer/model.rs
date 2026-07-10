@@ -2016,6 +2016,7 @@ fn fallback_material() -> ModelMaterial {
         apply_vertex_color: false,
         has_color_dye_table: false,
         color_dye_table: None,
+        staining_application: None,
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],

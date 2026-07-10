@@ -436,6 +436,7 @@ async fn load_weapon_model_from_browser_sqpack(
         item_name: id.item_name,
         model_main: id.model_main,
         model_sub: id.model_sub,
+        stain_ids: id.stain_ids,
     };
 
     load_weapon_model_from_async_resource(&mut resource, &request)

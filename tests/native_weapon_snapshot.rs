@@ -29,6 +29,7 @@ fn mock_weapon_model() -> WeaponModelData {
         item_name: "Mock Weapon".to_string(),
         model_main: PackedModelId::from_raw(1),
         model_sub: None,
+        stain_ids: [0, 0],
         load_diagnostics: Vec::new(),
         loaded_paths: vec!["mock/native-demo-triangle.mdl".to_string()],
         bounds: WeaponModelBounds {

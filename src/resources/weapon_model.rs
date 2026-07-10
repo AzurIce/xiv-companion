@@ -68,6 +68,7 @@ pub struct WeaponModelId {
     pub item_name: String,
     pub model_main: u64,
     pub model_sub: u64,
+    pub stain_ids: [u8; 2],
 }
 
 pub struct WeaponModelResource;
@@ -94,10 +95,12 @@ impl ResourceSpec for WeaponModelResource {
         ProviderRequest {
             kind: Self::kind(),
             key: format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}",
                 id.item_id,
                 id.model_main,
                 id.model_sub,
+                id.stain_ids[0],
+                id.stain_ids[1],
                 id.item_name.replace('|', " ")
             ),
         }
@@ -130,7 +133,7 @@ pub fn register_weapon_model_resources(hub: &mut ResourceHub) {
 }
 
 pub fn parse_weapon_model_request_key(key: &str) -> Result<WeaponModelId, String> {
-    let mut parts = key.splitn(4, '|');
+    let mut parts = key.splitn(6, '|');
     let item_id = parts
         .next()
         .ok_or_else(|| "missing item id".to_string())?
@@ -146,11 +149,47 @@ pub fn parse_weapon_model_request_key(key: &str) -> Result<WeaponModelId, String
         .ok_or_else(|| "missing model_sub".to_string())?
         .parse::<u64>()
         .map_err(|error| format!("invalid model_sub: {error}"))?;
+    let stain0 = parts
+        .next()
+        .ok_or_else(|| "missing stain0".to_string())?
+        .parse::<u8>()
+        .map_err(|error| format!("invalid stain0: {error}"))?;
+    let stain1 = parts
+        .next()
+        .ok_or_else(|| "missing stain1".to_string())?
+        .parse::<u8>()
+        .map_err(|error| format!("invalid stain1: {error}"))?;
     let item_name = parts.next().unwrap_or_default().to_string();
     Ok(WeaponModelId {
         item_id,
         item_name,
         model_main,
         model_sub,
+        stain_ids: [stain0, stain1],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weapon_model_request_key_round_trips_stain_ids() {
+        let id = WeaponModelId {
+            item_id: 42,
+            item_name: "Test | Weapon".to_string(),
+            model_main: 100,
+            model_sub: 200,
+            stain_ids: [17, 93],
+        };
+
+        let request = WeaponModelResource::request(&id);
+        assert_eq!(
+            parse_weapon_model_request_key(&request.key),
+            Ok(WeaponModelId {
+                item_name: "Test   Weapon".to_string(),
+                ..id
+            })
+        );
+    }
 }
