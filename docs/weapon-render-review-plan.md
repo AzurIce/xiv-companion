@@ -16,7 +16,7 @@
 
 - 本仓 `crates/xiv-companion-data/src/model.rs`：`PackedModelId`、`ModelVertex`、`ModelMaterial`、`ModelTextureKind`、`bake_color_table_maps`、weapon model/material candidate path。
 - 本仓 `crates/xiv-companion-data/src/mdl_geometry.rs` 与 `mdl_metadata.rs`：raw LOD0 mesh range、extra LOD、vertex declaration、secondary attributes、flow、bone table、shape metadata。
-- 本仓 `crates/xiv-companion-data/src/weapon_models.rs`：MTRL sampler records、`.shpk` composed semantics、ColorTable bake、ColorDyeTable debug、alpha mode、sub-model load path。
+- 本仓 `crates/xiv-companion-data/src/weapon_models.rs`：MTRL sampler records、`.shpk` composed semantics、ColorTable bake、ColorDyeTable 结构化行数据/debug、alpha mode、sub-model load path。
 - 本仓 `crates/xiv-companion-render/src/renderer/model.rs` 与 `model.wgsl`：GPU vertex layout、material bind group、opaque/transparent pass、mesh-level transparent sorting、实际消费的 texture/vertex fields。
 - `E:\repos\Meddle\Meddle\Meddle.Utils\Export\Model.cs` 与 `Vertex.cs`：LOD0 mesh range、extra LOD、shape/attribute group、Meddle 顶点属性保留方式。
 - `E:\repos\Meddle\Meddle\Meddle.Plugin\Utils\ParseMaterialUtil.cs` 与 `OnRenderMaterialUtil.cs`：运行时 material/texture handle、GPU ColorTable、decal/crest/on-render material output。
@@ -47,7 +47,8 @@
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、water、unknown，并进入 `PreparedMaterial`；lightshaft 已有最小 additive/tint/UV 动画 shader 行为，其它新增特殊 character family 目前仍主要用于准备层分类和 debug。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，并随 prepared material 输出。
 - `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index 与 ColorTable extra maps 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
-- `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总，`usesDye` 会在 MTRL 存在 `ColorDyeTable` 时置位，但尚未应用 stain。
+- `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，但尚未应用 stain。
+- `PreparedMaterialFeatureFlags` 已有第一版，按材质字段和贴图绑定标出 vertex color、ColorTable、tile、detail、scroll 等 shader 需求；`usesFlow` 已在 `PreparedModel` 阶段按 mesh 顶点 `flow0/flow1` presence 汇总。
 - `PreparedMaterialUnsupportedInputs` 已有第一版，按当前可可靠判断的数据标出 dye application、runtime ColorTable、decal/crest、tile array、detail array、incomplete shader family logic，phantom summary 会随 prepared material 输出这些缺口。
 - `PreparedMaterialUvSources` 已有第一版，记录常规 texture role 默认 `uv0`，并按 MeddleTools `UV0Scroll` / `UV1Scroll` 节点保留 scroll 的 `uv0` / `uv1` 来源；renderer material uniform / WGSL 已按 prepared texture UV source 选择 base、normal、mask、specular、emissive、material-properties、material/multi debug view 与 ColorTable extra map debug view 的采样 UV，并会按 render time 对 `uv0` / `uv1` 来源叠加已解析的 scroll multiplier；当前 source 规则仍基本保守为 `uv0`，scroll 也尚未做到节点级 texture-role 路由。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
@@ -86,7 +87,7 @@
 
 主要不足：
 
-- 染色仍停留在 `ColorDyeTable` 存在性和行标志 debug，尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入；`ModelMaterial.hasColorDyeTable` / `PreparedMaterialFeatureFlags.usesDye` / `unsupportedInputs.dyeApplication` 已能标出“这里需要染色应用”。
+- 染色的 MTRL 行语义已结构化进 `ModelMaterial.colorDyeTable`，覆盖 Legacy 的 diffuse/specular/emissive/gloss/specular-strength flag，以及 Dawntrail 的 template/channel 和 diffuse/specular/emissive/scalar/metalness/roughness/sheen/anisotropy/sphere flag；尚未接入 `stainingtemplate.stm`、EXD stain 参数或用户选择 stain 输入，因此仍不能生成实际染色 override。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
 - reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
@@ -94,7 +95,7 @@
 计划：
 
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
-2. 把染色作为下一批解析入口：解析 `ColorDyeTable` 行标志，加载 `chara/base_material/stainingtemplate.stm`，定义 item/user stain 输入，再生成染色后的 ColorTable 或 renderer-friendly override。
+2. 继续染色解析链路：`ColorDyeTable` 行标志已结构化；下一步加载 `chara/base_material/stainingtemplate.stm`，定义 EXD/item/user stain 输入，再生成染色后的 ColorTable 或 renderer-friendly override。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
 4. 对 runtime-only 数据不盲猜：decal/crest 先提供空白或显式输入 fallback，GPU ColorTable 先只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
@@ -213,7 +214,7 @@
 
 ### P1: 处理染色数据入口
 
-当前已把 `ColorDyeTable` 存在性暴露到 `ModelMaterial.hasColorDyeTable`、`PreparedMaterialFeatureFlags.usesDye` 和 `unsupportedInputs.dyeApplication`，但还没有应用染色。
+当前已把 Legacy/Dawntrail `ColorDyeTable` 的 template、channel 和可染通道 flag 结构化到 `ModelMaterial.colorDyeTable`；`ModelMaterial.hasColorDyeTable` 继续作为兼容字段，`PreparedMaterialFeatureFlags.usesDye` 和 `unsupportedInputs.dyeApplication` 会识别两种入口。现有 material debug 复用同一转换逻辑，但还没有应用染色。
 
 需要解析或加载：
 
@@ -226,6 +227,7 @@
 
 验证：
 
+- 已增加 focused tests，覆盖 Legacy/Dawntrail `ColorDyeTable` 到结构化 model rows 的字段保真，以及 structured table 独立于旧 bool 时仍会触发 prepared dye/unsupported 标记。
 - 先用单色、双色染色 fixture 验证 ColorTable row flag 应用。
 - 再选几件游戏中染色效果明显的武器做 visual snapshot。
 
@@ -268,7 +270,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `PreparedMaterial` 已包含第一版 `PreparedMaterialUnsupportedInputs`，会把 dye application、runtime ColorTable、decal/crest、tile/detail array 和特殊 shader family 行为缺口输出到 prepared summary。
 - phantom `model-summary.json` 会在主 surface mesh 上输出 prepared material 决策，并通过第一版 `PreparedModel` 获得 mesh draw role / main pass 可见性。
 - `PreparedModel` 仍是第一版：已包含 submesh attribute mask/name，并新增 `PreparedModelOptions.enabledAttributeMask` 与 `PreparedMeshVisibility`，可在显式提供运行时 enabled attribute mask 时按 Meddle composer 语义隐藏 disabled submesh；mesh-level shape influence 已进入 `ModelMesh` / `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 可标出 active/inactive influence 但不改变 draw visibility；mesh-level flow presence 已进入 prepared material feature flags；第一版 UV source 已驱动 renderer 采样选择；尚未包含实际 shape morph、skinning/morph 或 per-submesh prepared draw；sampler config、feature flags 与 shader-family-specific UV source 仍未完整驱动所有 runtime 绑定。
-- 当前缺口：`ColorDyeTable` 已进入 `ModelMaterial.hasColorDyeTable` 和 prepared summary，但 tile/detail array、runtime GPU ColorTable、decal/crest 和特殊 shader family 的 unsupported 标记仍只是审计信息，尚未接入真实替代输入或完整 renderer 行为。
+- 当前缺口：`ColorDyeTable` 行语义已进入 `ModelMaterial.colorDyeTable`，并通过 prepared dye/unsupported 标记暴露，但 stain template/application、tile/detail array、runtime GPU ColorTable、decal/crest 和特殊 shader family 的 unsupported 标记仍只是审计信息，尚未接入真实替代输入或完整 renderer 行为。
 
 建议中间结构包含：
 
@@ -278,7 +280,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，并进入最小 wgpu additive pass
 - culling policy：render backfaces / cull backfaces
-- feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，`usesDye` 由 `hasColorDyeTable` 驱动，实际 stain 输入仍待补齐
+- feature flags：usesVertexColor、usesFlow、usesColorTable、usesDye、usesScroll、usesTile、usesDetail；已有第一版材质级判定，mesh-level flow presence 已进入 `PreparedModel`，`usesDye` 由兼容 bool 或结构化 dye table 驱动，实际 stain 输入仍待补齐
 - unsupported/runtime-only inputs：dye application、runtime ColorTable、decal/crest、tile/detail array、shader-family-specific incomplete behavior；已有第一版，只基于当前可可靠判断的数据置位，不猜测运行时状态
 
 好处：
@@ -538,7 +540,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 从当前状态继续推进时，优先级应按依赖关系排：
 
-1. 数据解析：优先补染色输入链路。先把 `ColorDyeTable` 行语义、`stainingtemplate.stm`、EXD stain 参数和用户 stain 输入定义清楚，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
+1. 数据解析：继续补染色输入链路。`ColorDyeTable` 行语义已结构化进 model；下一步解析 `stainingtemplate.stm`、EXD stain 参数和用户 stain 输入，输出可测试的 ColorTable override；runtime GPU ColorTable 仍只作为 unsupported 输入标记。
 2. 结果处理：把 stain、decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 能表达的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
 3. 渲染器：继续消费已经结构化但尚未实际影响画面的低风险参数；detail tint/UV、tile index/scale、alpha aperture/offset、glass IOR/thickness、multi diffuse、outline rim 和 multi/detail normal scale 已有保守 fallback，下一步顺序为 texture mip/shadow offset 的受限消费；`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
 4. 验证：每个语义修正都配一个 focused unit test；涉及 WGSL 的改动至少跑 renderer 单测、native snapshot、wasm check，并在真实 phantom 样本上做 ignored snapshot 回归。

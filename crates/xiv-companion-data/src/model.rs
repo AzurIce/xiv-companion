@@ -307,6 +307,44 @@ pub struct ModelBlendIndices {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelLegacyColorDyeTableRow {
+    pub template: u16,
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub gloss: bool,
+    pub specular_strength: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDawntrailColorDyeTableRow {
+    pub template: u16,
+    pub channel: u8,
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub scalar3: bool,
+    pub metalness: bool,
+    pub roughness: bool,
+    pub sheen_rate: bool,
+    pub sheen_tint_rate: bool,
+    pub sheen_aperture: bool,
+    pub anisotropy: bool,
+    pub sphere_map_index: bool,
+    pub sphere_map_mask: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", content = "rows", rename_all = "camelCase")]
+pub enum ModelColorDyeTable {
+    Legacy(Vec<ModelLegacyColorDyeTableRow>),
+    Dawntrail(Vec<ModelDawntrailColorDyeTableRow>),
+    Opaque,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelMaterial {
     pub slot: usize,
     pub material_index: u16,
@@ -409,6 +447,8 @@ pub struct ModelMaterial {
     pub apply_vertex_color: bool,
     #[serde(default)]
     pub has_color_dye_table: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_dye_table: Option<ModelColorDyeTable>,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -968,7 +1008,7 @@ pub fn prepared_material_feature_flags(
     };
 
     flags.uses_vertex_color = material.apply_vertex_color;
-    flags.uses_dye = material.has_color_dye_table;
+    flags.uses_dye = material_has_color_dye_table(material);
     flags.uses_tile |= material_scalar_differs(material.tile_index, 0.0)
         || material_scalar_differs(material.tile_alpha, 1.0)
         || material_vec2_differs(material.tile_scale, [16.0, 16.0]);
@@ -994,9 +1034,7 @@ pub fn prepared_material_unsupported_inputs(
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialUnsupportedInputs {
     let feature_flags = prepared_material_feature_flags(material, shader_family, texture_bindings);
-    let has_color_dye_table = material
-        .map(|material| material.has_color_dye_table)
-        .unwrap_or(false);
+    let has_color_dye_table = material.map(material_has_color_dye_table).unwrap_or(false);
 
     PreparedMaterialUnsupportedInputs {
         dye_application: has_color_dye_table,
@@ -1006,6 +1044,10 @@ pub fn prepared_material_unsupported_inputs(
         detail_array: feature_flags.uses_detail,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
     }
+}
+
+fn material_has_color_dye_table(material: &ModelMaterial) -> bool {
+    material.has_color_dye_table || material.color_dye_table.is_some()
 }
 
 fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) -> bool {
@@ -1921,6 +1963,12 @@ mod color_table_bake_tests {
         );
 
         material = test_material();
+        material.color_dye_table = Some(ModelColorDyeTable::Opaque);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_dye);
+        assert!(prepared.unsupported_inputs.dye_application);
+
+        material = test_material();
         material.shader_package_name = Some("characterScroll.shpk".to_string());
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -2384,6 +2432,7 @@ mod color_table_bake_tests {
             render_backfaces: true,
             apply_vertex_color: false,
             has_color_dye_table: false,
+            color_dye_table: None,
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],
             specular_color: [1.0, 1.0, 1.0],

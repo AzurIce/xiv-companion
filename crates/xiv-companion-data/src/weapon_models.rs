@@ -1,6 +1,7 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelData,
-    ModelMaterial, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelSubmeshInfo, ModelTexture,
+    BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelColorDyeTable,
+    ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
+    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelSubmeshInfo, ModelTexture,
     ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
     WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
     WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
@@ -1320,72 +1321,115 @@ fn material_color_dye_table_kind(color_dye_table: &physis::mtrl::ColorDyeTable) 
 fn material_color_dye_table_debug(
     color_dye_table: Option<&physis::mtrl::ColorDyeTable>,
 ) -> Option<MaterialColorDyeTableDebug> {
-    match color_dye_table? {
-        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(table) => {
-            Some(MaterialColorDyeTableDebug {
-                kind: "Legacy".to_string(),
-                row_count: table.rows.len(),
-                rows: table
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
-                        index,
-                        template: row.template,
-                        channel: None,
-                        diffuse: row.diffuse,
-                        specular: row.specular,
-                        emissive: row.emissive,
-                        gloss: Some(row.gloss),
-                        specular_strength: Some(row.specular_strength),
-                        scalar3: None,
-                        metalness: None,
-                        roughness: None,
-                        sheen_rate: None,
-                        sheen_tint_rate: None,
-                        sheen_aperture: None,
-                        anisotropy: None,
-                        sphere_map_index: None,
-                        sphere_map_mask: None,
-                    })
-                    .collect(),
-            })
-        }
-        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(table) => {
-            Some(MaterialColorDyeTableDebug {
-                kind: "Dawntrail".to_string(),
-                row_count: table.rows.len(),
-                rows: table
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
-                        index,
-                        template: row.template,
-                        channel: Some(row.channel),
-                        diffuse: row.diffuse,
-                        specular: row.specular,
-                        emissive: row.emissive,
-                        gloss: None,
-                        specular_strength: None,
-                        scalar3: Some(row.scalar3),
-                        metalness: Some(row.metalness),
-                        roughness: Some(row.roughness),
-                        sheen_rate: Some(row.sheen_rate),
-                        sheen_tint_rate: Some(row.sheen_tint_rate),
-                        sheen_aperture: Some(row.sheen_aperture),
-                        anisotropy: Some(row.anisotropy),
-                        sphere_map_index: Some(row.sphere_map_index),
-                        sphere_map_mask: Some(row.sphere_map_mask),
-                    })
-                    .collect(),
-            })
-        }
-        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => Some(MaterialColorDyeTableDebug {
+    match model_color_dye_table(color_dye_table)? {
+        ModelColorDyeTable::Legacy(rows) => Some(MaterialColorDyeTableDebug {
+            kind: "Legacy".to_string(),
+            row_count: rows.len(),
+            rows: rows
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                    index,
+                    template: row.template,
+                    channel: None,
+                    diffuse: row.diffuse,
+                    specular: row.specular,
+                    emissive: row.emissive,
+                    gloss: Some(row.gloss),
+                    specular_strength: Some(row.specular_strength),
+                    scalar3: None,
+                    metalness: None,
+                    roughness: None,
+                    sheen_rate: None,
+                    sheen_tint_rate: None,
+                    sheen_aperture: None,
+                    anisotropy: None,
+                    sphere_map_index: None,
+                    sphere_map_mask: None,
+                })
+                .collect(),
+        }),
+        ModelColorDyeTable::Dawntrail(rows) => Some(MaterialColorDyeTableDebug {
+            kind: "Dawntrail".to_string(),
+            row_count: rows.len(),
+            rows: rows
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                    index,
+                    template: row.template,
+                    channel: Some(row.channel),
+                    diffuse: row.diffuse,
+                    specular: row.specular,
+                    emissive: row.emissive,
+                    gloss: None,
+                    specular_strength: None,
+                    scalar3: Some(row.scalar3),
+                    metalness: Some(row.metalness),
+                    roughness: Some(row.roughness),
+                    sheen_rate: Some(row.sheen_rate),
+                    sheen_tint_rate: Some(row.sheen_tint_rate),
+                    sheen_aperture: Some(row.sheen_aperture),
+                    anisotropy: Some(row.anisotropy),
+                    sphere_map_index: Some(row.sphere_map_index),
+                    sphere_map_mask: Some(row.sphere_map_mask),
+                })
+                .collect(),
+        }),
+        ModelColorDyeTable::Opaque => Some(MaterialColorDyeTableDebug {
             kind: "Opaque".to_string(),
             row_count: 0,
             rows: Vec::new(),
         }),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn model_color_dye_table(
+    color_dye_table: Option<&physis::mtrl::ColorDyeTable>,
+) -> Option<ModelColorDyeTable> {
+    match color_dye_table? {
+        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(table) => {
+            Some(ModelColorDyeTable::Legacy(
+                table
+                    .rows
+                    .iter()
+                    .map(|row| ModelLegacyColorDyeTableRow {
+                        template: row.template,
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        gloss: row.gloss,
+                        specular_strength: row.specular_strength,
+                    })
+                    .collect(),
+            ))
+        }
+        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(table) => {
+            Some(ModelColorDyeTable::Dawntrail(
+                table
+                    .rows
+                    .iter()
+                    .map(|row| ModelDawntrailColorDyeTableRow {
+                        template: row.template,
+                        channel: row.channel,
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        scalar3: row.scalar3,
+                        metalness: row.metalness,
+                        roughness: row.roughness,
+                        sheen_rate: row.sheen_rate,
+                        sheen_tint_rate: row.sheen_tint_rate,
+                        sheen_aperture: row.sheen_aperture,
+                        anisotropy: row.anisotropy,
+                        sphere_map_index: row.sphere_map_index,
+                        sphere_map_mask: row.sphere_map_mask,
+                    })
+                    .collect(),
+            ))
+        }
+        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => Some(ModelColorDyeTable::Opaque),
     }
 }
 
@@ -1595,6 +1639,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             summary.diffuse
         };
         let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
+        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
 
         return WeaponModelMaterial {
             slot,
@@ -1649,7 +1694,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             opacity,
             render_backfaces,
             apply_vertex_color,
-            has_color_dye_table: material.color_dye_table.is_some(),
+            has_color_dye_table: color_dye_table.is_some(),
+            color_dye_table,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -2122,6 +2168,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             summary.diffuse
         };
         let emissive_color = preview_emissive_color(summary.emissive, &texture_set);
+        let color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
 
         return WeaponModelMaterial {
             slot,
@@ -2176,7 +2223,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             opacity,
             render_backfaces,
             apply_vertex_color,
-            has_color_dye_table: material.color_dye_table.is_some(),
+            has_color_dye_table: color_dye_table.is_some(),
+            color_dye_table,
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -3508,6 +3556,7 @@ fn fallback_weapon_material(
         render_backfaces: true,
         apply_vertex_color: false,
         has_color_dye_table: false,
+        color_dye_table: None,
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -4704,6 +4753,19 @@ mod weapon_material_tests {
         );
 
         let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+        assert_eq!(
+            model_color_dye_table(Some(&color_dye_table)),
+            Some(ModelColorDyeTable::Legacy(vec![
+                ModelLegacyColorDyeTableRow {
+                    template: 42,
+                    diffuse: true,
+                    specular: false,
+                    emissive: true,
+                    gloss: true,
+                    specular_strength: false,
+                }
+            ]))
+        );
 
         assert_eq!(debug.kind, "Legacy");
         assert_eq!(debug.row_count, 1);
@@ -4743,6 +4805,27 @@ mod weapon_material_tests {
         );
 
         let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+        assert_eq!(
+            model_color_dye_table(Some(&color_dye_table)),
+            Some(ModelColorDyeTable::Dawntrail(vec![
+                ModelDawntrailColorDyeTableRow {
+                    template: 77,
+                    channel: 2,
+                    diffuse: true,
+                    specular: true,
+                    emissive: false,
+                    scalar3: true,
+                    metalness: false,
+                    roughness: true,
+                    sheen_rate: true,
+                    sheen_tint_rate: false,
+                    sheen_aperture: true,
+                    anisotropy: false,
+                    sphere_map_index: true,
+                    sphere_map_mask: true,
+                }
+            ]))
+        );
 
         assert_eq!(debug.kind, "Dawntrail");
         assert_eq!(debug.row_count, 1);
