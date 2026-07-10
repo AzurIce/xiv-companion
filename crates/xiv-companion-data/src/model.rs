@@ -1155,6 +1155,7 @@ pub fn prepared_material_unsupported_inputs(
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialUnsupportedInputs {
     let feature_flags = prepared_material_feature_flags(material, shader_family, texture_bindings);
+    let resource_availability = prepared_material_resource_availability(material);
     let dye_application = material
         .and_then(|material| material.staining_application.as_ref())
         .is_some_and(staining_application_is_incomplete);
@@ -1163,9 +1164,9 @@ pub fn prepared_material_unsupported_inputs(
         dye_application,
         runtime_color_table: feature_flags.uses_color_table,
         decal_or_crest: matches!(draw_role, ModelMeshDrawRole::CrestChange),
-        runtime_material_change: matches!(draw_role, ModelMeshDrawRole::MaterialChange),
-        tile_array: feature_flags.uses_tile,
-        detail_array: feature_flags.uses_detail,
+        runtime_material_change: false,
+        tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
+        detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
     }
 }
@@ -1285,6 +1286,9 @@ fn prepared_render_pass(
 ) -> PreparedRenderPass {
     if matches!(draw_role, ModelMeshDrawRole::LightShaft) {
         return PreparedRenderPass::AdditiveLightShaft;
+    }
+    if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+        return PreparedRenderPass::Transparent;
     }
     if matches!(draw_role, ModelMeshDrawRole::Glass) {
         return PreparedRenderPass::Glass;
@@ -2019,6 +2023,14 @@ mod color_table_bake_tests {
             ),
             PreparedRenderPass::AdditiveLightShaft
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::CrestChange
+            ),
+            PreparedRenderPass::Transparent
+        );
     }
 
     #[test]
@@ -2237,7 +2249,7 @@ mod color_table_bake_tests {
                 dye_application: true,
                 runtime_color_table: true,
                 decal_or_crest: false,
-                runtime_material_change: true,
+                runtime_material_change: false,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
@@ -2282,6 +2294,11 @@ mod color_table_bake_tests {
                 material_change: PreparedRuntimeFallback::BaseMaterial,
             }
         );
+
+        material.texture_arrays.detail_normal = Some(4);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!prepared.unsupported_inputs.tile_array);
+        assert!(!prepared.unsupported_inputs.detail_array);
     }
 
     #[test]

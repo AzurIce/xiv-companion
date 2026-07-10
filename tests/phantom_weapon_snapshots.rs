@@ -16,8 +16,9 @@ use xiv_companion::{
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
-    renderer::test_support::{
-        WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
+    renderer::{
+        ModelDebugMode, ModelRenderOptions,
+        test_support::{WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options},
     },
 };
 use xiv_companion_data::{
@@ -422,6 +423,27 @@ fn render_case(
         &model,
     )
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
+    if phantom_array_debug_enabled() {
+        for (name, debug_mode) in [
+            ("debug-tile-normal", ModelDebugMode::TileNormalArray),
+            ("debug-tile-orb", ModelDebugMode::TileOrbArray),
+            ("debug-detail-diffuse", ModelDebugMode::DetailDiffuseArray),
+            ("debug-detail-normal", ModelDebugMode::DetailNormalArray),
+        ] {
+            render_weapon_model_snapshot_with_options(
+                WeaponModelSnapshotOptions::new(name)
+                    .with_output_dir(&case_dir)
+                    .with_viewport(1024, 1024)
+                    .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                    .with_render_options(ModelRenderOptions {
+                        debug_mode,
+                        ..ModelRenderOptions::default()
+                    }),
+                &model,
+            )
+            .with_context(|| format!("failed to render {name} for {}", case.case_id))?;
+        }
+    }
 
     let raw_files = dump_raw_files(resource, &model, &case_dir)?;
     let (model_debug_files, model_metadata_by_path) =
@@ -496,6 +518,12 @@ fn phantom_case_filter() -> Option<HashSet<String>> {
         .map(ToString::to_string)
         .collect::<HashSet<_>>();
     (!values.is_empty()).then_some(values)
+}
+
+fn phantom_array_debug_enabled() -> bool {
+    std::env::var("XIV_PHANTOM_ARRAY_DEBUG")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {

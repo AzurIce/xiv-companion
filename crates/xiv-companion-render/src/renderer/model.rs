@@ -2,8 +2,9 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    PreparedMaterial, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter,
-    PreparedTextureSampling, PreparedUvSource, prepare_model_for_render,
+    ModelTexture, ModelTextureKind, PreparedMaterial, PreparedRenderPass,
+    PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource,
+    prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -33,6 +34,10 @@ pub enum ModelDebugMode {
     SheenProperties,
     SphereProperties,
     TileMatrix,
+    TileNormalArray,
+    TileOrbArray,
+    DetailDiffuseArray,
+    DetailNormalArray,
 }
 
 impl ModelDebugMode {
@@ -59,6 +64,10 @@ impl ModelDebugMode {
             ModelDebugMode::SheenProperties => 18.0,
             ModelDebugMode::SphereProperties => 19.0,
             ModelDebugMode::TileMatrix => 20.0,
+            ModelDebugMode::TileNormalArray => 21.0,
+            ModelDebugMode::TileOrbArray => 22.0,
+            ModelDebugMode::DetailDiffuseArray => 23.0,
+            ModelDebugMode::DetailNormalArray => 24.0,
         }
     }
 }
@@ -344,6 +353,26 @@ impl ModelRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 16,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 18,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -1261,6 +1290,36 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     model: &M,
     draw_batches: &[DrawBatch],
 ) -> Vec<wgpu::BindGroup> {
+    // Pair related atlases horizontally to stay below common WebGPU per-stage texture limits.
+    let tile_array_pair_texture = create_array_pair_texture(
+        device,
+        queue,
+        "weapon tile array pair",
+        model_texture_pair_for_kinds(
+            model,
+            ModelTextureKind::TileNormalArray,
+            ModelTextureKind::TileOrbArray,
+        ),
+        [128, 128, 255, 255],
+        [255, 128, 255, 255],
+    );
+    let tile_array_pair_view =
+        tile_array_pair_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let detail_array_pair_texture = create_array_pair_texture(
+        device,
+        queue,
+        "weapon detail array pair",
+        model_texture_pair_for_kinds(
+            model,
+            ModelTextureKind::DetailDiffuseArray,
+            ModelTextureKind::DetailNormalArray,
+        ),
+        [128, 128, 128, 255],
+        [128, 128, 255, 255],
+    );
+    let detail_array_pair_view =
+        detail_array_pair_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
     draw_batches
         .iter()
         .map(|batch| {
@@ -1277,6 +1336,8 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
                 model,
                 batch.prepared_material,
                 batch.draw_role,
+                &tile_array_pair_view,
+                &detail_array_pair_view,
             )
         })
         .collect()
@@ -1290,6 +1351,8 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_material: PreparedMaterial,
     draw_role: ModelMeshDrawRole,
+    tile_array_pair_view: &wgpu::TextureView,
+    detail_array_pair_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
     let uv_sources = material_uv_source_params(prepared_material);
@@ -1365,6 +1428,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         toon_sheen_params: material_toon_sheen_params(material),
         sheen_sphere_params: material_sheen_sphere_params(material),
         detail_params: material_detail_params(material),
+        array_params: material_array_params(material, model),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
         shader_diffuse_color: material_shader_diffuse_color(material),
@@ -1831,6 +1895,14 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 binding: 16,
                 resource: wgpu::BindingResource::TextureView(&multi_map_texture_view),
             },
+            wgpu::BindGroupEntry {
+                binding: 17,
+                resource: wgpu::BindingResource::TextureView(tile_array_pair_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 18,
+                resource: wgpu::BindingResource::TextureView(detail_array_pair_view),
+            },
         ],
     })
 }
@@ -1887,6 +1959,172 @@ fn sampler_filter_mode(filter: PreparedTextureFilter) -> wgpu::FilterMode {
         PreparedTextureFilter::Linear => wgpu::FilterMode::Linear,
         PreparedTextureFilter::Nearest => wgpu::FilterMode::Nearest,
     }
+}
+
+fn material_array_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> [f32; 4] {
+    let tile = material_texture_array_pair(
+        material.texture_arrays.tile_normal,
+        material.texture_arrays.tile_orb,
+        model,
+        ModelTextureKind::TileNormalArray,
+        ModelTextureKind::TileOrbArray,
+    );
+    let detail = material_texture_array_pair(
+        material.texture_arrays.detail_diffuse,
+        material.texture_arrays.detail_normal,
+        model,
+        ModelTextureKind::DetailDiffuseArray,
+        ModelTextureKind::DetailNormalArray,
+    );
+    [
+        tile.map(|(texture, _)| f32::from(texture.array_size))
+            .unwrap_or(1.0),
+        detail
+            .map(|(texture, _)| f32::from(texture.array_size))
+            .unwrap_or(1.0),
+        if tile.is_some() { 1.0 } else { 0.0 },
+        if detail.is_some() { 1.0 } else { 0.0 },
+    ]
+}
+
+fn material_texture_array_pair<'a, M: ModelRenderData + ?Sized>(
+    first: Option<usize>,
+    second: Option<usize>,
+    model: &'a M,
+    first_kind: ModelTextureKind,
+    second_kind: ModelTextureKind,
+) -> Option<(&'a ModelTexture, &'a ModelTexture)> {
+    let first_index = first?;
+    let second_index = second?;
+    let first = model.textures().get(first_index)?;
+    let second = model.textures().get(second_index)?;
+    (first.kind == first_kind
+        && second.kind == second_kind
+        && model
+            .textures()
+            .iter()
+            .position(|texture| texture.kind == first_kind)
+            == Some(first_index)
+        && model
+            .textures()
+            .iter()
+            .position(|texture| texture.kind == second_kind)
+            == Some(second_index)
+        && texture_array_pair_is_compatible(first, second))
+    .then_some((first, second))
+}
+
+fn model_texture_pair_for_kinds<M: ModelRenderData + ?Sized>(
+    model: &M,
+    first_kind: ModelTextureKind,
+    second_kind: ModelTextureKind,
+) -> Option<(&ModelTexture, &ModelTexture)> {
+    let first = model
+        .textures()
+        .iter()
+        .find(|texture| texture.kind == first_kind)?;
+    let second = model
+        .textures()
+        .iter()
+        .find(|texture| texture.kind == second_kind)?;
+    texture_array_pair_is_compatible(first, second).then_some((first, second))
+}
+
+fn texture_array_pair_is_compatible(first: &ModelTexture, second: &ModelTexture) -> bool {
+    texture_array_layout_is_valid(first)
+        && texture_array_layout_is_valid(second)
+        && first.width == second.width
+        && first.height == second.height
+        && first.array_size == second.array_size
+        && first.array_layer_height == second.array_layer_height
+}
+
+fn texture_array_layout_is_valid(texture: &ModelTexture) -> bool {
+    texture.width != 0
+        && texture.array_size > 1
+        && texture.array_layer_height != 0
+        && u32::from(texture.height)
+            == u32::from(texture.array_size) * u32::from(texture.array_layer_height)
+        && texture.rgba.len() == usize::from(texture.width) * usize::from(texture.height) * 4
+}
+
+fn create_array_pair_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    pair: Option<(&ModelTexture, &ModelTexture)>,
+    fallback_first: [u8; 4],
+    fallback_second: [u8; 4],
+) -> wgpu::Texture {
+    let Some((first, second)) = pair else {
+        let rgba = [
+            fallback_first[0],
+            fallback_first[1],
+            fallback_first[2],
+            fallback_first[3],
+            fallback_second[0],
+            fallback_second[1],
+            fallback_second[2],
+            fallback_second[3],
+        ];
+        return create_rgba_texture(
+            device,
+            queue,
+            label,
+            2,
+            1,
+            &rgba,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+    };
+
+    let width = u32::from(first.width);
+    let height = u32::from(first.height);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width * 2,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let copy_layout = wgpu::TexelCopyBufferLayout {
+        offset: 0,
+        bytes_per_row: Some(width * 4),
+        rows_per_image: Some(height),
+    };
+    let copy_size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    for (origin_x, rgba) in [(0, first.rgba.as_slice()), (width, second.rgba.as_slice())] {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: origin_x,
+                    y: 0,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            copy_layout,
+            copy_size,
+        );
+    }
+    texture
 }
 
 fn create_rgba_texture(
@@ -2269,8 +2507,16 @@ fn draw_role_params(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         } else {
             0.0
         },
-        0.0,
-        0.0,
+        if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(draw_role, ModelMeshDrawRole::MaterialChange) {
+            1.0
+        } else {
+            0.0
+        },
         0.0,
     ]
 }
@@ -2387,6 +2633,7 @@ struct MaterialUniform {
     toon_sheen_params: [f32; 4],
     sheen_sphere_params: [f32; 4],
     detail_params: [f32; 4],
+    array_params: [f32; 4],
     detail_color: [f32; 4],
     multi_detail_color: [f32; 4],
     shader_diffuse_color: [f32; 4],
@@ -2647,6 +2894,14 @@ mod tests {
             ),
             PreparedRenderPass::AdditiveLightShaft
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::CrestChange
+            ),
+            PreparedRenderPass::Transparent
+        );
     }
 
     #[test]
@@ -2749,6 +3004,10 @@ mod tests {
         assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 18.0);
         assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 19.0);
         assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 20.0);
+        assert_eq!(ModelDebugMode::TileNormalArray.shader_value(), 21.0);
+        assert_eq!(ModelDebugMode::TileOrbArray.shader_value(), 22.0);
+        assert_eq!(ModelDebugMode::DetailDiffuseArray.shader_value(), 23.0);
+        assert_eq!(ModelDebugMode::DetailNormalArray.shader_value(), 24.0);
     }
 
     #[test]
@@ -2929,6 +3188,62 @@ mod tests {
         assert_eq!(
             material_extra_texture_flags(&material, &model),
             [1.0, 1.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn material_array_params_require_compatible_texture_pairs() {
+        let mut material = fallback_material();
+        material.texture_arrays.tile_normal = Some(0);
+        material.texture_arrays.tile_orb = Some(1);
+        material.texture_arrays.detail_diffuse = Some(2);
+        material.texture_arrays.detail_normal = Some(3);
+        let mut textures = vec![
+            test_array_texture(crate::ModelTextureKind::TileNormalArray, 4),
+            test_array_texture(crate::ModelTextureKind::TileOrbArray, 4),
+            test_array_texture(crate::ModelTextureKind::DetailDiffuseArray, 8),
+            test_array_texture(crate::ModelTextureKind::DetailNormalArray, 8),
+        ];
+        let mut model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: textures.clone(),
+            meshes: Vec::new(),
+        };
+
+        assert_eq!(
+            material_array_params(&material, &model),
+            [4.0, 8.0, 1.0, 1.0]
+        );
+
+        model.textures[0].kind = crate::ModelTextureKind::BaseColor;
+        assert_eq!(
+            material_array_params(&material, &model),
+            [1.0, 8.0, 0.0, 1.0]
+        );
+        model.textures[0].kind = crate::ModelTextureKind::TileNormalArray;
+
+        let duplicate_tile_normal = model.textures[0].clone();
+        let duplicate_tile_orb = model.textures[1].clone();
+        model
+            .textures
+            .extend([duplicate_tile_normal, duplicate_tile_orb]);
+        material.texture_arrays.tile_normal = Some(4);
+        material.texture_arrays.tile_orb = Some(5);
+        assert_eq!(
+            material_array_params(&material, &model),
+            [1.0, 8.0, 0.0, 1.0]
+        );
+        material.texture_arrays.tile_normal = Some(0);
+        material.texture_arrays.tile_orb = Some(1);
+
+        textures[1].array_size = 3;
+        textures[1].height = 3;
+        textures[1].rgba.resize(12, 255);
+        model.textures = textures;
+        assert_eq!(
+            material_array_params(&material, &model),
+            [1.0, 8.0, 0.0, 1.0]
         );
     }
 
@@ -3186,6 +3501,14 @@ mod tests {
         assert_eq!(
             draw_role_params(ModelMeshDrawRole::LightShaft),
             [1.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            draw_role_params(ModelMeshDrawRole::CrestChange),
+            [0.0, 1.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            draw_role_params(ModelMeshDrawRole::MaterialChange),
+            [0.0, 0.0, 1.0, 0.0]
         );
 
         material.lightshaft_color = [0.2, 0.4, 0.6, 0.8];
@@ -3526,6 +3849,19 @@ mod tests {
             array_size: 1,
             array_layer_height: 1,
             rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
+        }
+    }
+
+    fn test_array_texture(kind: crate::ModelTextureKind, array_size: u16) -> crate::ModelTexture {
+        crate::ModelTexture {
+            path: "array.tex".to_string(),
+            kind,
+            width: 1,
+            height: array_size,
+            array_size,
+            array_layer_height: 1,
+            rgba: vec![128; usize::from(array_size) * 4],
             rgba_f32: None,
         }
     }

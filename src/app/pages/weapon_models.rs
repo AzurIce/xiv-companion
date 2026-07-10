@@ -621,6 +621,10 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "sheen-props", "Sheen" }
                     option { value: "sphere-props", "Sphere" }
                     option { value: "tile-matrix", "Tile Matrix" }
+                    option { value: "tile-normal-array", "Tile Normal" }
+                    option { value: "tile-orb-array", "Tile ORB" }
+                    option { value: "detail-diffuse-array", "Detail Diffuse" }
+                    option { value: "detail-normal-array", "Detail Normal" }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -787,6 +791,10 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::SheenProperties => "sheen-props",
         ModelDebugMode::SphereProperties => "sphere-props",
         ModelDebugMode::TileMatrix => "tile-matrix",
+        ModelDebugMode::TileNormalArray => "tile-normal-array",
+        ModelDebugMode::TileOrbArray => "tile-orb-array",
+        ModelDebugMode::DetailDiffuseArray => "detail-diffuse-array",
+        ModelDebugMode::DetailNormalArray => "detail-normal-array",
     }
 }
 
@@ -812,6 +820,10 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "sheen-props" => ModelDebugMode::SheenProperties,
         "sphere-props" => ModelDebugMode::SphereProperties,
         "tile-matrix" => ModelDebugMode::TileMatrix,
+        "tile-normal-array" => ModelDebugMode::TileNormalArray,
+        "tile-orb-array" => ModelDebugMode::TileOrbArray,
+        "detail-diffuse-array" => ModelDebugMode::DetailDiffuseArray,
+        "detail-normal-array" => ModelDebugMode::DetailNormalArray,
         _ => ModelDebugMode::Final,
     }
 }

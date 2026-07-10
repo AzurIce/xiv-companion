@@ -19,6 +19,7 @@ struct Material {
     toon_sheen_params: vec4<f32>, // x: toon index, y: toon light scale, z: sheen rate, w: sheen tint rate
     sheen_sphere_params: vec4<f32>, // x: sheen aperture, y: sphere map index
     detail_params: vec4<f32>, // x: detail id, y: multi detail id
+    array_params: vec4<f32>, // x: tile layers, y: detail layers, z: has tile pair, w: has detail pair
     detail_color: vec4<f32>,
     multi_detail_color: vec4<f32>,
     shader_diffuse_color: vec4<f32>,
@@ -40,7 +41,7 @@ struct Material {
     uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
     uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     uv_sources3: vec4<f32>, // x: ColorTable index, y: other
-    draw_role_params: vec4<f32>, // x: lightshaft draw role
+    draw_role_params: vec4<f32>, // x: lightshaft, y: transparent crest fallback, z: base material fallback
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
 
@@ -125,6 +126,12 @@ var material_map_texture: texture_2d<f32>;
 @group(1) @binding(16)
 var multi_map_texture: texture_2d<f32>;
 
+@group(1) @binding(17)
+var tile_array_pair_texture: texture_2d<f32>;
+
+@group(1) @binding(18)
+var detail_array_pair_texture: texture_2d<f32>;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
     @location(1) bright: vec4<f32>,
@@ -147,6 +154,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     let is_lightshaft = material.draw_role_params.x > 0.5;
+    let is_crest_fallback = material.draw_role_params.y > 0.5;
     var base_uv = resolve_uv(input, material.uv_sources0.x);
     if is_lightshaft {
         base_uv = resolve_lightshaft_uv(input);
@@ -157,17 +165,21 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let emissive_uv = resolve_uv(input, material.uv_sources1.z);
     let material_properties_uv = resolve_uv(input, material.uv_sources1.w);
 
-    let normal = resolve_normal(input, front_facing, normal_uv);
+    let extra = resolve_extra_properties(input);
+    let tile_array = resolve_tile_array(input, extra);
+    let detail_array = resolve_detail_array(input);
+    let normal = resolve_normal(input, front_facing, normal_uv, tile_array, detail_array);
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
     let mask = resolve_mask(mask_uv);
-    let properties = resolve_material_properties(material_properties_uv, mask);
+    var properties = resolve_material_properties(material_properties_uv, mask);
+    properties.y = mix(properties.y, clamp(tile_array.orb.g, 0.08, 1.0), tile_array.weight * 0.35);
+    properties.w *= mix(1.0, clamp(tile_array.orb.b, 0.0, 1.0), tile_array.weight * 0.25);
     let metalness = clamp(properties.x, 0.0, 1.0);
     let roughness = clamp(properties.y, 0.08, 1.0);
     let gloss_strength = clamp(properties.z, 0.0, 1.0);
     let specular_strength = clamp(properties.w, 0.0, 1.0);
-    let extra = resolve_extra_properties(input);
     let tile_specular_scale = resolve_tile_specular_scale(input, extra);
     let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
     let specular_scale = specular_strength
@@ -187,9 +199,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
     let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
-    let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || material.render.x > 0.5;
+    let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
     let shader_tint = resolve_shader_diffuse_tint(mask);
-    let detail_tint = resolve_detail_tint(input);
+    let detail_tint = resolve_detail_tint(input, detail_array);
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
     var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
     if uses_alpha && !is_glass && !is_lightshaft {
@@ -200,7 +212,22 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     }
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     if camera.options.w > 0.5 {
-        return debug_fragment_output(input, camera.options.w, base, normal, mask, properties, material_specular, emissive, alpha);
+        return debug_fragment_output(
+            input,
+            camera.options.w,
+            base,
+            normal,
+            mask,
+            properties,
+            material_specular,
+            emissive,
+            alpha,
+            tile_array,
+            detail_array,
+        );
+    }
+    if is_crest_fallback {
+        discard;
     }
     if is_mask && alpha < material.render.w {
         discard;
@@ -220,7 +247,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let glass_factors = resolve_glass_factors();
     let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55 + glass_factors.y * 0.18);
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
-    let ambient = mix(0.08, 0.22, ssao_mask);
+    let tile_ao = mix(1.0, clamp(tile_array.orb.r, 0.0, 1.0), tile_array.weight * 0.35);
+    let ambient = mix(0.08, 0.22, ssao_mask) * tile_ao;
     let glass_ambient = mix(0.06, 0.10, ssao_mask);
     let opaque_lit = base * (ambient + diffuse * 0.74)
         + specular_tint * specular * specular_scale * 0.24
@@ -251,6 +279,8 @@ fn debug_fragment_output(
     specular: vec3<f32>,
     emissive: vec3<f32>,
     alpha: f32,
+    tile_array: TileArraySample,
+    detail_array: DetailArraySample,
 ) -> FragmentOutput {
     var color = base;
     if mode < 1.5 {
@@ -298,9 +328,17 @@ fn debug_fragment_output(
     } else if mode < 19.5 {
         let sphere_uv = resolve_uv(input, material.uv_sources2.z);
         color = textureSample(sphere_properties_texture, nearest_data_sampler, sphere_uv).rgb;
-    } else {
+    } else if mode < 20.5 {
         let tile_matrix_uv = resolve_uv(input, material.uv_sources2.w);
         color = textureSample(tile_matrix_texture, nearest_data_sampler, tile_matrix_uv).rgb;
+    } else if mode < 21.5 {
+        color = tile_array.normal * 0.5 + vec3<f32>(0.5);
+    } else if mode < 22.5 {
+        color = tile_array.orb;
+    } else if mode < 23.5 {
+        color = detail_array.diffuse;
+    } else {
+        color = detail_array.normal * 0.5 + vec3<f32>(0.5);
     }
 
     var out: FragmentOutput;
@@ -330,6 +368,120 @@ fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
     let specular_strength = mix(1.0, mask.r * 1.35, material.params.w);
     let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);
     return vec4<f32>(metalness, roughness, gloss_strength, specular_strength);
+}
+
+struct TileArraySample {
+    normal: vec3<f32>,
+    orb: vec3<f32>,
+    weight: f32,
+};
+
+struct DetailArraySample {
+    diffuse: vec3<f32>,
+    normal: vec3<f32>,
+    tint: vec3<f32>,
+    normal_weight: f32,
+    available: f32,
+};
+
+fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArraySample {
+    var out: TileArraySample;
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
+    out.orb = vec3<f32>(1.0, 0.5, 1.0);
+    out.weight = 0.0;
+    if material.array_params.z <= 0.5 {
+        return out;
+    }
+
+    let layer_count = max(round(material.array_params.x), 1.0);
+    let ramp_layer = round(clamp(extra.tile.x, 0.0, 1.0) * 64.0);
+    let shader_layer = round(max(material.tile_params.x, 0.0));
+    let layer = clamp(select(shader_layer, ramp_layer, extra.flags.x > 0.5), 0.0, layer_count - 1.0);
+    let shader_alpha = clamp(material.tile_params.y, 0.0, 1.0);
+    let tile_alpha = select(shader_alpha, clamp(extra.tile.y, 0.0, 1.0), extra.flags.x > 0.5);
+    let source_uv = resolve_uv(input, material.uv_sources2.x);
+    let transformed_uv = vec2<f32>(
+        dot(extra.tile_matrix.xy, source_uv),
+        dot(extra.tile_matrix.zw, source_uv),
+    );
+    let tiled_uv = transformed_uv * max(abs(material.tile_params.zw), vec2<f32>(0.001));
+    let normal_sample = textureSample(
+        tile_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(tiled_uv, layer, layer_count, 0.0),
+    );
+    let orb_sample = textureSample(
+        tile_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(tiled_uv, layer, layer_count, 1.0),
+    );
+    out.normal = decode_normal(normal_sample);
+    out.orb = orb_sample.rgb;
+    out.weight = tile_alpha;
+    return out;
+}
+
+fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
+    var out: DetailArraySample;
+    out.diffuse = vec3<f32>(0.5);
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
+    out.tint = vec3<f32>(1.0);
+    out.normal_weight = 0.0;
+    out.available = 0.0;
+    if material.array_params.w <= 0.5 {
+        return out;
+    }
+
+    let layer_count = max(round(material.array_params.y), 1.0);
+    let detail_layer = clamp(round(max(material.detail_params.x, 0.0)), 0.0, layer_count - 1.0);
+    let multi_layer = clamp(round(max(material.detail_params.y, 0.0)), 0.0, layer_count - 1.0);
+    let detail_diffuse = textureSample(
+        detail_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 0.0),
+    ).rgb;
+    let multi_diffuse = textureSample(
+        detail_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 0.0),
+    ).rgb;
+    let detail_normal = decode_normal(textureSample(
+        detail_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 1.0),
+    ));
+    let multi_normal = decode_normal(textureSample(
+        detail_array_pair_texture,
+        nearest_data_sampler,
+        pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 1.0),
+    ));
+    let detail_tint = clamp(detail_diffuse * 2.0 * material.detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
+    let multi_tint = clamp(multi_diffuse * 2.0 * material.multi_detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
+    let detail_weight = clamp(material.detail_color.a, 0.0, 1.0) * 0.22;
+    let multi_weight = clamp(material.multi_detail_color.a, 0.0, 1.0) * 0.14;
+    out.diffuse = detail_diffuse;
+    out.normal = normalize(vec3<f32>(
+        detail_normal.xy * clamp(material.shader_params.z, 0.0, 4.0)
+            + multi_normal.xy * clamp(material.shader_params.w, 0.0, 4.0) * 0.65,
+        max(detail_normal.z * multi_normal.z, 0.05),
+    ));
+    out.tint = mix(vec3<f32>(1.0), detail_tint, detail_weight)
+        * mix(vec3<f32>(1.0), multi_tint, multi_weight);
+    out.normal_weight = 0.32;
+    out.available = 1.0;
+    return out;
+}
+
+fn pair_atlas_uv(uv: vec2<f32>, layer: f32, layer_count: f32, side: f32) -> vec2<f32> {
+    return vec2<f32>(
+        (fract(uv.x) + side) * 0.5,
+        (fract(uv.y) + layer) / layer_count,
+    );
+}
+
+fn decode_normal(sampled: vec4<f32>) -> vec3<f32> {
+    let xy = sampled.rg * 2.0 - vec2<f32>(1.0);
+    return normalize(vec3<f32>(xy, sqrt(max(1.0 - dot(xy, xy), 0.001))));
 }
 
 struct ExtraProperties {
@@ -499,7 +651,10 @@ fn resolve_shader_diffuse_tint(mask: vec3<f32>) -> vec3<f32> {
     return diffuse_tint * mix(vec3<f32>(1.0), multi_tint, multi_gate);
 }
 
-fn resolve_detail_tint(input: VertexOutput) -> vec3<f32> {
+fn resolve_detail_tint(input: VertexOutput, detail_array: DetailArraySample) -> vec3<f32> {
+    if detail_array.available > 0.5 {
+        return detail_array.tint;
+    }
     let detail = resolve_single_detail_tint(
         material.detail_params.x,
         material.detail_color,
@@ -555,32 +710,49 @@ fn resolve_lightshaft_color(base: vec3<f32>, texture_alpha: f32, vertex_alpha: f
     return vec4<f32>(base * tint.rgb * intensity * alpha, alpha);
 }
 
-fn resolve_normal(input: VertexOutput, front_facing: bool, uv: vec2<f32>) -> vec3<f32> {
+fn resolve_normal(
+    input: VertexOutput,
+    front_facing: bool,
+    uv: vec2<f32>,
+    tile_array: TileArraySample,
+    detail_array: DetailArraySample,
+) -> vec3<f32> {
     let face_sign = select(-1.0, 1.0, front_facing);
     let geometric_normal = normalize(input.normal) * face_sign;
-    let sampled = textureSample(normal_texture, data_sampler, uv).xyz * 2.0 - vec3<f32>(1.0);
-    if camera.options.x <= 0.5 || material.params.z <= 0.5 || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
+    let has_primary = material.params.z > 0.5;
+    let has_array_normal = tile_array.weight > 0.001 || detail_array.normal_weight > 0.001;
+    if camera.options.x <= 0.5 || (!has_primary && !has_array_normal) || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
         return geometric_normal;
     }
 
     let bitangent = normalize(input.bitangent.xyz);
     let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
     let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
-    let normal_scale = resolve_effective_normal_scale();
+    let sampled = select(
+        vec3<f32>(0.0, 0.0, 1.0),
+        decode_normal(textureSample(normal_texture, data_sampler, uv)),
+        has_primary,
+    );
+    let normal_scale = resolve_effective_normal_scale(detail_array.available > 0.5);
     let mapped = normalize(vec3<f32>(
-        sampled.x * normal_scale,
-        sampled.y * camera.options.y * normal_scale,
-        sampled.z,
+        sampled.x * normal_scale
+            + tile_array.normal.x * tile_array.weight * 0.65
+            + detail_array.normal.x * detail_array.normal_weight,
+        sampled.y * camera.options.y * normal_scale
+            + tile_array.normal.y * camera.options.y * tile_array.weight * 0.65
+            + detail_array.normal.y * camera.options.y * detail_array.normal_weight,
+        max(sampled.z * tile_array.normal.z * detail_array.normal.z, 0.05),
     ));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }
 
-fn resolve_effective_normal_scale() -> f32 {
+fn resolve_effective_normal_scale(has_detail_array: bool) -> f32 {
     let primary = clamp(material.shader_params.x, 0.0, 4.0);
     let multi_delta = clamp(material.shader_params.y, 0.0, 4.0) - 1.0;
     let detail_delta = clamp(material.shader_params.z, 0.0, 4.0) - 1.0;
     let multi_detail_delta = clamp(material.shader_params.w, 0.0, 4.0) - 1.0;
-    let fallback_delta = multi_delta * 0.08 + detail_delta * 0.12 + multi_detail_delta * 0.08;
+    let fallback_detail = select(detail_delta * 0.12 + multi_detail_delta * 0.08, 0.0, has_detail_array);
+    let fallback_delta = multi_delta * 0.08 + fallback_detail;
     return clamp(primary + fallback_delta, 0.0, 4.0);
 }
 
