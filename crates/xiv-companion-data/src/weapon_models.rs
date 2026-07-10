@@ -1,16 +1,16 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelColorDyeTable,
     ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
-    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelStainingApplication, ModelSubmeshInfo,
-    ModelTexture, ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility,
-    PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem,
-    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
-    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
-    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
-    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
-    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
-    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
-    weapon_slot_label,
+    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
+    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
+    PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
+    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
+    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
+    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
@@ -21,6 +21,11 @@ use crate::staining::{
     DAWNTRAIL_STAINING_TEMPLATE_PATH, LEGACY_STAINING_TEMPLATE_PATH, MAX_STAIN_ID,
     StainingTemplate, apply_staining_template_to_rows,
 };
+
+pub const CHARACTER_TILE_NORMAL_ARRAY_PATH: &str = "chara/common/texture/tile_norm_array.tex";
+pub const CHARACTER_TILE_ORB_ARRAY_PATH: &str = "chara/common/texture/tile_orb_array.tex";
+pub const BG_DETAIL_DIFFUSE_ARRAY_PATH: &str = "bgcommon/nature/detail/texture/detail_d_array.tex";
+pub const BG_DETAIL_NORMAL_ARRAY_PATH: &str = "bgcommon/nature/detail/texture/detail_n_array.tex";
 
 #[cfg(feature = "game-data")]
 const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
@@ -723,6 +728,294 @@ fn apply_weapon_staining(
 }
 
 #[cfg(feature = "game-data")]
+fn material_needs_tile_arrays(material: &ModelMaterial) -> bool {
+    let shader_family =
+        crate::model::material_shader_family(material.shader_package_name.as_deref());
+    if !matches!(
+        shader_family,
+        crate::model::MaterialShaderFamily::Character
+            | crate::model::MaterialShaderFamily::CharacterStockings
+            | crate::model::MaterialShaderFamily::CharacterGlass
+            | crate::model::MaterialShaderFamily::CharacterReflection
+            | crate::model::MaterialShaderFamily::CharacterTransparency
+            | crate::model::MaterialShaderFamily::CharacterScroll
+            | crate::model::MaterialShaderFamily::CharacterTattoo
+            | crate::model::MaterialShaderFamily::CharacterOcclusion
+    ) {
+        return false;
+    }
+    let bindings = crate::model::prepared_texture_bindings(Some(material));
+    crate::model::prepared_material_feature_flags(Some(material), shader_family, bindings).uses_tile
+}
+
+#[cfg(feature = "game-data")]
+fn material_needs_detail_arrays(material: &ModelMaterial) -> bool {
+    let shader_family =
+        crate::model::material_shader_family(material.shader_package_name.as_deref());
+    if shader_family != crate::model::MaterialShaderFamily::Bg {
+        return false;
+    }
+    let bindings = crate::model::prepared_texture_bindings(Some(material));
+    crate::model::prepared_material_feature_flags(Some(material), shader_family, bindings)
+        .uses_detail
+}
+
+#[cfg(feature = "game-data")]
+fn attach_shared_material_arrays_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    materials: &mut [ModelMaterial],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) {
+    let needs_tile = materials.iter().any(material_needs_tile_arrays);
+    let needs_detail = materials.iter().any(material_needs_detail_arrays);
+    let tile_normal = needs_tile.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            CHARACTER_TILE_NORMAL_ARRAY_PATH,
+            ModelTextureKind::TileNormalArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let tile_orb = needs_tile.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            CHARACTER_TILE_ORB_ARRAY_PATH,
+            ModelTextureKind::TileOrbArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let detail_diffuse = needs_detail.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            BG_DETAIL_DIFFUSE_ARRAY_PATH,
+            ModelTextureKind::DetailDiffuseArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let detail_normal = needs_detail.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            BG_DETAIL_NORMAL_ARRAY_PATH,
+            ModelTextureKind::DetailNormalArray,
+            textures,
+            loaded_paths,
+        )
+    });
+
+    for material in materials {
+        if material_needs_tile_arrays(material) {
+            apply_shared_array_result(material, &tile_normal, SharedArraySlot::TileNormal);
+            apply_shared_array_result(material, &tile_orb, SharedArraySlot::TileOrb);
+        }
+        if material_needs_detail_arrays(material) {
+            apply_shared_array_result(material, &detail_diffuse, SharedArraySlot::DetailDiffuse);
+            apply_shared_array_result(material, &detail_normal, SharedArraySlot::DetailNormal);
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy)]
+enum SharedArraySlot {
+    TileNormal,
+    TileOrb,
+    DetailDiffuse,
+    DetailNormal,
+}
+
+#[cfg(feature = "game-data")]
+fn apply_shared_array_result(
+    material: &mut ModelMaterial,
+    result: &Option<Result<usize, String>>,
+    slot: SharedArraySlot,
+) {
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(index) => {
+            let target = match slot {
+                SharedArraySlot::TileNormal => &mut material.texture_arrays.tile_normal,
+                SharedArraySlot::TileOrb => &mut material.texture_arrays.tile_orb,
+                SharedArraySlot::DetailDiffuse => &mut material.texture_arrays.detail_diffuse,
+                SharedArraySlot::DetailNormal => &mut material.texture_arrays.detail_normal,
+            };
+            *target = Some(*index);
+            add_unique_index(&mut material.texture_indices, *index);
+        }
+        Err(error) => {
+            if !material.texture_arrays.errors.contains(error) {
+                material.texture_arrays.errors.push(error.clone());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn load_shared_texture_array_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+    kind: ModelTextureKind,
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+        return Ok(index);
+    }
+    let bytes = resource
+        .read(path)
+        .ok_or_else(|| format!("failed to read shared texture array {path}"))?;
+    decode_and_push_shared_texture_array(
+        resource.platform(),
+        path,
+        kind,
+        &bytes,
+        textures,
+        loaded_paths,
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn decode_and_push_shared_texture_array(
+    platform: physis::Platform,
+    path: &str,
+    kind: ModelTextureKind,
+    bytes: &[u8],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    use physis::ReadableFile;
+
+    let mut texture = physis::tex::Texture::from_existing(platform, bytes)
+        .ok_or_else(|| format!("failed to parse shared texture array {path}"))?;
+    let decoded = crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, bytes)
+        .ok_or_else(|| format!("failed to decode shared texture array {path}"))?;
+    if decoded.array_size <= 1 {
+        return Err(format!("shared texture {path} is not a 2D array"));
+    }
+    let index = textures.len();
+    textures.push(ModelTexture {
+        path: path.to_string(),
+        kind,
+        width: decoded.width,
+        height: decoded.height,
+        array_size: decoded.array_size,
+        array_layer_height: decoded.array_layer_height,
+        rgba: decoded.rgba,
+        rgba_f32: None,
+    });
+    push_loaded_path(loaded_paths, path.to_string());
+    Ok(index)
+}
+
+#[cfg(feature = "game-data")]
+async fn attach_shared_material_arrays_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    materials: &mut [ModelMaterial],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) {
+    let needs_tile = materials.iter().any(material_needs_tile_arrays);
+    let needs_detail = materials.iter().any(material_needs_detail_arrays);
+    let tile_normal = if needs_tile {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                CHARACTER_TILE_NORMAL_ARRAY_PATH,
+                ModelTextureKind::TileNormalArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let tile_orb = if needs_tile {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                CHARACTER_TILE_ORB_ARRAY_PATH,
+                ModelTextureKind::TileOrbArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let detail_diffuse = if needs_detail {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                BG_DETAIL_DIFFUSE_ARRAY_PATH,
+                ModelTextureKind::DetailDiffuseArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let detail_normal = if needs_detail {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                BG_DETAIL_NORMAL_ARRAY_PATH,
+                ModelTextureKind::DetailNormalArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
+    for material in materials {
+        if material_needs_tile_arrays(material) {
+            apply_shared_array_result(material, &tile_normal, SharedArraySlot::TileNormal);
+            apply_shared_array_result(material, &tile_orb, SharedArraySlot::TileOrb);
+        }
+        if material_needs_detail_arrays(material) {
+            apply_shared_array_result(material, &detail_diffuse, SharedArraySlot::DetailDiffuse);
+            apply_shared_array_result(material, &detail_normal, SharedArraySlot::DetailNormal);
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_shared_texture_array_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    path: &str,
+    kind: ModelTextureKind,
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+        return Ok(index);
+    }
+    let bytes = resource
+        .read(path)
+        .await
+        .map_err(|error| format!("failed to read shared texture array {path}: {error}"))?;
+    decode_and_push_shared_texture_array(
+        resource.platform(),
+        path,
+        kind,
+        &bytes,
+        textures,
+        loaded_paths,
+    )
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     resource: &mut R,
     request: &WeaponModelLoadRequest,
@@ -764,6 +1057,13 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
             }
         }
     }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
 
     if meshes.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1950,6 +2250,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             has_color_dye_table: color_dye_table.is_some(),
             color_dye_table,
             staining_application,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -2047,7 +2348,11 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
             }
-            WeaponModelTextureKind::Other => {}
+            WeaponModelTextureKind::TileNormalArray
+            | WeaponModelTextureKind::TileOrbArray
+            | WeaponModelTextureKind::DetailDiffuseArray
+            | WeaponModelTextureKind::DetailNormalArray
+            | WeaponModelTextureKind::Other => {}
         }
     }
 
@@ -2126,19 +2431,24 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
         let Some(bytes) = resource.read(&path) else {
             continue;
         };
-        let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
             continue;
         };
-        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
             continue;
         };
         let index = textures.len();
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
-            width: texture.width,
-            height: texture.height,
-            rgba,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
             rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
@@ -2194,6 +2504,14 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
             }
         }
     }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
 
     if meshes.is_empty() {
         return Err(anyhow::anyhow!(
@@ -2503,6 +2821,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             has_color_dye_table: color_dye_table.is_some(),
             color_dye_table,
             staining_application,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -2602,7 +2921,11 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
             }
-            WeaponModelTextureKind::Other => {}
+            WeaponModelTextureKind::TileNormalArray
+            | WeaponModelTextureKind::TileOrbArray
+            | WeaponModelTextureKind::DetailDiffuseArray
+            | WeaponModelTextureKind::DetailNormalArray
+            | WeaponModelTextureKind::Other => {}
         }
     }
 
@@ -2681,19 +3004,24 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
         let Ok(bytes) = resource.read(&path).await else {
             continue;
         };
-        let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
             continue;
         };
-        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
             continue;
         };
         let index = textures.len();
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
-            width: texture.width,
-            height: texture.height,
-            rgba,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
             rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
@@ -3551,6 +3879,8 @@ fn push_or_replace_baked_texture_with_float_channels(
             kind,
             width,
             height,
+            array_size: 1,
+            array_layer_height: height,
             rgba,
             rgba_f32,
         };
@@ -3563,6 +3893,8 @@ fn push_or_replace_baked_texture_with_float_channels(
         kind,
         width,
         height,
+        array_size: 1,
+        array_layer_height: height,
         rgba,
         rgba_f32,
     });
@@ -3826,6 +4158,7 @@ fn fallback_weapon_material(
         has_color_dye_table: false,
         color_dye_table: None,
         staining_application: None,
+        texture_arrays: ModelMaterialTextureArrays::default(),
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -4518,6 +4851,109 @@ mod weapon_material_tests {
 
     #[test]
     #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_shared_texture_arrays_decode_as_vertical_atlases() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let cases = [
+            (
+                CHARACTER_TILE_NORMAL_ARRAY_PATH,
+                ModelTextureKind::TileNormalArray,
+            ),
+            (
+                CHARACTER_TILE_ORB_ARRAY_PATH,
+                ModelTextureKind::TileOrbArray,
+            ),
+            (
+                BG_DETAIL_DIFFUSE_ARRAY_PATH,
+                ModelTextureKind::DetailDiffuseArray,
+            ),
+            (
+                BG_DETAIL_NORMAL_ARRAY_PATH,
+                ModelTextureKind::DetailNormalArray,
+            ),
+        ];
+
+        for (path, kind) in cases {
+            let mut textures = Vec::new();
+            let mut loaded_paths = Vec::new();
+            let index = load_shared_texture_array_from_resource(
+                &mut resource,
+                path,
+                kind,
+                &mut textures,
+                &mut loaded_paths,
+            )
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+            let texture = &textures[index];
+
+            eprintln!(
+                "{path}: kind={:?}, {}x{}, layers={}, layer_height={}, rgba={}",
+                texture.kind,
+                texture.width,
+                texture.height,
+                texture.array_size,
+                texture.array_layer_height,
+                texture.rgba.len()
+            );
+            assert_eq!(texture.path, path);
+            assert_eq!(texture.kind, kind);
+            assert!(texture.array_size > 1);
+            assert_eq!(
+                u32::from(texture.height),
+                u32::from(texture.array_layer_height) * u32::from(texture.array_size)
+            );
+            assert_eq!(
+                texture.rgba.len(),
+                usize::from(texture.width) * usize::from(texture.height) * 4
+            );
+            assert_eq!(loaded_paths, vec![path.to_string()]);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_character_weapon_attaches_tile_texture_arrays() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45052,
+            item_name: "奶油之幻梦".to_string(),
+            model_main: 4_295_295_803,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.texture_arrays.tile_normal.is_some())
+            .expect("material using character tile arrays");
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        assert!(material.texture_arrays.tile_orb.is_some());
+        assert!(material.texture_arrays.errors.is_empty());
+        assert!(prepared.resource_availability.tile_array_complete);
+        assert!(prepared.unsupported_inputs.tile_array);
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == CHARACTER_TILE_NORMAL_ARRAY_PATH)
+        );
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == CHARACTER_TILE_ORB_ARRAY_PATH)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
     fn installed_weapon_stain_changes_baked_color_table() {
         let game_dir =
             std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
@@ -5067,6 +5503,8 @@ mod weapon_material_tests {
             kind: WeaponModelTextureKind::Index,
             width: 1,
             height: 1,
+            array_size: 1,
+            array_layer_height: 1,
             rgba: vec![0, 0, 0, 255],
             rgba_f32: None,
         }];
@@ -6038,6 +6476,8 @@ mod weapon_material_tests {
                 kind: WeaponModelTextureKind::BaseColor,
                 width: 1,
                 height: 1,
+                array_size: 1,
+                array_layer_height: 1,
                 rgba: vec![255, 128, 64, 255],
                 rgba_f32: None,
             },
@@ -6046,6 +6486,8 @@ mod weapon_material_tests {
                 kind: WeaponModelTextureKind::BaseColor,
                 width: 1,
                 height: 1,
+                array_size: 1,
+                array_layer_height: 1,
                 rgba: vec![255, 255, 255, 32],
                 rgba_f32: None,
             },
@@ -6228,6 +6670,8 @@ mod weapon_material_tests {
             kind,
             width: 1,
             height: 1,
+            array_size: 1,
+            array_layer_height: 1,
             rgba: vec![255, 255, 255, alpha],
             rgba_f32: None,
         }

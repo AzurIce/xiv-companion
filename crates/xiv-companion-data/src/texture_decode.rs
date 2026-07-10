@@ -1,3 +1,13 @@
+const TEXTURE_TYPE_2D_ARRAY: u32 = 0x1000_0000;
+
+pub struct DecodedTextureRgba {
+    pub width: u16,
+    pub height: u16,
+    pub array_size: u16,
+    pub array_layer_height: u16,
+    pub rgba: Vec<u8>,
+}
+
 pub fn decode_texture_rgba(texture: &physis::tex::Texture) -> Option<Vec<u8>> {
     match texture.format {
         physis::tex::TextureFormat::BC2_UNORM => decode_bc2_rgba(
@@ -8,6 +18,50 @@ pub fn decode_texture_rgba(texture: &physis::tex::Texture) -> Option<Vec<u8>> {
         ),
         _ => texture.to_rgba(),
     }
+}
+
+pub fn decode_texture_rgba_with_layout(
+    texture: &mut physis::tex::Texture,
+    bytes: &[u8],
+) -> Option<DecodedTextureRgba> {
+    let array_size = texture_array_size(bytes);
+    let array_layer_height = texture.height;
+    let original_depth = texture.depth;
+    if array_size > 1 {
+        texture.depth = array_size;
+    }
+    let rgba = decode_texture_rgba(texture);
+    texture.depth = original_depth;
+    let rgba = rgba?;
+    let height = array_layer_height.checked_mul(array_size)?;
+    let expected_len = usize::from(texture.width)
+        .checked_mul(usize::from(height))?
+        .checked_mul(4)?;
+    if rgba.len() != expected_len {
+        return None;
+    }
+
+    Some(DecodedTextureRgba {
+        width: texture.width,
+        height,
+        array_size,
+        array_layer_height,
+        rgba,
+    })
+}
+
+fn texture_array_size(bytes: &[u8]) -> u16 {
+    let Some(attribute) = bytes
+        .get(0..4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+    else {
+        return 1;
+    };
+    if attribute & TEXTURE_TYPE_2D_ARRAY == 0 {
+        return 1;
+    }
+    bytes.get(15).copied().unwrap_or(0).max(1).into()
 }
 
 fn decode_bc2_rgba(data: &[u8], width: usize, height: usize, depth: usize) -> Option<Vec<u8>> {
@@ -117,6 +171,17 @@ fn copy_decoded_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texture_array_size_reads_ffxiv_header_array_byte() {
+        let mut bytes = [0_u8; 16];
+        bytes[0..4].copy_from_slice(&TEXTURE_TYPE_2D_ARRAY.to_le_bytes());
+        bytes[15] = 64;
+        assert_eq!(texture_array_size(&bytes), 64);
+
+        bytes[0..4].copy_from_slice(&0x0080_0000_u32.to_le_bytes());
+        assert_eq!(texture_array_size(&bytes), 1);
+    }
 
     #[test]
     fn bc2_decodes_explicit_alpha_and_rgb565_color() {

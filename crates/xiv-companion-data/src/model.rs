@@ -234,14 +234,18 @@ pub enum ModelMeshDrawRole {
     LightShaft,
     ShadowOnly,
     Ignored,
-    DebugVisible,
+    MaterialChange,
+    CrestChange,
 }
 
 impl ModelMeshDrawRole {
     pub fn renders_in_main_pass(self) -> bool {
         matches!(
             self,
-            ModelMeshDrawRole::Normal | ModelMeshDrawRole::Glass | ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::Normal
+                | ModelMeshDrawRole::Glass
+                | ModelMeshDrawRole::MaterialChange
+                | ModelMeshDrawRole::CrestChange
         )
     }
 
@@ -260,9 +264,8 @@ pub fn mesh_draw_role_for_category(category: Option<&str>) -> ModelMeshDrawRole 
         "lightshaft" | "light_shaft" => ModelMeshDrawRole::LightShaft,
         "shadow" | "terrainshadow" | "terrain_shadow" => ModelMeshDrawRole::ShadowOnly,
         "verticalfog" | "vertical_fog" => ModelMeshDrawRole::Ignored,
-        "materialchange" | "material_change" | "crestchange" | "crest_change" => {
-            ModelMeshDrawRole::DebugVisible
-        }
+        "materialchange" | "material_change" => ModelMeshDrawRole::MaterialChange,
+        "crestchange" | "crest_change" => ModelMeshDrawRole::CrestChange,
         _ => ModelMeshDrawRole::Normal,
     }
 }
@@ -490,6 +493,8 @@ pub struct ModelMaterial {
     pub color_dye_table: Option<ModelColorDyeTable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staining_application: Option<ModelStainingApplication>,
+    #[serde(default)]
+    pub texture_arrays: ModelMaterialTextureArrays,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -524,6 +529,21 @@ pub struct ModelMaterial {
     pub tile_matrix_texture: Option<usize>,
     #[serde(default)]
     pub index_texture: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelMaterialTextureArrays {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_normal: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_orb: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_diffuse: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_normal: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -681,6 +701,10 @@ pub struct PreparedMaterial {
     pub feature_flags: PreparedMaterialFeatureFlags,
     #[serde(default)]
     pub unsupported_inputs: PreparedMaterialUnsupportedInputs,
+    #[serde(default)]
+    pub resource_availability: PreparedMaterialResourceAvailability,
+    #[serde(default)]
+    pub runtime_fallbacks: PreparedMaterialRuntimeFallbacks,
     pub render_backfaces: bool,
 }
 
@@ -749,9 +773,33 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub dye_application: bool,
     pub runtime_color_table: bool,
     pub decal_or_crest: bool,
+    pub runtime_material_change: bool,
     pub tile_array: bool,
     pub detail_array: bool,
     pub incomplete_shader_family_logic: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialResourceAvailability {
+    pub tile_array_complete: bool,
+    pub detail_array_complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialRuntimeFallbacks {
+    pub decal_or_crest: PreparedRuntimeFallback,
+    pub material_change: PreparedRuntimeFallback,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedRuntimeFallback {
+    #[default]
+    NotRequired,
+    TransparentTexture,
+    BaseMaterial,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -770,6 +818,10 @@ pub struct PreparedTextureBindings {
     pub sphere_properties: Option<usize>,
     pub tile_matrix: Option<usize>,
     pub index: Option<usize>,
+    pub tile_normal_array: Option<usize>,
+    pub tile_orb_array: Option<usize>,
+    pub detail_diffuse_array: Option<usize>,
+    pub detail_normal_array: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -788,6 +840,14 @@ pub struct PreparedTextureSamplingSet {
     pub sphere_properties: PreparedTextureSampling,
     pub tile_matrix: PreparedTextureSampling,
     pub index: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub tile_normal_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub tile_orb_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub detail_diffuse_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub detail_normal_array: PreparedTextureSampling,
     pub other: PreparedTextureSampling,
 }
 
@@ -811,9 +871,23 @@ impl Default for PreparedTextureSamplingSet {
             ),
             tile_matrix: prepared_texture_sampling_for_kind(ModelTextureKind::TileMatrixProperties),
             index: prepared_texture_sampling_for_kind(ModelTextureKind::Index),
+            tile_normal_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::TileNormalArray,
+            ),
+            tile_orb_array: prepared_texture_sampling_for_kind(ModelTextureKind::TileOrbArray),
+            detail_diffuse_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::DetailDiffuseArray,
+            ),
+            detail_normal_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::DetailNormalArray,
+            ),
             other: prepared_texture_sampling_for_kind(ModelTextureKind::Other),
         }
     }
+}
+
+fn default_texture_array_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::TileNormalArray)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -998,6 +1072,8 @@ pub fn prepare_material_for_draw_role(
             shader_family,
             texture_bindings,
         ),
+        resource_availability: prepared_material_resource_availability(material),
+        runtime_fallbacks: prepared_material_runtime_fallbacks(draw_role),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -1023,6 +1099,10 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
         index: material.index_texture,
+        tile_normal_array: material.texture_arrays.tile_normal,
+        tile_orb_array: material.texture_arrays.tile_orb,
+        detail_diffuse_array: material.texture_arrays.detail_diffuse,
+        detail_normal_array: material.texture_arrays.detail_normal,
     }
 }
 
@@ -1082,10 +1162,42 @@ pub fn prepared_material_unsupported_inputs(
     PreparedMaterialUnsupportedInputs {
         dye_application,
         runtime_color_table: feature_flags.uses_color_table,
-        decal_or_crest: matches!(draw_role, ModelMeshDrawRole::DebugVisible),
+        decal_or_crest: matches!(draw_role, ModelMeshDrawRole::CrestChange),
+        runtime_material_change: matches!(draw_role, ModelMeshDrawRole::MaterialChange),
         tile_array: feature_flags.uses_tile,
         detail_array: feature_flags.uses_detail,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
+    }
+}
+
+pub fn prepared_material_resource_availability(
+    material: Option<&ModelMaterial>,
+) -> PreparedMaterialResourceAvailability {
+    let Some(material) = material else {
+        return PreparedMaterialResourceAvailability::default();
+    };
+    PreparedMaterialResourceAvailability {
+        tile_array_complete: material.texture_arrays.tile_normal.is_some()
+            && material.texture_arrays.tile_orb.is_some(),
+        detail_array_complete: material.texture_arrays.detail_diffuse.is_some()
+            && material.texture_arrays.detail_normal.is_some(),
+    }
+}
+
+pub fn prepared_material_runtime_fallbacks(
+    draw_role: ModelMeshDrawRole,
+) -> PreparedMaterialRuntimeFallbacks {
+    PreparedMaterialRuntimeFallbacks {
+        decal_or_crest: if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+            PreparedRuntimeFallback::TransparentTexture
+        } else {
+            PreparedRuntimeFallback::NotRequired
+        },
+        material_change: if matches!(draw_role, ModelMeshDrawRole::MaterialChange) {
+            PreparedRuntimeFallback::BaseMaterial
+        } else {
+            PreparedRuntimeFallback::NotRequired
+        },
     }
 }
 
@@ -1127,7 +1239,11 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
         | ModelTextureKind::TileProperties
         | ModelTextureKind::SheenProperties
         | ModelTextureKind::SphereProperties
-        | ModelTextureKind::TileMatrixProperties => PreparedTextureSampling {
+        | ModelTextureKind::TileMatrixProperties
+        | ModelTextureKind::TileNormalArray
+        | ModelTextureKind::TileOrbArray
+        | ModelTextureKind::DetailDiffuseArray
+        | ModelTextureKind::DetailNormalArray => PreparedTextureSampling {
             color_space: PreparedTextureColorSpace::NonColor,
             filter: PreparedTextureFilter::Nearest,
             address_mode: PreparedTextureAddressMode::Repeat,
@@ -1281,6 +1397,10 @@ pub struct ModelTexture {
     pub kind: ModelTextureKind,
     pub width: u16,
     pub height: u16,
+    #[serde(default = "default_texture_array_size")]
+    pub array_size: u16,
+    #[serde(default)]
+    pub array_layer_height: u16,
     pub rgba: Vec<u8>,
     /// Optional per-pixel float channels for non-unorm semantic data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1311,7 +1431,15 @@ pub enum ModelTextureKind {
     TileMatrixProperties,
     /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
     Index,
+    TileNormalArray,
+    TileOrbArray,
+    DetailDiffuseArray,
+    DetailNormalArray,
     Other,
+}
+
+fn default_texture_array_size() -> u16 {
+    1
 }
 
 pub type WeaponMaterialRenderMode = MaterialRenderMode;
@@ -1832,11 +1960,11 @@ mod color_table_bake_tests {
         );
         assert_eq!(
             mesh_draw_role_for_category(Some("materialChange")),
-            ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::MaterialChange
         );
         assert_eq!(
             mesh_draw_role_for_category(Some("crestChange")),
-            ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::CrestChange
         );
         assert_eq!(mesh_draw_role_for_category(None), ModelMeshDrawRole::Normal);
     }
@@ -1909,6 +2037,8 @@ mod color_table_bake_tests {
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: false,
             }
         );
@@ -1922,6 +2052,8 @@ mod color_table_bake_tests {
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: true,
             }
         );
@@ -1963,6 +2095,10 @@ mod color_table_bake_tests {
         material.sphere_properties_texture = Some(11);
         material.tile_matrix_texture = Some(12);
         material.index_texture = Some(13);
+        material.texture_arrays.tile_normal = Some(14);
+        material.texture_arrays.tile_orb = Some(15);
+        material.texture_arrays.detail_diffuse = Some(16);
+        material.texture_arrays.detail_normal = Some(17);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -1981,6 +2117,10 @@ mod color_table_bake_tests {
                 sphere_properties: Some(11),
                 tile_matrix: Some(12),
                 index: Some(13),
+                tile_normal_array: Some(14),
+                tile_orb_array: Some(15),
+                detail_diffuse_array: Some(16),
+                detail_normal_array: Some(17),
             }
         );
         assert_eq!(
@@ -2078,12 +2218,26 @@ mod color_table_bake_tests {
         });
 
         assert_eq!(
-            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::DebugVisible)
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange)
                 .unsupported_inputs,
             PreparedMaterialUnsupportedInputs {
                 dye_application: true,
                 runtime_color_table: true,
                 decal_or_crest: true,
+                runtime_material_change: false,
+                tile_array: true,
+                detail_array: true,
+                incomplete_shader_family_logic: true,
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::MaterialChange)
+                .unsupported_inputs,
+            PreparedMaterialUnsupportedInputs {
+                dye_application: true,
+                runtime_color_table: true,
+                decal_or_crest: false,
+                runtime_material_change: true,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
@@ -2093,6 +2247,40 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
             PreparedMaterialUnsupportedInputs::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_shared_array_availability_and_runtime_fallbacks() {
+        let mut material = test_material();
+        material.texture_arrays.tile_normal = Some(1);
+        material.texture_arrays.tile_orb = Some(2);
+        material.texture_arrays.detail_diffuse = Some(3);
+
+        let prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange);
+        assert_eq!(
+            prepared.resource_availability,
+            PreparedMaterialResourceAvailability {
+                tile_array_complete: true,
+                detail_array_complete: false,
+            }
+        );
+        assert_eq!(
+            prepared.runtime_fallbacks,
+            PreparedMaterialRuntimeFallbacks {
+                decal_or_crest: PreparedRuntimeFallback::TransparentTexture,
+                material_change: PreparedRuntimeFallback::NotRequired,
+            }
+        );
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::MaterialChange)
+                .runtime_fallbacks,
+            PreparedMaterialRuntimeFallbacks {
+                decal_or_crest: PreparedRuntimeFallback::NotRequired,
+                material_change: PreparedRuntimeFallback::BaseMaterial,
+            }
         );
     }
 
@@ -2381,6 +2569,16 @@ mod color_table_bake_tests {
                 address_mode: PreparedTextureAddressMode::Repeat,
             }
         );
+        let array_sampling = PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Nearest,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        };
+        let sampling_set = PreparedTextureSamplingSet::default();
+        assert_eq!(sampling_set.tile_normal_array, array_sampling);
+        assert_eq!(sampling_set.tile_orb_array, array_sampling);
+        assert_eq!(sampling_set.detail_diffuse_array, array_sampling);
+        assert_eq!(sampling_set.detail_normal_array, array_sampling);
     }
 
     #[test]
@@ -2508,6 +2706,7 @@ mod color_table_bake_tests {
             has_color_dye_table: false,
             color_dye_table: None,
             staining_application: None,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],
             specular_color: [1.0, 1.0, 1.0],

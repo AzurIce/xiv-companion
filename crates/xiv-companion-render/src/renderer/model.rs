@@ -2017,6 +2017,7 @@ fn fallback_material() -> ModelMaterial {
         has_color_dye_table: false,
         color_dye_table: None,
         staining_application: None,
+        texture_arrays: crate::ModelMaterialTextureArrays::default(),
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],
@@ -2256,7 +2257,8 @@ fn draw_role_debug_color(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         ModelMeshDrawRole::LightShaft => [1.0, 0.82, 0.22, 1.0],
         ModelMeshDrawRole::ShadowOnly => [0.18, 0.18, 0.22, 1.0],
         ModelMeshDrawRole::Ignored => [0.55, 0.55, 0.55, 1.0],
-        ModelMeshDrawRole::DebugVisible => [1.0, 0.34, 0.76, 1.0],
+        ModelMeshDrawRole::MaterialChange => [1.0, 0.34, 0.76, 1.0],
+        ModelMeshDrawRole::CrestChange => [1.0, 0.62, 0.2, 1.0],
     }
 }
 
@@ -2559,6 +2561,7 @@ mod tests {
     use super::*;
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
+        PreparedMaterialResourceAvailability, PreparedMaterialRuntimeFallbacks,
         PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources, PreparedTextureAddressMode,
         PreparedTextureBindings, PreparedTextureColorSpace, PreparedTextureFilter,
         PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureUvSources,
@@ -2658,6 +2661,8 @@ mod tests {
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: true,
             }
         );
@@ -2776,6 +2781,8 @@ mod tests {
             uv_sources: PreparedMaterialUvSources::default(),
             feature_flags: PreparedMaterialFeatureFlags::default(),
             unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
             render_backfaces: true,
         };
 
@@ -2824,8 +2831,12 @@ mod tests {
             [0.66, 0.92, 1.0, 1.0]
         );
         assert_eq!(
-            draw_role_debug_color(ModelMeshDrawRole::DebugVisible),
+            draw_role_debug_color(ModelMeshDrawRole::MaterialChange),
             [1.0, 0.34, 0.76, 1.0]
+        );
+        assert_eq!(
+            draw_role_debug_color(ModelMeshDrawRole::CrestChange),
+            [1.0, 0.62, 0.2, 1.0]
         );
     }
 
@@ -2850,6 +2861,8 @@ mod tests {
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: false,
             }
         );
@@ -3224,6 +3237,8 @@ mod tests {
             },
             feature_flags: PreparedMaterialFeatureFlags::default(),
             unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
             render_backfaces: true,
         };
 
@@ -3368,7 +3383,7 @@ mod tests {
             vec![
                 ModelMeshDrawRole::Normal,
                 ModelMeshDrawRole::LightShaft,
-                ModelMeshDrawRole::DebugVisible,
+                ModelMeshDrawRole::MaterialChange,
                 ModelMeshDrawRole::Glass
             ]
         );
@@ -3441,6 +3456,8 @@ mod tests {
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: true,
             },
             center,
@@ -3506,6 +3523,8 @@ mod tests {
             kind,
             width: 1,
             height: 1,
+            array_size: 1,
+            array_layer_height: 1,
             rgba: vec![0, 0, 0, 255],
             rgba_f32: None,
         }

@@ -20,7 +20,9 @@ use xiv_companion::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
     },
 };
-use xiv_companion_data::{MdlMeshMetadata, MdlMetadata, ModelBoneTable};
+use xiv_companion_data::{
+    MdlMeshMetadata, MdlMetadata, ModelBoneTable, ModelMaterialTextureArrays,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,6 +201,7 @@ struct MaterialSummary {
     sheen_properties_texture: Option<usize>,
     sphere_properties_texture: Option<usize>,
     tile_matrix_texture: Option<usize>,
+    texture_arrays: ModelMaterialTextureArrays,
     debug_file: Option<String>,
     semantic_summary: Option<MaterialSemanticSummaryDebug>,
 }
@@ -238,6 +241,8 @@ struct TextureSummary {
     kind: String,
     width: u16,
     height: u16,
+    array_size: u16,
+    array_layer_height: u16,
     rgba_bytes: usize,
     decoded_png: Option<String>,
     pixel_stats: Option<TexturePixelStats>,
@@ -719,6 +724,8 @@ fn dump_decoded_textures(model: &WeaponModelData, case_dir: &Path) -> Result<Vec
             kind: format!("{:?}", texture.kind),
             width: texture.width,
             height: texture.height,
+            array_size: texture.array_size,
+            array_layer_height: texture.array_layer_height,
             rgba_bytes: texture.rgba.len(),
             decoded_png,
             pixel_stats: texture_pixel_stats(texture),
@@ -996,6 +1003,7 @@ fn material_summary(
         sheen_properties_texture: material.sheen_properties_texture,
         sphere_properties_texture: material.sphere_properties_texture,
         tile_matrix_texture: material.tile_matrix_texture,
+        texture_arrays: material.texture_arrays.clone(),
         debug_file: debug.and_then(|debug| debug.debug_file.clone()),
         semantic_summary: debug.and_then(|debug| debug.semantic_summary.clone()),
     }

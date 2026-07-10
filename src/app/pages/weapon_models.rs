@@ -482,6 +482,10 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Tile Matrix", value: texture_counts.tile_matrix.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
                     StatRow { label: "Index", value: texture_counts.index.to_string() }
+                    StatRow { label: "Tile Normal Array", value: texture_counts.tile_normal_array.to_string() }
+                    StatRow { label: "Tile ORB Array", value: texture_counts.tile_orb_array.to_string() }
+                    StatRow { label: "Detail Diffuse Array", value: texture_counts.detail_diffuse_array.to_string() }
+                    StatRow { label: "Detail Normal Array", value: texture_counts.detail_normal_array.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
                 }
             }
@@ -530,6 +534,10 @@ struct TextureKindCounts {
     tile_matrix: usize,
     emissive: usize,
     index: usize,
+    tile_normal_array: usize,
+    tile_orb_array: usize,
+    detail_diffuse_array: usize,
+    detail_normal_array: usize,
     other: usize,
 }
 
@@ -551,6 +559,10 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::TileMatrixProperties => counts.tile_matrix += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
                 WeaponModelTextureKind::Index => counts.index += 1,
+                WeaponModelTextureKind::TileNormalArray => counts.tile_normal_array += 1,
+                WeaponModelTextureKind::TileOrbArray => counts.tile_orb_array += 1,
+                WeaponModelTextureKind::DetailDiffuseArray => counts.detail_diffuse_array += 1,
+                WeaponModelTextureKind::DetailNormalArray => counts.detail_normal_array += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
             }
         }
