@@ -1,3 +1,4 @@
+pub mod collection;
 pub mod craft_data;
 #[cfg(feature = "game-data")]
 pub mod game_data;
@@ -10,6 +11,7 @@ pub mod model;
 mod texture_decode;
 pub mod weapon_models;
 
+pub use collection::*;
 pub use craft_data::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;

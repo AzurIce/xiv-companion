@@ -45,6 +45,13 @@ pub const APP_MODULES: &[AppModule] = &[
         group: ModuleGroup::Preview,
         status: ModuleStatus::Experimental,
     },
+    AppModule {
+        id: "collection",
+        label: "图鉴",
+        href: "/collection",
+        group: ModuleGroup::Data,
+        status: ModuleStatus::Experimental,
+    },
 ];
 
 pub fn module_group_label(group: ModuleGroup) -> &'static str {

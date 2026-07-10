@@ -13,6 +13,12 @@ pub struct CachedResourceRecord {
     pub source_tag: String,
     /// Human-readable game version string.
     pub game_version: String,
+    /// Decoder/schema revision used to create the cached payload.
+    pub schema_revision: u32,
+    /// Number of logical records in the payload when known.
+    pub record_count: usize,
+    /// Timestamp at which this copy was stored.
+    pub saved_at: String,
     /// Serialized resource bytes.
     pub bytes: Vec<u8>,
 }
@@ -51,8 +57,8 @@ pub async fn load_cached_resource(key: &str) -> Result<Option<CachedResourceReco
         return Ok(None);
     };
 
-    let bytes = js_sys::Reflect::get(&record, &JsValue::from_str("bytes"))
-        .map_err(format_js_error)?;
+    let bytes =
+        js_sys::Reflect::get(&record, &JsValue::from_str("bytes")).map_err(format_js_error)?;
     if bytes.is_undefined() || bytes.is_null() {
         return Ok(None);
     }
@@ -62,14 +68,14 @@ pub async fn load_cached_resource(key: &str) -> Result<Option<CachedResourceReco
         fingerprint: js_string_field(&record, "fingerprint").unwrap_or_default(),
         source_tag: js_string_field(&record, "sourceTag").unwrap_or_default(),
         game_version: js_string_field(&record, "gameVersion").unwrap_or_default(),
+        schema_revision: js_number_field(&record, "schemaRevision").unwrap_or_default() as u32,
+        record_count: js_number_field(&record, "recordCount").unwrap_or_default() as usize,
+        saved_at: js_string_field(&record, "savedAt").unwrap_or_default(),
         bytes,
     }))
 }
 
-pub async fn save_cached_resource(
-    key: &str,
-    record: &CachedResourceRecord,
-) -> Result<(), String> {
+pub async fn save_cached_resource(key: &str, record: &CachedResourceRecord) -> Result<(), String> {
     let object = js_sys::Object::new();
     js_sys::Reflect::set(
         &object,
@@ -91,8 +97,20 @@ pub async fn save_cached_resource(
     .map_err(format_js_error)?;
     js_sys::Reflect::set(
         &object,
+        &JsValue::from_str("schemaRevision"),
+        &JsValue::from_f64(record.schema_revision as f64),
+    )
+    .map_err(format_js_error)?;
+    js_sys::Reflect::set(
+        &object,
+        &JsValue::from_str("recordCount"),
+        &JsValue::from_f64(record.record_count as f64),
+    )
+    .map_err(format_js_error)?;
+    js_sys::Reflect::set(
+        &object,
         &JsValue::from_str("savedAt"),
-        &js_sys::Date::new_0().to_iso_string(),
+        &JsValue::from_str(&record.saved_at),
     )
     .map_err(format_js_error)?;
     let array = js_sys::Uint8Array::from(record.bytes.as_slice());
@@ -139,6 +157,12 @@ fn js_string_field(value: &JsValue, key: &str) -> Option<String> {
     js_sys::Reflect::get(value, &JsValue::from_str(key))
         .ok()
         .and_then(|value| value.as_string())
+}
+
+fn js_number_field(value: &JsValue, key: &str) -> Option<f64> {
+    js_sys::Reflect::get(value, &JsValue::from_str(key))
+        .ok()
+        .and_then(|value| value.as_f64())
 }
 
 fn format_js_error(error: JsValue) -> String {

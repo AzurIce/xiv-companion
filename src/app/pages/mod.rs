@@ -1,3 +1,4 @@
+pub mod collection;
 pub mod crafting;
 pub mod notes;
 pub mod weapon_models;
@@ -6,12 +7,14 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use xiv_companion::{
-    CraftDataId, CraftDataResource, ItemIconId, ItemIconResource, ResourceError, ResourceErrorKind,
-    ResourceSource, ResourceSpec, WeaponCatalogId, WeaponCatalogResource,
+    CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CraftDataId,
+    CraftDataResource, ItemIconId, ItemIconResource, ResourceError, ResourceErrorKind,
+    ResourceOrigin, ResourceSource, ResourceStatus, WeaponCatalogId, WeaponCatalogResource,
 };
 
 use crate::app::data::{
-    LoadedCraftData, clear_item_icon_cache, load_craft_data_with_source, load_weapon_catalog,
+    LoadedCraftData, clear_item_icon_cache, load_collection_catalog, load_craft_data_with_source,
+    load_weapon_catalog,
 };
 use crate::app::icons::{Icon, IconKind};
 use crate::app::load_progress::{self, CraftDataLoadProgress};
@@ -21,7 +24,6 @@ use crate::app::resource_settings::{
     ResourceSettings, SourcePreference, configured_web_resource_hub_for, is_user_local_path_usable,
     load_resource_settings, path_user_local_provider_available_for_runtime, save_resource_settings,
 };
-use crate::app::resources::IndexedDbCachedProvider;
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent, CardHeader,
     CardTitle, input_class,
@@ -32,6 +34,7 @@ use crate::app::user_local_directory::{
 };
 use crate::app::utils::{cx, format_integer};
 
+pub use collection::CollectionPage;
 pub use crafting::CraftingPage;
 pub use notes::NotesPage;
 pub use weapon_models::WeaponModelsPage;
@@ -40,6 +43,16 @@ pub use weapon_models::WeaponModelsPage;
 enum ResourceTestResult {
     Ok(String),
     Err(ResourceDiagnostic),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum ResourceActionState {
+    #[default]
+    Idle,
+    Updating,
+    Resetting,
+    Success(String),
+    Error(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,8 +451,12 @@ pub fn WorkspacePage() -> Element {
     let mut restore_started = use_signal(|| false);
     let mut craft_data_progress = use_signal(|| None::<CraftDataLoadProgress>);
     let mut save_feedback = use_signal(|| None::<SaveFeedback>);
-    let mut craft_data_source_info = use_signal(|| None::<(String, String)>);
-    let mut weapon_catalog_source_info = use_signal(|| None::<(String, String)>);
+    let mut craft_data_status = use_signal(|| None::<ResourceStatus>);
+    let mut weapon_catalog_status = use_signal(|| None::<ResourceStatus>);
+    let mut collection_catalog_status = use_signal(|| None::<ResourceStatus>);
+    let mut craft_data_action = use_signal(ResourceActionState::default);
+    let mut weapon_catalog_action = use_signal(ResourceActionState::default);
+    let mut collection_catalog_action = use_signal(ResourceActionState::default);
     let mut craft_data = use_resource(move || {
         let _ = settings_revision();
         load_craft_data_with_source(applied_settings())
@@ -447,6 +464,10 @@ pub fn WorkspacePage() -> Element {
     let mut weapon_catalog = use_resource(move || {
         let _ = settings_revision();
         load_weapon_catalog()
+    });
+    let mut collection_catalog = use_resource(move || {
+        let _ = settings_revision();
+        load_collection_catalog()
     });
 
     use_effect(move || {
@@ -462,18 +483,42 @@ pub fn WorkspacePage() -> Element {
     });
 
     use_effect(move || {
+        let _ = craft_data.read().is_some();
+        let _ = weapon_catalog.read().is_some();
+        let _ = collection_catalog.read().is_some();
         spawn(async move {
-            let request = CraftDataResource::request(&CraftDataId::Default);
-            match IndexedDbCachedProvider::current_cache_info(request).await {
-                Ok(info) => craft_data_source_info.set(info),
-                Err(error) => log::warn("resource", format!("craft-data cache info failed: {error}")),
+            match configured_web_resource_hub_for(&applied_settings())
+                .status::<CraftDataResource>(CraftDataId::Default)
+                .await
+            {
+                Ok(status) => craft_data_status.set(Some(status)),
+                Err(error) => {
+                    log::warn("resource", format!("craft-data cache info failed: {error}"))
+                }
             }
         });
         spawn(async move {
-            let request = WeaponCatalogResource::request(&WeaponCatalogId::Default);
-            match IndexedDbCachedProvider::current_cache_info(request).await {
-                Ok(info) => weapon_catalog_source_info.set(info),
-                Err(error) => log::warn("resource", format!("weapon-catalog cache info failed: {error}")),
+            match configured_web_resource_hub_for(&applied_settings())
+                .status::<WeaponCatalogResource>(WeaponCatalogId::Default)
+                .await
+            {
+                Ok(status) => weapon_catalog_status.set(Some(status)),
+                Err(error) => log::warn(
+                    "resource",
+                    format!("weapon-catalog cache info failed: {error}"),
+                ),
+            }
+        });
+        spawn(async move {
+            match configured_web_resource_hub_for(&applied_settings())
+                .status::<CollectionCatalogResource>(CollectionCatalogId::Default)
+                .await
+            {
+                Ok(status) => collection_catalog_status.set(Some(status)),
+                Err(error) => log::warn(
+                    "resource",
+                    format!("collection-catalog cache info failed: {error}"),
+                ),
             }
         });
     });
@@ -492,6 +537,7 @@ pub fn WorkspacePage() -> Element {
                     settings_revision.set(settings_revision() + 1);
                     craft_data.restart();
                     weapon_catalog.restart();
+                    collection_catalog.restart();
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -520,13 +566,18 @@ pub fn WorkspacePage() -> Element {
                 settings: current_settings,
                 craft_data,
                 weapon_catalog,
+                collection_catalog,
                 craft_test: craft_test(),
                 icon_test: icon_test(),
                 directory_pick_error: directory_pick_error(),
                 authorized_user_local_directory: authorized_directory_snapshot,
                 craft_progress: craft_data_progress(),
-                craft_data_source_info: craft_data_source_info(),
-                weapon_catalog_source_info: weapon_catalog_source_info(),
+                craft_data_status: craft_data_status(),
+                weapon_catalog_status: weapon_catalog_status(),
+                collection_catalog_status: collection_catalog_status(),
+                craft_data_action: craft_data_action(),
+                weapon_catalog_action: weapon_catalog_action(),
+                collection_catalog_action: collection_catalog_action(),
                 settings_dirty,
                 save_feedback: save_feedback(),
                 validation,
@@ -562,6 +613,7 @@ pub fn WorkspacePage() -> Element {
                         settings_revision.set(settings_revision() + 1);
                         craft_data.restart();
                         weapon_catalog.restart();
+                        collection_catalog.restart();
                     });
                 },
                 on_cancel: move |_| {
@@ -584,6 +636,7 @@ pub fn WorkspacePage() -> Element {
                         settings_revision.set(settings_revision() + 1);
                         craft_data.restart();
                         weapon_catalog.restart();
+                        collection_catalog.restart();
                     });
                 },
                 on_test_craft: move |source| {
@@ -620,6 +673,7 @@ pub fn WorkspacePage() -> Element {
                                 settings_revision.set(settings_revision() + 1);
                                 craft_data.restart();
                                 weapon_catalog.restart();
+                                collection_catalog.restart();
                             }
                             Err(error) => {
                                 log::warn("local-dir", format!("directory pick failed: {error}"));
@@ -629,69 +683,109 @@ pub fn WorkspacePage() -> Element {
                     });
                 },
                 on_update_craft_data_from_local: move |_| {
+                    craft_data_action.set(ResourceActionState::Updating);
                     spawn(async move {
-                        let request = CraftDataResource::request(&CraftDataId::Default);
-                        match IndexedDbCachedProvider::update_from_local(request.clone()).await {
-                            Ok(()) => {
-                                match IndexedDbCachedProvider::current_cache_info(request).await {
-                                    Ok(info) => craft_data_source_info.set(info),
-                                    Err(error) => log::warn("resource", format!("refresh CraftData cache info failed: {error}")),
-                                }
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .refresh::<CraftDataResource>(CraftDataId::Default, ResourceOrigin::UserLocal)
+                            .await
+                        {
+                            Ok(status) => {
+                                craft_data_status.set(Some(status));
+                                craft_data_action.set(ResourceActionState::Success("已从本地更新".to_string()));
                                 craft_data.restart();
                             }
                             Err(error) => {
-                                log::warn("resource", format!("update CraftData from local failed: {error}"));
+                                craft_data_action.set(ResourceActionState::Error(error.to_string()));
                             }
                         }
                     });
                 },
                 on_reset_craft_data_to_builtin: move |_| {
+                    craft_data_action.set(ResourceActionState::Resetting);
                     spawn(async move {
-                        let request = CraftDataResource::request(&CraftDataId::Default);
-                        match IndexedDbCachedProvider::reset_to_builtin(request.clone()).await {
-                            Ok(()) => {
-                                match IndexedDbCachedProvider::current_cache_info(request).await {
-                                    Ok(info) => craft_data_source_info.set(info),
-                                    Err(error) => log::warn("resource", format!("refresh CraftData cache info failed: {error}")),
-                                }
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .reset::<CraftDataResource>(CraftDataId::Default)
+                            .await
+                        {
+                            Ok(status) => {
+                                craft_data_status.set(Some(status));
+                                craft_data_action.set(ResourceActionState::Success("已恢复内置数据".to_string()));
                                 craft_data.restart();
                             }
                             Err(error) => {
-                                log::warn("resource", format!("reset CraftData to builtin failed: {error}"));
+                                craft_data_action.set(ResourceActionState::Error(error.to_string()));
                             }
                         }
                     });
                 },
                 on_update_weapon_catalog_from_local: move |_| {
+                    weapon_catalog_action.set(ResourceActionState::Updating);
                     spawn(async move {
-                        let request = WeaponCatalogResource::request(&WeaponCatalogId::Default);
-                        match IndexedDbCachedProvider::update_from_local(request.clone()).await {
-                            Ok(()) => {
-                                match IndexedDbCachedProvider::current_cache_info(request).await {
-                                    Ok(info) => weapon_catalog_source_info.set(info),
-                                    Err(error) => log::warn("resource", format!("refresh WeaponCatalog cache info failed: {error}")),
-                                }
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .refresh::<WeaponCatalogResource>(WeaponCatalogId::Default, ResourceOrigin::UserLocal)
+                            .await
+                        {
+                            Ok(status) => {
+                                weapon_catalog_status.set(Some(status));
+                                weapon_catalog_action.set(ResourceActionState::Success("已从本地更新".to_string()));
                                 weapon_catalog.restart();
                             }
                             Err(error) => {
-                                log::warn("resource", format!("update WeaponCatalog from local failed: {error}"));
+                                weapon_catalog_action.set(ResourceActionState::Error(error.to_string()));
                             }
                         }
                     });
                 },
                 on_reset_weapon_catalog_to_builtin: move |_| {
+                    weapon_catalog_action.set(ResourceActionState::Resetting);
                     spawn(async move {
-                        let request = WeaponCatalogResource::request(&WeaponCatalogId::Default);
-                        match IndexedDbCachedProvider::reset_to_builtin(request.clone()).await {
-                            Ok(()) => {
-                                match IndexedDbCachedProvider::current_cache_info(request).await {
-                                    Ok(info) => weapon_catalog_source_info.set(info),
-                                    Err(error) => log::warn("resource", format!("refresh WeaponCatalog cache info failed: {error}")),
-                                }
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .reset::<WeaponCatalogResource>(WeaponCatalogId::Default)
+                            .await
+                        {
+                            Ok(status) => {
+                                weapon_catalog_status.set(Some(status));
+                                weapon_catalog_action.set(ResourceActionState::Success("已恢复内置数据".to_string()));
                                 weapon_catalog.restart();
                             }
                             Err(error) => {
-                                log::warn("resource", format!("reset WeaponCatalog to builtin failed: {error}"));
+                                weapon_catalog_action.set(ResourceActionState::Error(error.to_string()));
+                            }
+                        }
+                    });
+                },
+                on_update_collection_catalog_from_local: move |_| {
+                    collection_catalog_action.set(ResourceActionState::Updating);
+                    spawn(async move {
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .refresh::<CollectionCatalogResource>(CollectionCatalogId::Default, ResourceOrigin::UserLocal)
+                            .await
+                        {
+                            Ok(status) => {
+                                collection_catalog_status.set(Some(status));
+                                collection_catalog_action.set(ResourceActionState::Success("已从本地更新".to_string()));
+                                collection_catalog.restart();
+                            }
+                            Err(error) => {
+                                collection_catalog_action.set(ResourceActionState::Error(error.to_string()));
+                            }
+                        }
+                    });
+                },
+                on_reset_collection_catalog_to_builtin: move |_| {
+                    collection_catalog_action.set(ResourceActionState::Resetting);
+                    spawn(async move {
+                        match configured_web_resource_hub_for(&applied_settings())
+                            .reset::<CollectionCatalogResource>(CollectionCatalogId::Default)
+                            .await
+                        {
+                            Ok(status) => {
+                                collection_catalog_status.set(Some(status));
+                                collection_catalog_action.set(ResourceActionState::Success("已恢复内置数据".to_string()));
+                                collection_catalog.restart();
+                            }
+                            Err(error) => {
+                                collection_catalog_action.set(ResourceActionState::Error(error.to_string()));
                             }
                         }
                     });
@@ -749,13 +843,18 @@ fn ResourcePanel(
     settings: ResourceSettings,
     craft_data: Resource<Result<LoadedCraftData, String>>,
     weapon_catalog: Resource<Result<Rc<xiv_companion::WeaponCatalogPackage>, String>>,
+    collection_catalog: Resource<Result<Rc<CollectionCatalogPackage>, String>>,
     craft_test: Option<(ResourceSource, ResourceTestResult)>,
     icon_test: Option<(ResourceSource, ResourceTestResult)>,
     directory_pick_error: Option<String>,
     authorized_user_local_directory: Option<AuthorizedUserLocalDirectory>,
     craft_progress: Option<CraftDataLoadProgress>,
-    craft_data_source_info: Option<(String, String)>,
-    weapon_catalog_source_info: Option<(String, String)>,
+    craft_data_status: Option<ResourceStatus>,
+    weapon_catalog_status: Option<ResourceStatus>,
+    collection_catalog_status: Option<ResourceStatus>,
+    craft_data_action: ResourceActionState,
+    weapon_catalog_action: ResourceActionState,
+    collection_catalog_action: ResourceActionState,
     settings_dirty: bool,
     save_feedback: Option<SaveFeedback>,
     validation: SettingsValidation,
@@ -769,16 +868,16 @@ fn ResourcePanel(
     on_reset_craft_data_to_builtin: EventHandler<()>,
     on_update_weapon_catalog_from_local: EventHandler<()>,
     on_reset_weapon_catalog_to_builtin: EventHandler<()>,
+    on_update_collection_catalog_from_local: EventHandler<()>,
+    on_reset_collection_catalog_to_builtin: EventHandler<()>,
 ) -> Element {
     let user_local_path = settings.user_local_path.clone();
     let local_status = validation.user_local_status;
-    let loading = craft_data.read().is_none() || weapon_catalog.read().is_none();
-    let can_save = settings_dirty && validation.valid && !loading;
-    let save_label = if loading {
-        "加载中"
-    } else {
-        "保存并应用"
-    };
+    let loading = craft_data.read().is_none()
+        || weapon_catalog.read().is_none()
+        || collection_catalog.read().is_none();
+    let can_save = settings_dirty && validation.valid;
+    let save_label = "保存并应用";
     let settings_for_path = settings.clone();
 
     rsx! {
@@ -847,13 +946,20 @@ fn ResourcePanel(
                 ResourceStatusTable {
                     craft_data,
                     weapon_catalog,
-                    craft_data_source_info,
-                    weapon_catalog_source_info,
+                    collection_catalog,
+                    craft_data_status,
+                    weapon_catalog_status,
+                    collection_catalog_status,
+                    craft_data_action,
+                    weapon_catalog_action,
+                    collection_catalog_action,
                     user_local_configured: local_status == UserLocalStatus::Configured,
                     on_update_craft_data_from_local,
                     on_reset_craft_data_to_builtin,
                     on_update_weapon_catalog_from_local,
                     on_reset_weapon_catalog_to_builtin,
+                    on_update_collection_catalog_from_local,
+                    on_reset_collection_catalog_to_builtin,
                 }
 
                 // Section: Testing
@@ -866,12 +972,8 @@ fn ResourcePanel(
                     on_test_icon,
                 }
 
-                // Section: Current data
-                SectionLabel { label: "当前数据" }
-                DataStatus {
-                    craft_data,
-                    weapon_catalog,
-                    craft_progress,
+                if let Some(progress) = craft_progress {
+                    CraftDataProgressView { progress }
                 }
             }
         }
@@ -888,12 +990,12 @@ fn SettingsFeedbackBadge(
     loading: bool,
     validation: SettingsValidation,
 ) -> Element {
-    let (text, variant) = if loading {
-        ("加载中", BadgeVariant::Secondary)
-    } else if settings_dirty && validation.valid {
+    let (text, variant) = if settings_dirty && validation.valid {
         ("草稿可保存", BadgeVariant::Success)
     } else if settings_dirty {
         ("草稿无效", BadgeVariant::Warning)
+    } else if loading {
+        ("正在初始化资源", BadgeVariant::Secondary)
     } else if feedback == Some(SaveFeedback::Saved) {
         ("已应用", BadgeVariant::Success)
     } else if feedback == Some(SaveFeedback::Cancelled) {
@@ -1060,18 +1162,36 @@ fn AuthorizedDirectoryNotice(
 fn ResourceStatusTable(
     craft_data: Resource<Result<LoadedCraftData, String>>,
     weapon_catalog: Resource<Result<Rc<xiv_companion::WeaponCatalogPackage>, String>>,
-    craft_data_source_info: Option<(String, String)>,
-    weapon_catalog_source_info: Option<(String, String)>,
+    collection_catalog: Resource<Result<Rc<CollectionCatalogPackage>, String>>,
+    craft_data_status: Option<ResourceStatus>,
+    weapon_catalog_status: Option<ResourceStatus>,
+    collection_catalog_status: Option<ResourceStatus>,
+    craft_data_action: ResourceActionState,
+    weapon_catalog_action: ResourceActionState,
+    collection_catalog_action: ResourceActionState,
     user_local_configured: bool,
     on_update_craft_data_from_local: EventHandler<()>,
     on_reset_craft_data_to_builtin: EventHandler<()>,
     on_update_weapon_catalog_from_local: EventHandler<()>,
     on_reset_weapon_catalog_to_builtin: EventHandler<()>,
+    on_update_collection_catalog_from_local: EventHandler<()>,
+    on_reset_collection_catalog_to_builtin: EventHandler<()>,
 ) -> Element {
-    let (craft_version, craft_count, craft_source) =
-        indexed_db_resource_status(&craft_data, craft_data_source_info.as_ref());
-    let (weapon_version, weapon_count, weapon_source) =
-        indexed_db_resource_status(&weapon_catalog, weapon_catalog_source_info.as_ref());
+    let craft_loaded = craft_data.read();
+    let weapon_loaded = weapon_catalog.read();
+    let collection_loaded = collection_catalog.read();
+    let craft_fallback = craft_loaded
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|loaded| (loaded.data.game_version.clone(), loaded.data.counts.items));
+    let weapon_fallback = weapon_loaded
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|catalog| (catalog.game_version.clone(), catalog.counts.items));
+    let collection_fallback = collection_loaded
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|catalog| (catalog.game_version.clone(), catalog.counts.items));
     let weapon_model_status = if user_local_configured {
         "已配置本地目录"
     } else {
@@ -1088,96 +1208,53 @@ fn ResourceStatusTable(
             }
 
             ResourceStatusRow {
-                label: "CraftData",
+                label: "合成数据",
                 description: "配方、物品、来源数据",
-                version: craft_version,
-                count: craft_count,
+                status: craft_data_status,
+                fallback: craft_fallback,
                 count_label: "物品",
-                source: craft_source,
+                action: craft_data_action,
                 user_local_configured,
                 on_update: move |_| on_update_craft_data_from_local.call(()),
                 on_reset: move |_| on_reset_craft_data_to_builtin.call(()),
             }
 
             ResourceStatusRow {
-                label: "WeaponCatalog",
-                description: "武器目录数据",
-                version: weapon_version,
-                count: weapon_count,
+                label: "武器索引",
+                description: "武器检索与模型入口",
+                status: weapon_catalog_status,
+                fallback: weapon_fallback,
                 count_label: "武器",
-                source: weapon_source,
+                action: weapon_catalog_action,
                 user_local_configured,
                 on_update: move |_| on_update_weapon_catalog_from_local.call(()),
                 on_reset: move |_| on_reset_weapon_catalog_to_builtin.call(()),
             }
 
+            ResourceStatusRow {
+                label: "图鉴目录",
+                description: "装备、乐谱与收藏品目录",
+                status: collection_catalog_status,
+                fallback: collection_fallback,
+                count_label: "条目",
+                action: collection_catalog_action,
+                user_local_configured,
+                on_update: move |_| on_update_collection_catalog_from_local.call(()),
+                on_reset: move |_| on_reset_collection_catalog_to_builtin.call(()),
+            }
+
             ResourceStatusStaticRow {
-                label: "WeaponModel",
-                description: "本地 SqPack 武器模型预览",
+                label: "武器模型",
+                description: "本地按需读取 · 依赖游戏目录与武器索引",
                 status: weapon_model_status,
             }
 
             ResourceStatusStaticRow {
-                label: "ItemIcon",
-                description: "物品图标 URL",
-                status: "Builtin/API",
+                label: "物品图标",
+                description: "按需读取的物品图标",
+                status: "内置/API",
             }
         }
-    }
-}
-
-fn indexed_db_resource_status<T>(
-    data: &Resource<Result<T, String>>,
-    cache_info: Option<&(String, String)>,
-) -> (Option<String>, Option<usize>, &'static str)
-where
-    T: ResourceVersionInfo,
-{
-    let version = data
-        .read()
-        .as_ref()
-        .and_then(|result| result.as_ref().ok().map(|value| value.game_version().to_string()))
-        .or_else(|| cache_info.map(|(_, version)| version.clone()));
-    let count = data
-        .read()
-        .as_ref()
-        .and_then(|result| result.as_ref().ok().map(|value| value.item_count()));
-    let source = match cache_info.map(|(tag, _)| tag.as_str()) {
-        Some("local") => "local",
-        _ => "builtin",
-    };
-    (version, count, source)
-}
-
-trait ResourceVersionInfo {
-    fn game_version(&self) -> &str;
-    fn item_count(&self) -> usize;
-}
-
-impl ResourceVersionInfo for LoadedCraftData {
-    fn game_version(&self) -> &str {
-        &self.data.game_version
-    }
-    fn item_count(&self) -> usize {
-        self.data.counts.items
-    }
-}
-
-impl ResourceVersionInfo for xiv_companion::WeaponCatalogPackage {
-    fn game_version(&self) -> &str {
-        &self.game_version
-    }
-    fn item_count(&self) -> usize {
-        self.counts.items
-    }
-}
-
-impl<T: ResourceVersionInfo> ResourceVersionInfo for Rc<T> {
-    fn game_version(&self) -> &str {
-        (**self).game_version()
-    }
-    fn item_count(&self) -> usize {
-        (**self).item_count()
     }
 }
 
@@ -1185,44 +1262,73 @@ impl<T: ResourceVersionInfo> ResourceVersionInfo for Rc<T> {
 fn ResourceStatusRow(
     label: &'static str,
     description: &'static str,
-    version: Option<String>,
-    count: Option<usize>,
+    status: Option<ResourceStatus>,
+    fallback: Option<(String, usize)>,
     count_label: &'static str,
-    source: &'static str,
+    action: ResourceActionState,
     user_local_configured: bool,
     on_update: EventHandler<MouseEvent>,
     on_reset: EventHandler<MouseEvent>,
 ) -> Element {
+    let version = status
+        .as_ref()
+        .and_then(|status| status.metadata.game_version.clone())
+        .or_else(|| fallback.as_ref().map(|(version, _)| version.clone()));
+    let count = status
+        .as_ref()
+        .and_then(|status| status.metadata.record_count)
+        .or_else(|| fallback.as_ref().map(|(_, count)| *count));
+    let origin = status
+        .as_ref()
+        .and_then(|status| status.metadata.origin)
+        .unwrap_or(ResourceOrigin::Builtin);
+    let busy = matches!(
+        action,
+        ResourceActionState::Updating | ResourceActionState::Resetting
+    );
+    let can_reset = origin == ResourceOrigin::UserLocal && !busy;
     rsx! {
-        div { class: "grid grid-cols-[1fr_auto] items-center gap-3 border-b border-border/50 px-4 py-2.5 last:border-b-0 md:grid-cols-[1fr_auto_1fr]",
+        div { class: "grid gap-3 border-b border-border/50 px-4 py-3 last:border-b-0 md:grid-cols-[minmax(12rem,1fr)_minmax(11rem,auto)_auto] md:items-center",
             div { class: "min-w-0",
                 div { class: "text-sm font-medium", "{label}" }
                 div { class: "text-xs text-muted-foreground", "{description}" }
             }
-            div { class: "hidden text-xs text-muted-foreground md:block",
+            div { class: "text-xs text-muted-foreground",
                 if let Some(version) = version {
-                    div { "{version}" }
-                    div { "来源 {source}" }
-                    if let Some(count) = count {
-                        div { "{count} {count_label}" }
+                    div { class: "flex flex-wrap items-center gap-2",
+                        Badge { variant: if origin == ResourceOrigin::UserLocal { BadgeVariant::Success } else { BadgeVariant::Outline },
+                            {if origin == ResourceOrigin::UserLocal { "本地" } else { "内置" }}
+                        }
+                        span { class: "font-medium text-foreground", "{version}" }
+                        if let Some(count) = count { span { "{format_integer(count as f64)} {count_label}" } }
                     }
                 } else {
-                    "加载中…"
+                    "等待初始化"
+                }
+                match &action {
+                    ResourceActionState::Updating => rsx! { div { class: "mt-1 text-amber-700", "正在从本地更新" } },
+                    ResourceActionState::Resetting => rsx! { div { class: "mt-1 text-amber-700", "正在恢复内置数据" } },
+                    ResourceActionState::Success(message) => rsx! { div { class: "mt-1 text-emerald-700", "{message}" } },
+                    ResourceActionState::Error(message) => rsx! { div { class: "mt-1 max-w-md text-destructive", "{message}" } },
+                    ResourceActionState::Idle => rsx! {},
                 }
             }
-            div { class: "flex justify-end md:justify-start gap-2",
+            div { class: "flex justify-end gap-2",
                 Button {
                     variant: ButtonVariant::Outline,
                     size: ButtonSize::Sm,
-                    disabled: !user_local_configured,
+                    disabled: !user_local_configured || busy,
                     onclick: move |event| on_update.call(event),
-                    "从本地更新"
+                    if busy { Icon { kind: IconKind::LoaderCircle, class: "h-4 w-4 animate-spin" } }
+                    "本地更新"
                 }
                 Button {
-                    variant: ButtonVariant::Outline,
-                    size: ButtonSize::Sm,
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Icon,
+                    title: Some("恢复内置数据".to_string()),
+                    disabled: !can_reset,
                     onclick: move |event| on_reset.call(event),
-                    "重置为 builtin"
+                    Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
                 }
             }
         }
@@ -1394,102 +1500,6 @@ fn CraftDataProgressView(progress: CraftDataLoadProgress) -> Element {
                         if progress.done { "bg-emerald-500" } else { "bg-foreground/70" },
                     ]),
                     style: "{progress_width}",
-                }
-            }
-        }
-    }
-}
-
-/// Compact data status footer showing loaded CraftData and WeaponCatalog info.
-#[component]
-fn DataStatus(
-    craft_data: Resource<Result<LoadedCraftData, String>>,
-    weapon_catalog: Resource<Result<Rc<xiv_companion::WeaponCatalogPackage>, String>>,
-    craft_progress: Option<CraftDataLoadProgress>,
-) -> Element {
-    rsx! {
-        div { class: "rounded-lg border bg-card p-3 space-y-3",
-            // CraftData
-            div { class: "space-y-2",
-                div { class: "text-xs font-medium text-muted-foreground", "CraftData" }
-                match craft_data.read().as_ref() {
-                    Some(Ok(loaded)) => {
-                        let data = &loaded.data;
-                        rsx! {
-                            div { class: "space-y-2",
-                                div { class: "flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm",
-                                    span { class: "font-medium", "{data.game_version}" }
-                                    span { class: "text-muted-foreground",
-                                        "来源 "
-                                        span { class: "font-medium text-foreground", "{source_name(loaded.source)}" }
-                                    }
-                                    span { class: "text-muted-foreground",
-                                        span { class: "font-medium text-foreground", "{format_integer(data.counts.items as f64)}" }
-                                        " 物品"
-                                    }
-                                    span { class: "text-muted-foreground",
-                                        span { class: "font-medium text-foreground", "{format_integer(data.counts.recipes as f64)}" }
-                                        " 配方"
-                                    }
-                                    span { class: "text-muted-foreground",
-                                        span { class: "font-medium text-foreground", "{format_integer(data.counts.sources as f64)}" }
-                                        " 来源"
-                                    }
-                                }
-                                if loaded.source == ResourceSource::UserLocal {
-                                    if let Some(progress) = craft_progress.clone() {
-                                        CraftDataProgressView { progress }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    Some(Err(error)) => rsx! {
-                        div { class: "flex items-center gap-2 text-sm text-destructive",
-                            div { class: "flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-100",
-                                span { class: "text-[10px] font-bold text-red-600", "✗" }
-                            }
-                            "{error}"
-                        }
-                    },
-                    None => rsx! {
-                        div { class: "flex items-center gap-2 text-sm text-muted-foreground",
-                            div { class: "h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" }
-                            "正在加载 CraftData…"
-                        }
-                    },
-                }
-            }
-
-            // WeaponCatalog
-            div { class: "space-y-2",
-                div { class: "text-xs font-medium text-muted-foreground", "WeaponCatalog" }
-                match weapon_catalog.read().as_ref() {
-                    Some(Ok(catalog)) => {
-                        rsx! {
-                            div { class: "flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm",
-                                span { class: "font-medium", "{catalog.game_version}" }
-                                span { class: "text-muted-foreground",
-                                    span { class: "font-medium text-foreground", "{format_integer(catalog.counts.items as f64)}" }
-                                    " 武器"
-                                }
-                            }
-                        }
-                    },
-                    Some(Err(error)) => rsx! {
-                        div { class: "flex items-center gap-2 text-sm text-destructive",
-                            div { class: "flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-100",
-                                span { class: "text-[10px] font-bold text-red-600", "✗" }
-                            }
-                            "{error}"
-                        }
-                    },
-                    None => rsx! {
-                        div { class: "flex items-center gap-2 text-sm text-muted-foreground",
-                            div { class: "h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" }
-                            "正在加载 WeaponCatalog…"
-                        }
-                    },
                 }
             }
         }

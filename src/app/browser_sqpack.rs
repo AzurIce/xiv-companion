@@ -95,6 +95,13 @@ impl BrowserSqPack {
             .await
     }
 
+    pub async fn game_version(&self) -> Result<String, String> {
+        let bytes = self.read_sqpack_file_all("ffxivgame.ver").await?;
+        String::from_utf8(bytes)
+            .map(|version| version.trim().to_string())
+            .map_err(|error| format!("读取本地游戏版本失败: {error}"))
+    }
+
     /// 尝试读取候选资源路径；未命中 SqPack 索引时不输出 warn。
     ///
     /// 模型材质/贴图解析会按多个可能路径探测，前几个候选缺失是正常情况。
@@ -200,6 +207,35 @@ impl BrowserSqPack {
             "sqpack",
             format!(
                 "preloaded WeaponCatalog sheets: {} files in {}",
+                files.len(),
+                log::format_elapsed(log::elapsed_ms(start_ms)),
+            ),
+        );
+        Ok(InMemoryPhysisResource::new(files))
+    }
+
+    pub async fn preload_collection_catalog_resource(
+        &mut self,
+    ) -> Result<InMemoryPhysisResource, String> {
+        let start_ms = log::now_ms();
+        log::info("sqpack", "preloading CollectionCatalog sheets");
+        let mut files = HashMap::new();
+        self.preload_sheet(&mut files, "Item", &[Language::ChineseSimplified])
+            .await?;
+        self.preload_sheet(&mut files, "ItemSeries", &[Language::ChineseSimplified])
+            .await?;
+        self.preload_sheet(
+            &mut files,
+            "ClassJobCategory",
+            &[Language::ChineseSimplified],
+        )
+        .await?;
+        self.preload_sheet(&mut files, "ItemAction", &[Language::None])
+            .await?;
+        log::info(
+            "sqpack",
+            format!(
+                "preloaded CollectionCatalog sheets: {} files in {}",
                 files.len(),
                 log::format_elapsed(log::elapsed_ms(start_ms)),
             ),

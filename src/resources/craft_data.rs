@@ -161,7 +161,14 @@ impl ResourceProvider for LocalCraftDataProvider {
                     format!("failed to encode local craft data: {error}"),
                 )
             })?;
-            Ok(ResourceBlob { bytes, fingerprint })
+            Ok(ResourceBlob {
+                bytes,
+                fingerprint,
+                metadata: super::ResourceMetadata {
+                    origin: Some(super::ResourceOrigin::UserLocal),
+                    ..Default::default()
+                },
+            })
         })
     }
 }

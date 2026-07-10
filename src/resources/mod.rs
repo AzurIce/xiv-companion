@@ -4,6 +4,7 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 
+pub mod collection_catalog;
 pub mod craft_data;
 pub mod item_icon;
 pub mod weapon_model;
@@ -70,6 +71,29 @@ pub enum ResourceSource {
     IndexedDb,
     /// Resources explicitly supplied from the user's local machine, such as a game directory.
     UserLocal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResourceOrigin {
+    Builtin,
+    UserLocal,
+    Network,
+}
+
+impl ResourceOrigin {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+            Self::UserLocal => "local",
+            Self::Network => "network",
+        }
+    }
+}
+
+impl fmt::Display for ResourceOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
 }
 
 impl ResourceSource {
@@ -260,12 +284,31 @@ pub struct ProviderRequest {
 pub struct ResourceBlob {
     pub bytes: Vec<u8>,
     pub fingerprint: Option<String>,
+    pub metadata: ResourceMetadata,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourceMetadata {
+    pub origin: Option<ResourceOrigin>,
+    pub game_version: Option<String>,
+    pub revision: Option<String>,
+    pub saved_at: Option<String>,
+    pub record_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedResource<T> {
     pub source: ResourceSource,
+    pub metadata: ResourceMetadata,
     pub value: T,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceStatus {
+    pub resource: ResourceKindKey,
+    pub storage: ResourceSource,
+    pub available: bool,
+    pub metadata: ResourceMetadata,
 }
 
 pub trait ResourceProvider {
@@ -275,6 +318,52 @@ pub trait ResourceProvider {
         &'a self,
         request: ProviderRequest,
     ) -> ResourceFuture<'a, Result<ResourceBlob, ResourceError>>;
+
+    fn status<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        let source = self.source();
+        Box::pin(async move {
+            Err(ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind,
+                Some(source),
+                "provider does not expose resource status",
+            ))
+        })
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        request: ProviderRequest,
+        origin: ResourceOrigin,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        let source = self.source();
+        Box::pin(async move {
+            Err(ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind,
+                Some(source),
+                format!("provider cannot refresh from {origin}"),
+            ))
+        })
+    }
+
+    fn reset<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        let source = self.source();
+        Box::pin(async move {
+            Err(ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind,
+                Some(source),
+                "provider cannot reset this resource",
+            ))
+        })
+    }
 }
 
 pub struct ResourceHub {
@@ -331,8 +420,14 @@ impl ResourceHub {
 
         let mut attempts = Vec::new();
         for source in sources {
-            match self.load_from::<R>(source, id.clone()).await {
-                Ok(value) => return Ok(LoadedResource { source, value }),
+            match self.load_from_with_metadata::<R>(source, id.clone()).await {
+                Ok((value, metadata)) => {
+                    return Ok(LoadedResource {
+                        source,
+                        metadata,
+                        value,
+                    });
+                }
                 Err(error) => {
                     let can_try_next = descriptor.fallback_policy.can_try_next_source(&error);
                     attempts.push(error.summary());
@@ -356,6 +451,16 @@ impl ResourceHub {
         source: ResourceSource,
         id: R::Id,
     ) -> Result<R::Output, ResourceError> {
+        self.load_from_with_metadata::<R>(source, id)
+            .await
+            .map(|(value, _)| value)
+    }
+
+    async fn load_from_with_metadata<R: ResourceSpec>(
+        &self,
+        source: ResourceSource,
+        id: R::Id,
+    ) -> Result<(R::Output, ResourceMetadata), ResourceError> {
         let resource_kind = R::kind();
         self.descriptor(&resource_kind)?;
 
@@ -379,7 +484,8 @@ impl ResourceHub {
                 source,
                 fingerprint: blob.fingerprint,
             };
-            return R::decode(blob.bytes, context);
+            let value = R::decode(blob.bytes, context)?;
+            return Ok((value, blob.metadata));
         }
 
         Err(ResourceError::new(
@@ -388,6 +494,48 @@ impl ResourceHub {
             Some(source),
             format!("source {source} cannot provide {resource_kind}"),
         ))
+    }
+
+    pub async fn status<R: ResourceSpec>(
+        &self,
+        id: R::Id,
+    ) -> Result<ResourceStatus, ResourceError> {
+        let request = R::request(&id);
+        self.management_provider(&request)?.status(request).await
+    }
+
+    pub async fn refresh<R: ResourceSpec>(
+        &self,
+        id: R::Id,
+        origin: ResourceOrigin,
+    ) -> Result<ResourceStatus, ResourceError> {
+        let request = R::request(&id);
+        self.management_provider(&request)?
+            .refresh(request, origin)
+            .await
+    }
+
+    pub async fn reset<R: ResourceSpec>(&self, id: R::Id) -> Result<ResourceStatus, ResourceError> {
+        let request = R::request(&id);
+        self.management_provider(&request)?.reset(request).await
+    }
+
+    fn management_provider(
+        &self,
+        request: &ProviderRequest,
+    ) -> Result<&dyn ResourceProvider, ResourceError> {
+        self.providers
+            .get(&ResourceSource::IndexedDb)
+            .and_then(|providers| providers.iter().find(|provider| provider.supports(request)))
+            .map(|provider| provider.as_ref())
+            .ok_or_else(|| {
+                ResourceError::new(
+                    ResourceErrorKind::Unsupported,
+                    request.kind.clone(),
+                    Some(ResourceSource::IndexedDb),
+                    "resource does not expose managed storage operations",
+                )
+            })
     }
 
     fn descriptor(&self, kind: &ResourceKindKey) -> Result<&ResourceDescriptor, ResourceError> {
@@ -423,6 +571,18 @@ pub trait ResourceSpec {
     fn descriptor() -> ResourceDescriptor;
     fn request(id: &Self::Id) -> ProviderRequest;
     fn decode(bytes: Vec<u8>, context: DecodeContext) -> Result<Self::Output, ResourceError>;
+}
+
+pub fn compare_resource_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    resource_version_components(left).cmp(&resource_version_components(right))
+}
+
+fn resource_version_components(value: &str) -> Vec<u64> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -526,6 +686,33 @@ mod tests {
                 Ok(ResourceBlob {
                     bytes,
                     fingerprint: Some("test".to_string()),
+                    metadata: ResourceMetadata {
+                        origin: Some(if self.source == ResourceSource::Builtin {
+                            ResourceOrigin::Builtin
+                        } else {
+                            ResourceOrigin::UserLocal
+                        }),
+                        game_version: Some("game-2026.01.01.0000.0000".to_string()),
+                        ..Default::default()
+                    },
+                })
+            })
+        }
+
+        fn status<'a>(
+            &'a self,
+            request: ProviderRequest,
+        ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+            Box::pin(async move {
+                Ok(ResourceStatus {
+                    resource: request.kind,
+                    storage: self.source,
+                    available: true,
+                    metadata: ResourceMetadata {
+                        origin: Some(ResourceOrigin::Builtin),
+                        game_version: Some("game-2026.01.01.0000.0000".to_string()),
+                        ..Default::default()
+                    },
                 })
             })
         }
@@ -543,6 +730,11 @@ mod tests {
             source: ResourceSource::UserLocal,
             error: None,
             value: b"user-local",
+        });
+        hub.add_provider(TestProvider {
+            source: ResourceSource::IndexedDb,
+            error: None,
+            value: b"indexed-db",
         });
         hub
     }
@@ -585,6 +777,7 @@ mod tests {
         .expect("resource should load from fallback");
 
         assert_eq!(loaded.source, ResourceSource::UserLocal);
+        assert_eq!(loaded.metadata.origin, Some(ResourceOrigin::UserLocal));
         assert_eq!(loaded.value, "user-local");
     }
 
@@ -596,5 +789,22 @@ mod tests {
 
         assert_eq!(error.kind, ResourceErrorKind::DecodeFailed);
         assert_eq!(error.source, Some(ResourceSource::Builtin));
+    }
+
+    #[test]
+    fn resource_versions_compare_numeric_components() {
+        assert!(
+            compare_resource_versions("game-2026.10.01.0000.0000", "game-2026.9.30.0000.0000")
+                .is_gt()
+        );
+        assert!(compare_resource_versions("Local SqPack", "unknown").is_eq());
+    }
+
+    #[test]
+    fn status_uses_managed_indexed_db_provider() {
+        let status = futures_executor::block_on(test_hub(None).status::<TestResource>(TestId::Ok))
+            .expect("managed status should load");
+        assert_eq!(status.storage, ResourceSource::IndexedDb);
+        assert_eq!(status.metadata.origin, Some(ResourceOrigin::Builtin));
     }
 }

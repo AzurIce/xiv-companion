@@ -1,31 +1,60 @@
 use dioxus::prelude::*;
 use physis::ReadableFile;
+use serde::Deserialize;
 use xiv_companion::{
     AsyncGameResource, BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage,
     ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceProvider, ResourceSource, WeaponModelLoadRequest, item_icon_tex_path,
-    load_weapon_model_from_async_resource, register_craft_data_resource,
-    register_item_icon_resource, register_weapon_model_resources,
+    ResourceMetadata, ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus,
+    WeaponModelLoadRequest, compare_resource_versions, item_icon_tex_path,
+    load_weapon_model_from_async_resource, register_collection_catalog_resource,
+    register_craft_data_resource, register_item_icon_resource, register_weapon_model_resources,
     resources::{
-        craft_data::CraftDataKind,
-        item_icon::ItemIconKind,
-        weapon_model::WeaponCatalogKind,
+        collection_catalog::CollectionCatalogKind, craft_data::CraftDataKind,
+        item_icon::ItemIconKind, weapon_model::WeaponCatalogKind,
     },
 };
 
 use crate::app::browser_sqpack::BrowserSqPack;
-use crate::app::indexed_db_cache::{CachedResourceRecord, load_cached_resource, save_cached_resource};
+use crate::app::indexed_db_cache::{
+    CachedResourceRecord, load_cached_resource, save_cached_resource,
+};
 use crate::app::log;
 
 const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 const BUNDLED_WEAPON_CATALOG_ASSET: Asset = asset!("/assets/weapon-catalog.json");
+const BUNDLED_COLLECTION_CATALOG_ASSET: Asset = asset!("/assets/collection-catalog.json");
+const BUNDLED_RESOURCE_MANIFEST_ASSET: Asset = asset!("/assets/resource-manifest.json");
 const ITEM_ICON_READ_WINDOW: u64 = 2 * 1024 * 1024;
 
 const CACHED_CRAFT_DATA_KEY: &str = "craft-data";
 const CACHED_WEAPON_CATALOG_KEY: &str = "weapon-catalog";
+const CACHED_COLLECTION_CATALOG_KEY: &str = "collection-catalog";
+
+#[derive(Clone, Debug)]
+struct CachedPackageInfo {
+    game_version: String,
+    revision: String,
+    record_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledResourceManifest {
+    resources: std::collections::HashMap<String, BundledResourceManifestEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledResourceManifestEntry {
+    game_version: String,
+    revision: String,
+    schema_revision: u32,
+    record_count: usize,
+}
 
 pub fn default_web_resource_hub() -> ResourceHub {
     let mut hub = ResourceHub::new();
+    register_collection_catalog_resource(&mut hub);
     register_craft_data_resource(&mut hub);
     register_item_icon_resource(&mut hub);
     register_weapon_model_resources(&mut hub);
@@ -39,12 +68,23 @@ pub fn default_web_resource_hub() -> ResourceHub {
 pub struct IndexedDbCachedProvider;
 
 impl IndexedDbCachedProvider {
+    fn schema_revision(request: &ProviderRequest) -> u32 {
+        if request.kind == CollectionCatalogKind.into() {
+            2
+        } else {
+            1
+        }
+    }
+
     fn cache_key(request: &ProviderRequest) -> Option<&'static str> {
         if request.kind == CraftDataKind.into() && request.key == "default" {
             return Some(CACHED_CRAFT_DATA_KEY);
         }
         if request.kind == WeaponCatalogKind.into() && request.key == "default" {
             return Some(CACHED_WEAPON_CATALOG_KEY);
+        }
+        if request.kind == CollectionCatalogKind.into() && request.key == "default" {
+            return Some(CACHED_COLLECTION_CATALOG_KEY);
         }
         None
     }
@@ -56,16 +96,67 @@ impl IndexedDbCachedProvider {
         if request.kind == WeaponCatalogKind.into() && request.key == "default" {
             return Some(BUNDLED_WEAPON_CATALOG_ASSET);
         }
+        if request.kind == CollectionCatalogKind.into() && request.key == "default" {
+            return Some(BUNDLED_COLLECTION_CATALOG_ASSET);
+        }
         None
     }
 
-    fn game_version_from_bytes(
+    fn manifest_key(request: &ProviderRequest) -> Option<&'static str> {
+        Self::cache_key(request)
+    }
+
+    async fn bundled_manifest_entry(
+        request: &ProviderRequest,
+    ) -> Result<BundledResourceManifestEntry, ResourceError> {
+        let key = Self::manifest_key(request).ok_or_else(|| {
+            ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind.clone(),
+                Some(ResourceSource::Builtin),
+                "resource is not present in the bundled manifest",
+            )
+        })?;
+        let bytes = dioxus::asset_resolver::read_asset_bytes(BUNDLED_RESOURCE_MANIFEST_ASSET)
+            .await
+            .map_err(|error| {
+                ResourceError::new(
+                    ResourceErrorKind::ProviderFailed,
+                    request.kind.clone(),
+                    Some(ResourceSource::Builtin),
+                    format!("failed to read bundled resource manifest: {error}"),
+                )
+            })?;
+        let manifest =
+            serde_json::from_slice::<BundledResourceManifest>(&bytes).map_err(|error| {
+                ResourceError::new(
+                    ResourceErrorKind::DecodeFailed,
+                    request.kind.clone(),
+                    Some(ResourceSource::Builtin),
+                    format!("failed to decode bundled resource manifest: {error}"),
+                )
+            })?;
+        manifest.resources.get(key).cloned().ok_or_else(|| {
+            ResourceError::new(
+                ResourceErrorKind::NotFound,
+                request.kind.clone(),
+                Some(ResourceSource::Builtin),
+                format!("bundled resource manifest has no entry for {key}"),
+            )
+        })
+    }
+
+    fn package_info_from_bytes(
         request: &ProviderRequest,
         bytes: &[u8],
-    ) -> Result<String, ResourceError> {
+    ) -> Result<CachedPackageInfo, ResourceError> {
         if request.kind == CraftDataKind.into() {
             return serde_json::from_slice::<xiv_companion::CraftDataPackage>(bytes)
-                .map(|package| package.game_version)
+                .map(|package| CachedPackageInfo {
+                    game_version: package.game_version,
+                    revision: package.generated_at,
+                    record_count: package.counts.items,
+                })
                 .map_err(|error| {
                     ResourceError::new(
                         ResourceErrorKind::DecodeFailed,
@@ -77,13 +168,33 @@ impl IndexedDbCachedProvider {
         }
         if request.kind == WeaponCatalogKind.into() {
             return serde_json::from_slice::<xiv_companion::WeaponCatalogPackage>(bytes)
-                .map(|package| package.game_version)
+                .map(|package| CachedPackageInfo {
+                    game_version: package.game_version,
+                    revision: package.generated_at,
+                    record_count: package.counts.items,
+                })
                 .map_err(|error| {
                     ResourceError::new(
                         ResourceErrorKind::DecodeFailed,
                         request.kind.clone(),
                         Some(ResourceSource::Builtin),
                         format!("failed to decode bundled WeaponCatalog for indexing: {error}"),
+                    )
+                });
+        }
+        if request.kind == CollectionCatalogKind.into() {
+            return serde_json::from_slice::<xiv_companion::CollectionCatalogPackage>(bytes)
+                .map(|package| CachedPackageInfo {
+                    game_version: package.game_version,
+                    revision: package.generated_at,
+                    record_count: package.counts.items,
+                })
+                .map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::DecodeFailed,
+                        request.kind.clone(),
+                        Some(ResourceSource::Builtin),
+                        format!("failed to decode bundled CollectionCatalog for indexing: {error}"),
                     )
                 });
         }
@@ -95,7 +206,41 @@ impl IndexedDbCachedProvider {
         ))
     }
 
-    pub async fn update_from_local(request: ProviderRequest) -> Result<(), ResourceError> {
+    async fn bundled_record(
+        request: &ProviderRequest,
+    ) -> Result<CachedResourceRecord, ResourceError> {
+        let asset = Self::bundled_asset(request).ok_or_else(|| {
+            ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind.clone(),
+                Some(ResourceSource::Builtin),
+                "no bundled asset for this request",
+            )
+        })?;
+        let bytes = dioxus::asset_resolver::read_asset_bytes(asset)
+            .await
+            .map_err(|error| {
+                ResourceError::new(
+                    ResourceErrorKind::ProviderFailed,
+                    request.kind.clone(),
+                    Some(ResourceSource::Builtin),
+                    format!("failed to read bundled asset: {error}"),
+                )
+            })?;
+        let info = Self::package_info_from_bytes(request, &bytes)?;
+        let schema_revision = Self::schema_revision(request);
+        Ok(CachedResourceRecord {
+            fingerprint: format!("{}:{}:{schema_revision}", info.game_version, info.revision),
+            source_tag: ResourceOrigin::Builtin.id().to_string(),
+            game_version: info.game_version,
+            schema_revision,
+            record_count: info.record_count,
+            saved_at: now_iso_string(),
+            bytes,
+        })
+    }
+
+    async fn update_from_local(request: ProviderRequest) -> Result<ResourceStatus, ResourceError> {
         let resource_kind = request.kind.clone();
         let Some(cache_key) = Self::cache_key(&request) else {
             return Err(ResourceError::new(
@@ -106,8 +251,11 @@ impl IndexedDbCachedProvider {
             ));
         };
 
-        let (bytes, game_version) = if request.kind == CraftDataKind.into() {
-            log::info("resource", "updating CraftData in IndexedDB from local SqPack");
+        let bytes = if request.kind == CraftDataKind.into() {
+            log::info(
+                "resource",
+                "updating CraftData in IndexedDB from local SqPack",
+            );
             let mut sqpack = BrowserSqPack::from_window_handle().await.map_err(|error| {
                 ResourceError::new(
                     browser_sqpack_provider_error_kind(&error),
@@ -116,22 +264,29 @@ impl IndexedDbCachedProvider {
                     error,
                 )
             })?;
-            let resource = sqpack.preload_craft_data_resource().await.map_err(|error| {
-                ResourceError::new(
-                    ResourceErrorKind::ProviderFailed,
-                    resource_kind.clone(),
-                    Some(ResourceSource::UserLocal),
-                    error,
-                )
-            })?;
+            let resource = sqpack
+                .preload_craft_data_resource()
+                .await
+                .map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::ProviderFailed,
+                        resource_kind.clone(),
+                        Some(ResourceSource::UserLocal),
+                        error,
+                    )
+                })?;
             let generated_at = js_sys::Date::new_0()
                 .to_iso_string()
                 .as_string()
                 .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+            let game_version = sqpack
+                .game_version()
+                .await
+                .unwrap_or_else(|_| "未知本地版本".to_string());
             let data = xiv_companion::game_data::export_craft_data_from_resource(
                 resource,
                 "Browser Local SqPack".to_string(),
-                "Local SqPack".to_string(),
+                game_version,
                 generated_at,
             )
             .map_err(|error| {
@@ -142,33 +297,46 @@ impl IndexedDbCachedProvider {
                     format!("failed to export CraftData from local SqPack: {error:#}"),
                 )
             })?;
-            let game_version = data.game_version.clone();
-            let bytes = serde_json::to_vec(&data).map_err(|error| {
+            serde_json::to_vec(&data).map_err(|error| {
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
                     resource_kind.clone(),
                     Some(ResourceSource::UserLocal),
                     format!("failed to encode local CraftData: {error}"),
                 )
-            })?;
-            (bytes, game_version)
+            })?
         } else if request.kind == WeaponCatalogKind.into() {
             log::info(
                 "resource",
                 "updating WeaponCatalog in IndexedDB from local SqPack",
             );
-            let bytes = load_weapon_catalog_from_browser_sqpack().await.map_err(|error| {
-                ResourceError::new(
-                    browser_sqpack_provider_error_kind(&error),
-                    resource_kind.clone(),
-                    Some(ResourceSource::UserLocal),
-                    error,
-                )
-            })?;
-            let game_version = serde_json::from_slice::<xiv_companion::WeaponCatalogPackage>(&bytes)
-                .map(|package| package.game_version)
-                .unwrap_or_default();
-            (bytes, game_version)
+            let bytes = load_weapon_catalog_from_browser_sqpack()
+                .await
+                .map_err(|error| {
+                    ResourceError::new(
+                        browser_sqpack_provider_error_kind(&error),
+                        resource_kind.clone(),
+                        Some(ResourceSource::UserLocal),
+                        error,
+                    )
+                })?;
+            bytes
+        } else if request.kind == CollectionCatalogKind.into() {
+            log::info(
+                "resource",
+                "updating CollectionCatalog in IndexedDB from local SqPack",
+            );
+            let bytes = load_collection_catalog_from_browser_sqpack()
+                .await
+                .map_err(|error| {
+                    ResourceError::new(
+                        browser_sqpack_provider_error_kind(&error),
+                        resource_kind.clone(),
+                        Some(ResourceSource::UserLocal),
+                        error,
+                    )
+                })?;
+            bytes
         } else {
             return Err(ResourceError::new(
                 ResourceErrorKind::Unsupported,
@@ -178,10 +346,15 @@ impl IndexedDbCachedProvider {
             ));
         };
 
+        let info = Self::package_info_from_bytes(&request, &bytes)?;
+        let schema_revision = Self::schema_revision(&request);
         let record = CachedResourceRecord {
-            fingerprint: game_version.clone(),
-            source_tag: "local".to_string(),
-            game_version,
+            fingerprint: format!("{}:{}:{schema_revision}", info.game_version, info.revision),
+            source_tag: ResourceOrigin::UserLocal.id().to_string(),
+            game_version: info.game_version,
+            schema_revision,
+            record_count: info.record_count,
+            saved_at: now_iso_string(),
             bytes,
         };
         save_cached_resource(cache_key, &record)
@@ -189,15 +362,15 @@ impl IndexedDbCachedProvider {
             .map_err(|error| {
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
-                    request.kind,
+                    request.kind.clone(),
                     Some(ResourceSource::IndexedDb),
                     error,
                 )
             })?;
-        Ok(())
+        Ok(resource_status_from_record(request.kind, &record))
     }
 
-    pub async fn reset_to_builtin(request: ProviderRequest) -> Result<(), ResourceError> {
+    async fn reset_to_builtin(request: ProviderRequest) -> Result<ResourceStatus, ResourceError> {
         let Some(cache_key) = Self::cache_key(&request) else {
             return Err(ResourceError::new(
                 ResourceErrorKind::Unsupported,
@@ -211,38 +384,51 @@ impl IndexedDbCachedProvider {
             .map_err(|error| {
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
-                    request.kind,
+                    request.kind.clone(),
                     Some(ResourceSource::IndexedDb),
                     error,
                 )
-            })
-    }
-
-    /// Returns the cached source tag (`"builtin"` / `"local"`) and game version for the request,
-    /// or `None` if the resource has never been cached.
-    pub async fn current_cache_info(
-        request: ProviderRequest,
-    ) -> Result<Option<(String, String)>, ResourceError> {
-        let resource_kind = request.kind.clone();
-        let Some(cache_key) = Self::cache_key(&request) else {
-            return Err(ResourceError::new(
-                ResourceErrorKind::Unsupported,
-                resource_kind,
-                Some(ResourceSource::IndexedDb),
-                "IndexedDb cache does not support this request",
-            ));
-        };
-        load_cached_resource(cache_key)
+            })?;
+        let record = Self::bundled_record(&request).await?;
+        save_cached_resource(cache_key, &record)
             .await
             .map_err(|error| {
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
-                    request.kind,
+                    request.kind.clone(),
                     Some(ResourceSource::IndexedDb),
                     error,
                 )
-            })
-            .map(|record| record.map(|r| (r.source_tag, r.game_version)))
+            })?;
+        Ok(resource_status_from_record(request.kind, &record))
+    }
+
+    async fn cache_status(request: ProviderRequest) -> Result<ResourceStatus, ResourceError> {
+        let Some(cache_key) = Self::cache_key(&request) else {
+            return Err(ResourceError::new(
+                ResourceErrorKind::Unsupported,
+                request.kind,
+                Some(ResourceSource::IndexedDb),
+                "IndexedDb cache does not support this request",
+            ));
+        };
+        let record = load_cached_resource(cache_key).await.map_err(|error| {
+            ResourceError::new(
+                ResourceErrorKind::ProviderFailed,
+                request.kind.clone(),
+                Some(ResourceSource::IndexedDb),
+                error,
+            )
+        })?;
+        Ok(match record {
+            Some(record) => resource_status_from_record(request.kind, &record),
+            None => ResourceStatus {
+                resource: request.kind,
+                storage: ResourceSource::IndexedDb,
+                available: false,
+                metadata: ResourceMetadata::default(),
+            },
+        })
     }
 }
 
@@ -269,33 +455,97 @@ impl ResourceProvider for IndexedDbCachedProvider {
                     "IndexedDb cache does not support this request",
                 ));
             };
-            let Some(asset) = Self::bundled_asset(&request) else {
-                return Err(ResourceError::new(
-                    ResourceErrorKind::Unsupported,
-                    resource_kind,
-                    Some(ResourceSource::IndexedDb),
-                    "no bundled asset for this request",
-                ));
-            };
-
-            if let Some(record) = load_cached_resource(cache_key).await.map_err(|error| {
+            let cached = load_cached_resource(cache_key).await.map_err(|error| {
                 ResourceError::new(
                     ResourceErrorKind::ProviderFailed,
                     resource_kind.clone(),
                     Some(ResourceSource::IndexedDb),
                     error,
                 )
-            })? {
+            })?;
+
+            if let Some(record) = cached {
+                if record.source_tag == ResourceOrigin::UserLocal.id() {
+                    let expected_schema = Self::schema_revision(&request);
+                    if record.schema_revision >= expected_schema {
+                        let metadata = resource_metadata_from_record(&record);
+                        return Ok(ResourceBlob {
+                            bytes: record.bytes,
+                            fingerprint: Some(record.fingerprint),
+                            metadata,
+                        });
+                    }
+                    if let Ok(info) = Self::package_info_from_bytes(&request, &record.bytes) {
+                        let upgraded = CachedResourceRecord {
+                            fingerprint: format!(
+                                "{}:{}:{expected_schema}",
+                                info.game_version, info.revision
+                            ),
+                            source_tag: record.source_tag,
+                            game_version: info.game_version,
+                            schema_revision: expected_schema,
+                            record_count: info.record_count,
+                            saved_at: record.saved_at,
+                            bytes: record.bytes,
+                        };
+                        save_cached_resource(cache_key, &upgraded)
+                            .await
+                            .map_err(|error| {
+                                ResourceError::new(
+                                    ResourceErrorKind::ProviderFailed,
+                                    resource_kind.clone(),
+                                    Some(ResourceSource::IndexedDb),
+                                    error,
+                                )
+                            })?;
+                        let metadata = resource_metadata_from_record(&upgraded);
+                        return Ok(ResourceBlob {
+                            bytes: upgraded.bytes,
+                            fingerprint: Some(upgraded.fingerprint),
+                            metadata,
+                        });
+                    }
+                    log::warn(
+                        "resource",
+                        format!(
+                            "discarding incompatible local {cache_key} schema {} (expected {expected_schema})",
+                            record.schema_revision
+                        ),
+                    );
+                }
+
+                let bundled_info = Self::bundled_manifest_entry(&request).await?;
+                if !should_replace_builtin_cache(&record, &bundled_info) {
+                    let metadata = resource_metadata_from_record(&record);
+                    return Ok(ResourceBlob {
+                        bytes: record.bytes,
+                        fingerprint: Some(record.fingerprint),
+                        metadata,
+                    });
+                }
+                let bundled = Self::bundled_record(&request).await?;
                 log::info(
                     "resource",
                     format!(
-                        "loaded {cache_key} from IndexedDB (source={}, version={})",
-                        record.source_tag, record.game_version
+                        "upgrading {cache_key} builtin cache from {} to {}",
+                        record.game_version, bundled.game_version
                     ),
                 );
+                save_cached_resource(cache_key, &bundled)
+                    .await
+                    .map_err(|error| {
+                        ResourceError::new(
+                            ResourceErrorKind::ProviderFailed,
+                            resource_kind,
+                            Some(ResourceSource::IndexedDb),
+                            error,
+                        )
+                    })?;
+                let metadata = resource_metadata_from_record(&bundled);
                 return Ok(ResourceBlob {
-                    bytes: record.bytes,
-                    fingerprint: Some(record.fingerprint),
+                    bytes: bundled.bytes,
+                    fingerprint: Some(bundled.fingerprint),
+                    metadata,
                 });
             }
 
@@ -303,30 +553,107 @@ impl ResourceProvider for IndexedDbCachedProvider {
                 "resource",
                 format!("{cache_key} not in IndexedDB; seeding from builtin asset"),
             );
-            let bytes = dioxus::asset_resolver::read_asset_bytes(asset).await.map_err(|error| {
-                ResourceError::new(
-                    ResourceErrorKind::ProviderFailed,
-                    resource_kind.clone(),
-                    Some(ResourceSource::Builtin),
-                    format!("failed to read bundled asset: {error}"),
-                )
-            })?;
-            let game_version = Self::game_version_from_bytes(&request, &bytes)?;
-            let record = CachedResourceRecord {
-                fingerprint: game_version.clone(),
-                source_tag: "builtin".to_string(),
-                game_version: game_version.clone(),
-                bytes: bytes.clone(),
-            };
+            let record = Self::bundled_record(&request).await?;
             if let Err(error) = save_cached_resource(cache_key, &record).await {
-                log::warn("resource", format!("failed to seed {cache_key} in IndexedDB: {error}"));
+                log::warn(
+                    "resource",
+                    format!("failed to seed {cache_key} in IndexedDB: {error}"),
+                );
             }
+            let metadata = resource_metadata_from_record(&record);
             Ok(ResourceBlob {
-                bytes,
-                fingerprint: Some(game_version),
+                bytes: record.bytes,
+                fingerprint: Some(record.fingerprint),
+                metadata,
             })
         })
     }
+
+    fn status<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        Box::pin(Self::cache_status(request))
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        request: ProviderRequest,
+        origin: ResourceOrigin,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        Box::pin(async move {
+            match origin {
+                ResourceOrigin::Builtin => Self::reset_to_builtin(request).await,
+                ResourceOrigin::UserLocal => Self::update_from_local(request).await,
+                ResourceOrigin::Network => Err(ResourceError::new(
+                    ResourceErrorKind::Unsupported,
+                    request.kind,
+                    Some(ResourceSource::IndexedDb),
+                    "network refresh is not supported for this resource",
+                )),
+            }
+        })
+    }
+
+    fn reset<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> ResourceFuture<'a, Result<ResourceStatus, ResourceError>> {
+        Box::pin(Self::reset_to_builtin(request))
+    }
+}
+
+fn resource_metadata_from_record(record: &CachedResourceRecord) -> ResourceMetadata {
+    ResourceMetadata {
+        origin: match record.source_tag.as_str() {
+            "builtin" => Some(ResourceOrigin::Builtin),
+            "local" => Some(ResourceOrigin::UserLocal),
+            "network" => Some(ResourceOrigin::Network),
+            _ => None,
+        },
+        game_version: Some(record.game_version.clone()),
+        revision: Some(record.fingerprint.clone()),
+        saved_at: (!record.saved_at.is_empty()).then(|| record.saved_at.clone()),
+        record_count: Some(record.record_count),
+    }
+}
+
+fn resource_status_from_record(
+    resource: xiv_companion::ResourceKindKey,
+    record: &CachedResourceRecord,
+) -> ResourceStatus {
+    ResourceStatus {
+        resource,
+        storage: ResourceSource::IndexedDb,
+        available: true,
+        metadata: resource_metadata_from_record(record),
+    }
+}
+
+fn should_replace_builtin_cache(
+    cached: &CachedResourceRecord,
+    bundled: &BundledResourceManifestEntry,
+) -> bool {
+    if cached.schema_revision < bundled.schema_revision {
+        return true;
+    }
+    let version_order = compare_resource_versions(&bundled.game_version, &cached.game_version);
+    let expected_fingerprint = format!(
+        "{}:{}:{}",
+        bundled.game_version, bundled.revision, bundled.schema_revision
+    );
+    version_order.is_gt()
+        || (version_order.is_eq()
+            && cached.schema_revision == bundled.schema_revision
+            && (cached.record_count != bundled.record_count
+                || cached.fingerprint != expected_fingerprint))
+}
+
+fn now_iso_string() -> String {
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string())
 }
 
 pub struct BrowserSqPackProvider;
@@ -426,6 +753,10 @@ impl ResourceProvider for BrowserSqPackProvider {
             Ok(ResourceBlob {
                 bytes,
                 fingerprint: None,
+                metadata: xiv_companion::ResourceMetadata {
+                    origin: Some(xiv_companion::ResourceOrigin::UserLocal),
+                    ..Default::default()
+                },
             })
         })
     }
@@ -459,6 +790,10 @@ fn browser_sqpack_access_error_kind(error: &str) -> Option<ResourceErrorKind> {
 async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
     let start_ms = log::now_ms();
     let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let game_version = sqpack
+        .game_version()
+        .await
+        .unwrap_or_else(|_| "未知本地版本".to_string());
 
     let preload_start_ms = log::now_ms();
     let resource = sqpack.preload_weapon_catalog_resource().await?;
@@ -478,7 +813,7 @@ async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
     let data = xiv_companion::game_data::export_weapon_catalog_from_resource(
         resource,
         "Browser Local SqPack".to_string(),
-        "Local SqPack".to_string(),
+        game_version,
         generated_at,
     )
     .map_err(|error| format!("failed to export WeaponCatalog from local SqPack: {error:#}"))?;
@@ -491,6 +826,74 @@ async fn load_weapon_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
             "WeaponCatalog exported in {} ({} items, {} bytes)",
             log::format_elapsed(log::elapsed_ms(start_ms)),
             data.counts.items,
+            bytes.len(),
+        ),
+    );
+    Ok(bytes)
+}
+
+async fn load_collection_catalog_from_browser_sqpack() -> Result<Vec<u8>, String> {
+    let start_ms = log::now_ms();
+    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let game_version = sqpack
+        .game_version()
+        .await
+        .unwrap_or_else(|_| "未知本地版本".to_string());
+
+    let preload_start_ms = log::now_ms();
+    let resource = sqpack.preload_collection_catalog_resource().await?;
+    let preload_elapsed_ms = log::elapsed_ms(preload_start_ms);
+    log::info(
+        "resource",
+        format!(
+            "CollectionCatalog preload completed in {}",
+            log::format_elapsed(preload_elapsed_ms),
+        ),
+    );
+
+    let generated_at = js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+    let mut data = xiv_companion::game_data::export_collection_catalog_from_resource(
+        resource,
+        "Browser Local SqPack".to_string(),
+        game_version.clone(),
+        generated_at,
+    )
+    .map_err(|error| format!("failed to export CollectionCatalog from local SqPack: {error:#}"))?;
+    if let Ok(bytes) =
+        dioxus::asset_resolver::read_asset_bytes(BUNDLED_COLLECTION_CATALOG_ASSET).await
+    {
+        if let Ok(bundled) =
+            serde_json::from_slice::<xiv_companion::CollectionCatalogPackage>(&bytes)
+        {
+            let release_by_id = bundled
+                .items
+                .into_iter()
+                .map(|item| (item.id, (item.expansion, item.patch)))
+                .collect::<std::collections::HashMap<_, _>>();
+            for item in &mut data.items {
+                if let Some((expansion, patch)) = release_by_id.get(&item.id) {
+                    item.expansion.clone_from(expansion);
+                    item.patch.clone_from(patch);
+                } else {
+                    item.expansion = "本地版本".to_string();
+                    item.patch = game_version.clone();
+                }
+            }
+        }
+    }
+
+    let bytes = serde_json::to_vec(&data)
+        .map_err(|error| format!("failed to encode CollectionCatalog: {error}"))?;
+    log::info(
+        "resource",
+        format!(
+            "CollectionCatalog exported in {} ({} items, {} equipment, {} bytes)",
+            log::format_elapsed(log::elapsed_ms(start_ms)),
+            data.counts.items,
+            data.counts.equipment,
             bytes.len(),
         ),
     );
@@ -537,10 +940,15 @@ impl AsyncGameResource for BrowserSqPackGameResource<'_> {
 }
 
 async fn load_item_icon_from_browser_sqpack(icon_id: u32) -> Result<Vec<u8>, String> {
-    log::debug("resource", format!("BrowserSqPack request: item-icon/{icon_id}"));
+    log::debug(
+        "resource",
+        format!("BrowserSqPack request: item-icon/{icon_id}"),
+    );
     let mut sqpack = BrowserSqPack::from_window_handle().await?;
     let path = item_icon_tex_path(icon_id);
-    sqpack.read_game_file_with_window(&path, ITEM_ICON_READ_WINDOW).await
+    sqpack
+        .read_game_file_with_window(&path, ITEM_ICON_READ_WINDOW)
+        .await
 }
 
 pub struct BundledProvider;
@@ -553,6 +961,7 @@ impl ResourceProvider for BundledProvider {
     fn supports(&self, request: &ProviderRequest) -> bool {
         (request.kind == CraftDataKind.into() && request.key == "default")
             || (request.kind == WeaponCatalogKind.into() && request.key == "default")
+            || (request.kind == CollectionCatalogKind.into() && request.key == "default")
     }
 
     fn read<'a>(
@@ -572,8 +981,10 @@ impl ResourceProvider for BundledProvider {
 
             let asset = if request.kind == CraftDataKind.into() {
                 BUNDLED_CRAFT_DATA_ASSET
-            } else {
+            } else if request.kind == WeaponCatalogKind.into() {
                 BUNDLED_WEAPON_CATALOG_ASSET
+            } else {
+                BUNDLED_COLLECTION_CATALOG_ASSET
             };
             let bytes = dioxus::asset_resolver::read_asset_bytes(asset)
                 .await
@@ -588,6 +999,10 @@ impl ResourceProvider for BundledProvider {
             Ok(ResourceBlob {
                 bytes,
                 fingerprint: None,
+                metadata: xiv_companion::ResourceMetadata {
+                    origin: Some(xiv_companion::ResourceOrigin::Builtin),
+                    ..Default::default()
+                },
             })
         })
     }

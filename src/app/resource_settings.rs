@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    CraftDataKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy, WeaponCatalogKind,
+    CollectionCatalogKind, CraftDataKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy,
+    WeaponCatalogKind,
 };
 #[cfg(feature = "game-data")]
 use xiv_companion::{LocalCraftDataProvider, LocalItemIconProvider};
@@ -141,6 +142,10 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
             SourcePolicy::Fixed(ResourceSource::IndexedDb),
         );
         hub.set_policy(
+            CollectionCatalogKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
             ItemIconKind.into(),
             SourcePolicy::Fixed(ResourceSource::Builtin),
         );
@@ -151,6 +156,10 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
         );
         hub.set_policy(
             WeaponCatalogKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
+            CollectionCatalogKind.into(),
             SourcePolicy::Fixed(ResourceSource::IndexedDb),
         );
         hub.set_policy(
