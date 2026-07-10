@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use xiv_companion::{
     MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelShapeInfo,
     ModelStainingApplication, ModelSubmeshInfo, ModelTexture, PreparedMaterial, PreparedMesh,
-    PreparedMeshShapeInfluences, WeaponCatalogItem, WeaponModelData,
+    PreparedMeshShapeInfluences, WeaponCatalogItem, WeaponModelData, WeaponModelLoadRequest,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
-    load_weapon_model_from_resource, material_debug_info_from_mtrl_bytes,
+    load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
     renderer::test_support::{
         WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
@@ -37,6 +37,8 @@ struct PhantomWeaponCase {
     name: String,
     #[serde(default)]
     focus: Vec<String>,
+    #[serde(default)]
+    stain_ids: [u8; 2],
 }
 
 #[derive(Debug)]
@@ -306,8 +308,8 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
         ));
     }
     manifest.push(String::new());
-    manifest.push("| priority | item | focus | snapshot | summary | raw |".to_string());
-    manifest.push("| --- | --- | --- | --- | --- | --- |".to_string());
+    manifest.push("| priority | item | stains | focus | snapshot | summary | raw |".to_string());
+    manifest.push("| --- | --- | --- | --- | --- | --- | --- |".to_string());
 
     for case in &fixture.cases {
         if !phantom_case_matches_filter(case, case_filter.as_ref()) {
@@ -336,10 +338,12 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
                     .and_then(|name| name.to_str())
                     .unwrap_or(".");
                 manifest.push(format!(
-                    "| {} | {} {} | {} | [png]({}) | [json]({}) | [raw]({}) |",
+                    "| {} | {} {} | [{}, {}] | {} | [png]({}) | [json]({}) | [raw]({}) |",
                     case.priority,
                     case.item_id,
                     case.name,
+                    case.stain_ids[0],
+                    case.stain_ids[1],
                     case.focus.join(", "),
                     markdown_path(case_dir, &artifacts.snapshot_path),
                     markdown_path(case_dir, &artifacts.summary_path),
@@ -380,8 +384,31 @@ fn render_case(
     fs::create_dir_all(&case_dir)
         .with_context(|| format!("failed to create {}", case_dir.display()))?;
 
-    let model = load_weapon_model_from_resource(resource, item)
+    let request = WeaponModelLoadRequest::from(item).with_stain_ids(case.stain_ids);
+    let model = load_weapon_model_from_resource_request(resource, &request)
         .with_context(|| format!("failed to load model for {}", case.case_id))?;
+    anyhow::ensure!(
+        model.stain_ids == case.stain_ids,
+        "{} returned stain IDs {:?}, expected {:?}",
+        case.case_id,
+        model.stain_ids,
+        case.stain_ids
+    );
+    if case.stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        anyhow::ensure!(
+            model.materials.iter().any(|material| {
+                material
+                    .staining_application
+                    .as_ref()
+                    .is_some_and(|application| {
+                        application.error.is_none() && application.report.rows_changed != 0
+                    })
+            }),
+            "{} requested stains {:?}, but no material ColorTable rows changed",
+            case.case_id,
+            case.stain_ids
+        );
+    }
     let snapshot = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("snapshot")
             .with_output_dir(&case_dir)

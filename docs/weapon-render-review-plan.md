@@ -91,7 +91,7 @@
 
 主要不足：
 
-- 染色已接入同步/异步 weapon model load、material summary、ColorTable bake 和 Web stain0/stain1 选择器；EXD 名称、UI 色块、排序和 metallic metadata 也已导出。当前主要缺口是还没有把染色组合纳入正式视觉 snapshot。
+- 染色已接入同步/异步 weapon model load、material summary、ColorTable bake 和 Web stain0/stain1 选择器；EXD 名称、UI 色块、排序和 metallic metadata 也已导出。正式 phantom fixture 已加入 `45052` stain `[1,0]` case，当前视觉覆盖仍应继续扩展到第二通道和 metallic 染剂。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，目前只能记录为缺口，离线预览缺少显式 fallback。
 - reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy，其中 index 与 ColorTable extra maps 已进入 runtime sampler group；真实 tile/detail array 资源仍未绑定。
@@ -99,7 +99,7 @@
 计划：
 
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
-2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器和 URL 状态；下一步为染色明显的武器增加正式视觉 snapshot。EXD 颜色继续只用于 UI，不作为实际覆盖值。
+2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器、URL 状态和首个正式染色 snapshot；后续补第二通道与 metallic 染剂视觉组合。EXD 颜色继续只用于 UI，不作为实际覆盖值。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
 4. 对 runtime-only 数据不盲猜：decal/crest 先提供空白或显式输入 fallback，GPU ColorTable 先只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
@@ -245,7 +245,8 @@ EXD 与 Web 输入已接入：
 - 已用本地 SqPack ignored test 验证当前 Legacy STM 为 v1.1、GUD STM 为 v2.1，均有 43 个模板；key 范围分别为 100..612 与 1100..1612，验证了 GUD 到 Legacy 的 `-1000` fallback 关系。
 - 已用真实武器 `45052` 做 ignored integration test：stain `[1,0]` 只处理启用 dye flags 的行，application report 无 missing template/error，且 baked base texture 与 `[0,0]` 未染色版本不同。
 - 已用本地 `Stain` sheet ignored test 验证当前 125 个具名染剂、BGR 到 RGBA 转换、shade/sub-order 排序和 metallic 字段；Web URL parser 覆盖双通道与保留值 255 拒绝。
-- 再选几件游戏中染色效果明显的武器做 visual snapshot。
+- phantom fixture schema v2 已允许每个 case 指定 `stainIds`；`45052 奶油之幻梦` 的 `[0,0]` 与 `[1,0]` 会走正式 `WeaponModelLoadRequest` 同轮出图。染色 case 会断言返回 stain IDs 一致且至少一个材质 `rowsChanged > 0`；当前两张 PNG 哈希不同，染色材质报告 `rowsChanged=2`、missing=0、error=None。
+- 后续再选第二通道和 metallic 染色效果明显的武器扩充 visual snapshot，而不是只依赖单通道素雪白样本。
 
 ### P2: 解析更多 runtime-only 或 shader-specific 信息的替代输入
 
@@ -559,7 +560,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 1. 数据解析：染色数据与 Web 输入链路已完成；下一步调查并表达 decal/crest 的静态替代输入，以及真实 tile/detail array 的资源路径和可用性。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
 2. 结果处理：把 decal/crest fallback、tile/detail array availability 变成 `PreparedModelOptions` / `PreparedMaterial` 的显式输入或 fallback 原因。默认离线模式继续保守，不猜运行时 shape、decal、crest 或 GPU ColorTable。
 3. 渲染器：优先接入真实 tile/detail array；同时继续消费结构化但尚未实际影响画面的参数。`g_Transparency`、真实 alpha/glass 行为和 toon lighting 需要先确认 shader-family 语义。
-4. 验证：先为染色明显的武器增加正式视觉 snapshot；每个后续语义修正继续配 focused unit test，涉及 WGSL 时至少跑 renderer 单测、native snapshot、wasm check 和真实 phantom 回归。
+4. 验证：首个正式染色 snapshot 已完成；下一步扩充第二通道/metallic case。每个后续语义修正继续配 focused unit test，涉及 WGSL 时至少跑 renderer 单测、native snapshot、wasm check 和真实 phantom 回归。
 
 ### 第一阶段：可审计和不误画
 
@@ -590,7 +591,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 ### 第三阶段：shader family 和运行时替代输入
 
 1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；其中这些 shader package 已先进入 `MaterialShaderFamily` 分类，具体节点逻辑仍待实现。
-2. 已完成 STM lookup/row override、同步/异步 weapon load、prepared diagnostics、EXD metadata 和 Web stain0/stain1 选择器；后续补正式染色视觉 snapshot。
+2. 已完成 STM lookup/row override、同步/异步 weapon load、prepared diagnostics、EXD metadata、Web stain0/stain1 选择器和首个正式染色视觉 snapshot；后续扩充第二通道与 metallic case。
 3. 设计 decal/crest fallback 或显式输入。
 4. 评估离线 bake/atlas 路线。
 

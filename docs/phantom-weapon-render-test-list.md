@@ -1,7 +1,8 @@
 # 幻梦武器渲染测试列表
 
 这份清单用于后续调试 `xx之幻梦` 系列武器的渲染正确性。条目来自
-`assets/craft-data.json` 中物品名包含 `之幻梦` 的记录，共 23 件。
+`assets/craft-data.json` 中物品名包含 `之幻梦` 的记录，共 23 件；fixture 另为
+`45052 奶油之幻梦` 增加 stain `[1, 0]` 视觉组合，因此当前共 24 个 case。
 
 机器可读版本见 `tests/fixtures/phantom_weapons.json`。后续 native snapshot
 runner 可以按 `itemId` 从 WeaponCatalog / SqPack 解析模型并批量出图。
@@ -11,6 +12,7 @@ runner 可以按 `itemId` 从 WeaponCatalog / SqPack 解析模型并批量出图
 P0 先看当前已知问题：
 
 - `45052 奶油之幻梦`：深度/遮挡问题。
+- `45052 奶油之幻梦` stain `[1, 0]`：STM/ColorTable bake 与未染色版本的视觉对照。
 - `45053 茶歇之幻梦`：透明、颜色、背面偏灰问题。
 
 P1 再看文档中已经暴露过路径或材质特殊性的样本：
@@ -40,6 +42,7 @@ P2 最后跑全量覆盖，确认其它幻梦武器没有被局部修复带偏�
 | P1 | 45050 | 逗猫之幻梦 | 5 | 31665 | `#/weapon-models?item=45050` | material path resolution |
 | P2 | 45051 | 丛林之幻梦 | 4 | 32053 | `#/weapon-models?item=45051` | baseline |
 | P0 | 45052 | 奶油之幻梦 | 9 | 32484 | `#/weapon-models?item=45052` | depth / occlusion |
+| P0 | 45052 | 奶油之幻梦 | 9 | 32484 | `#/weapon-models?item=45052&stain0=1` | staining / ColorTable bake / depth / occlusion |
 | P0 | 45053 | 茶歇之幻梦 | 7 | 32899 | `#/weapon-models?item=45053` | transparency / color / gray backfaces |
 | P2 | 45054 | 旅途之幻梦 | 10 | 37828 | `#/weapon-models?item=45054` | baseline |
 | P2 | 45055 | 仙韵之幻梦 | 98 | 37829 | `#/weapon-models?item=45055` | baseline |
