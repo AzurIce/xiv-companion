@@ -10,9 +10,10 @@ use anyhow::{Context, Result, anyhow};
 use physis::resource::{Resource, SqPackResource};
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMesh, ModelShapeInfo,
-    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, PreparedMaterial, PreparedMesh,
-    PreparedMeshShapeInfluences, WeaponCatalogItem, WeaponModelData, WeaponModelLoadRequest,
+    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMaterialReferenceFallback,
+    ModelMesh, ModelShapeInfo, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
+    PreparedMaterial, PreparedMesh, PreparedMeshShapeInfluences, WeaponCatalogItem,
+    WeaponModelData, WeaponModelLoadRequest,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
@@ -133,6 +134,7 @@ struct MaterialSummary {
     material_index: u16,
     name: String,
     path: Option<String>,
+    reference_fallback: Option<ModelMaterialReferenceFallback>,
     shader_package_name: Option<String>,
     render_mode: String,
     alpha_mode: String,
@@ -1055,6 +1057,7 @@ fn material_summary(
         material_index: material.material_index,
         name: material.name.clone(),
         path: material.path.clone(),
+        reference_fallback: material.reference_fallback.clone(),
         shader_package_name: material.shader_package_name.clone(),
         render_mode: format!("{:?}", material.render_mode),
         alpha_mode: format!("{:?}", material.alpha_mode),

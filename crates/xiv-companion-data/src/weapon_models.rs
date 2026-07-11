@@ -2,7 +2,8 @@ pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialFlowMode,
     MaterialLightingMode, MaterialRenderMode, MaterialSubColorMode, MaterialValueMode, ModelBounds,
     ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow,
-    ModelMaterial, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
+    ModelMaterial, ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind,
+    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
     ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
     PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
     WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
@@ -2274,6 +2275,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             material_index,
             name: material_name,
             path: Some(path),
+            reference_fallback: None,
             shader_package_name: Some(shader_package_name),
             render_mode,
             alpha_mode,
@@ -2898,6 +2900,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             material_index,
             name: material_name,
             path: Some(path),
+            reference_fallback: None,
             shader_package_name: Some(shader_package_name),
             render_mode,
             alpha_mode,
@@ -4389,6 +4392,7 @@ fn fallback_weapon_material(
         material_index,
         name,
         path: None,
+        reference_fallback: None,
         shader_package_name: None,
         render_mode: WeaponMaterialRenderMode::Opaque,
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
@@ -4490,17 +4494,27 @@ fn reuse_loaded_material_for_missing_reference(
     if material.path.is_some() {
         return material;
     }
-    let Some(source) = loaded_materials
-        .iter()
-        .find(|source| source.material_index == material.material_index && source.path.is_some())
-    else {
+    let Some(source) = loaded_materials.iter().find(|source| {
+        source.material_index == material.material_index
+            && source.path.is_some()
+            && source.reference_fallback.is_none()
+    }) else {
         return material;
     };
 
+    let reference_fallback = ModelMaterialReferenceFallback {
+        kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+        requested_name: material.name.clone(),
+        source_slot: source.slot,
+        source_material_index: source.material_index,
+        source_name: source.name.clone(),
+        source_path: source.path.clone().expect("filtered material path"),
+    };
     let mut reused = source.clone();
     reused.slot = material.slot;
     reused.material_index = material.material_index;
     reused.name = material.name;
+    reused.reference_fallback = Some(reference_fallback);
     reused
 }
 
@@ -6072,6 +6086,41 @@ mod weapon_material_tests {
             reused.path.as_deref(),
             Some("chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl")
         );
+        assert_eq!(
+            reused.reference_fallback,
+            Some(ModelMaterialReferenceFallback {
+                kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+                requested_name: "/mt_w3103b0001_a.mtrl".to_string(),
+                source_slot: 0,
+                source_material_index: 0,
+                source_name: "/mt_w3004b0001_a.mtrl".to_string(),
+                source_path:
+                    "chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl"
+                        .to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn missing_material_reference_does_not_chain_reused_materials() {
+        let mut reused_source =
+            fallback_weapon_material(1, 0, "/mt_reused.mtrl".to_string(), [0.1, 0.2, 0.3]);
+        reused_source.path = Some("source.mtrl".to_string());
+        reused_source.reference_fallback = Some(ModelMaterialReferenceFallback {
+            kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+            requested_name: "/mt_reused.mtrl".to_string(),
+            source_slot: 0,
+            source_material_index: 0,
+            source_name: "/mt_source.mtrl".to_string(),
+            source_path: "source.mtrl".to_string(),
+        });
+        let missing =
+            fallback_weapon_material(2, 0, "/mt_missing.mtrl".to_string(), [0.4, 0.5, 0.6]);
+
+        let unresolved = reuse_loaded_material_for_missing_reference(missing, &[reused_source]);
+
+        assert_eq!(unresolved.path, None);
+        assert_eq!(unresolved.reference_fallback, None);
     }
 
     #[test]
@@ -6102,6 +6151,19 @@ mod weapon_material_tests {
         assert_eq!(
             secondary.path.as_deref(),
             Some("chara/weapon/w3004/obj/body/b0001/material/v0002/mt_w3004b0001_a.mtrl")
+        );
+        assert_eq!(
+            secondary.reference_fallback,
+            Some(ModelMaterialReferenceFallback {
+                kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+                requested_name: "/mt_w3103b0001_a.mtrl".to_string(),
+                source_slot: 0,
+                source_material_index: 0,
+                source_name: "/mt_w3004b0001_a.mtrl".to_string(),
+                source_path:
+                    "chara/weapon/w3004/obj/body/b0001/material/v0002/mt_w3004b0001_a.mtrl"
+                        .to_string(),
+            })
         );
         assert!(!secondary.texture_indices.is_empty());
     }

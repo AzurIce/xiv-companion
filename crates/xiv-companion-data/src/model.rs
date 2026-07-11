@@ -387,11 +387,30 @@ pub struct ModelStainingApplication {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelMaterialReferenceFallback {
+    pub kind: ModelMaterialReferenceFallbackKind,
+    pub requested_name: String,
+    pub source_slot: usize,
+    pub source_material_index: u16,
+    pub source_name: String,
+    pub source_path: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelMaterialReferenceFallbackKind {
+    SameIndexLoadedMaterial,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelMaterial {
     pub slot: usize,
     pub material_index: u16,
     pub name: String,
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_fallback: Option<ModelMaterialReferenceFallback>,
     pub shader_package_name: Option<String>,
     #[serde(default)]
     pub render_mode: MaterialRenderMode,
@@ -3753,6 +3772,7 @@ mod color_table_bake_tests {
             material_index: 0,
             name: "test".to_string(),
             path: None,
+            reference_fallback: None,
             shader_package_name: None,
             render_mode: MaterialRenderMode::Opaque,
             alpha_mode: MaterialAlphaMode::Opaque,

@@ -2754,6 +2754,7 @@ fn fallback_material() -> ModelMaterial {
         material_index: 0,
         name: "fallback".to_string(),
         path: None,
+        reference_fallback: None,
         shader_package_name: None,
         render_mode: MaterialRenderMode::Opaque,
         alpha_mode: MaterialAlphaMode::Opaque,
