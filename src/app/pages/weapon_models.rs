@@ -470,11 +470,14 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                 section { class: "space-y-2",
                     div { class: "text-sm font-semibold", "Textures" }
                     StatRow { label: "Base", value: texture_counts.base.to_string() }
+                    StatRow { label: "Base Map 1", value: texture_counts.secondary_base.to_string() }
                     StatRow { label: "Normal", value: texture_counts.normal.to_string() }
+                    StatRow { label: "Normal Map 1", value: texture_counts.secondary_normal.to_string() }
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
                     StatRow { label: "Material Map", value: texture_counts.material_map.to_string() }
                     StatRow { label: "Multi Map", value: texture_counts.multi_map.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
+                    StatRow { label: "Specular Map 1", value: texture_counts.secondary_specular.to_string() }
                     StatRow { label: "Material Props", value: texture_counts.material_properties.to_string() }
                     StatRow { label: "Tile Props", value: texture_counts.tile_properties.to_string() }
                     StatRow { label: "Sheen Props", value: texture_counts.sheen_properties.to_string() }
@@ -525,11 +528,14 @@ fn StatRow(label: &'static str, value: String) -> Element {
 #[derive(Default)]
 struct TextureKindCounts {
     base: usize,
+    secondary_base: usize,
     normal: usize,
+    secondary_normal: usize,
     mask: usize,
     material_map: usize,
     multi_map: usize,
     specular: usize,
+    secondary_specular: usize,
     material_properties: usize,
     tile_properties: usize,
     sheen_properties: usize,
@@ -553,11 +559,14 @@ impl TextureKindCounts {
         for texture in &model.textures {
             match texture.kind {
                 WeaponModelTextureKind::BaseColor => counts.base += 1,
+                WeaponModelTextureKind::SecondaryBaseColor => counts.secondary_base += 1,
                 WeaponModelTextureKind::Normal => counts.normal += 1,
+                WeaponModelTextureKind::SecondaryNormal => counts.secondary_normal += 1,
                 WeaponModelTextureKind::Mask => counts.mask += 1,
                 WeaponModelTextureKind::MaterialMap => counts.material_map += 1,
                 WeaponModelTextureKind::MultiMap => counts.multi_map += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
+                WeaponModelTextureKind::SecondarySpecular => counts.secondary_specular += 1,
                 WeaponModelTextureKind::MaterialProperties => counts.material_properties += 1,
                 WeaponModelTextureKind::TileProperties => counts.tile_properties += 1,
                 WeaponModelTextureKind::SheenProperties => counts.sheen_properties += 1,

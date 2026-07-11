@@ -50,7 +50,8 @@ struct Material {
     uv_scroll_masks1: vec4<f32>, // multi, specular, emissive, material properties
     uv_scroll_masks2: vec4<f32>, // tile, sheen, sphere, tile matrix
     uv_scroll_masks3: vec4<f32>, // ColorTable index, other
-    feature_params: vec4<f32>, // x: use flow0 as primary tangent, y: water family
+    feature_params: vec4<f32>, // x: use flow0 tangent, y: water, z: secondary bindings, w: bg specular channels
+    secondary_map_params: vec4<f32>, // xyz: secondary color/normal/specular present, w: GetMultiValues blend
     draw_role_params: vec4<f32>, // x: lightshaft, y: transparent crest fallback, z: base material fallback
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
@@ -193,12 +194,23 @@ fn fs_outline() -> FragmentOutput {
 @fragment
 fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
     let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
+    let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
     let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
+    let sampled_secondary_base = textureSample(tile_properties_texture, base_color_sampler, secondary_base_uv);
     let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
-    let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
-    let alpha = resolve_material_alpha(
+    let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
+    let secondary_weight = clamp(input.color.a, 0.0, 1.0)
+        * material.secondary_map_params.x
+        * material.secondary_map_params.w;
+    let base_texture_alpha = mix(primary_alpha, sampled_secondary_base.a, secondary_weight);
+    let opacity_vertex_alpha = select(
         input.color.a,
+        1.0,
+        material.secondary_map_params.w > 0.5,
+    );
+    let alpha = resolve_material_alpha(
+        opacity_vertex_alpha,
         base_texture_alpha,
         sampled_normal.b,
         false,
@@ -223,6 +235,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         base_uv = resolve_lightshaft_uv(input);
     }
     let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
+    let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
+    let secondary_normal_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
+    let secondary_specular_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z);
     let mask_uv = resolve_uv(input, material.uv_sources0.z, material.uv_scroll_masks0.z);
     let specular_uv = resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y);
     let emissive_uv = resolve_uv(input, material.uv_sources1.z, material.uv_scroll_masks1.z);
@@ -232,12 +247,38 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let tile_array = resolve_tile_array(input, extra);
     let detail_array = resolve_detail_array(input);
     let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
-    let normal = resolve_normal(input, front_facing, sampled_normal, tile_array, detail_array);
+    let sampled_secondary_normal = textureSample(sheen_properties_texture, data_sampler, secondary_normal_uv);
+    let secondary_blend = clamp(input.color.a, 0.0, 1.0) * material.secondary_map_params.w;
+    let sampled_specular = textureSample(specular_texture, data_sampler, specular_uv).rgb;
+    let sampled_secondary_specular = textureSample(
+        sphere_properties_texture,
+        data_sampler,
+        secondary_specular_uv,
+    ).rgb;
+    let effective_specular_sample = mix(
+        sampled_specular,
+        sampled_secondary_specular,
+        secondary_blend * material.secondary_map_params.z,
+    );
+    let normal = resolve_normal(
+        input,
+        front_facing,
+        sampled_normal,
+        sampled_secondary_normal,
+        secondary_blend,
+        tile_array,
+        detail_array,
+    );
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
     let mask = resolve_mask(mask_uv);
     var properties = resolve_material_properties(material_properties_uv, mask);
+    let has_bg_specular = material.properties.y > 0.5 || material.secondary_map_params.z > 0.5;
+    if material.feature_params.w > 0.5 && has_bg_specular {
+        properties.x = effective_specular_sample.b;
+        properties.y = effective_specular_sample.g;
+    }
     properties.y = mix(properties.y, clamp(tile_array.orb.g, 0.08, 1.0), tile_array.weight * 0.35);
     properties.w *= mix(1.0, clamp(tile_array.orb.b, 0.0, 1.0), tile_array.weight * 0.25);
     let metalness = clamp(properties.x, 0.0, 1.0);
@@ -255,12 +296,33 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let specular = pow(normal_half, specular_power);
     let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
-    let sampled_specular = textureSample(specular_texture, base_color_sampler, specular_uv).rgb;
+    let sampled_secondary_base = textureSample(tile_properties_texture, base_color_sampler, secondary_base_uv);
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
-    let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
-    let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
-    let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5)
-        * specular_color_mask.rgb;
+    let primary_texture = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
+    let secondary_color_weight = secondary_blend * material.secondary_map_params.x;
+    let scroll_texture_mix = mix(
+        primary_texture * clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
+        sampled_secondary_base.rgb * clamp(material.shader_multi_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
+        secondary_color_weight,
+    );
+    let texture_mix = select(primary_texture, scroll_texture_mix, material.secondary_map_params.w > 0.5);
+    let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
+    let base_texture_alpha = mix(primary_alpha, sampled_secondary_base.a, secondary_color_weight);
+    let primary_specular = select(
+        material.specular_color.rgb,
+        sampled_specular,
+        material.properties.y > 0.5,
+    );
+    let generic_material_specular = mix(
+        primary_specular,
+        sampled_secondary_specular,
+        secondary_blend * material.secondary_map_params.z,
+    );
+    let material_specular = select(
+        generic_material_specular,
+        material.specular_color.rgb,
+        material.feature_params.w > 0.5,
+    ) * specular_color_mask.rgb;
     let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
@@ -269,14 +331,21 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
     let generic_base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
+    let scroll_base = texture_mix * vertex_tint;
+    let family_base = select(generic_base, scroll_base, material.secondary_map_params.w > 0.5);
     let is_water = material.feature_params.y > 0.5;
     let base = select(
-        generic_base,
+        family_base,
         clamp(material.water_deep_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
         is_water,
     );
-    let alpha = resolve_material_alpha(
+    let opacity_vertex_alpha = select(
         input.color.a,
+        1.0,
+        material.secondary_map_params.w > 0.5,
+    );
+    let alpha = resolve_material_alpha(
+        opacity_vertex_alpha,
         base_texture_alpha,
         sampled_normal.b,
         is_lightshaft,
@@ -870,12 +939,14 @@ fn resolve_normal(
     input: VertexOutput,
     front_facing: bool,
     normal_sample: vec4<f32>,
+    secondary_normal_sample: vec4<f32>,
+    secondary_blend: f32,
     tile_array: TileArraySample,
     detail_array: DetailArraySample,
 ) -> vec3<f32> {
     let face_sign = select(-1.0, 1.0, front_facing);
     let geometric_normal = normalize(input.normal) * face_sign;
-    let has_primary = material.params.z > 0.5;
+    let has_primary = material.params.z > 0.5 || material.secondary_map_params.y > 0.5;
     let has_array_normal = tile_array.weight > 0.001 || detail_array.normal_weight > 0.001;
     let has_bitangent = dot(input.bitangent.xyz, input.bitangent.xyz) > 0.0001;
     let flow_tangent_plane = input.flow0.xyz - geometric_normal * dot(input.flow0.xyz, geometric_normal);
@@ -898,12 +969,34 @@ fn resolve_normal(
     );
     let tangent = select(primary_tangent, flow_tangent, uses_flow);
     let bitangent = select(primary_bitangent, flow_bitangent_unoriented * flow_orientation, uses_flow);
-    let sampled = select(
+    let primary_sampled = select(
         vec3<f32>(0.0, 0.0, 1.0),
         decode_normal(normal_sample),
-        has_primary,
+        material.params.z > 0.5,
     );
-    let normal_scale = resolve_effective_normal_scale(detail_array.available > 0.5);
+    let primary_scale = clamp(material.shader_params.x, 0.0, 4.0);
+    let secondary_scale = clamp(material.shader_params.y, 0.0, 4.0);
+    let scaled_primary = normalize(vec3<f32>(
+        primary_sampled.xy * primary_scale,
+        primary_sampled.z,
+    ));
+    let decoded_secondary = decode_normal(secondary_normal_sample);
+    let scaled_secondary = normalize(vec3<f32>(
+        decoded_secondary.xy * secondary_scale,
+        decoded_secondary.z,
+    ));
+    let uses_secondary_maps = material.secondary_map_params.w > 0.5;
+    let secondary_sampled = normalize(mix(
+        scaled_primary,
+        scaled_secondary,
+        secondary_blend * material.secondary_map_params.y,
+    ));
+    let sampled = select(primary_sampled, secondary_sampled, uses_secondary_maps);
+    let normal_scale = select(
+        resolve_effective_normal_scale(detail_array.available > 0.5),
+        1.0,
+        uses_secondary_maps,
+    );
     let mapped = normalize(vec3<f32>(
         sampled.x * normal_scale
             + tile_array.normal.x * tile_array.weight * 0.65

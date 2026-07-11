@@ -1566,7 +1566,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         water_refraction_color: material_water_refraction_color(material),
         water_whitecap_color: material_water_whitecap_color(material),
         glass_params: material_glass_params(material),
-        extra_properties: material_extra_texture_flags(material, model),
+        extra_properties: material_extra_texture_flags(material, model, prepared_material),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
         toon_sheen_params: material_toon_sheen_params(material),
@@ -1600,6 +1600,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_scroll_masks2: uv_scroll_masks.2,
         uv_scroll_masks3: uv_scroll_masks.3,
         feature_params: material_feature_params(prepared_material),
+        secondary_map_params: material_secondary_map_params(material, model, prepared_material),
         draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
     };
@@ -1753,7 +1754,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Rgba8Unorm,
             )
         })
         .unwrap_or_else(|| {
@@ -1764,23 +1765,70 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 1,
                 1,
                 &[
-                    srgb_byte(material.specular_color[0]),
-                    srgb_byte(material.specular_color[1]),
-                    srgb_byte(material.specular_color[2]),
+                    unorm_byte(material.specular_color[0]),
+                    unorm_byte(material.specular_color[1]),
+                    unorm_byte(material.specular_color[2]),
                     255,
                 ],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Rgba8Unorm,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let tile_properties_texture_view = material
-        .tile_properties_texture
+    let uses_secondary_maps = prepared_material.feature_flags.uses_secondary_maps;
+    let tile_binding_texture = if uses_secondary_maps {
+        material.secondary_base_color_texture
+    } else {
+        material.tile_properties_texture
+    };
+    let tile_properties_texture_view = tile_binding_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
                 queue,
-                &format!("weapon tile properties texture {}", texture.path),
+                &format!("weapon tile/secondary color texture {}", texture.path),
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                if uses_secondary_maps {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                },
+            )
+        })
+        .unwrap_or_else(|| {
+            create_rgba_texture(
+                device,
+                queue,
+                "weapon neutral tile/secondary color texture",
+                1,
+                1,
+                if uses_secondary_maps {
+                    &[255, 255, 255, 255]
+                } else {
+                    &[0, 255, 255, 255]
+                },
+                if uses_secondary_maps {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                },
+            )
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let sheen_binding_texture = if uses_secondary_maps {
+        material.secondary_normal_texture
+    } else {
+        material.sheen_properties_texture
+    };
+    let sheen_properties_texture_view = sheen_binding_texture
+        .and_then(|index| model.textures().get(index))
+        .map(|texture| {
+            create_rgba_texture(
+                device,
+                queue,
+                &format!("weapon sheen/secondary normal texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
@@ -1791,22 +1839,30 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             create_rgba_texture(
                 device,
                 queue,
-                "weapon neutral tile properties texture",
+                "weapon neutral sheen/secondary normal texture",
                 1,
                 1,
-                &[0, 255, 255, 255],
+                if uses_secondary_maps {
+                    &[128, 128, 255, 255]
+                } else {
+                    &[0, 0, 0, 255]
+                },
                 wgpu::TextureFormat::Rgba8Unorm,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let sheen_properties_texture_view = material
-        .sheen_properties_texture
+    let sphere_binding_texture = if uses_secondary_maps {
+        material.secondary_specular_texture
+    } else {
+        material.sphere_properties_texture
+    };
+    let sphere_properties_texture_view = sphere_binding_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
                 queue,
-                &format!("weapon sheen properties texture {}", texture.path),
+                &format!("weapon sphere/secondary specular texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
@@ -1814,39 +1870,23 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .unwrap_or_else(|| {
+            let neutral_pixels = if uses_secondary_maps {
+                [
+                    unorm_byte(material.specular_color[0]),
+                    unorm_byte(material.specular_color[1]),
+                    unorm_byte(material.specular_color[2]),
+                    255,
+                ]
+            } else {
+                [0, 0, 255, 255]
+            };
             create_rgba_texture(
                 device,
                 queue,
-                "weapon neutral sheen properties texture",
+                "weapon neutral sphere/secondary specular texture",
                 1,
                 1,
-                &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let sphere_properties_texture_view = material
-        .sphere_properties_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon sphere properties texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral sphere properties texture",
-                1,
-                1,
-                &[0, 0, 255, 255],
+                &neutral_pixels,
                 wgpu::TextureFormat::Rgba8Unorm,
             )
         })
@@ -2337,16 +2377,6 @@ fn unorm_byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-fn srgb_byte(linear: f32) -> u8 {
-    let value = linear.clamp(0.0, 1.0);
-    let srgb = if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    unorm_byte(srgb)
-}
-
 fn fallback_material() -> ModelMaterial {
     ModelMaterial {
         slot: 0,
@@ -2360,6 +2390,7 @@ fn fallback_material() -> ModelMaterial {
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
+        value_mode: crate::MaterialValueMode::Single,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -2422,11 +2453,14 @@ fn fallback_material() -> ModelMaterial {
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        secondary_base_color_texture: None,
         normal_texture: None,
+        secondary_normal_texture: None,
         mask_texture: None,
         material_map_texture: None,
         multi_map_texture: None,
         specular_texture: None,
+        secondary_specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
         tile_properties_texture: None,
@@ -2458,7 +2492,11 @@ fn effective_normal_texture(
 fn material_extra_texture_flags<M: ModelRenderData + ?Sized>(
     material: &ModelMaterial,
     model: &M,
+    prepared_material: PreparedMaterial,
 ) -> [f32; 4] {
+    if prepared_material.feature_flags.uses_secondary_maps {
+        return [0.0; 4];
+    }
     [
         texture_presence_flag(model, material.tile_properties_texture),
         texture_presence_flag(model, material.sheen_properties_texture),
@@ -2695,12 +2733,21 @@ fn material_uv_source_params(
             prepared_uv_source_value(uv_sources.emissive),
             prepared_uv_source_value(uv_sources.material_properties),
         ],
-        [
-            prepared_uv_source_value(uv_sources.tile_properties),
-            prepared_uv_source_value(uv_sources.sheen_properties),
-            prepared_uv_source_value(uv_sources.sphere_properties),
-            prepared_uv_source_value(uv_sources.tile_matrix),
-        ],
+        if prepared_material.feature_flags.uses_secondary_maps {
+            [
+                prepared_uv_source_value(uv_sources.secondary_base_color),
+                prepared_uv_source_value(uv_sources.secondary_normal),
+                prepared_uv_source_value(uv_sources.secondary_specular),
+                prepared_uv_source_value(uv_sources.tile_matrix),
+            ]
+        } else {
+            [
+                prepared_uv_source_value(uv_sources.tile_properties),
+                prepared_uv_source_value(uv_sources.sheen_properties),
+                prepared_uv_source_value(uv_sources.sphere_properties),
+                prepared_uv_source_value(uv_sources.tile_matrix),
+            ]
+        },
         [
             prepared_uv_source_value(uv_sources.index),
             prepared_uv_source_value(uv_sources.other),
@@ -2728,12 +2775,21 @@ fn material_uv_scroll_mask_params(
             value(scroll.emissive),
             value(scroll.material_properties),
         ],
-        [
-            value(scroll.tile_properties),
-            value(scroll.sheen_properties),
-            value(scroll.sphere_properties),
-            value(scroll.tile_matrix),
-        ],
+        if prepared_material.feature_flags.uses_secondary_maps {
+            [
+                value(scroll.secondary_base_color),
+                value(scroll.secondary_normal),
+                value(scroll.secondary_specular),
+                value(scroll.tile_matrix),
+            ]
+        } else {
+            [
+                value(scroll.tile_properties),
+                value(scroll.sheen_properties),
+                value(scroll.sphere_properties),
+                value(scroll.tile_matrix),
+            ]
+        },
         [value(scroll.index), value(scroll.other), 0.0, 0.0],
     )
 }
@@ -2750,8 +2806,35 @@ fn material_feature_params(prepared_material: PreparedMaterial) -> [f32; 4] {
         } else {
             0.0
         },
-        0.0,
-        0.0,
+        if prepared_material.feature_flags.uses_secondary_maps {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(
+            prepared_material.shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        ) {
+            1.0
+        } else {
+            0.0
+        },
+    ]
+}
+
+fn material_secondary_map_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    if !prepared_material.feature_flags.uses_secondary_maps {
+        return [0.0; 4];
+    }
+    [
+        texture_presence_flag(model, material.secondary_base_color_texture),
+        texture_presence_flag(model, material.secondary_normal_texture),
+        texture_presence_flag(model, material.secondary_specular_texture),
+        1.0,
     ]
 }
 
@@ -2941,6 +3024,7 @@ struct MaterialUniform {
     uv_scroll_masks2: [f32; 4],
     uv_scroll_masks3: [f32; 4],
     feature_params: [f32; 4],
+    secondary_map_params: [f32; 4],
     draw_role_params: [f32; 4],
     debug_color: [f32; 4],
 }
@@ -3221,6 +3305,7 @@ mod tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3406,6 +3491,7 @@ mod tests {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
             flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
             alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet {
@@ -3493,6 +3579,7 @@ mod tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3584,7 +3671,11 @@ mod tests {
         };
 
         assert_eq!(
-            material_extra_texture_flags(&material, &model),
+            material_extra_texture_flags(
+                &material,
+                &model,
+                prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal),
+            ),
             [1.0, 1.0, 0.0, 1.0]
         );
     }
@@ -3762,6 +3853,7 @@ mod tests {
             render_pass: PreparedRenderPass::Transparent,
             shader_family: MaterialShaderFamily::CharacterTransparency,
             flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
             alpha_policy: crate::PreparedMaterialAlphaPolicy {
                 source: PreparedAlphaSource::NormalBlue,
                 draw_depth_mode: MaterialDrawDepthMode::Dither,
@@ -4013,17 +4105,21 @@ mod tests {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
             flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
             alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet::default(),
             uv_sources: PreparedMaterialUvSources {
                 textures: PreparedTextureUvSources {
                     base_color: PreparedUvSource::Uv0,
+                    secondary_base_color: PreparedUvSource::Uv0,
                     normal: PreparedUvSource::Uv1,
+                    secondary_normal: PreparedUvSource::Uv0,
                     mask: PreparedUvSource::Uv2,
                     material_map: PreparedUvSource::Uv3,
                     multi_map: PreparedUvSource::Uv3,
                     specular: PreparedUvSource::Uv2,
+                    secondary_specular: PreparedUvSource::Uv0,
                     emissive: PreparedUvSource::Uv1,
                     material_properties: PreparedUvSource::Uv0,
                     tile_properties: PreparedUvSource::Uv1,
@@ -4079,6 +4175,42 @@ mod tests {
 
         prepared.shader_family = MaterialShaderFamily::Water;
         assert_eq!(material_feature_params(prepared), [1.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn secondary_scroll_maps_reuse_extra_bindings_with_presence_flags() {
+        let mut material = fallback_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = crate::MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(0);
+        material.secondary_normal_texture = Some(1);
+        material.secondary_specular_texture = Some(99);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: vec![
+                test_texture(crate::ModelTextureKind::SecondaryBaseColor),
+                test_texture(crate::ModelTextureKind::SecondaryNormal),
+            ],
+            meshes: Vec::new(),
+        };
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert_eq!(material_feature_params(prepared), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            material_secondary_map_params(&material, &model, prepared),
+            [1.0, 1.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            material_extra_texture_flags(&material, &model, prepared),
+            [0.0; 4]
+        );
+        assert_eq!(material_uv_source_params(prepared).2, [1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(
+            material_uv_scroll_mask_params(prepared).2,
+            [1.0, 1.0, 1.0, 0.0]
+        );
     }
 
     #[test]
@@ -4280,6 +4412,7 @@ mod tests {
                 render_pass: pass,
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),

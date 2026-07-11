@@ -406,6 +406,8 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
+    pub value_mode: MaterialValueMode,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_water_deep_color")]
     pub water_deep_color: [f32; 4],
@@ -524,7 +526,11 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub base_color_texture: Option<usize>,
     #[serde(default)]
+    pub secondary_base_color_texture: Option<usize>,
+    #[serde(default)]
     pub normal_texture: Option<usize>,
+    #[serde(default)]
+    pub secondary_normal_texture: Option<usize>,
     #[serde(default)]
     pub mask_texture: Option<usize>,
     #[serde(default)]
@@ -533,6 +539,8 @@ pub struct ModelMaterial {
     pub multi_map_texture: Option<usize>,
     #[serde(default)]
     pub specular_texture: Option<usize>,
+    #[serde(default)]
+    pub secondary_specular_texture: Option<usize>,
     #[serde(default)]
     pub emissive_texture: Option<usize>,
     #[serde(default)]
@@ -614,6 +622,20 @@ pub enum MaterialFlowMode {
     #[default]
     Standard,
     Flow,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialValueMode {
+    #[default]
+    Single,
+    Multi,
+    AlphaMulti,
+    AlphaMulti2,
+    AlphaMulti3,
+    MultiMaterial,
+    Compatibility,
     Unknown,
 }
 
@@ -750,6 +772,8 @@ pub struct PreparedMaterial {
     #[serde(default)]
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
+    pub value_mode: MaterialValueMode,
+    #[serde(default)]
     pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
@@ -819,11 +843,14 @@ impl Default for PreparedMaterialUvSources {
 #[serde(rename_all = "camelCase", default)]
 pub struct PreparedTextureScrollSet {
     pub base_color: bool,
+    pub secondary_base_color: bool,
     pub normal: bool,
+    pub secondary_normal: bool,
     pub mask: bool,
     pub material_map: bool,
     pub multi_map: bool,
     pub specular: bool,
+    pub secondary_specular: bool,
     pub emissive: bool,
     pub material_properties: bool,
     pub tile_properties: bool,
@@ -838,11 +865,14 @@ pub struct PreparedTextureScrollSet {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureUvSources {
     pub base_color: PreparedUvSource,
+    pub secondary_base_color: PreparedUvSource,
     pub normal: PreparedUvSource,
+    pub secondary_normal: PreparedUvSource,
     pub mask: PreparedUvSource,
     pub material_map: PreparedUvSource,
     pub multi_map: PreparedUvSource,
     pub specular: PreparedUvSource,
+    pub secondary_specular: PreparedUvSource,
     pub emissive: PreparedUvSource,
     pub material_properties: PreparedUvSource,
     pub tile_properties: PreparedUvSource,
@@ -875,6 +905,7 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_dye: bool,
     pub uses_outline: bool,
     pub uses_toon: bool,
+    pub uses_secondary_maps: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -887,6 +918,7 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub tile_array: bool,
     pub detail_array: bool,
     pub incomplete_shader_family_logic: bool,
+    pub secondary_map_blend: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -916,11 +948,14 @@ pub enum PreparedRuntimeFallback {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureBindings {
     pub base_color: Option<usize>,
+    pub secondary_base_color: Option<usize>,
     pub normal: Option<usize>,
+    pub secondary_normal: Option<usize>,
     pub mask: Option<usize>,
     pub material_map: Option<usize>,
     pub multi_map: Option<usize>,
     pub specular: Option<usize>,
+    pub secondary_specular: Option<usize>,
     pub emissive: Option<usize>,
     pub material_properties: Option<usize>,
     pub tile_properties: Option<usize>,
@@ -944,11 +979,14 @@ pub struct PreparedTextureBindings {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureSamplingSet {
     pub base_color: PreparedTextureSampling,
+    pub secondary_base_color: PreparedTextureSampling,
     pub normal: PreparedTextureSampling,
+    pub secondary_normal: PreparedTextureSampling,
     pub mask: PreparedTextureSampling,
     pub material_map: PreparedTextureSampling,
     pub multi_map: PreparedTextureSampling,
     pub specular: PreparedTextureSampling,
+    pub secondary_specular: PreparedTextureSampling,
     pub emissive: PreparedTextureSampling,
     pub material_properties: PreparedTextureSampling,
     pub tile_properties: PreparedTextureSampling,
@@ -977,11 +1015,18 @@ impl Default for PreparedTextureSamplingSet {
     fn default() -> Self {
         Self {
             base_color: prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
+            secondary_base_color: prepared_texture_sampling_for_kind(
+                ModelTextureKind::SecondaryBaseColor,
+            ),
             normal: prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
+            secondary_normal: prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryNormal),
             mask: prepared_texture_sampling_for_kind(ModelTextureKind::Mask),
             material_map: prepared_texture_sampling_for_kind(ModelTextureKind::MaterialMap),
             multi_map: prepared_texture_sampling_for_kind(ModelTextureKind::MultiMap),
             specular: prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
+            secondary_specular: prepared_texture_sampling_for_kind(
+                ModelTextureKind::SecondarySpecular,
+            ),
             emissive: prepared_texture_sampling_for_kind(ModelTextureKind::Emissive),
             material_properties: prepared_texture_sampling_for_kind(
                 ModelTextureKind::MaterialProperties,
@@ -1195,6 +1240,9 @@ pub fn prepare_material_for_draw_role(
         flow_mode: material
             .map(|material| material.flow_mode)
             .unwrap_or_default(),
+        value_mode: material
+            .map(|material| material.value_mode)
+            .unwrap_or_default(),
         alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
@@ -1272,11 +1320,14 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
 
     PreparedTextureBindings {
         base_color: material.base_color_texture,
+        secondary_base_color: material.secondary_base_color_texture,
         normal: material.normal_texture,
+        secondary_normal: material.secondary_normal_texture,
         mask: material.mask_texture,
         material_map: material.material_map_texture,
         multi_map: material.multi_map_texture,
         specular: material.specular_texture,
+        secondary_specular: material.secondary_specular_texture,
         emissive: material.emissive_texture,
         material_properties: material.material_properties_texture,
         tile_properties: material.tile_properties_texture,
@@ -1301,10 +1352,16 @@ pub fn prepared_material_uv_sources(
 ) -> PreparedMaterialUvSources {
     let mut sources = PreparedMaterialUvSources::default();
     if matches!(shader_family, MaterialShaderFamily::BgUvScroll) {
-        // MeddleTools bguvscroll connects only Color/Normal/Specular Map0 to UV0Scroll.
+        // MeddleTools bguvscroll connects Map0 to UV0Scroll and Map1 to UV1Scroll.
         sources.scroll.base_color = texture_bindings.base_color.is_some();
         sources.scroll.normal = texture_bindings.normal.is_some();
         sources.scroll.specular = texture_bindings.specular.is_some();
+        sources.textures.secondary_base_color = PreparedUvSource::Uv1;
+        sources.textures.secondary_normal = PreparedUvSource::Uv1;
+        sources.textures.secondary_specular = PreparedUvSource::Uv1;
+        sources.scroll.secondary_base_color = texture_bindings.secondary_base_color.is_some();
+        sources.scroll.secondary_normal = texture_bindings.secondary_normal.is_some();
+        sources.scroll.secondary_specular = texture_bindings.secondary_specular.is_some();
     }
     sources
 }
@@ -1315,13 +1372,26 @@ fn prepared_material_uses_scroll(
 ) -> bool {
     let textures = uv_sources.textures;
     let scroll = uv_sources.scroll;
+    let secondary_scroll = matches!(material.value_mode, MaterialValueMode::Multi);
     [
         (scroll.base_color, textures.base_color),
+        (
+            scroll.secondary_base_color && secondary_scroll,
+            textures.secondary_base_color,
+        ),
         (scroll.normal, textures.normal),
+        (
+            scroll.secondary_normal && secondary_scroll,
+            textures.secondary_normal,
+        ),
         (scroll.mask, textures.mask),
         (scroll.material_map, textures.material_map),
         (scroll.multi_map, textures.multi_map),
         (scroll.specular, textures.specular),
+        (
+            scroll.secondary_specular && secondary_scroll,
+            textures.secondary_specular,
+        ),
         (scroll.emissive, textures.emissive),
         (scroll.material_properties, textures.material_properties),
         (scroll.tile_properties, textures.tile_properties),
@@ -1358,6 +1428,14 @@ pub fn prepared_material_feature_flags(
             || texture_bindings.tile_matrix.is_some(),
         uses_tile: texture_bindings.tile_properties.is_some(),
         uses_detail: texture_bindings.multi_map.is_some(),
+        uses_secondary_maps: matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+            && matches!(
+                material.map(|material| material.value_mode),
+                Some(MaterialValueMode::Multi)
+            )
+            && (texture_bindings.secondary_base_color.is_some()
+                || texture_bindings.secondary_normal.is_some()
+                || texture_bindings.secondary_specular.is_some()),
         ..PreparedMaterialFeatureFlags::default()
     };
 
@@ -1429,6 +1507,16 @@ pub fn prepared_material_unsupported_inputs(
         tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
         detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
+        secondary_map_blend: material.is_some_and(|material| {
+            matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+                && (texture_bindings.secondary_base_color.is_some()
+                    || texture_bindings.secondary_normal.is_some()
+                    || texture_bindings.secondary_specular.is_some())
+                && !matches!(
+                    material.value_mode,
+                    MaterialValueMode::Single | MaterialValueMode::Multi
+                )
+        }),
     }
 }
 
@@ -1490,13 +1578,13 @@ fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) 
 
 pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTextureSampling {
     match kind {
-        ModelTextureKind::BaseColor | ModelTextureKind::Specular | ModelTextureKind::Emissive => {
-            PreparedTextureSampling {
-                color_space: PreparedTextureColorSpace::Srgb,
-                filter: PreparedTextureFilter::Linear,
-                address_mode: PreparedTextureAddressMode::Repeat,
-            }
-        }
+        ModelTextureKind::BaseColor
+        | ModelTextureKind::SecondaryBaseColor
+        | ModelTextureKind::Emissive => PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::Srgb,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        },
         ModelTextureKind::Index
         | ModelTextureKind::TileProperties
         | ModelTextureKind::SheenProperties
@@ -1511,6 +1599,9 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
             address_mode: PreparedTextureAddressMode::Repeat,
         },
         ModelTextureKind::Normal
+        | ModelTextureKind::SecondaryNormal
+        | ModelTextureKind::Specular
+        | ModelTextureKind::SecondarySpecular
         | ModelTextureKind::Mask
         | ModelTextureKind::MaterialMap
         | ModelTextureKind::MultiMap
@@ -1716,13 +1807,16 @@ pub struct ModelTexture {
 #[serde(rename_all = "camelCase")]
 pub enum ModelTextureKind {
     BaseColor,
+    SecondaryBaseColor,
     Normal,
+    SecondaryNormal,
     Mask,
     /// Explicit `g_SamplerMaterial` texture. Its channel semantics are shader-specific.
     MaterialMap,
     /// Explicit `g_SamplerMulti` texture. Its channel semantics are shader-specific.
     MultiMap,
     Specular,
+    SecondarySpecular,
     Emissive,
     /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。
     MaterialProperties,
@@ -2409,6 +2503,7 @@ mod color_table_bake_tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
                 flow_mode: MaterialFlowMode::Standard,
+                value_mode: MaterialValueMode::Single,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2429,6 +2524,7 @@ mod color_table_bake_tests {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
+                value_mode: MaterialValueMode::Single,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2491,11 +2587,14 @@ mod color_table_bake_tests {
                 .texture_bindings,
             PreparedTextureBindings {
                 base_color: Some(1),
+                secondary_base_color: None,
                 normal: Some(2),
+                secondary_normal: None,
                 mask: Some(3),
                 material_map: Some(4),
                 multi_map: Some(5),
                 specular: Some(6),
+                secondary_specular: None,
                 emissive: Some(7),
                 material_properties: Some(8),
                 tile_properties: Some(9),
@@ -2545,6 +2644,7 @@ mod color_table_bake_tests {
                 uses_dye: true,
                 uses_outline: true,
                 uses_toon: true,
+                uses_secondary_maps: false,
             }
         );
 
@@ -2648,6 +2748,7 @@ mod color_table_bake_tests {
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
+                secondary_map_blend: false,
             }
         );
         assert_eq!(
@@ -2661,6 +2762,7 @@ mod color_table_bake_tests {
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
+                secondary_map_blend: false,
             }
         );
 
@@ -2737,11 +2839,14 @@ mod color_table_bake_tests {
             PreparedMaterialUvSources {
                 textures: PreparedTextureUvSources {
                     base_color: PreparedUvSource::Uv0,
+                    secondary_base_color: PreparedUvSource::Uv1,
                     normal: PreparedUvSource::Uv0,
+                    secondary_normal: PreparedUvSource::Uv1,
                     mask: PreparedUvSource::Uv0,
                     material_map: PreparedUvSource::Uv0,
                     multi_map: PreparedUvSource::Uv0,
                     specular: PreparedUvSource::Uv0,
+                    secondary_specular: PreparedUvSource::Uv1,
                     emissive: PreparedUvSource::Uv0,
                     material_properties: PreparedUvSource::Uv0,
                     tile_properties: PreparedUvSource::Uv0,
@@ -2765,6 +2870,44 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).uv_sources,
             PreparedMaterialUvSources::default()
         );
+    }
+
+    #[test]
+    fn prepared_bguvscroll_routes_secondary_maps_to_uv1_scroll() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(6);
+        material.secondary_normal_texture = Some(7);
+        material.secondary_specular_texture = Some(8);
+        material.uv_scroll = [0.0, 0.0, -0.5, 0.25];
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert!(prepared.feature_flags.uses_scroll);
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_base_color,
+            PreparedUvSource::Uv1
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_normal,
+            PreparedUvSource::Uv1
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_specular,
+            PreparedUvSource::Uv1
+        );
+        assert!(prepared.uv_sources.scroll.secondary_base_color);
+        assert!(prepared.uv_sources.scroll.secondary_normal);
+        assert!(prepared.uv_sources.scroll.secondary_specular);
+        assert!(!prepared.unsupported_inputs.secondary_map_blend);
+
+        material.value_mode = MaterialValueMode::AlphaMulti2;
+        let unsupported =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!unsupported.feature_flags.uses_secondary_maps);
+        assert!(!unsupported.feature_flags.uses_scroll);
+        assert!(unsupported.unsupported_inputs.secondary_map_blend);
     }
 
     #[test]
@@ -2992,10 +3135,22 @@ mod color_table_bake_tests {
         assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
             PreparedTextureSampling {
-                color_space: PreparedTextureColorSpace::Srgb,
+                color_space: PreparedTextureColorSpace::NonColor,
                 filter: PreparedTextureFilter::Linear,
                 address_mode: PreparedTextureAddressMode::Repeat,
             }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryBaseColor),
+            prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor)
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryNormal),
+            prepared_texture_sampling_for_kind(ModelTextureKind::Normal)
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondarySpecular),
+            prepared_texture_sampling_for_kind(ModelTextureKind::Specular)
         );
         assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
@@ -3142,6 +3297,7 @@ mod color_table_bake_tests {
             draw_depth_mode: MaterialDrawDepthMode::None,
             lighting_mode: MaterialLightingMode::Default,
             flow_mode: MaterialFlowMode::Standard,
+            value_mode: MaterialValueMode::Single,
             transparency: 0.0,
             water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
             water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -3204,11 +3360,14 @@ mod color_table_bake_tests {
             metalness: 0.0,
             texture_indices: Vec::new(),
             base_color_texture: None,
+            secondary_base_color_texture: None,
             normal_texture: None,
+            secondary_normal_texture: None,
             mask_texture: None,
             material_map_texture: None,
             multi_map_texture: None,
             specular_texture: None,
+            secondary_specular_texture: None,
             emissive_texture: None,
             material_properties_texture: None,
             tile_properties_texture: None,

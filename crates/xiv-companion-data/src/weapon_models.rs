@@ -1,7 +1,7 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialFlowMode,
-    MaterialLightingMode, MaterialRenderMode, ModelBounds, ModelColorDyeTable, ModelData,
-    ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
+    MaterialLightingMode, MaterialRenderMode, MaterialValueMode, ModelBounds, ModelColorDyeTable,
+    ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
     ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
     ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
     PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
@@ -64,6 +64,22 @@ const CATEGORY_FLOW_MAP_TYPE: u32 = 0x40D1_481E;
 const FLOW_MAP_STANDARD: u32 = 0x337C_6BC4;
 #[cfg(feature = "game-data")]
 const FLOW_MAP_FLOW: u32 = 0x71AD_A939;
+#[cfg(feature = "game-data")]
+const GET_VALUES: u32 = 0xB616_DC5A;
+#[cfg(feature = "game-data")]
+const GET_VALUES_MULTI: u32 = 0x1DF2_985C;
+#[cfg(feature = "game-data")]
+const GET_VALUES_MULTI_MATERIAL: u32 = 0x5CC6_05B5;
+#[cfg(feature = "game-data")]
+const GET_VALUES_COMPATIBILITY: u32 = 0x600E_F9DF;
+#[cfg(feature = "game-data")]
+const GET_VALUES_SINGLE: u32 = 0x669A_451B;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES: u32 = 0x9418_20BE;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES2: u32 = 0xE49A_D72B;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES3: u32 = 0x939D_E7BD;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
@@ -2169,6 +2185,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
+        let value_mode = composed_material_value_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2256,6 +2273,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             draw_depth_mode,
             lighting_mode,
             flow_mode,
+            value_mode,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -2318,11 +2336,14 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
+            secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
+            secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
@@ -2374,8 +2395,17 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
                     set.has_alpha = true;
                 }
             }
+            WeaponModelTextureKind::SecondaryBaseColor => {
+                set.secondary_base_color.get_or_insert(texture_index);
+                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
+                    set.has_alpha = true;
+                }
+            }
             WeaponModelTextureKind::Normal => {
                 set.normal.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SecondaryNormal => {
+                set.secondary_normal.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
@@ -2388,6 +2418,9 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             }
             WeaponModelTextureKind::Specular => {
                 set.specular.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SecondarySpecular => {
+                set.secondary_specular.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
@@ -2768,6 +2801,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
+        let value_mode = composed_material_value_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2856,6 +2890,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             draw_depth_mode,
             lighting_mode,
             flow_mode,
+            value_mode,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -2918,11 +2953,14 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
+            secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
+            secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
@@ -2976,8 +3014,17 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
                     set.has_alpha = true;
                 }
             }
+            WeaponModelTextureKind::SecondaryBaseColor => {
+                set.secondary_base_color.get_or_insert(texture_index);
+                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
+                    set.has_alpha = true;
+                }
+            }
             WeaponModelTextureKind::Normal => {
                 set.normal.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SecondaryNormal => {
+                set.secondary_normal.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Mask => {
                 set.mask.get_or_insert(texture_index);
@@ -2990,6 +3037,9 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             }
             WeaponModelTextureKind::Specular => {
                 set.specular.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::SecondarySpecular => {
+                set.secondary_specular.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
@@ -3135,11 +3185,14 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
 struct WeaponTextureSet {
     indices: Vec<usize>,
     base_color: Option<usize>,
+    secondary_base_color: Option<usize>,
     normal: Option<usize>,
+    secondary_normal: Option<usize>,
     mask: Option<usize>,
     material_map: Option<usize>,
     multi_map: Option<usize>,
     specular: Option<usize>,
+    secondary_specular: Option<usize>,
     emissive: Option<usize>,
     material_properties: Option<usize>,
     tile_properties: Option<usize>,
@@ -3172,7 +3225,10 @@ fn texture_has_alpha(texture: &WeaponModelTexture) -> bool {
 
 #[cfg(feature = "game-data")]
 fn texture_alpha_affects_material_transparency(texture: &WeaponModelTexture) -> bool {
-    texture.kind == WeaponModelTextureKind::BaseColor && texture_has_alpha(texture)
+    matches!(
+        texture.kind,
+        WeaponModelTextureKind::BaseColor | WeaponModelTextureKind::SecondaryBaseColor
+    ) && texture_has_alpha(texture)
 }
 
 #[cfg(feature = "game-data")]
@@ -3180,7 +3236,11 @@ fn refresh_texture_set_alpha(set: &mut WeaponTextureSet, textures: &[WeaponModel
     set.has_alpha = set
         .base_color
         .and_then(|index| textures.get(index))
-        .is_some_and(texture_alpha_affects_material_transparency);
+        .is_some_and(texture_alpha_affects_material_transparency)
+        || set
+            .secondary_base_color
+            .and_then(|index| textures.get(index))
+            .is_some_and(texture_alpha_affects_material_transparency);
 }
 
 #[cfg(feature = "game-data")]
@@ -3682,6 +3742,20 @@ fn composed_material_flow_mode(semantics: &ComposedMaterialSemantics) -> Materia
         None | Some(FLOW_MAP_STANDARD) => MaterialFlowMode::Standard,
         Some(FLOW_MAP_FLOW) => MaterialFlowMode::Flow,
         Some(_) => MaterialFlowMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_value_mode(semantics: &ComposedMaterialSemantics) -> MaterialValueMode {
+    match semantics.material_key_value(GET_VALUES) {
+        None | Some(GET_VALUES_SINGLE) => MaterialValueMode::Single,
+        Some(GET_VALUES_MULTI) => MaterialValueMode::Multi,
+        Some(GET_ALPHA_MULTI_VALUES) => MaterialValueMode::AlphaMulti,
+        Some(GET_ALPHA_MULTI_VALUES2) => MaterialValueMode::AlphaMulti2,
+        Some(GET_ALPHA_MULTI_VALUES3) => MaterialValueMode::AlphaMulti3,
+        Some(GET_VALUES_MULTI_MATERIAL) => MaterialValueMode::MultiMaterial,
+        Some(GET_VALUES_COMPATIBILITY) => MaterialValueMode::Compatibility,
+        Some(_) => MaterialValueMode::Unknown,
     }
 }
 
@@ -4284,6 +4358,7 @@ fn fallback_weapon_material(
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
+        value_mode: MaterialValueMode::Single,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -4346,11 +4421,14 @@ fn fallback_weapon_material(
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        secondary_base_color_texture: None,
         normal_texture: None,
+        secondary_normal_texture: None,
         mask_texture: None,
         material_map_texture: None,
         multi_map_texture: None,
         specular_texture: None,
+        secondary_specular_texture: None,
         emissive_texture: None,
         material_properties_texture: None,
         tile_properties_texture: None,
@@ -4773,7 +4851,10 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_SamplerNormalMap", WeaponModelTextureKind::Normal),
         ("g_NormalMapSampler", WeaponModelTextureKind::Normal),
         ("g_SamplerNormalMap0", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap1", WeaponModelTextureKind::Normal),
+        (
+            "g_SamplerNormalMap1",
+            WeaponModelTextureKind::SecondaryNormal,
+        ),
         ("g_SamplerSkinNormal", WeaponModelTextureKind::Normal),
         ("g_SamplerEmissive", WeaponModelTextureKind::Emissive),
         ("g_EmissiveSampler", WeaponModelTextureKind::Emissive),
@@ -4795,6 +4876,10 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_SamplerSpecularMap", WeaponModelTextureKind::Specular),
         ("g_SpecularMapSampler", WeaponModelTextureKind::Specular),
         ("g_SamplerSpecularMap0", WeaponModelTextureKind::Specular),
+        (
+            "g_SamplerSpecularMap1",
+            WeaponModelTextureKind::SecondarySpecular,
+        ),
         ("g_SamplerReflect", WeaponModelTextureKind::Specular),
         ("g_ReflectSampler", WeaponModelTextureKind::Specular),
         ("g_SamplerDiffuse", WeaponModelTextureKind::BaseColor),
@@ -4804,7 +4889,10 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_SamplerColorMap", WeaponModelTextureKind::BaseColor),
         ("g_ColorMapSampler", WeaponModelTextureKind::BaseColor),
         ("g_SamplerColorMap0", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap1", WeaponModelTextureKind::BaseColor),
+        (
+            "g_SamplerColorMap1",
+            WeaponModelTextureKind::SecondaryBaseColor,
+        ),
         ("g_SamplerSkinDiffuse", WeaponModelTextureKind::BaseColor),
         ("g_SamplerAlbedo", WeaponModelTextureKind::BaseColor),
         ("g_AlbedoSampler", WeaponModelTextureKind::BaseColor),
@@ -6046,6 +6134,29 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_get_values_mode_preserves_known_and_unknown_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_value_mode(&semantics),
+            MaterialValueMode::Single
+        );
+
+        for (value, expected) in [
+            (GET_VALUES_SINGLE, MaterialValueMode::Single),
+            (GET_VALUES_MULTI, MaterialValueMode::Multi),
+            (GET_ALPHA_MULTI_VALUES, MaterialValueMode::AlphaMulti),
+            (GET_ALPHA_MULTI_VALUES2, MaterialValueMode::AlphaMulti2),
+            (GET_ALPHA_MULTI_VALUES3, MaterialValueMode::AlphaMulti3),
+            (GET_VALUES_MULTI_MATERIAL, MaterialValueMode::MultiMaterial),
+            (GET_VALUES_COMPATIBILITY, MaterialValueMode::Compatibility),
+            (0xDEAD_BEEF, MaterialValueMode::Unknown),
+        ] {
+            semantics.apply_material_key(GET_VALUES, value);
+            assert_eq!(composed_material_value_mode(&semantics), expected);
+        }
+    }
+
+    #[test]
     fn composed_material_alpha_params_use_resolved_material_constants() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[
@@ -6718,6 +6829,18 @@ mod weapon_material_tests {
     #[test]
     fn sampler_classification_covers_meddletools_texture_roles() {
         assert_eq!(
+            classify_sampler_name("g_SamplerColorMap1"),
+            Some(WeaponModelTextureKind::SecondaryBaseColor)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerNormalMap1"),
+            Some(WeaponModelTextureKind::SecondaryNormal)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerSpecularMap1"),
+            Some(WeaponModelTextureKind::SecondarySpecular)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerSkinDiffuse"),
             Some(WeaponModelTextureKind::BaseColor)
         );
@@ -6756,13 +6879,16 @@ mod weapon_material_tests {
             test_texture("material.tex", WeaponModelTextureKind::MaterialMap),
             test_texture("multi.tex", WeaponModelTextureKind::MultiMap),
             test_texture("specular.tex", WeaponModelTextureKind::Specular),
+            test_texture("color1.tex", WeaponModelTextureKind::SecondaryBaseColor),
+            test_texture("normal1.tex", WeaponModelTextureKind::SecondaryNormal),
+            test_texture("specular1.tex", WeaponModelTextureKind::SecondarySpecular),
             test_texture("id.tex", WeaponModelTextureKind::Index),
             test_texture("wave.tex", WeaponModelTextureKind::WaterWave),
             test_texture("wave1.tex", WeaponModelTextureKind::WaterWaveSecondary),
             test_texture("whitecap.tex", WeaponModelTextureKind::WaterWhitecap),
         ];
         assert_eq!(
-            choose_fallback_base_texture(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], &textures),
+            choose_fallback_base_texture(&(0..textures.len()).collect::<Vec<_>>(), &textures),
             None
         );
     }
@@ -6807,6 +6933,15 @@ mod weapon_material_tests {
         let alpha_base =
             test_texture_with_alpha("base-alpha.tex", WeaponModelTextureKind::BaseColor, 128);
         assert!(texture_alpha_affects_material_transparency(&alpha_base));
+
+        let alpha_secondary = test_texture_with_alpha(
+            "base1-alpha.tex",
+            WeaponModelTextureKind::SecondaryBaseColor,
+            128,
+        );
+        assert!(texture_alpha_affects_material_transparency(
+            &alpha_secondary
+        ));
     }
 
     #[test]
@@ -6825,6 +6960,18 @@ mod weapon_material_tests {
         assert!(!set.has_alpha);
 
         set.base_color = Some(1);
+        refresh_texture_set_alpha(&mut set, &textures);
+        assert!(set.has_alpha);
+
+        let secondary_index = textures.len();
+        let mut textures = textures;
+        textures.push(test_texture_with_alpha(
+            "secondary-base.tex",
+            WeaponModelTextureKind::SecondaryBaseColor,
+            64,
+        ));
+        set.base_color = Some(0);
+        set.secondary_base_color = Some(secondary_index);
         refresh_texture_set_alpha(&mut set, &textures);
         assert!(set.has_alpha);
     }
