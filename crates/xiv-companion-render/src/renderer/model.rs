@@ -333,7 +333,7 @@ impl ModelRenderer {
                         binding: 12,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -342,7 +342,7 @@ impl ModelRenderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 13,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
@@ -1891,32 +1891,19 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let tile_matrix_texture_view = material
+    let tile_matrix_texture = material
         .tile_matrix_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon tile matrix texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral tile matrix texture",
-                1,
-                1,
-                &[255, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        .and_then(|index| model.textures().get(index));
+    let tile_matrix_texture_view = create_tile_matrix_texture(
+        device,
+        queue,
+        tile_matrix_texture
+            .map(|texture| format!("weapon tile matrix texture {}", texture.path))
+            .as_deref()
+            .unwrap_or("weapon neutral tile matrix texture"),
+        tile_matrix_texture,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let index_texture_view = material
         .index_texture
         .and_then(|index| model.textures().get(index))
@@ -2328,6 +2315,91 @@ fn create_rgba_texture(
         );
     }
     texture
+}
+
+fn create_tile_matrix_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    source: Option<&ModelTexture>,
+) -> wgpu::Texture {
+    let (width, height, pixels) = tile_matrix_texture_pixels(source);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&pixels),
+        if height == 1 {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            }
+        } else {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 16),
+                rows_per_image: Some(height),
+            }
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
+fn tile_matrix_texture_pixels(source: Option<&ModelTexture>) -> (u32, u32, Vec<[f32; 4]>) {
+    let Some(source) = source.filter(|texture| texture.width != 0 && texture.height != 0) else {
+        return (1, 1, vec![[1.0, 0.0, 0.0, 1.0]]);
+    };
+    let width = u32::from(source.width);
+    let height = u32::from(source.height);
+    let pixel_count = usize::from(source.width) * usize::from(source.height);
+    let float_pixels = source
+        .rgba_f32
+        .as_deref()
+        .filter(|pixels| pixels.len() == pixel_count);
+    let unorm_pixels = (source.rgba.len() >= pixel_count * 4).then_some(source.rgba.as_slice());
+    let pixels = (0..pixel_count)
+        .map(|pixel_index| {
+            let mut fallback = [1.0, 0.0, 0.0, 1.0];
+            if let Some(unorm_pixels) = unorm_pixels {
+                for channel in 0..4 {
+                    fallback[channel] = f32::from(unorm_pixels[pixel_index * 4 + channel]) / 255.0;
+                }
+            }
+            let Some(float_pixel) = float_pixels.map(|pixels| pixels[pixel_index]) else {
+                return fallback;
+            };
+            for channel in 0..4 {
+                if float_pixel[channel].is_finite() {
+                    fallback[channel] = float_pixel[channel];
+                }
+            }
+            fallback
+        })
+        .collect();
+    (width, height, pixels)
 }
 
 fn unorm_byte(value: f32) -> u8 {
@@ -3668,6 +3740,29 @@ mod tests {
             crate::PreparedTextureArrayStatus::InvalidLayout;
         prepared.resource_availability.tile_array.layer_count = None;
         assert_eq!(material_array_params(prepared), [1.0, 8.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn tile_matrix_texture_pixels_preserve_float_channels_and_fallbacks() {
+        let mut texture = test_texture(crate::ModelTextureKind::TileMatrixProperties);
+        texture.rgba = vec![255, 64, 128, 191];
+        texture.rgba_f32 = Some(vec![[2.0, -0.5, 0.25, 1.5]]);
+        assert_eq!(
+            tile_matrix_texture_pixels(Some(&texture)),
+            (1, 1, vec![[2.0, -0.5, 0.25, 1.5]])
+        );
+
+        texture.rgba_f32 = Some(vec![[f32::NAN, -0.5, f32::INFINITY, 1.5]]);
+        let (_, _, pixels) = tile_matrix_texture_pixels(Some(&texture));
+        assert_eq!(pixels[0], [1.0, -0.5, 128.0 / 255.0, 1.5]);
+
+        texture.rgba_f32 = Some(Vec::new());
+        let (_, _, pixels) = tile_matrix_texture_pixels(Some(&texture));
+        assert_eq!(pixels[0], [1.0, 64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0]);
+        assert_eq!(
+            tile_matrix_texture_pixels(None),
+            (1, 1, vec![[1.0, 0.0, 0.0, 1.0]])
+        );
     }
 
     #[test]

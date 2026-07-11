@@ -175,10 +175,10 @@ tile normal 会与 primary tangent-space normal 组合；tile ORB 当前保守�
    - diffuse RGB 为 sRGB，Alpha 固定不透明；`TileAlpha` 是 tile 属性，不作为材质透明度。
    - specular RGB 为 sRGB，Alpha 保存 ColorTable `Anisotropy`。
    - material-properties 为线性 unorm，通道为 metalness / roughness / gloss strength / specular strength。
-   - tile/sheen/sphere/tile-matrix 与 MeddleTools 的 extra ramps 对齐，tile-matrix 同时保留 float channels。
+   - tile/sheen/sphere/tile-matrix 与 MeddleTools 的 extra ramps 对齐；tile-matrix 的 UU/UV/VU/VV 同时保留 float channels，并以 `Rgba32Float` 上传，避免 RGBA8 截断负 skew 和大于 1 的 repeat。
 4. 若 ColorTable 有 emissive，则额外启用 emissive texture。
 
-当前实现同时支持 Dawntrail 32 行和 Legacy 16 行 ColorTable。renderer 已消费 diffuse/base、specular、material-properties、emissive，并已把 tile、sheen、sphere、tile-matrix extra maps 绑定进 WGSL；tile properties 还会驱动共享 tile normal/ORB atlas 的逐像素 layer selection。完整 MeddleTools 节点图仍未复刻。
+当前实现同时支持 Dawntrail 32 行和 Legacy 16 行 ColorTable。renderer 已消费 diffuse/base、specular、material-properties、emissive，并已把 tile、sheen、sphere、tile-matrix extra maps 绑定进 WGSL；tile properties 还会驱动共享 tile normal/ORB atlas 的逐像素 layer selection。TileMatrix binding 使用 unfilterable `Rgba32Float` 与 non-filtering nearest sampler，float payload 无效时逐通道回退 RGBA8/identity；native synthetic fixture 已证明相同 RGBA8 下 scale 1/2 的 float matrix 会产生不同输出。完整 MeddleTools 节点图仍未复刻。
 
 ## 7. 材质模式
 

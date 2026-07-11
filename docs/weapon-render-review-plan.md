@@ -59,7 +59,7 @@
 - Meddle `OnRenderMaterialUtil` 证明 weapon decal/FC crest 属于运行时 on-render 输入，不是静态 MTRL sampler。`PreparedMaterial.runtimeFallbacks` 已明确缺失 decal/crest 时使用透明纹理语义，materialChange 使用基础材质语义；renderer final 模式会 discard crest fallback，mesh-role debug 仍可见，materialChange 继续使用基础材质。
 - `bguvscroll.shpk` 已单独分类为 `MaterialShaderFamily::BgUvScroll`；primary Color/Normal/Specular Map0 使用 UV0Scroll，secondary Map1 使用 UV1Scroll。三种 Map1 已有独立 texture kind、model/prepared binding、per-role source/scroll mask 和 Web diagnostics；WGSL 在 `GetMultiValues` 下按 vertex alpha 统一混合 color、color alpha、normal 与 specular。`characterscroll.shpk` 不会误继承该动画。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
-- renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。调查确认 tile-matrix 虽已在 `ModelTexture.rgbaF32` 保留未 clamp 的 UU/UV/VU/VV，当前上传仍无条件使用 `Rgba8Unorm`，负 skew 与大于 1 的 repeat 会丢失。下一步把该 binding 改为基线 WebGPU 可采样的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，float payload 无效时才回退 RGBA8/identity。
+- renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。tile-matrix 现已从错误的 `Rgba8Unorm` 上传改成基线 WebGPU 支持的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，直接消费 `ModelTexture.rgbaF32` 的 UU/UV/VU/VV；payload 长度错误或单通道 non-finite 时回退对应 RGBA8/identity。native synthetic fixture 使用相同 clamp 后 RGBA8、仅改变 float scale 1/2，已验证最终输出不同。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`；共享 detail normal atlas 可用时 WGSL 会按 detail/multi-detail ID 与各自 UV scale 采样并组合 tangent-space normal，缺图时才回到 primary normal 的受限 fallback。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 优先用逐像素 ColorTable `TileProperties.r * 64` 选 tile layer，没有该贴图时回退 `g_TileIndex`，并结合 TileMatrix/TileScale 采样 tile normal/ORB。ORB 当前保守按 R=AO、G=roughness、B=specular scale 使用；`TileAlpha` 只控制 tile 效果权重，不作为材质透明度。
@@ -364,7 +364,7 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 - `colorset_tile`: tile index / tile alpha
 - `colorset_sheen`: sheen rate / sheen tint / sheen aperture
 - `colorset_sphere`: sphere index / sphere mask
-- `colorset_tile_matrix`: float channels 优先，RGBA8 仅 debug/fallback；当前数据已保留 float，但 GPU 仍错误上传 RGBA8，下一步修正为 `Rgba32Float`
+- `colorset_tile_matrix`: float channels 已以 `Rgba32Float` 上传，RGBA8 仅 debug/fallback
 
 处理规则：
 
@@ -584,7 +584,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 从当前状态继续推进时，优先级应按依赖关系排：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；stockings/tattoo runtime input diagnostics、Environment role 与 `GetSubColor` Face/Hair mode 均已结构化，occlusion 的 runtime sub-color 依赖已进入 prepared diagnostics。下一步继续 shader-family-specific texture role/UV 规则和真实样本调查。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
-2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。共享 array 的 binding/layout/pair status 与 layer count 已从 renderer 前置到 prepared，非法资源不再只静默回退；Meddle 的 `TileIndex = half * 64` 与本仓 `/64` bake 证明 WGSL 的 `TileProperties.r * 64` 语义继续保留。下一项修正 TileMatrix float channels 的 GPU 上传：Meddle/MeddleTools 均证明顺序为 UU/UV/VU/VV，不能继续用 RGBA8 clamp；之后处理 detail/multi-detail mask 和 ORB 权重。
+2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。共享 array 的 binding/layout/pair status 与 layer count 已从 renderer 前置到 prepared，非法资源不再只静默回退；Meddle 的 `TileIndex = half * 64` 与本仓 `/64` bake 证明 WGSL 的 `TileProperties.r * 64` 语义继续保留。TileMatrix 已按 Meddle/MeddleTools 的 UU/UV/VU/VV 顺序使用未 clamp float GPU texture；下一步处理 detail/multi-detail mask 和 ORB 权重。
 3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline、tattoo normal-A alpha 与 water direct alpha/deep color/primary wave 已完成第一版。tattoo 的 OptionColor/DecalColor 混色仍不猜测。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。characterReflection generic approximation 与 stockings/tattoo/occlusion runtime 输入均已有独立 diagnostic；后续再寻找真实 reflection 节点/样本。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
