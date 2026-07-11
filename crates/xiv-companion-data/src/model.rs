@@ -433,6 +433,12 @@ pub struct ModelMaterial {
     pub toon_index: f32,
     #[serde(default = "default_material_toon_light_scale")]
     pub toon_light_scale: f32,
+    #[serde(default = "default_material_toon_light_spec_aperture")]
+    pub toon_light_spec_aperture: f32,
+    #[serde(default = "default_material_toon_reflection_scale")]
+    pub toon_reflection_scale: f32,
+    #[serde(default = "default_material_toon_spec_index")]
+    pub toon_spec_index: f32,
     #[serde(default)]
     pub sheen_rate: f32,
     #[serde(default)]
@@ -818,6 +824,7 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_flow: bool,
     pub uses_dye: bool,
     pub uses_outline: bool,
+    pub uses_toon: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1260,6 +1267,17 @@ pub fn prepared_material_feature_flags(
                 | MaterialShaderFamily::CharacterTattoo
                 | MaterialShaderFamily::CharacterOcclusion
         );
+    flags.uses_toon = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
 
     flags
 }
@@ -1467,6 +1485,18 @@ fn default_material_tile_scale() -> [f32; 2] {
 
 fn default_material_toon_light_scale() -> f32 {
     2.0
+}
+
+fn default_material_toon_light_spec_aperture() -> f32 {
+    50.0
+}
+
+fn default_material_toon_reflection_scale() -> f32 {
+    2.5
+}
+
+fn default_material_toon_spec_index() -> f32 {
+    4.0e-45
 }
 
 fn default_material_sheen_aperture() -> f32 {
@@ -2204,7 +2234,10 @@ mod color_table_bake_tests {
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
-                feature_flags: PreparedMaterialFeatureFlags::default(),
+                feature_flags: PreparedMaterialFeatureFlags {
+                    uses_toon: true,
+                    ..PreparedMaterialFeatureFlags::default()
+                },
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
@@ -2325,6 +2358,7 @@ mod color_table_bake_tests {
                 uses_flow: false,
                 uses_dye: true,
                 uses_outline: true,
+                uses_toon: true,
             }
         );
 
@@ -2360,6 +2394,7 @@ mod color_table_bake_tests {
                 .feature_flags,
             PreparedMaterialFeatureFlags {
                 uses_scroll: true,
+                uses_toon: true,
                 ..PreparedMaterialFeatureFlags::default()
             }
         );
@@ -2861,6 +2896,9 @@ mod color_table_bake_tests {
             tile_scale: [16.0, 16.0],
             toon_index: 0.0,
             toon_light_scale: 2.0,
+            toon_light_spec_aperture: 50.0,
+            toon_reflection_scale: 2.5,
+            toon_spec_index: 4.0e-45,
             sheen_rate: 0.0,
             sheen_tint_rate: 0.0,
             sheen_aperture: 1.0,

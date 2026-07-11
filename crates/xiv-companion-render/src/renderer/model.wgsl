@@ -18,6 +18,7 @@ struct Material {
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
     tile_params: vec4<f32>, // x: tile index, y: tile alpha, zw: tile repeat uv
     toon_sheen_params: vec4<f32>, // x: toon index, y: toon light scale, z: sheen rate, w: sheen tint rate
+    toon_params: vec4<f32>, // x: light spec aperture, y: reflection scale, z: spec index, w: prepared toon
     sheen_sphere_params: vec4<f32>, // x: sheen aperture, y: sphere map index
     detail_params: vec4<f32>, // x: detail id, y: multi detail id
     array_params: vec4<f32>, // x: tile layers, y: detail layers, z: has tile pair, w: has detail pair
@@ -236,7 +237,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         * tile_specular_scale
         * specular_color_mask.a;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
-    let specular = pow(max(dot(normal, half_dir), 0.0), specular_power);
+    let normal_half = max(dot(normal, half_dir), 0.0);
+    let specular = pow(normal_half, specular_power);
+    let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
     let sampled_specular = textureSample(specular_texture, base_color_sampler, specular_uv).rgb;
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
@@ -291,7 +294,9 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
         return out;
     }
-    let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
+    let rim = pow(1.0 - max(normal.z, 0.0), 2.0)
+        * select(0.16, 0.58, is_glass)
+        * toon_lighting.z;
     let specular_tint = mix(material_specular, base, metalness * 0.35);
     let glass_factors = resolve_glass_factors();
     let glass_tint = mix(
@@ -303,11 +308,11 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let tile_ao = mix(1.0, clamp(tile_array.orb.r, 0.0, 1.0), tile_array.weight * 0.35);
     let ambient = mix(0.08, 0.22, ssao_mask) * tile_ao;
     let glass_ambient = mix(0.52, 0.62, ssao_mask);
-    let opaque_lit = base * (ambient + diffuse * 0.74)
-        + specular_tint * specular * specular_scale * 0.24
+    let opaque_lit = base * (ambient + toon_lighting.x * 0.74)
+        + specular_tint * toon_lighting.y * specular_scale * 0.24
         + vec3<f32>(rim);
-    let glass_lit = glass_tint * (glass_ambient + diffuse * 0.12)
-        + material_specular * specular * (0.65 + glass_factors.z * 0.25)
+    let glass_lit = glass_tint * (glass_ambient + toon_lighting.x * 0.12)
+        + material_specular * toon_lighting.y * (0.65 + glass_factors.z * 0.25)
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
     let lighting_enabled = material.alpha_policy_params.y > 0.5;
     let surface_lit = select(base, opaque_lit, lighting_enabled);
@@ -714,6 +719,37 @@ fn resolve_glass_factors() -> vec3<f32> {
     let ior_delta = clamp((clamp(material.glass_params.x, 1.0, 2.5) - 1.0) / 1.5, 0.0, 1.0);
     let thickness_delta = clamp((max(material.glass_params.y, 0.0) - 0.01) * 8.0, 0.0, 1.0);
     return vec3<f32>(ior_delta, thickness_delta, max(ior_delta, thickness_delta * 0.35));
+}
+
+fn resolve_toon_lighting(raw_diffuse: f32, normal_half: f32, raw_specular: f32) -> vec3<f32> {
+    if material.toon_params.w < 0.5 {
+        return vec3<f32>(raw_diffuse, raw_specular, 1.0);
+    }
+
+    let toon_index_phase = fract(abs(material.toon_sheen_params.x) * 0.6180339);
+    let scaled_diffuse = clamp(
+        raw_diffuse * clamp(material.toon_sheen_params.y, 0.0, 8.0) * 0.5,
+        0.0,
+        1.0,
+    );
+    let diffuse_threshold = 0.45 + (toon_index_phase - 0.5) * 0.18;
+    let shadow_level = 0.40 + toon_index_phase * 0.10;
+    let diffuse_band = mix(
+        shadow_level,
+        1.0,
+        smoothstep(diffuse_threshold - 0.12, diffuse_threshold + 0.12, scaled_diffuse),
+    );
+    let toon_diffuse = mix(scaled_diffuse, diffuse_band, 0.35);
+
+    let spec_index_phase = fract(abs(material.toon_params.z) * 0.6180339);
+    let spec_aperture = clamp(material.toon_params.x, 1.0, 256.0);
+    let spec_signal = pow(clamp(normal_half, 0.0, 1.0), spec_aperture);
+    let spec_threshold = 0.35 + spec_index_phase * 0.30;
+    let spec_band = smoothstep(spec_threshold - 0.08, spec_threshold + 0.08, spec_signal);
+    let toon_specular = mix(raw_specular, max(raw_specular, spec_band), 0.40);
+    let reflection_scale = clamp(material.toon_params.y / 2.5, 0.25, 3.0);
+
+    return vec3<f32>(toon_diffuse, toon_specular, reflection_scale);
 }
 
 fn resolve_emissive(emissive_tex: vec3<f32>, vertex_alpha: f32, mask: vec3<f32>) -> vec3<f32> {

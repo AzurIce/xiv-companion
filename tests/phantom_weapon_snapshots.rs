@@ -154,6 +154,9 @@ struct MaterialSummary {
     tile_scale: [f32; 2],
     toon_index: f32,
     toon_light_scale: f32,
+    toon_light_spec_aperture: f32,
+    toon_reflection_scale: f32,
+    toon_spec_index: f32,
     sheen_rate: f32,
     sheen_tint_rate: f32,
     sheen_aperture: f32,
@@ -423,6 +426,15 @@ fn render_case(
             material.outline_color = [1.0, 0.05, 0.02, 1.0];
         }
     }
+    if phantom_toon_override_enabled() {
+        for material in &mut model.materials {
+            material.toon_index = 3.0;
+            material.toon_light_scale = 3.0;
+            material.toon_light_spec_aperture = 12.0;
+            material.toon_reflection_scale = 5.0;
+            material.toon_spec_index = 4.0;
+        }
+    }
     let snapshot = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("snapshot")
             .with_output_dir(&case_dir)
@@ -561,6 +573,17 @@ fn parse_phantom_outline_width(value: &str) -> Option<f32> {
         .map(|width| width.min(0.1))
 }
 
+fn phantom_toon_override_enabled() -> bool {
+    parse_phantom_toggle(&std::env::var("XIV_PHANTOM_TOON_OVERRIDE").unwrap_or_default())
+}
+
+fn parse_phantom_toggle(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 #[test]
 fn phantom_glass_blend_mode_parser_preserves_scene_choice() {
     assert_eq!(
@@ -583,6 +606,15 @@ fn phantom_outline_width_parser_clamps_synthetic_override() {
     assert_eq!(parse_phantom_outline_width("2"), Some(0.1));
     assert_eq!(parse_phantom_outline_width("0"), None);
     assert_eq!(parse_phantom_outline_width("invalid"), None);
+}
+
+#[test]
+fn phantom_toggle_parser_accepts_explicit_true_values() {
+    for value in ["1", "true", "YES", "on"] {
+        assert!(parse_phantom_toggle(value));
+    }
+    assert!(!parse_phantom_toggle("0"));
+    assert!(!parse_phantom_toggle("invalid"));
 }
 
 fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {
@@ -1042,6 +1074,9 @@ fn material_summary(
         tile_scale: material.tile_scale,
         toon_index: material.toon_index,
         toon_light_scale: material.toon_light_scale,
+        toon_light_spec_aperture: material.toon_light_spec_aperture,
+        toon_reflection_scale: material.toon_reflection_scale,
+        toon_spec_index: material.toon_spec_index,
         sheen_rate: material.sheen_rate,
         sheen_tint_rate: material.sheen_tint_rate,
         sheen_aperture: material.sheen_aperture,

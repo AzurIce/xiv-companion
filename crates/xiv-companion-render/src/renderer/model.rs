@@ -1565,6 +1565,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
         toon_sheen_params: material_toon_sheen_params(material),
+        toon_params: material_toon_params(material, prepared_material),
         sheen_sphere_params: material_sheen_sphere_params(material),
         detail_params: material_detail_params(material),
         array_params: material_array_params(material, model),
@@ -2364,6 +2365,9 @@ fn fallback_material() -> ModelMaterial {
         tile_scale: [16.0, 16.0],
         toon_index: 0.0,
         toon_light_scale: 2.0,
+        toon_light_spec_aperture: 50.0,
+        toon_reflection_scale: 2.5,
+        toon_spec_index: 4.0e-45,
         sheen_rate: 0.0,
         sheen_tint_rate: 0.0,
         sheen_aperture: 1.0,
@@ -2518,6 +2522,19 @@ fn material_toon_sheen_params(material: &ModelMaterial) -> [f32; 4] {
         finite_or(material.toon_light_scale, 2.0),
         finite_or(material.sheen_rate, 0.0),
         finite_or(material.sheen_tint_rate, 0.0),
+    ]
+}
+
+fn material_toon_params(material: &ModelMaterial, prepared_material: PreparedMaterial) -> [f32; 4] {
+    [
+        finite_or(material.toon_light_spec_aperture, 50.0),
+        finite_or(material.toon_reflection_scale, 2.5),
+        finite_or(material.toon_spec_index, 4.0e-45),
+        if prepared_material.feature_flags.uses_toon {
+            1.0
+        } else {
+            0.0
+        },
     ]
 }
 
@@ -2803,6 +2820,7 @@ struct MaterialUniform {
     shader_params: [f32; 4],
     tile_params: [f32; 4],
     toon_sheen_params: [f32; 4],
+    toon_params: [f32; 4],
     sheen_sphere_params: [f32; 4],
     detail_params: [f32; 4],
     array_params: [f32; 4],
@@ -3546,7 +3564,12 @@ mod tests {
     #[test]
     fn material_toon_sheen_sphere_params_preserve_shader_inputs() {
         let mut material = fallback_material();
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [50.0, 2.5, 4.0e-45, 0.0]
+        );
         assert_eq!(
             material_sheen_sphere_params(&material),
             [1.0, 0.0, 0.0, 0.0]
@@ -3554,6 +3577,9 @@ mod tests {
 
         material.toon_index = 5.0;
         material.toon_light_scale = 1.5;
+        material.toon_light_spec_aperture = 64.0;
+        material.toon_reflection_scale = 3.5;
+        material.toon_spec_index = 2.0;
         material.sheen_rate = 0.25;
         material.sheen_tint_rate = 0.35;
         material.sheen_aperture = 0.8;
@@ -3562,6 +3588,12 @@ mod tests {
             material_toon_sheen_params(&material),
             [5.0, 1.5, 0.25, 0.35]
         );
+        material.shader_package_name = Some("character.shpk".to_string());
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [64.0, 3.5, 2.0, 1.0]
+        );
         assert_eq!(
             material_sheen_sphere_params(&material),
             [0.8, 3.0, 0.0, 0.0]
@@ -3569,11 +3601,19 @@ mod tests {
 
         material.toon_index = f32::NAN;
         material.toon_light_scale = f32::INFINITY;
+        material.toon_light_spec_aperture = f32::NAN;
+        material.toon_reflection_scale = f32::INFINITY;
+        material.toon_spec_index = f32::NEG_INFINITY;
         material.sheen_rate = f32::NEG_INFINITY;
         material.sheen_tint_rate = f32::NAN;
         material.sheen_aperture = f32::INFINITY;
         material.sphere_map_index = f32::NAN;
         assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [50.0, 2.5, 4.0e-45, 1.0]
+        );
         assert_eq!(
             material_sheen_sphere_params(&material),
             [1.0, 0.0, 0.0, 0.0]
