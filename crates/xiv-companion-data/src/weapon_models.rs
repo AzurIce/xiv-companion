@@ -2345,6 +2345,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             specular_texture: texture_set.specular,
             secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
+            environment_texture: texture_set.environment,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
             sheen_properties_texture: texture_set.sheen_properties,
@@ -2424,6 +2425,9 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Environment => {
+                set.environment.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::MaterialProperties => {
                 set.material_properties.get_or_insert(texture_index);
@@ -2962,6 +2966,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             specular_texture: texture_set.specular,
             secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
+            environment_texture: texture_set.environment,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
             sheen_properties_texture: texture_set.sheen_properties,
@@ -3043,6 +3048,9 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             }
             WeaponModelTextureKind::Emissive => {
                 set.emissive.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::Environment => {
+                set.environment.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::MaterialProperties => {
                 set.material_properties.get_or_insert(texture_index);
@@ -3194,6 +3202,7 @@ struct WeaponTextureSet {
     specular: Option<usize>,
     secondary_specular: Option<usize>,
     emissive: Option<usize>,
+    environment: Option<usize>,
     material_properties: Option<usize>,
     tile_properties: Option<usize>,
     sheen_properties: Option<usize>,
@@ -4430,6 +4439,7 @@ fn fallback_weapon_material(
         specular_texture: None,
         secondary_specular_texture: None,
         emissive_texture: None,
+        environment_texture: None,
         material_properties_texture: None,
         tile_properties_texture: None,
         sheen_properties_texture: None,
@@ -4900,7 +4910,7 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
         ("g_Sampler0", WeaponModelTextureKind::BaseColor),
         ("g_Sampler1", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerEnvMap", WeaponModelTextureKind::Other),
+        ("g_SamplerEnvMap", WeaponModelTextureKind::Environment),
         ("g_SamplerWaveMap", WeaponModelTextureKind::WaterWave),
         (
             "g_SamplerWaveMap1",
@@ -6854,7 +6864,7 @@ mod weapon_material_tests {
         );
         assert_eq!(
             classify_sampler_name("g_SamplerEnvMap"),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::Environment)
         );
         assert_eq!(
             classify_sampler_name("g_SamplerWaveMap"),
@@ -6886,6 +6896,7 @@ mod weapon_material_tests {
             test_texture("wave.tex", WeaponModelTextureKind::WaterWave),
             test_texture("wave1.tex", WeaponModelTextureKind::WaterWaveSecondary),
             test_texture("whitecap.tex", WeaponModelTextureKind::WaterWhitecap),
+            test_texture("environment.tex", WeaponModelTextureKind::Environment),
         ];
         assert_eq!(
             choose_fallback_base_texture(&(0..textures.len()).collect::<Vec<_>>(), &textures),
@@ -6920,6 +6931,7 @@ mod weapon_material_tests {
             WeaponModelTextureKind::WaterWave,
             WeaponModelTextureKind::WaterWaveSecondary,
             WeaponModelTextureKind::WaterWhitecap,
+            WeaponModelTextureKind::Environment,
             WeaponModelTextureKind::Other,
         ] {
             let texture = test_texture_with_alpha("non-base-alpha.tex", kind, 0);

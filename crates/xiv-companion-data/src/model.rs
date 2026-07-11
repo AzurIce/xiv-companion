@@ -544,6 +544,8 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub emissive_texture: Option<usize>,
     #[serde(default)]
+    pub environment_texture: Option<usize>,
+    #[serde(default)]
     pub material_properties_texture: Option<usize>,
     #[serde(default)]
     pub tile_properties_texture: Option<usize>,
@@ -852,6 +854,7 @@ pub struct PreparedTextureScrollSet {
     pub specular: bool,
     pub secondary_specular: bool,
     pub emissive: bool,
+    pub environment: bool,
     pub material_properties: bool,
     pub tile_properties: bool,
     pub sheen_properties: bool,
@@ -874,6 +877,8 @@ pub struct PreparedTextureUvSources {
     pub specular: PreparedUvSource,
     pub secondary_specular: PreparedUvSource,
     pub emissive: PreparedUvSource,
+    #[serde(default)]
+    pub environment: PreparedUvSource,
     pub material_properties: PreparedUvSource,
     pub tile_properties: PreparedUvSource,
     pub sheen_properties: PreparedUvSource,
@@ -960,6 +965,8 @@ pub struct PreparedTextureBindings {
     pub specular: Option<usize>,
     pub secondary_specular: Option<usize>,
     pub emissive: Option<usize>,
+    #[serde(default)]
+    pub environment: Option<usize>,
     pub material_properties: Option<usize>,
     pub tile_properties: Option<usize>,
     pub sheen_properties: Option<usize>,
@@ -991,6 +998,8 @@ pub struct PreparedTextureSamplingSet {
     pub specular: PreparedTextureSampling,
     pub secondary_specular: PreparedTextureSampling,
     pub emissive: PreparedTextureSampling,
+    #[serde(default = "default_environment_texture_sampling")]
+    pub environment: PreparedTextureSampling,
     pub material_properties: PreparedTextureSampling,
     pub tile_properties: PreparedTextureSampling,
     pub sheen_properties: PreparedTextureSampling,
@@ -1031,6 +1040,7 @@ impl Default for PreparedTextureSamplingSet {
                 ModelTextureKind::SecondarySpecular,
             ),
             emissive: prepared_texture_sampling_for_kind(ModelTextureKind::Emissive),
+            environment: prepared_texture_sampling_for_kind(ModelTextureKind::Environment),
             material_properties: prepared_texture_sampling_for_kind(
                 ModelTextureKind::MaterialProperties,
             ),
@@ -1065,6 +1075,10 @@ fn default_texture_array_sampling() -> PreparedTextureSampling {
 
 fn default_water_texture_sampling() -> PreparedTextureSampling {
     prepared_texture_sampling_for_kind(ModelTextureKind::WaterWave)
+}
+
+fn default_environment_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Environment)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1332,6 +1346,7 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         specular: material.specular_texture,
         secondary_specular: material.secondary_specular_texture,
         emissive: material.emissive_texture,
+        environment: material.environment_texture,
         material_properties: material.material_properties_texture,
         tile_properties: material.tile_properties_texture,
         sheen_properties: material.sheen_properties_texture,
@@ -1396,6 +1411,7 @@ fn prepared_material_uses_scroll(
             textures.secondary_specular,
         ),
         (scroll.emissive, textures.emissive),
+        (scroll.environment, textures.environment),
         (scroll.material_properties, textures.material_properties),
         (scroll.tile_properties, textures.tile_properties),
         (scroll.sheen_properties, textures.sheen_properties),
@@ -1615,6 +1631,7 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
         | ModelTextureKind::WaterWave
         | ModelTextureKind::WaterWaveSecondary
         | ModelTextureKind::WaterWhitecap
+        | ModelTextureKind::Environment
         | ModelTextureKind::Other => PreparedTextureSampling {
             color_space: PreparedTextureColorSpace::NonColor,
             filter: PreparedTextureFilter::Linear,
@@ -1827,6 +1844,8 @@ pub enum ModelTextureKind {
     Specular,
     SecondarySpecular,
     Emissive,
+    /// Explicit `g_SamplerEnvMap` texture used by BG/crystal environment mapping.
+    Environment,
     /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。
     MaterialProperties,
     /// ColorTable 派生出的 tile 参数贴图，通道为 tile index / tile alpha / 1 / 1。
@@ -2583,6 +2602,7 @@ mod color_table_bake_tests {
         material.multi_map_texture = Some(5);
         material.specular_texture = Some(6);
         material.emissive_texture = Some(7);
+        material.environment_texture = Some(21);
         material.material_properties_texture = Some(8);
         material.tile_properties_texture = Some(9);
         material.sheen_properties_texture = Some(10);
@@ -2611,6 +2631,7 @@ mod color_table_bake_tests {
                 specular: Some(6),
                 secondary_specular: None,
                 emissive: Some(7),
+                environment: Some(21),
                 material_properties: Some(8),
                 tile_properties: Some(9),
                 sheen_properties: Some(10),
@@ -2882,6 +2903,7 @@ mod color_table_bake_tests {
                     specular: PreparedUvSource::Uv0,
                     secondary_specular: PreparedUvSource::Uv1,
                     emissive: PreparedUvSource::Uv0,
+                    environment: PreparedUvSource::Uv0,
                     material_properties: PreparedUvSource::Uv0,
                     tile_properties: PreparedUvSource::Uv0,
                     sheen_properties: PreparedUvSource::Uv0,
@@ -3187,6 +3209,14 @@ mod color_table_bake_tests {
             prepared_texture_sampling_for_kind(ModelTextureKind::Specular)
         );
         assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Environment),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
             PreparedTextureSampling {
                 color_space: PreparedTextureColorSpace::NonColor,
@@ -3403,6 +3433,7 @@ mod color_table_bake_tests {
             specular_texture: None,
             secondary_specular_texture: None,
             emissive_texture: None,
+            environment_texture: None,
             material_properties_texture: None,
             tile_properties_texture: None,
             sheen_properties_texture: None,

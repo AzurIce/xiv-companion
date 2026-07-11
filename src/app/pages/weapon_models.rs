@@ -484,6 +484,7 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Sphere Props", value: texture_counts.sphere_properties.to_string() }
                     StatRow { label: "Tile Matrix", value: texture_counts.tile_matrix.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
+                    StatRow { label: "Environment", value: texture_counts.environment.to_string() }
                     StatRow { label: "Index", value: texture_counts.index.to_string() }
                     StatRow { label: "Tile Normal Array", value: texture_counts.tile_normal_array.to_string() }
                     StatRow { label: "Tile ORB Array", value: texture_counts.tile_orb_array.to_string() }
@@ -542,6 +543,7 @@ struct TextureKindCounts {
     sphere_properties: usize,
     tile_matrix: usize,
     emissive: usize,
+    environment: usize,
     index: usize,
     tile_normal_array: usize,
     tile_orb_array: usize,
@@ -573,6 +575,7 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::SphereProperties => counts.sphere_properties += 1,
                 WeaponModelTextureKind::TileMatrixProperties => counts.tile_matrix += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
+                WeaponModelTextureKind::Environment => counts.environment += 1,
                 WeaponModelTextureKind::Index => counts.index += 1,
                 WeaponModelTextureKind::TileNormalArray => counts.tile_normal_array += 1,
                 WeaponModelTextureKind::TileOrbArray => counts.tile_orb_array += 1,
