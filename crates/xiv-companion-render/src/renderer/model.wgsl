@@ -153,6 +153,30 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 @fragment
+fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
+    let base_uv = resolve_uv(input, material.uv_sources0.x);
+    let normal_uv = resolve_uv(input, material.uv_sources0.y);
+    let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
+    let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
+    let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
+    let alpha = resolve_material_alpha(
+        input.color.a,
+        base_texture_alpha,
+        sampled_normal.b,
+        false,
+        false,
+    );
+    if material.alpha_policy_params.z < 0.5 || alpha <= ordered_dither_threshold(input.clip_position.xy) {
+        discard;
+    }
+
+    var out: FragmentOutput;
+    out.color = vec4<f32>(0.0);
+    out.bright = vec4<f32>(0.0);
+    return out;
+}
+
+@fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     let is_lightshaft = material.draw_role_params.x > 0.5;
     let is_crest_fallback = material.draw_role_params.y > 0.5;
@@ -195,7 +219,6 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
-    let texture_alpha = resolve_surface_alpha(base_texture_alpha, sampled_normal.b);
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5)
         * specular_color_mask.rgb;
     let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
@@ -206,13 +229,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
     let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
-    var alpha = select(1.0, clamp(material.diffuse_color.a * texture_alpha * input.color.a, 0.0, 1.0), uses_alpha);
-    if uses_alpha && !is_glass && !is_lightshaft {
-        alpha = resolve_alpha_shaping(alpha);
-    }
-    if is_glass {
-        alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.0, 1.0);
-    }
+    let alpha = resolve_material_alpha(
+        input.color.a,
+        base_texture_alpha,
+        sampled_normal.b,
+        is_lightshaft,
+        is_crest_fallback,
+    );
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     if camera.options.w > 0.5 {
         return debug_fragment_output(
@@ -625,6 +648,44 @@ fn resolve_surface_alpha(base_alpha: f32, normal_blue: f32) -> f32 {
         return clamp(base_alpha, 0.0, 1.0);
     }
     return 1.0;
+}
+
+fn resolve_material_alpha(
+    vertex_alpha: f32,
+    base_texture_alpha: f32,
+    normal_blue: f32,
+    is_lightshaft: bool,
+    is_crest_fallback: bool,
+) -> f32 {
+    let texture_alpha = resolve_surface_alpha(base_texture_alpha, normal_blue);
+    let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
+    let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
+    let is_glass = material.alpha_policy_params.w > 1.5;
+    let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
+    var alpha = select(
+        1.0,
+        clamp(material.diffuse_color.a * texture_alpha * vertex_alpha, 0.0, 1.0),
+        uses_alpha,
+    );
+    if uses_alpha && !is_glass && !is_lightshaft {
+        alpha = resolve_alpha_shaping(alpha);
+    }
+    if is_glass {
+        alpha = clamp(material.render.y * texture_alpha * vertex_alpha, 0.0, 1.0);
+    }
+    return alpha;
+}
+
+fn ordered_dither_threshold(position: vec2<f32>) -> f32 {
+    const BAYER_4X4 = array<f32, 16>(
+        0.0, 8.0, 2.0, 10.0,
+        12.0, 4.0, 14.0, 6.0,
+        3.0, 11.0, 1.0, 9.0,
+        15.0, 7.0, 13.0, 5.0,
+    );
+    let pixel = vec2<u32>(max(position, vec2<f32>(0.0)));
+    let index = (pixel.y & 3u) * 4u + (pixel.x & 3u);
+    return (BAYER_4X4[index] + 0.5) / 16.0;
 }
 
 fn resolve_glass_factors() -> vec3<f32> {

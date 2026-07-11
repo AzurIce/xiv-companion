@@ -128,6 +128,8 @@ pub struct ModelRenderer {
     culled_pipeline: wgpu::RenderPipeline,
     cutout_pipeline: wgpu::RenderPipeline,
     cutout_culled_pipeline: wgpu::RenderPipeline,
+    dither_depth_pipeline: wgpu::RenderPipeline,
+    dither_depth_culled_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
     transparent_culled_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
@@ -522,6 +524,22 @@ impl ModelRenderer {
             ModelPipelineBlend::Opaque,
             true,
         );
+        let dither_depth_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon dither depth pipeline",
+            ModelPipelineBlend::DitherDepth,
+            false,
+        );
+        let dither_depth_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon dither depth culled pipeline",
+            ModelPipelineBlend::DitherDepth,
+            true,
+        );
         let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
@@ -631,6 +649,8 @@ impl ModelRenderer {
             culled_pipeline,
             cutout_pipeline,
             cutout_culled_pipeline,
+            dither_depth_pipeline,
+            dither_depth_culled_pipeline,
             transparent_pipeline,
             transparent_culled_pipeline,
             glass_pipeline,
@@ -766,6 +786,19 @@ impl ModelRenderer {
                     &self.cutout_pipeline
                 } else {
                     &self.cutout_culled_pipeline
+                });
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.uses_dither_depth_prepass())
+            {
+                render_pass.set_pipeline(if batch.render_backfaces() {
+                    &self.dither_depth_pipeline
+                } else {
+                    &self.dither_depth_culled_pipeline
                 });
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
@@ -1114,17 +1147,17 @@ fn create_model_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(blend_mode.fragment_entry()),
             targets: &[
                 Some(wgpu::ColorTargetState {
                     format: POST_FORMAT,
                     blend,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: blend_mode.color_write_mask(),
                 }),
                 Some(wgpu::ColorTargetState {
                     format: POST_FORMAT,
                     blend,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: blend_mode.color_write_mask(),
                 }),
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -1154,6 +1187,7 @@ fn create_model_pipeline(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelPipelineBlend {
     Opaque,
+    DitherDepth,
     Alpha,
     Additive,
 }
@@ -1161,7 +1195,7 @@ enum ModelPipelineBlend {
 impl ModelPipelineBlend {
     fn blend_state(self) -> Option<wgpu::BlendState> {
         match self {
-            ModelPipelineBlend::Opaque => None,
+            ModelPipelineBlend::Opaque | ModelPipelineBlend::DitherDepth => None,
             ModelPipelineBlend::Alpha => Some(wgpu::BlendState::ALPHA_BLENDING),
             ModelPipelineBlend::Additive => Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -1179,7 +1213,24 @@ impl ModelPipelineBlend {
     }
 
     fn writes_depth(self) -> bool {
-        matches!(self, ModelPipelineBlend::Opaque)
+        matches!(
+            self,
+            ModelPipelineBlend::Opaque | ModelPipelineBlend::DitherDepth
+        )
+    }
+
+    fn fragment_entry(self) -> &'static str {
+        match self {
+            ModelPipelineBlend::DitherDepth => "fs_dither_depth",
+            _ => "fs_main",
+        }
+    }
+
+    fn color_write_mask(self) -> wgpu::ColorWrites {
+        match self {
+            ModelPipelineBlend::DitherDepth => wgpu::ColorWrites::empty(),
+            _ => wgpu::ColorWrites::ALL,
+        }
     }
 }
 
@@ -2718,6 +2769,14 @@ impl DrawBatch {
     fn render_backfaces(&self) -> bool {
         self.prepared_material.render_backfaces
     }
+
+    fn uses_dither_depth_prepass(&self) -> bool {
+        self.pass().sorts_back_to_front()
+            && matches!(
+                self.prepared_material.alpha_policy.draw_depth_mode,
+                MaterialDrawDepthMode::Dither
+            )
+    }
 }
 
 #[repr(C)]
@@ -2982,6 +3041,22 @@ mod tests {
     fn model_pipeline_blend_modes_report_blend_and_depth_policy() {
         assert_eq!(ModelPipelineBlend::Opaque.blend_state(), None);
         assert!(ModelPipelineBlend::Opaque.writes_depth());
+        assert_eq!(ModelPipelineBlend::Opaque.fragment_entry(), "fs_main");
+        assert_eq!(
+            ModelPipelineBlend::Opaque.color_write_mask(),
+            wgpu::ColorWrites::ALL
+        );
+
+        assert_eq!(ModelPipelineBlend::DitherDepth.blend_state(), None);
+        assert!(ModelPipelineBlend::DitherDepth.writes_depth());
+        assert_eq!(
+            ModelPipelineBlend::DitherDepth.fragment_entry(),
+            "fs_dither_depth"
+        );
+        assert_eq!(
+            ModelPipelineBlend::DitherDepth.color_write_mask(),
+            wgpu::ColorWrites::empty()
+        );
         assert_eq!(
             ModelPipelineBlend::Alpha.blend_state(),
             Some(wgpu::BlendState::ALPHA_BLENDING)
@@ -2997,6 +3072,22 @@ mod tests {
         assert_eq!(additive.alpha.src_factor, wgpu::BlendFactor::One);
         assert_eq!(additive.alpha.dst_factor, wgpu::BlendFactor::One);
         assert!(!ModelPipelineBlend::Additive.writes_depth());
+    }
+
+    #[test]
+    fn dither_depth_prepass_only_selects_dithered_transparent_batches() {
+        let mut glass = test_batch(0, PreparedRenderPass::Glass, [0.0; 3]);
+        glass.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(glass.uses_dither_depth_prepass());
+
+        let mut transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
+        assert!(!transparent.uses_dither_depth_prepass());
+        transparent.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(transparent.uses_dither_depth_prepass());
+
+        let mut opaque = test_batch(2, PreparedRenderPass::Opaque, [0.0; 3]);
+        opaque.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(!opaque.uses_dither_depth_prepass());
     }
 
     #[test]
