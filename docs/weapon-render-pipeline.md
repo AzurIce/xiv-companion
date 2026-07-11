@@ -118,6 +118,7 @@ MTRL 贴图需要分类为：
 - 优先解析 MTRL sampler records，并结合 `.shpk` resource parameter name 判定 sampler role。
 - `.shpk` 名称缺失时使用 known CRC 表兜底；再结合文件名后缀分类。
 - `g_SamplerEnvMap` 保留为独立 Environment role，prepared sampling 为 Non-Color/Linear/Repeat；`crystal.shpk` 会分类为 Crystal family，binding 存在时输出 `usesEnvironmentMap=true` 和 `environmentMapping=true` unsupported。当前没有可靠的反射坐标与混合公式，因此数据可审计但尚不进入 WGSL。
+- `g_SamplerMulti` binding 存在时会输出 `multiMapInterpretation=true` unsupported；它与 `detailArray` 是否缺少共享数组独立，避免 arrays 完整时误报 MultiMap 已被正常着色消费。
 - 路径后缀 `_id` / `g_SamplerIndex` 会识别为 `Index`，不会当 mask 或 diffuse 直接采样。
 - material debug 会输出 sampler 的 `textureUsageName` 和 `kindSource`，用于判断来源是 `.shpk` resource name、known CRC 还是 unknown。
 

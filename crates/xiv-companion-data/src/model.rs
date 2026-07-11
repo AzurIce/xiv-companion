@@ -931,6 +931,7 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub incomplete_shader_family_logic: bool,
     pub secondary_map_blend: bool,
     pub environment_mapping: bool,
+    pub multi_map_interpretation: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1545,6 +1546,7 @@ pub fn prepared_material_unsupported_inputs(
                 )
         }),
         environment_mapping: texture_bindings.environment.is_some(),
+        multi_map_interpretation: texture_bindings.multi_map.is_some(),
     }
 }
 
@@ -2797,6 +2799,7 @@ mod color_table_bake_tests {
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
                 environment_mapping: false,
+                multi_map_interpretation: true,
             }
         );
         assert_eq!(
@@ -2815,6 +2818,7 @@ mod color_table_bake_tests {
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
                 environment_mapping: false,
+                multi_map_interpretation: true,
             }
         );
 
@@ -2879,9 +2883,11 @@ mod color_table_bake_tests {
         );
 
         material.texture_arrays.detail_normal = Some(4);
+        material.multi_map_texture = Some(5);
         let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(!prepared.unsupported_inputs.tile_array);
         assert!(!prepared.unsupported_inputs.detail_array);
+        assert!(prepared.unsupported_inputs.multi_map_interpretation);
     }
 
     #[test]
