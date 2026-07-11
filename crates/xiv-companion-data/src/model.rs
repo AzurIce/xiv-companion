@@ -654,6 +654,7 @@ pub enum MaterialShaderFamily {
     CharacterOcclusion,
     Bg,
     BgUvScroll,
+    Crystal,
     LightShaft,
     Water,
     #[default]
@@ -686,6 +687,7 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "characterocclusion.shpk" => MaterialShaderFamily::CharacterOcclusion,
         "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
         "bguvscroll.shpk" => MaterialShaderFamily::BgUvScroll,
+        "crystal.shpk" => MaterialShaderFamily::Crystal,
         "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
         "water.shpk" | "river.shpk" => MaterialShaderFamily::Water,
         _ => MaterialShaderFamily::Unknown,
@@ -911,6 +913,7 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_outline: bool,
     pub uses_toon: bool,
     pub uses_secondary_maps: bool,
+    pub uses_environment_map: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -927,6 +930,7 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub detail_array: bool,
     pub incomplete_shader_family_logic: bool,
     pub secondary_map_blend: bool,
+    pub environment_mapping: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1447,6 +1451,7 @@ pub fn prepared_material_feature_flags(
             || texture_bindings.tile_matrix.is_some(),
         uses_tile: texture_bindings.tile_properties.is_some(),
         uses_detail: texture_bindings.multi_map.is_some(),
+        uses_environment_map: texture_bindings.environment.is_some(),
         uses_secondary_maps: matches!(shader_family, MaterialShaderFamily::BgUvScroll)
             && matches!(
                 material.map(|material| material.value_mode),
@@ -1539,6 +1544,7 @@ pub fn prepared_material_unsupported_inputs(
                     MaterialValueMode::Single | MaterialValueMode::Multi
                 )
         }),
+        environment_mapping: texture_bindings.environment.is_some(),
     }
 }
 
@@ -1594,6 +1600,7 @@ fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) 
             | MaterialShaderFamily::CharacterScroll
             | MaterialShaderFamily::CharacterTattoo
             | MaterialShaderFamily::CharacterOcclusion
+            | MaterialShaderFamily::Crystal
             | MaterialShaderFamily::LightShaft
     )
 }
@@ -2681,6 +2688,7 @@ mod color_table_bake_tests {
                 uses_outline: true,
                 uses_toon: true,
                 uses_secondary_maps: false,
+                uses_environment_map: false,
             }
         );
 
@@ -2788,6 +2796,7 @@ mod color_table_bake_tests {
                 detail_array: true,
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
+                environment_mapping: false,
             }
         );
         assert_eq!(
@@ -2805,6 +2814,7 @@ mod color_table_bake_tests {
                 detail_array: true,
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
+                environment_mapping: false,
             }
         );
 
@@ -2820,6 +2830,14 @@ mod color_table_bake_tests {
         assert!(!stockings.unsupported_inputs.runtime_option_color);
         assert!(!stockings.unsupported_inputs.runtime_decal_color);
         assert!(stockings.unsupported_inputs.runtime_skin_material);
+
+        material.shader_package_name = Some("crystal.shpk".to_string());
+        material.environment_texture = Some(9);
+        let crystal = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(crystal.shader_family, MaterialShaderFamily::Crystal);
+        assert!(crystal.feature_flags.uses_environment_map);
+        assert!(crystal.unsupported_inputs.environment_mapping);
+        assert!(crystal.unsupported_inputs.incomplete_shader_family_logic);
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
@@ -3309,6 +3327,10 @@ mod color_table_bake_tests {
         assert_eq!(
             material_shader_family(Some("bg.shpk")),
             MaterialShaderFamily::Bg
+        );
+        assert_eq!(
+            material_shader_family(Some("meddle crystal.shpk")),
+            MaterialShaderFamily::Crystal
         );
         assert_eq!(
             material_shader_family(Some("bguvscroll.shpk")),
