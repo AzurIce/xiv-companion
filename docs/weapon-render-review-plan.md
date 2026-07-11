@@ -145,7 +145,7 @@
 - cutout/glass 已有独立 wgpu pipeline 入口，但 shader 行为仍分别沿用现有 alpha test 与 glass 近似；additive-lightshaft 已有最小 additive pipeline，并已消费第一组 `lightshaft.shpk` 参数，但完整 lightshaft 节点行为尚未实现。
 - 多套 UV 已开始通过 prepared source 和 per-role UV scroll 参与采样；Map1/UV1Scroll、tile/detail arrays 与 Flow primary tangent 已参与 shading，但 secondary tangent frame、`color1`、`flow1`、detail/multi maps 的完整解释仍未完成。
 - alpha/glass/transparency 已从固定 glass opacity 前进到 prepared alpha source：character glass/transparency 强制进入对应 pass，normal B 驱动 alpha，`EnableLighting` 可控制 transparency lighting；`DrawDepthMode_Dither` 已驱动专用 depth-only prepass，使用与颜色 pass 一致的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值。`GlassBlendMode` 已作为显式 scene option 进入 renderer/Web/snapshot，但 Mul 仍保留现有 alpha-blend 近似，Add 只选择硬件 additive pipeline；折射和真实厚度传输仍缺失，且尚无真实 charactertransparency 武器样本。Meddle 只确认 `DrawDepthMode_Dither` 的 material key/value 与适用 SHPK，没有游戏抖动公式；MeddleTools 不实现运行时 depth pass，因此当前公式是保守近似。它仍与 scene-level `ApplyDitherClip` 区分，后者覆盖更多 shader family。`GlassBlendMode` 也只有 scene key 的 Mul/Add 名字与默认值，没有 MTRL 来源或 MeddleTools 节点语义，因此没有写入 parsed material。
-- `characterstockings.shpk` 当前 prepared alpha source 已强制为 Opaque，但 render pass 仍可能沿用静态 base alpha/alpha-test 分类进入 Cutout/Transparent，与 MeddleTools `meddle character.shpk` 中 `IS_STOCKING` 将最终 alpha 强制为 1 的节点行为不一致。下一批先让 stockings surface 固定使用 opaque pass，并增加 synthetic prepared/renderer tests。Meddle `OnRenderMaterialUtil` 同时证明 stockings 会复制 runtime skin material textures 并应用 legacy body decal；离线 loader 尚无这些运行时输入，因此修正 alpha/pipeline 后仍保留 `incompleteShaderFamilyLogic`，不宣称完整支持。
+- `characterstockings.shpk` 已按 MeddleTools `meddle character.shpk` 的 `IS_STOCKING` 节点行为把最终 alpha source 和普通 surface render pass 都固定为 Opaque；即使静态 base alpha 或 alpha-test 预分类为 Mask/Blend，也不会误进 Cutout/Transparent。Glass/Crest/LightShaft 等 mesh draw role 仍保持更高优先级。Meddle `OnRenderMaterialUtil` 同时证明 stockings 会复制 runtime skin material textures 并应用 legacy body decal；离线 loader 尚无这些运行时输入，因此仍保留 `incompleteShaderFamilyLogic`，不宣称完整支持。
 - renderer debug view 已能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果；更细的 per-texture independent sampler policy 仍未实现。
 
 计划：
@@ -578,7 +578,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；下一步继续结构化 shader-family-specific texture role/UV 规则，并寻找能覆盖 bg detail、reflection、stockings、tattoo、occlusion 的真实武器样本。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
 2. 结果处理：把当前在 WGSL 中的 tile layer、detail layer、ORB 通道和组合权重逐步提升为更明确的 prepared 规则，尤其处理 TileMatrix float channels、detail/multi-detail mask 和越界诊断，减少 renderer 内部猜测。
-3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow 与 water direct alpha/deep color/primary wave 已完成第一版。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。当前推进 stockings 最终 alpha/pipeline 对齐：固定 opaque pass，但继续把 runtime skin texture/body decal 标成未支持；随后推进 reflection/tattoo/occlusion 或 multi map mask。
+3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline 与 water direct alpha/deep color/primary wave 已完成第一版。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。stockings runtime skin texture/body decal 继续标成未支持；下一步推进 reflection/tattoo/occlusion 或 multi map mask。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
 
@@ -610,7 +610,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 ### 第三阶段：shader family 和运行时替代输入
 
-1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；其中这些 shader package 已先进入 `MaterialShaderFamily` 分类，具体节点逻辑仍待实现。
+1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；这些 shader package 已进入 `MaterialShaderFamily` 分类，stockings 已对齐可由静态输入证明的 opaque alpha/pipeline，但 runtime skin texture/body decal 仍缺失，其它 family 继续补具体节点逻辑。
 2. 已完成 STM lookup/row override、同步/异步 weapon load、prepared diagnostics、EXD metadata、Web stain0/stain1 选择器和首个正式染色视觉 snapshot；后续扩充第二通道与 metallic case。
 3. 已完成 decal/crest 透明 fallback 与 materialChange 基础材质 fallback 的 prepared 语义和 renderer 执行；后续在需要时设计显式 runtime texture 输入。
 4. 评估离线 bake/atlas 路线。

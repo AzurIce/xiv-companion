@@ -1655,6 +1655,9 @@ fn prepared_render_pass(
     if matches!(shader_family, MaterialShaderFamily::CharacterTransparency) {
         return PreparedRenderPass::Transparent;
     }
+    if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
+        return PreparedRenderPass::Opaque;
+    }
 
     let Some(material) = material else {
         return PreparedRenderPass::Opaque;
@@ -2461,7 +2464,13 @@ mod color_table_bake_tests {
         material.shader_package_name = Some("characterstockings.shpk".to_string());
         material.alpha_mode = MaterialAlphaMode::Blend;
         let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
         assert_eq!(prepared.alpha_policy.source, PreparedAlphaSource::Opaque);
+
+        material.alpha_mode = MaterialAlphaMode::Mask;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
+        assert!(prepared.unsupported_inputs.incomplete_shader_family_logic);
     }
 
     #[test]

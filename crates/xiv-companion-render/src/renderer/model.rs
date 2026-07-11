@@ -3295,6 +3295,14 @@ mod tests {
             ),
             PreparedRenderPass::Transparent
         );
+
+        let mut stockings = fallback_material();
+        stockings.shader_package_name = Some("characterstockings.shpk".to_string());
+        stockings.alpha_mode = MaterialAlphaMode::Blend;
+        stockings.render_mode = MaterialRenderMode::Transparent;
+        let prepared = prepare_material_for_draw_role(Some(&stockings), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
+        assert!(prepared.render_pass.uses_opaque_pipeline());
     }
 
     #[test]
