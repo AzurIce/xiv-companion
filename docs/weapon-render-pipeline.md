@@ -175,10 +175,10 @@ tile normal 会与 primary tangent-space normal 组合，贡献权重为采样 n
    - diffuse RGB 为 sRGB，Alpha 固定不透明；`TileAlpha` 是 tile 属性，不作为材质透明度。
    - specular RGB 为 sRGB，Alpha 保存 ColorTable `Anisotropy`。
    - material-properties 为线性 unorm，通道为 metalness / roughness / gloss strength / specular strength。
-   - tile/sheen/sphere/tile-matrix 与 MeddleTools 的 extra ramps 对齐；tile-matrix 的 UU/UV/VU/VV 同时保留 float channels，并以 `Rgba32Float` 上传，避免 RGBA8 截断负 skew 和大于 1 的 repeat。
+   - tile/sheen/sphere/tile-matrix 与 MeddleTools 的 extra ramps 对齐；Dawntrail raw TileIndex/SphereIndex 均先从 half bits 解码，再分别按 0..64/0..255 写入 UNORM。low-level material debug 仍保留原始 `u16`。tile-matrix 的 UU/UV/VU/VV 同时保留 float channels，并以 `Rgba32Float` 上传，避免 RGBA8 截断负 skew 和大于 1 的 repeat。
 4. 若 ColorTable 有 emissive，则额外启用 emissive texture。
 
-当前实现同时支持 Dawntrail 32 行和 Legacy 16 行 ColorTable。renderer 已消费 diffuse/base、specular、material-properties、emissive，并已把 tile、sheen、sphere、tile-matrix extra maps 绑定进 WGSL；tile properties 还会驱动共享 tile normal/ORB atlas 的逐像素 layer selection。TileMatrix binding 使用 unfilterable `Rgba32Float` 与 non-filtering nearest sampler，float payload 无效时逐通道回退 RGBA8/identity；Blender `tile_select` 证明它只形成 tile UV vector，WGSL 已删除旧的 matrix-delta specular。互补 synthetic fixtures 证明 patterned tile 在 scale 1/2 下输出不同，而 uniform tile 在同样矩阵变化下逐像素一致。独立 synthetic fixture 还确认只改变 sheen rate/tint/aptitude 或 sphere index/mask 会分别改变最终画面，证明两个 ramp 的 binding 与当前近似消费没有静默失效；该结果不代表近似公式等价于游戏 shader。完整 MeddleTools 节点图仍未复刻。
+当前实现同时支持 Dawntrail 32 行和 Legacy 16 行 ColorTable。renderer 已消费 diffuse/base、specular、material-properties、emissive，并已把 tile、sheen、sphere、tile-matrix extra maps 绑定进 WGSL；tile properties 还会驱动共享 tile normal/ORB atlas 的逐像素 layer selection。45059 真实材质包含 raw `SphereIndex=0x4000`，语义 half 值为 `2.0`；修正后的 sphere-properties 贴图平均 R 为精确的 `2/255`，验证不再把 raw bits 错误烘焙为饱和 1。TileMatrix binding 使用 unfilterable `Rgba32Float` 与 non-filtering nearest sampler，float payload 无效时逐通道回退 RGBA8/identity；Blender `tile_select` 证明它只形成 tile UV vector，WGSL 已删除旧的 matrix-delta specular。互补 synthetic fixtures 证明 patterned tile 在 scale 1/2 下输出不同，而 uniform tile 在同样矩阵变化下逐像素一致。独立 synthetic fixture 还确认只改变 sheen rate/tint/aptitude 或 sphere index/mask 会分别改变最终画面，证明两个 ramp 的 binding 与当前近似消费没有静默失效；该结果不代表近似公式等价于游戏 shader。完整 MeddleTools 节点图仍未复刻。
 
 ## 7. 材质模式
 

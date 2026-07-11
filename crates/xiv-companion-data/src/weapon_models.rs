@@ -4200,7 +4200,7 @@ fn weapon_color_table_rows(
                     sheen_rate: row.sheen_rate,
                     sheen_tint: row.sheen_tint,
                     sheen_aperture: row.sheen_aperture,
-                    sphere_index: f32::from(row.sphere_index),
+                    sphere_index: dawntrail_sphere_index(row.sphere_index),
                     sphere_mask: row.sphere_mask,
                     tile_matrix: [
                         row.material_repeat[0],
@@ -4239,6 +4239,11 @@ fn weapon_color_table_rows(
 #[cfg(feature = "game-data")]
 fn dawntrail_tile_index(tile_set: u16) -> f32 {
     half_to_f32(tile_set) * 64.0
+}
+
+#[cfg(feature = "game-data")]
+fn dawntrail_sphere_index(sphere_index: u16) -> f32 {
+    half_to_f32(sphere_index)
 }
 
 #[cfg(feature = "game-data")]
@@ -5733,7 +5738,7 @@ mod weapon_material_tests {
         assert_eq!(rows[0].sheen_rate, row.sheen_rate);
         assert_eq!(rows[0].sheen_tint, row.sheen_tint);
         assert_eq!(rows[0].sheen_aperture, row.sheen_aperture);
-        assert_eq!(rows[0].sphere_index, f32::from(row.sphere_index));
+        assert_eq!(rows[0].sphere_index, 2.0);
         assert_eq!(rows[0].sphere_mask, row.sphere_mask);
         assert_eq!(
             rows[0].tile_matrix,
@@ -5744,6 +5749,10 @@ mod weapon_material_tests {
                 row.material_skew[1],
             ]
         );
+
+        let baked = bake_color_table_maps(&[rows[0], rows[0]], &[0, 0, 0, 255])
+            .expect("bake Dawntrail sphere properties");
+        assert_eq!(baked.sphere_properties_rgba[0], 2);
     }
 
     #[test]
@@ -5766,6 +5775,7 @@ mod weapon_material_tests {
         assert_eq!(debug.rows[0].sheen_tint, Some(row.sheen_tint));
         assert_eq!(debug.rows[0].sheen_aperture, Some(row.sheen_aperture));
         assert_eq!(debug.rows[0].sphere_mask, Some(row.sphere_mask));
+        assert_eq!(debug.rows[0].sphere_index, Some(0x4000));
         assert_eq!(
             debug.rows[0].tile_matrix,
             Some([
@@ -7351,7 +7361,7 @@ mod weapon_material_tests {
             shader_index: 3,
             tile_set: 0x3400,
             tile_alpha: 0.88,
-            sphere_index: 5,
+            sphere_index: 0x4000,
             material_repeat: [1.25, 1.5],
             material_skew: [0.25, 0.5],
         }

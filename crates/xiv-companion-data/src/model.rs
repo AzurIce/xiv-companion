@@ -2213,7 +2213,8 @@ impl Default for ColorTableRowColors {
 /// 额外的 ColorTable 语义贴图同样为线性 unorm，用于预览 MeddleTools 中的
 /// TileProperties / SheenProperties / SphereProperties / TileMatrixProperties ramp。
 /// TileMatrix 同时在 `tile_matrix_rgba_f32` 中保留未 clamp 的 UU / UV / VU / VV。
-/// TileIndex 按 0..64 归一化，SphereIndex 按 0..255 归一化。
+/// TileIndex 与 SphereIndex 在调用前已从 Dawntrail half bits 解码，
+/// bake 时分别按 0..64 与 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
     pub diffuse_rgba: Vec<u8>,
