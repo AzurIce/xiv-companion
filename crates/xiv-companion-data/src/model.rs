@@ -817,6 +817,7 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_scroll: bool,
     pub uses_flow: bool,
     pub uses_dye: bool,
+    pub uses_outline: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1246,6 +1247,19 @@ pub fn prepared_material_feature_flags(
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
     flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4])
         || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
+    flags.uses_outline = material.outline_width.is_finite()
+        && material.outline_width > 0.0
+        && matches!(
+            shader_family,
+            MaterialShaderFamily::Character
+                | MaterialShaderFamily::CharacterStockings
+                | MaterialShaderFamily::CharacterGlass
+                | MaterialShaderFamily::CharacterReflection
+                | MaterialShaderFamily::CharacterTransparency
+                | MaterialShaderFamily::CharacterScroll
+                | MaterialShaderFamily::CharacterTattoo
+                | MaterialShaderFamily::CharacterOcclusion
+        );
 
     flags
 }
@@ -2296,6 +2310,8 @@ mod color_table_bake_tests {
         material.detail_id = 3.0;
         material.detail_color_uv_scale = [8.0, 4.0, 4.0, 4.0];
         material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        material.outline_width = 0.01;
+        material.shader_package_name = Some("character.shpk".to_string());
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -2308,7 +2324,15 @@ mod color_table_bake_tests {
                 uses_scroll: true,
                 uses_flow: false,
                 uses_dye: true,
+                uses_outline: true,
             }
+        );
+
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_outline
         );
 
         material = test_material();

@@ -393,7 +393,7 @@ fn render_case(
         .with_context(|| format!("failed to create {}", case_dir.display()))?;
 
     let request = WeaponModelLoadRequest::from(item).with_stain_ids(case.stain_ids);
-    let model = load_weapon_model_from_resource_request(resource, &request)
+    let mut model = load_weapon_model_from_resource_request(resource, &request)
         .with_context(|| format!("failed to load model for {}", case.case_id))?;
     anyhow::ensure!(
         model.stain_ids == case.stain_ids,
@@ -416,6 +416,12 @@ fn render_case(
             case.case_id,
             case.stain_ids
         );
+    }
+    if let Some(outline_width) = phantom_outline_width() {
+        for material in &mut model.materials {
+            material.outline_width = outline_width;
+            material.outline_color = [1.0, 0.05, 0.02, 1.0];
+        }
     }
     let snapshot = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("snapshot")
@@ -543,6 +549,18 @@ fn parse_phantom_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
     }
 }
 
+fn phantom_outline_width() -> Option<f32> {
+    parse_phantom_outline_width(&std::env::var("XIV_PHANTOM_OUTLINE_WIDTH").unwrap_or_default())
+}
+
+fn parse_phantom_outline_width(value: &str) -> Option<f32> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .map(|width| width.min(0.1))
+}
+
 #[test]
 fn phantom_glass_blend_mode_parser_preserves_scene_choice() {
     assert_eq!(
@@ -557,6 +575,14 @@ fn phantom_glass_blend_mode_parser_preserves_scene_choice() {
         parse_phantom_glass_blend_mode("unknown"),
         ModelGlassBlendMode::Multiply
     );
+}
+
+#[test]
+fn phantom_outline_width_parser_clamps_synthetic_override() {
+    assert_eq!(parse_phantom_outline_width("0.02"), Some(0.02));
+    assert_eq!(parse_phantom_outline_width("2"), Some(0.1));
+    assert_eq!(parse_phantom_outline_width("0"), None);
+    assert_eq!(parse_phantom_outline_width("invalid"), None);
 }
 
 fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {

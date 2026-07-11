@@ -140,6 +140,7 @@ pub struct ModelRenderer {
     cutout_culled_pipeline: wgpu::RenderPipeline,
     dither_depth_pipeline: wgpu::RenderPipeline,
     dither_depth_culled_pipeline: wgpu::RenderPipeline,
+    outline_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
     transparent_culled_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
@@ -217,7 +218,7 @@ impl ModelRenderer {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -550,6 +551,12 @@ impl ModelRenderer {
             ModelPipelineBlend::DitherDepth,
             true,
         );
+        let outline_pipeline = create_outline_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon outline pipeline",
+        );
         let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
@@ -661,6 +668,7 @@ impl ModelRenderer {
             cutout_culled_pipeline,
             dither_depth_pipeline,
             dither_depth_culled_pipeline,
+            outline_pipeline,
             transparent_pipeline,
             transparent_culled_pipeline,
             glass_pipeline,
@@ -810,6 +818,15 @@ impl ModelRenderer {
                 } else {
                     &self.dither_depth_culled_pipeline
                 });
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            render_pass.set_pipeline(&self.outline_pipeline);
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.uses_outline_pass())
+            {
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
@@ -1190,6 +1207,60 @@ fn create_model_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
             depth_write_enabled: Some(blend_mode.writes_depth()),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_outline_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_outline"),
+            buffers: &[GpuVertex::layout()],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_outline"),
+            targets: &[
+                Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Front),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -2798,6 +2869,16 @@ impl DrawBatch {
         self.pass() == PreparedRenderPass::Glass
             && matches!(glass_blend_mode, ModelGlassBlendMode::Additive)
     }
+
+    fn uses_outline_pass(&self) -> bool {
+        self.prepared_material.feature_flags.uses_outline
+            && matches!(
+                self.draw_role,
+                ModelMeshDrawRole::Normal
+                    | ModelMeshDrawRole::Glass
+                    | ModelMeshDrawRole::MaterialChange
+            )
+    }
 }
 
 #[repr(C)]
@@ -3124,6 +3205,23 @@ mod tests {
 
         let transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
         assert!(!transparent.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
+    }
+
+    #[test]
+    fn outline_pass_only_selects_eligible_surface_batches() {
+        let mut normal = test_batch(0, PreparedRenderPass::Opaque, [0.0; 3]);
+        normal.prepared_material.feature_flags.uses_outline = true;
+        assert!(normal.uses_outline_pass());
+
+        let mut lightshaft = test_batch(1, PreparedRenderPass::AdditiveLightShaft, [0.0; 3]);
+        lightshaft.prepared_material.feature_flags.uses_outline = true;
+        lightshaft.draw_role = ModelMeshDrawRole::LightShaft;
+        assert!(!lightshaft.uses_outline_pass());
+
+        let mut crest = test_batch(2, PreparedRenderPass::Transparent, [0.0; 3]);
+        crest.prepared_material.feature_flags.uses_outline = true;
+        crest.draw_role = ModelMeshDrawRole::CrestChange;
+        assert!(!crest.uses_outline_pass());
     }
 
     #[test]
