@@ -947,6 +947,7 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub secondary_map_blend: bool,
     pub environment_mapping: bool,
     pub multi_map_interpretation: bool,
+    pub character_reflection: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1572,6 +1573,7 @@ pub fn prepared_material_unsupported_inputs(
         }),
         environment_mapping: texture_bindings.environment.is_some(),
         multi_map_interpretation: texture_bindings.multi_map.is_some(),
+        character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
     }
 }
 
@@ -2828,6 +2830,7 @@ mod color_table_bake_tests {
                 secondary_map_blend: false,
                 environment_mapping: false,
                 multi_map_interpretation: true,
+                character_reflection: true,
             }
         );
         assert_eq!(
@@ -2848,6 +2851,7 @@ mod color_table_bake_tests {
                 secondary_map_blend: false,
                 environment_mapping: false,
                 multi_map_interpretation: true,
+                character_reflection: true,
             }
         );
 
@@ -2883,6 +2887,11 @@ mod color_table_bake_tests {
         material.shader_package_name = Some("characterocclusion.shpk".to_string());
         let occlusion = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(occlusion.unsupported_inputs.runtime_sub_color);
+
+        material.shader_package_name = Some("characterreflection.shpk".to_string());
+        let reflection = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(reflection.unsupported_inputs.character_reflection);
+        assert!(reflection.unsupported_inputs.incomplete_shader_family_logic);
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
