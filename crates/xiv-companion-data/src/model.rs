@@ -834,6 +834,7 @@ pub enum PreparedAlphaSource {
     BaseColorAlpha,
     NormalBlue,
     MaterialTransparency,
+    NormalAlpha,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1324,6 +1325,8 @@ pub fn prepared_material_alpha_policy(
         PreparedAlphaSource::MaterialTransparency
     } else if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
         PreparedAlphaSource::Opaque
+    } else if matches!(shader_family, MaterialShaderFamily::CharacterTattoo) {
+        PreparedAlphaSource::NormalAlpha
     } else if matches!(
         shader_family,
         MaterialShaderFamily::CharacterGlass | MaterialShaderFamily::CharacterTransparency
@@ -2532,6 +2535,17 @@ mod color_table_bake_tests {
         let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
         assert!(prepared.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        material.alpha_mode = MaterialAlphaMode::Blend;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalAlpha
+        );
+        assert!(prepared.unsupported_inputs.runtime_option_color);
+        assert!(prepared.unsupported_inputs.runtime_decal_color);
     }
 
     #[test]

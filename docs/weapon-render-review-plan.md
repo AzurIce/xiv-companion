@@ -79,7 +79,7 @@
 - `characterreflection.shpk` 已有独立 `characterReflection` unsupported 字段，并继续保留 `incompleteShaderFamilyLogic`。Meddle/MeddleTools 搜索未发现静态 reflection sampler、on-render replacement 或对应节点组，MeddleTools 也没有把它映射回 `character.shpk`；现 renderer 因而明确标为 generic character approximation，不把 Environment/sphere/specular 资源猜作 reflection 输入。该标记会保持到获得真实 SHPK 节点或样本证据。
 - `g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `alphaParams` uniform；WGSL 当前只在 aperture/offset 非默认时对非 glass/lightshaft alpha 做受限 shaping，`g_ShadowAlphaThreshold` 仍未驱动 shadow pass。
 - character transparency/glass 的控制入口已结构化：`ModelMaterial.drawDepthMode` 保留 `None/Dither/Unknown`，`lightingMode` 保留 default/enabled/disabled/unknown；`PreparedMaterial.alphaPolicy` 输出 alpha source、depth mode 与 lighting enabled。MeddleTools `shaders.blend` 进一步确认普通 character Alpha 输出来自 `g_SamplerNormal` Blue，stockings 分支强制为 1；renderer 已按该规则让 character blend/glass/transparency 从 normal B 取 alpha，并让 `EnableLightingOff` 的 character transparency 走 unlit surface。`GlassBlendMode` 已作为显式 scene option 进入 renderer、Web 和 snapshot；Mul/Add 当前分别使用现有 alpha blend 与 additive pipeline 近似。
-- MeddleTools `meddle charactertattoo.shpk` 节点图明确把 `g_SamplerNormal` Alpha 连接到材质 Alpha，而不是复用普通 character 的 normal Blue。当前 `PreparedAlphaSource` 无法表达该差异，非 opaque tattoo 会被错误归入 `NormalBlue`。下一步增加独立 `NormalAlpha` source，renderer uniform 编码为 `4.0`，并让 dither depth 与主 fragment 的 alpha resolver 同时接收 normal B/A；只修正可静态证明的 alpha，依赖运行时 `OptionColor`/`DecalColor` 的 base color 混合继续保持 unsupported。
+- MeddleTools `meddle charactertattoo.shpk` 节点图明确把 `g_SamplerNormal` Alpha 连接到材质 Alpha，而不是复用普通 character 的 normal Blue。`PreparedAlphaSource::NormalAlpha` 已表达该差异，renderer uniform 编码为 `4.0`，dither depth 与主 fragment 的 alpha resolver 均接收 normal B/A 并按 source 选择；只修正可静态证明的 alpha，依赖运行时 `OptionColor`/`DecalColor` 的 base color 混合继续保持 unsupported。
 - `ModelDebugMode` 已提供 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、tile/sheen/sphere properties、tile matrix，以及 tile normal/ORB、detail diffuse/normal atlas 选层结果；Web 控件和 snapshot/test render options 共用同一入口。phantom 可通过 `XIV_PHANTOM_ARRAY_DEBUG=1` 输出四张数组诊断图。
 
 主要缺口集中在：
@@ -520,9 +520,9 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 character transparency/glass 与 water 已完成第一版 alpha source / prepared policy：
 
 - `DrawDepthMode` / `EnableLighting` 已结构化并进入 `PreparedMaterial.alphaPolicy`；character glass/transparency 会强制进入 Glass/Transparent pass。
-- MeddleTools `shaders.blend` 已确认普通 character alpha 使用 normal Blue、stockings 强制 1，而 `charactertattoo.shpk` 使用 normal Alpha。tattoo 尚需增加独立 prepared alpha source 和 WGSL 通道选择；ColorTable baked base 不再写固定 glass alpha，glass 材质 opacity 不再重复乘 0.28。
+- MeddleTools `shaders.blend` 已确认普通 character alpha 使用 normal Blue、stockings 强制 1，而 `charactertattoo.shpk` 使用 normal Alpha。tattoo 已使用独立 `NormalAlpha` prepared source 和 WGSL 通道选择；native WGPU synthetic fixture 固定 normal B、只改变 A，并验证颜色输出随 A 变化。ColorTable baked base 不再写固定 glass alpha，glass 材质 opacity 不再重复乘 0.28。
 - WGSL 已用 normal B 驱动 character glass/transparency alpha，`EnableLightingOff` 可关闭 transparency lighting，并提高 glass transmission tint，45059 灰暗球体回归已明显改善。
-- `DrawDepthMode_Dither` 已执行专用 depth prepass：opaque/cutout 后、transparent/glass 颜色 pass 前，只选择 prepared depth mode 为 Dither 的透明 batch；WGSL 复用颜色 pass 的 base-alpha/normal-B alpha 计算，按稳定 4x4 屏幕空间阈值 discard；pipeline 只写 depth，两个颜色 target 的 write mask 为空，原透明颜色 pass 继续不写 depth。双面和背面剔除材质各有对应 pipeline。该公式是缺少游戏 shader 实现时的保守近似，不扩展为 `ApplyDitherClip` scene-key 行为。
+- `DrawDepthMode_Dither` 已执行专用 depth prepass：opaque/cutout 后、transparent/glass 颜色 pass 前，只选择 prepared depth mode 为 Dither 的透明 batch；WGSL 复用颜色 pass 的 prepared alpha source（包括普通 character 的 normal B 与 tattoo 的 normal A）计算，按稳定 4x4 屏幕空间阈值 discard；pipeline 只写 depth，两个颜色 target 的 write mask 为空，原透明颜色 pass 继续不写 depth。双面和背面剔除材质各有对应 pipeline。该公式是缺少游戏 shader 实现时的保守近似，不扩展为 `ApplyDitherClip` scene-key 行为。
 - `GlassBlendMode` 已成为显式 `ModelGlassBlendMode::{Multiply, Additive}` renderer input。默认 Multiply 保持当前 alpha-blend glass pipeline；Additive 只把 Glass batch 切到 additive pipeline，不影响普通 Transparent 或 LightShaft 分类。Web 渲染面板已增加 Glass Mul/Add 选项；phantom harness 可通过 `XIV_PHANTOM_GLASS_BLEND=additive` 验证。45059 默认 Mul 保持原透明雪景，Add 会明显高亮，说明分派生效。由于没有真实 blend equation 证据，Multiply 暂不改成硬件乘法，Add 也只视为近似；折射、真实厚度和 scene color transmission 仍未实现。
 - water/river 已确认并接入 `g_Transparency -> Alpha`、`g_WaterDeepColor -> Base Color`、primary wave RG normal；refraction/whitecap/WaveMap1 等待额外证据。
 - 区分 cutout、blend、glass、additive。
@@ -585,7 +585,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；stockings/tattoo runtime input diagnostics、Environment role 与 `GetSubColor` Face/Hair mode 均已结构化，occlusion 的 runtime sub-color 依赖已进入 prepared diagnostics。下一步继续 shader-family-specific texture role/UV 规则和真实样本调查。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
 2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。下一步把当前在 WGSL 中的 tile layer、detail layer、ORB 通道和组合权重逐步提升为更明确的 prepared 规则，尤其处理 TileMatrix float channels、detail/multi-detail mask 和越界诊断，减少 renderer 内部猜测。
-3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline 与 water direct alpha/deep color/primary wave 已完成第一版。下一项先按 MeddleTools 节点证据把 tattoo alpha 从错误的 normal B 修正为 normal A，并同时覆盖颜色 pass 与 dither depth；OptionColor/DecalColor 混色仍不猜测。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。characterReflection generic approximation 与 stockings/tattoo/occlusion runtime 输入均已有独立 diagnostic；后续再寻找真实 reflection 节点/样本。
+3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline、tattoo normal-A alpha 与 water direct alpha/deep color/primary wave 已完成第一版。tattoo 的 OptionColor/DecalColor 混色仍不猜测。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。characterReflection generic approximation 与 stockings/tattoo/occlusion runtime 输入均已有独立 diagnostic；后续再寻找真实 reflection 节点/样本。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
 
@@ -617,7 +617,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 ### 第三阶段：shader family 和运行时替代输入
 
-1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；这些 shader package 已进入 `MaterialShaderFamily` 分类，stockings 已对齐可由静态输入证明的 opaque alpha/pipeline，tattoo 下一步先对齐可证明的 normal-A alpha，runtime skin texture/body decal 与 OptionColor/DecalColor 仍缺失，其它 family 继续补具体节点逻辑。
+1. character glass/transparency/scroll/lightshaft/reflection/stockings/tattoo/occlusion 逐个补齐；这些 shader package 已进入 `MaterialShaderFamily` 分类，stockings 已对齐可由静态输入证明的 opaque alpha/pipeline，tattoo 已对齐可证明的 normal-A alpha；runtime skin texture/body decal 与 OptionColor/DecalColor 仍缺失，其它 family 继续补具体节点逻辑。
 2. 已完成 STM lookup/row override、同步/异步 weapon load、prepared diagnostics、EXD metadata、Web stain0/stain1 选择器和首个正式染色视觉 snapshot；后续扩充第二通道与 metallic case。
 3. 已完成 decal/crest 透明 fallback 与 materialChange 基础材质 fallback 的 prepared 语义和 renderer 执行；后续在需要时设计显式 runtime texture 输入。
 4. 评估离线 bake/atlas 路线。

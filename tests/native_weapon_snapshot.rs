@@ -120,6 +120,45 @@ fn render_mock_water_material_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic tattoo alpha snapshots with native wgpu"]
+fn render_mock_tattoo_normal_alpha_snapshot() {
+    let low_alpha = mock_tattoo_model(32);
+    let high_alpha = mock_tattoo_model(224);
+    let render = |name, model| {
+        render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic tattoo snapshot")
+    };
+
+    let low_snapshot = render("native-tattoo-normal-alpha-low", &low_alpha);
+    let high_snapshot = render("native-tattoo-normal-alpha-high", &high_alpha);
+    let pixels = |path| {
+        image::open(path)
+            .expect("decode synthetic tattoo PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let low_pixels = pixels(low_snapshot.png_path);
+    let high_pixels = pixels(high_snapshot.png_path);
+    let rgb_difference: u64 = low_pixels
+        .chunks_exact(4)
+        .zip(high_pixels.chunks_exact(4))
+        .map(|(low, high)| {
+            (0..3)
+                .map(|channel| low[channel].abs_diff(high[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    assert!(
+        rgb_difference > 100_000,
+        "tattoo output must respond to normal alpha when normal blue is unchanged"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic bguvscroll Map1 snapshots with native wgpu"]
 fn render_mock_secondary_scroll_map_snapshot() {
     let primary = mock_secondary_scroll_model(0.0);
@@ -273,6 +312,80 @@ fn mock_secondary_scroll_model(vertex_alpha: f32) -> WeaponModelData {
             material_index: 0,
             material_slot: 0,
             material_name: "synthetic bguvscroll".to_string(),
+            color: [1.0; 3],
+            bone_table: None,
+            vertices,
+            indices: vec![0, 1, 2, 0, 2, 3],
+        }],
+    }
+}
+
+fn mock_tattoo_model(normal_alpha: u8) -> WeaponModelData {
+    let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
+        "slot": 0,
+        "materialIndex": 0,
+        "name": "synthetic tattoo",
+        "path": null,
+        "shaderPackageName": "charactertattoo.shpk",
+        "alphaMode": "blend",
+        "drawDepthMode": "dither",
+        "shaderDiffuseColor": [1.0, 1.0, 1.0, 1.0],
+        "fallbackColor": [0.95, 0.25, 0.2],
+        "diffuseColor": [1.0, 1.0, 1.0],
+        "specularColor": [0.0, 0.0, 0.0],
+        "emissiveColor": [0.7, 0.08, 0.04],
+        "roughness": 1.0,
+        "metalness": 0.0,
+        "textureIndices": [0],
+        "normalTexture": 0,
+    }))
+    .expect("deserialize synthetic tattoo material");
+    let texture = WeaponModelTexture {
+        path: "synthetic/tattoo_normal.tex".to_string(),
+        kind: ModelTextureKind::Normal,
+        width: 1,
+        height: 1,
+        array_size: 1,
+        array_layer_height: 0,
+        rgba: vec![128, 128, 255, normal_alpha],
+        rgba_f32: None,
+    };
+    let positions = [
+        [-0.8, -0.8, 0.0],
+        [0.8, -0.8, 0.0],
+        [0.8, 0.8, 0.0],
+        [-0.8, 0.8, 0.0],
+    ];
+    let vertices = positions
+        .into_iter()
+        .map(|position| vertex(position, [1.0; 4]))
+        .collect();
+
+    WeaponModelData {
+        item_id: 4,
+        item_name: "Synthetic Tattoo".to_string(),
+        model_main: PackedModelId::from_raw(4),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics: Vec::new(),
+        loaded_paths: vec!["synthetic/tattoo.mdl".to_string()],
+        bounds: WeaponModelBounds {
+            min: [-0.8, -0.8, 0.0],
+            max: [0.8, 0.8, 0.0],
+            center: [0.0, 0.0, 0.0],
+            radius: 1.2,
+        },
+        materials: vec![material],
+        textures: vec![texture],
+        meshes: vec![WeaponModelMesh {
+            path: "synthetic/tattoo.mdl".to_string(),
+            part_index: 0,
+            mesh_category: Some("normal".to_string()),
+            submesh: None,
+            shape_influences: Vec::new(),
+            material_index: 0,
+            material_slot: 0,
+            material_name: "synthetic tattoo".to_string(),
             color: [1.0; 3],
             bone_table: None,
             vertices,

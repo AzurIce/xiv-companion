@@ -2556,6 +2556,7 @@ fn material_alpha_policy_params(prepared_material: PreparedMaterial) -> [f32; 4]
         PreparedAlphaSource::BaseColorAlpha => 1.0,
         PreparedAlphaSource::NormalBlue => 2.0,
         PreparedAlphaSource::MaterialTransparency => 3.0,
+        PreparedAlphaSource::NormalAlpha => 4.0,
     };
     let pass = match prepared_material.render_pass {
         PreparedRenderPass::Transparent => 1.0,
@@ -3893,6 +3894,9 @@ mod tests {
         prepared.render_pass = PreparedRenderPass::Transparent;
         prepared.alpha_policy.source = PreparedAlphaSource::MaterialTransparency;
         assert_eq!(material_alpha_policy_params(prepared), [3.0, 1.0, 0.0, 1.0]);
+
+        prepared.alpha_policy.source = PreparedAlphaSource::NormalAlpha;
+        assert_eq!(material_alpha_policy_params(prepared), [4.0, 1.0, 0.0, 1.0]);
     }
 
     #[test]

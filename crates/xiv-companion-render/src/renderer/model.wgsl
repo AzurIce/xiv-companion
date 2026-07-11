@@ -12,7 +12,7 @@ struct Material {
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
     alpha_params: vec4<f32>, // x: aperture, y: offset, z: shadow alpha threshold, w: transparency
-    alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue 3=material transparency, y: lighting, z: dither depth, w: prepared pass
+    alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue 3=material transparency 4=normal alpha, y: lighting, z: dither depth, w: prepared pass
     water_deep_color: vec4<f32>,
     water_refraction_color: vec4<f32>,
     water_whitecap_color: vec4<f32>,
@@ -213,6 +213,7 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
         opacity_vertex_alpha,
         base_texture_alpha,
         sampled_normal.b,
+        sampled_normal.a,
         false,
         false,
     );
@@ -348,6 +349,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         opacity_vertex_alpha,
         base_texture_alpha,
         sampled_normal.b,
+        sampled_normal.a,
         is_lightshaft,
         is_crest_fallback,
     );
@@ -756,7 +758,10 @@ fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
     return mix(raw_alpha, shaped, shaping_enabled);
 }
 
-fn resolve_surface_alpha(base_alpha: f32, normal_blue: f32) -> f32 {
+fn resolve_surface_alpha(base_alpha: f32, normal_blue: f32, normal_alpha: f32) -> f32 {
+    if material.alpha_policy_params.x > 3.5 {
+        return clamp(normal_alpha, 0.0, 1.0);
+    }
     if material.alpha_policy_params.x > 2.5 {
         return clamp(material.alpha_params.w, 0.0, 1.0);
     }
@@ -773,10 +778,11 @@ fn resolve_material_alpha(
     vertex_alpha: f32,
     base_texture_alpha: f32,
     normal_blue: f32,
+    normal_alpha: f32,
     is_lightshaft: bool,
     is_crest_fallback: bool,
 ) -> f32 {
-    let texture_alpha = resolve_surface_alpha(base_texture_alpha, normal_blue);
+    let texture_alpha = resolve_surface_alpha(base_texture_alpha, normal_blue, normal_alpha);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
     let is_glass = material.alpha_policy_params.w > 1.5;
