@@ -2123,6 +2123,7 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
             textures,
             loaded_paths,
         );
+        let material = reuse_loaded_material_for_missing_reference(material, materials);
         materials.push(material);
         slots.push((material_index, slot));
     }
@@ -2744,6 +2745,7 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
             loaded_paths,
         )
         .await;
+        let material = reuse_loaded_material_for_missing_reference(material, materials);
         materials.push(material);
         slots.push((material_index, slot));
     }
@@ -4481,6 +4483,28 @@ fn fallback_weapon_material(
 }
 
 #[cfg(feature = "game-data")]
+fn reuse_loaded_material_for_missing_reference(
+    material: WeaponModelMaterial,
+    loaded_materials: &[WeaponModelMaterial],
+) -> WeaponModelMaterial {
+    if material.path.is_some() {
+        return material;
+    }
+    let Some(source) = loaded_materials
+        .iter()
+        .find(|source| source.material_index == material.material_index && source.path.is_some())
+    else {
+        return material;
+    };
+
+    let mut reused = source.clone();
+    reused.slot = material.slot;
+    reused.material_index = material.material_index;
+    reused.name = material.name;
+    reused
+}
+
+#[cfg(feature = "game-data")]
 fn brighter_color(current: [f32; 3], candidate: [f32; 3]) -> [f32; 3] {
     let current_luma = current[0] * 0.2126 + current[1] * 0.7152 + current[2] * 0.0722;
     let candidate_luma = candidate[0] * 0.2126 + candidate[1] * 0.7152 + candidate[2] * 0.0722;
@@ -6022,6 +6046,64 @@ mod weapon_material_tests {
         );
         assert!(prepared.unsupported_inputs.runtime_skin_color);
         assert!(model.bounds.radius.is_finite() && model.bounds.radius > 0.0);
+    }
+
+    #[test]
+    fn missing_material_reference_reuses_loaded_same_index() {
+        let mut source =
+            fallback_weapon_material(0, 0, "/mt_w3004b0001_a.mtrl".to_string(), [0.1, 0.2, 0.3]);
+        source.path = Some(
+            "chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl".to_string(),
+        );
+        source.shader_package_name = Some("character.shpk".to_string());
+        let missing =
+            fallback_weapon_material(1, 0, "/mt_w3103b0001_a.mtrl".to_string(), [0.4, 0.5, 0.6]);
+
+        let reused = reuse_loaded_material_for_missing_reference(missing, &[source]);
+
+        assert_eq!(reused.slot, 1);
+        assert_eq!(reused.material_index, 0);
+        assert_eq!(reused.name, "/mt_w3103b0001_a.mtrl");
+        assert_eq!(
+            reused.shader_package_name.as_deref(),
+            Some("character.shpk")
+        );
+        assert_eq!(
+            reused.path.as_deref(),
+            Some("chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_43624_reuses_primary_material_for_stale_secondary_reference() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 43_624,
+            item_name: "帝国魔导双牙".to_string(),
+            model_main: 0x0000_0002_0001_0BBC,
+            model_sub: 0x0000_0002_0001_0BEE,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let secondary = model
+            .materials
+            .iter()
+            .find(|material| material.name == "/mt_w3103b0001_a.mtrl")
+            .expect("secondary material");
+
+        assert_eq!(
+            secondary.shader_package_name.as_deref(),
+            Some("character.shpk")
+        );
+        assert_eq!(
+            secondary.path.as_deref(),
+            Some("chara/weapon/w3004/obj/body/b0001/material/v0002/mt_w3004b0001_a.mtrl")
+        );
+        assert!(!secondary.texture_indices.is_empty());
     }
 
     #[test]

@@ -30,6 +30,8 @@ struct WeaponShaderFamilyAudit {
     family_counts: BTreeMap<String, usize>,
     candidates: Vec<WeaponShaderFamilyCandidate>,
     unclassified_materials: Vec<WeaponShaderFamilyCandidate>,
+    resource_collisions: Vec<WeaponMaterialResourceCollision>,
+    unresolved_material_references: Vec<WeaponUnresolvedMaterialReference>,
     failures: Vec<String>,
 }
 
@@ -44,6 +46,31 @@ struct WeaponShaderFamilyCandidate {
     material_path: String,
     shader_package_name: String,
     shader_family: MaterialShaderFamily,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WeaponMaterialResourceCollision {
+    item_ids: Vec<u32>,
+    item_names: Vec<String>,
+    model: PackedModelId,
+    model_path: String,
+    material_name: String,
+    candidate_path: String,
+    resource_type: String,
+    byte_length: usize,
+    header: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WeaponUnresolvedMaterialReference {
+    item_ids: Vec<u32>,
+    item_names: Vec<String>,
+    model: PackedModelId,
+    model_path: String,
+    material_name: String,
+    candidate_paths: Vec<String>,
 }
 
 #[test]
@@ -61,7 +88,27 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
     )
     .context("failed to export weapon catalog")?;
     let catalog_items = catalog.items.len();
-    let models = catalog_models(&catalog.items);
+    let item_ids = item_ids();
+    let selected_items = catalog
+        .items
+        .iter()
+        .filter(|item| item_ids.as_ref().is_none_or(|ids| ids.contains(&item.id)))
+        .cloned()
+        .collect::<Vec<_>>();
+    if item_ids.is_some() {
+        for item in &selected_items {
+            eprintln!(
+                "selected item {} {}: main={:016X} {:?}, sub={:016X} {:?}",
+                item.id,
+                item.name,
+                item.model_main,
+                item.primary_model(),
+                item.model_sub,
+                item.secondary_model()
+            );
+        }
+    }
+    let models = catalog_models(&selected_items);
     let unique_models = models.len();
     let scan_limit = scan_limit().unwrap_or(unique_models);
     let mut resource = SqPackResource::from_existing(game_dir_text);
@@ -74,6 +121,8 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         family_counts: BTreeMap::new(),
         candidates: Vec::new(),
         unclassified_materials: Vec::new(),
+        resource_collisions: Vec::new(),
+        unresolved_material_references: Vec::new(),
         failures: Vec::new(),
     };
 
@@ -161,29 +210,64 @@ fn scan_model<R: Resource>(
         .iter()
         .filter_map(|material| material.name.as_deref())
     {
-        let Some((material_path, material_bytes)) =
-            weapon_material_candidate_paths(model, &model_path, material_name)
-                .into_iter()
-                .find_map(|path| resource.read(&path).map(|bytes| (path, bytes)))
-        else {
-            report.failures.push(format!(
-                "{} material {} ({}) has no readable candidate",
-                model_path,
-                material_name,
-                item_label(items)
-            ));
+        let material_candidates =
+            weapon_material_candidate_paths(model, &model_path, material_name);
+        let platform = resource.platform();
+        let (material, readable_candidates) = first_valid_candidate(
+            &material_candidates,
+            |path| resource.read(path),
+            |bytes| physis::mtrl::Material::from_existing(platform, bytes),
+        );
+        let Some((material_path, material)) = material else {
+            if !readable_candidates.is_empty() {
+                report.failures.push(format!(
+                    "{} material {} ({}) has no parseable candidate; rejected: {}",
+                    model_path,
+                    material_name,
+                    item_label(items),
+                    readable_candidates
+                        .iter()
+                        .map(|(path, bytes)| format!(
+                            "{} [{}; bytes={}; header={}]",
+                            path,
+                            resource_type_hint(bytes),
+                            bytes.len(),
+                            hex_prefix(bytes, 32)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            } else {
+                report
+                    .unresolved_material_references
+                    .push(WeaponUnresolvedMaterialReference {
+                        item_ids: items.iter().map(|item| item.id).collect(),
+                        item_names: items.iter().map(|item| item.name.clone()).collect(),
+                        model,
+                        model_path: model_path.clone(),
+                        material_name: material_name.to_string(),
+                        candidate_paths: material_candidates,
+                    });
+            }
             continue;
         };
-        let Some(material) =
-            physis::mtrl::Material::from_existing(resource.platform(), &material_bytes)
-        else {
-            report.failures.push(format!(
-                "{} ({}) failed to parse",
-                material_path,
-                item_label(items)
-            ));
-            continue;
-        };
+        report
+            .resource_collisions
+            .extend(
+                readable_candidates
+                    .into_iter()
+                    .map(|(candidate_path, bytes)| WeaponMaterialResourceCollision {
+                        item_ids: items.iter().map(|item| item.id).collect(),
+                        item_names: items.iter().map(|item| item.name.clone()).collect(),
+                        model,
+                        model_path: model_path.clone(),
+                        material_name: material_name.to_string(),
+                        candidate_path,
+                        resource_type: resource_type_hint(&bytes).to_string(),
+                        byte_length: bytes.len(),
+                        header: hex_prefix(&bytes, 32),
+                    }),
+            );
         let shader_package_name = material.shader_package_name;
         let shader_family = material_shader_family(Some(&shader_package_name));
         *report
@@ -219,11 +303,60 @@ fn item_label(items: &[&WeaponCatalogItem]) -> String {
         .unwrap_or_else(|| "unknown item".to_string())
 }
 
+fn hex_prefix(bytes: &[u8], limit: usize) -> String {
+    bytes
+        .iter()
+        .take(limit)
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn resource_type_hint(bytes: &[u8]) -> &'static str {
+    match bytes.get(..4) {
+        Some(b"pap ") => "pap",
+        Some(b"mdl ") => "mdl",
+        Some(b"shPk") => "shpk",
+        _ => "unknown",
+    }
+}
+
+fn first_valid_candidate<T, Read, Validate>(
+    candidates: &[String],
+    mut read: Read,
+    mut validate: Validate,
+) -> (Option<(String, T)>, Vec<(String, Vec<u8>)>)
+where
+    Read: FnMut(&str) -> Option<Vec<u8>>,
+    Validate: FnMut(&[u8]) -> Option<T>,
+{
+    let mut rejected = Vec::new();
+    for path in candidates {
+        let Some(bytes) = read(path) else {
+            continue;
+        };
+        if let Some(value) = validate(&bytes) {
+            return (Some((path.clone(), value)), rejected);
+        }
+        rejected.push((path.clone(), bytes));
+    }
+    (None, rejected)
+}
+
 fn scan_limit() -> Option<usize> {
     std::env::var("XIV_WEAPON_SHADER_SCAN_LIMIT")
         .ok()
         .and_then(|value| value.parse().ok())
         .filter(|limit| *limit > 0)
+}
+
+fn item_ids() -> Option<Vec<u32>> {
+    let ids = std::env::var("XIV_WEAPON_SHADER_ITEM_IDS")
+        .ok()?
+        .split(',')
+        .filter_map(|value| value.trim().parse().ok())
+        .collect::<Vec<_>>();
+    (!ids.is_empty()).then_some(ids)
 }
 
 fn game_dir() -> PathBuf {
@@ -262,5 +395,28 @@ mod tests {
             models[2].1.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![20, 10]
         );
+    }
+
+    #[test]
+    fn resource_type_hint_identifies_pap_hash_collisions() {
+        assert_eq!(resource_type_hint(b"pap \x01\x00"), "pap");
+        assert_eq!(resource_type_hint(&[0, 0, 3, 1]), "unknown");
+    }
+
+    #[test]
+    fn candidate_validation_continues_after_wrong_resource_type() {
+        let candidates = vec!["collision".to_string(), "material".to_string()];
+        let (selected, rejected) = first_valid_candidate(
+            &candidates,
+            |path| match path {
+                "collision" => Some(b"pap ".to_vec()),
+                "material" => Some(vec![0, 0, 3, 1]),
+                _ => None,
+            },
+            |bytes| (bytes == [0, 0, 3, 1]).then_some("mtrl"),
+        );
+
+        assert_eq!(selected, Some(("material".to_string(), "mtrl")));
+        assert_eq!(rejected, vec![("collision".to_string(), b"pap ".to_vec())]);
     }
 }
