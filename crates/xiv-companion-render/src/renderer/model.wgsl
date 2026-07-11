@@ -43,6 +43,11 @@ struct Material {
     uv_sources1: vec4<f32>, // x: multi, y: specular, z: emissive, w: material properties
     uv_sources2: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     uv_sources3: vec4<f32>, // x: ColorTable index, y: other
+    uv_scroll_masks0: vec4<f32>, // base, normal, mask, material map
+    uv_scroll_masks1: vec4<f32>, // multi, specular, emissive, material properties
+    uv_scroll_masks2: vec4<f32>, // tile, sheen, sphere, tile matrix
+    uv_scroll_masks3: vec4<f32>, // ColorTable index, other
+    feature_params: vec4<f32>, // x: use flow0 as primary tangent
     draw_role_params: vec4<f32>, // x: lightshaft, y: transparent crest fallback, z: base material fallback
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
@@ -72,6 +77,8 @@ struct VertexOutput {
     @location(4) uv1: vec2<f32>,
     @location(5) uv2: vec2<f32>,
     @location(6) uv3: vec2<f32>,
+    @location(7) flow0: vec4<f32>,
+    @location(8) flow1: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -150,6 +157,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.uv1 = input.uv1;
     out.uv2 = input.uv2;
     out.uv3 = input.uv3;
+    out.flow0 = input.flow0;
+    out.flow1 = input.flow1;
     return out;
 }
 
@@ -165,6 +174,8 @@ fn vs_outline(input: VertexInput) -> VertexOutput {
     out.uv1 = input.uv1;
     out.uv2 = input.uv2;
     out.uv3 = input.uv3;
+    out.flow0 = input.flow0;
+    out.flow1 = input.flow1;
     return out;
 }
 
@@ -178,8 +189,8 @@ fn fs_outline() -> FragmentOutput {
 
 @fragment
 fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
-    let base_uv = resolve_uv(input, material.uv_sources0.x);
-    let normal_uv = resolve_uv(input, material.uv_sources0.y);
+    let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
+    let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
     let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
     let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
     let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
@@ -204,15 +215,15 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     let is_lightshaft = material.draw_role_params.x > 0.5;
     let is_crest_fallback = material.draw_role_params.y > 0.5;
-    var base_uv = resolve_uv(input, material.uv_sources0.x);
+    var base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
     if is_lightshaft {
         base_uv = resolve_lightshaft_uv(input);
     }
-    let normal_uv = resolve_uv(input, material.uv_sources0.y);
-    let mask_uv = resolve_uv(input, material.uv_sources0.z);
-    let specular_uv = resolve_uv(input, material.uv_sources1.y);
-    let emissive_uv = resolve_uv(input, material.uv_sources1.z);
-    let material_properties_uv = resolve_uv(input, material.uv_sources1.w);
+    let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
+    let mask_uv = resolve_uv(input, material.uv_sources0.z, material.uv_scroll_masks0.z);
+    let specular_uv = resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y);
+    let emissive_uv = resolve_uv(input, material.uv_sources1.z, material.uv_scroll_masks1.z);
+    let material_properties_uv = resolve_uv(input, material.uv_sources1.w, material.uv_scroll_masks1.w);
 
     let extra = resolve_extra_properties(input);
     let tile_array = resolve_tile_array(input, extra);
@@ -373,26 +384,26 @@ fn debug_fragment_output(
     } else if mode < 13.5 {
         color = material.debug_color.rgb;
     } else if mode < 14.5 {
-        let index_uv = resolve_uv(input, material.uv_sources3.x);
+        let index_uv = resolve_uv(input, material.uv_sources3.x, material.uv_scroll_masks3.x);
         let index_sample = textureSample(color_table_index_texture, nearest_data_sampler, index_uv);
         color = vec3<f32>(index_sample.r, index_sample.g, 0.5);
     } else if mode < 15.5 {
-        let material_map_uv = resolve_uv(input, material.uv_sources0.w);
+        let material_map_uv = resolve_uv(input, material.uv_sources0.w, material.uv_scroll_masks0.w);
         color = textureSample(material_map_texture, data_sampler, material_map_uv).rgb;
     } else if mode < 16.5 {
-        let multi_map_uv = resolve_uv(input, material.uv_sources1.x);
+        let multi_map_uv = resolve_uv(input, material.uv_sources1.x, material.uv_scroll_masks1.x);
         color = textureSample(multi_map_texture, data_sampler, multi_map_uv).rgb;
     } else if mode < 17.5 {
-        let tile_uv = resolve_uv(input, material.uv_sources2.x);
+        let tile_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
         color = textureSample(tile_properties_texture, nearest_data_sampler, tile_uv).rgb;
     } else if mode < 18.5 {
-        let sheen_uv = resolve_uv(input, material.uv_sources2.y);
+        let sheen_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
         color = textureSample(sheen_properties_texture, nearest_data_sampler, sheen_uv).rgb;
     } else if mode < 19.5 {
-        let sphere_uv = resolve_uv(input, material.uv_sources2.z);
+        let sphere_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z);
         color = textureSample(sphere_properties_texture, nearest_data_sampler, sphere_uv).rgb;
     } else if mode < 20.5 {
-        let tile_matrix_uv = resolve_uv(input, material.uv_sources2.w);
+        let tile_matrix_uv = resolve_uv(input, material.uv_sources2.w, material.uv_scroll_masks2.w);
         color = textureSample(tile_matrix_texture, nearest_data_sampler, tile_matrix_uv).rgb;
     } else if mode < 21.5 {
         color = tile_array.normal * 0.5 + vec3<f32>(0.5);
@@ -462,7 +473,7 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
     let layer = clamp(select(shader_layer, ramp_layer, extra.flags.x > 0.5), 0.0, layer_count - 1.0);
     let shader_alpha = clamp(material.tile_params.y, 0.0, 1.0);
     let tile_alpha = select(shader_alpha, clamp(extra.tile.y, 0.0, 1.0), extra.flags.x > 0.5);
-    let source_uv = resolve_uv(input, material.uv_sources2.x);
+    let source_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
     let transformed_uv = vec2<f32>(
         dot(extra.tile_matrix.xy, source_uv),
         dot(extra.tile_matrix.zw, source_uv),
@@ -572,16 +583,16 @@ fn resolve_extra_properties(input: VertexOutput) -> ExtraProperties {
     extra.sphere = vec4<f32>(0.0, 0.0, 1.0, 1.0);
     extra.tile_matrix = vec4<f32>(1.0, 0.0, 0.0, 1.0);
     if has_tile {
-        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.x));
+        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x));
     }
     if has_sheen {
-        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.y));
+        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y));
     }
     if has_sphere {
-        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.z));
+        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z));
     }
     if has_tile_matrix {
-        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.w));
+        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.w, material.uv_scroll_masks2.w));
     }
     return extra;
 }
@@ -645,7 +656,7 @@ fn resolve_tile_specular_scale(input: VertexOutput, extra: ExtraProperties) -> f
             abs(shader_tile_alpha - 1.0) > 0.001 ||
             repeat_delta > 0.001,
     );
-    let tile_uv = resolve_uv(input, material.uv_sources2.x) * tile_repeat;
+    let tile_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x) * tile_repeat;
     let tile_phase = dot(tile_uv, vec2<f32>(1.0, 0.618)) + material.tile_params.x * 0.137;
     let tile_pattern = 0.5 + 0.5 * sin(tile_phase * 6.2831853);
     let shader_alpha_scale = mix(0.97, 1.03, shader_tile_alpha);
@@ -852,13 +863,27 @@ fn resolve_normal(
     let geometric_normal = normalize(input.normal) * face_sign;
     let has_primary = material.params.z > 0.5;
     let has_array_normal = tile_array.weight > 0.001 || detail_array.normal_weight > 0.001;
-    if camera.options.x <= 0.5 || (!has_primary && !has_array_normal) || dot(input.bitangent.xyz, input.bitangent.xyz) <= 0.0001 {
+    let has_bitangent = dot(input.bitangent.xyz, input.bitangent.xyz) > 0.0001;
+    let flow_tangent_plane = input.flow0.xyz - geometric_normal * dot(input.flow0.xyz, geometric_normal);
+    let uses_flow = material.feature_params.x > 0.5 && dot(flow_tangent_plane, flow_tangent_plane) > 0.0001;
+    if camera.options.x <= 0.5 || (!has_primary && !has_array_normal) || (!has_bitangent && !uses_flow) {
         return geometric_normal;
     }
 
-    let bitangent = normalize(input.bitangent.xyz);
+    let safe_bitangent = input.bitangent.xyz + select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0), has_bitangent);
+    let primary_bitangent = normalize(safe_bitangent);
     let tangent_sign = select(1.0, -1.0, input.bitangent.w < 0.0);
-    let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
+    let primary_tangent = normalize(cross(primary_bitangent, geometric_normal)) * tangent_sign;
+    let safe_flow_tangent = flow_tangent_plane + select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0), uses_flow);
+    let flow_tangent = normalize(safe_flow_tangent);
+    let flow_bitangent_unoriented = normalize(cross(geometric_normal, flow_tangent));
+    let flow_orientation = select(
+        1.0,
+        -1.0,
+        has_bitangent && dot(flow_bitangent_unoriented, primary_bitangent) < 0.0,
+    );
+    let tangent = select(primary_tangent, flow_tangent, uses_flow);
+    let bitangent = select(primary_bitangent, flow_bitangent_unoriented * flow_orientation, uses_flow);
     let sampled = select(
         vec3<f32>(0.0, 0.0, 1.0),
         decode_normal(normal_sample),
@@ -887,7 +912,7 @@ fn resolve_effective_normal_scale(has_detail_array: bool) -> f32 {
     return clamp(primary + fallback_delta, 0.0, 4.0);
 }
 
-fn resolve_uv(input: VertexOutput, source: f32) -> vec2<f32> {
+fn resolve_uv(input: VertexOutput, source: f32, scroll_enabled: f32) -> vec2<f32> {
     if source > 2.5 {
         return input.uv3;
     }
@@ -895,7 +920,7 @@ fn resolve_uv(input: VertexOutput, source: f32) -> vec2<f32> {
         return input.uv2;
     }
     if source > 0.5 {
-        return input.uv1 + material.uv_scroll.zw * camera.options.z;
+        return input.uv1 + material.uv_scroll.zw * camera.options.z * scroll_enabled;
     }
-    return input.uv0 + material.uv_scroll.xy * camera.options.z;
+    return input.uv0 + material.uv_scroll.xy * camera.options.z * scroll_enabled;
 }

@@ -404,6 +404,8 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub lighting_mode: MaterialLightingMode,
     #[serde(default)]
+    pub flow_mode: MaterialFlowMode,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_alpha_aperture")]
     pub alpha_aperture: f32,
@@ -596,6 +598,15 @@ pub enum MaterialLightingMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialFlowMode {
+    #[default]
+    Standard,
+    Flow,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
     CharacterStockings,
@@ -606,6 +617,7 @@ pub enum MaterialShaderFamily {
     CharacterTattoo,
     CharacterOcclusion,
     Bg,
+    BgUvScroll,
     LightShaft,
     Water,
     #[default]
@@ -637,6 +649,7 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "charactertattoo.shpk" => MaterialShaderFamily::CharacterTattoo,
         "characterocclusion.shpk" => MaterialShaderFamily::CharacterOcclusion,
         "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
+        "bguvscroll.shpk" => MaterialShaderFamily::BgUvScroll,
         "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
         "water.shpk" | "river.shpk" => MaterialShaderFamily::Water,
         _ => MaterialShaderFamily::Unknown,
@@ -723,6 +736,8 @@ pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
     pub shader_family: MaterialShaderFamily,
     #[serde(default)]
+    pub flow_mode: MaterialFlowMode,
+    #[serde(default)]
     pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
@@ -770,6 +785,8 @@ pub enum PreparedAlphaSource {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMaterialUvSources {
     pub textures: PreparedTextureUvSources,
+    #[serde(default)]
+    pub scroll: PreparedTextureScrollSet,
     pub uv0_scroll: PreparedUvSource,
     pub uv1_scroll: PreparedUvSource,
 }
@@ -778,10 +795,30 @@ impl Default for PreparedMaterialUvSources {
     fn default() -> Self {
         Self {
             textures: PreparedTextureUvSources::default(),
+            scroll: PreparedTextureScrollSet::default(),
             uv0_scroll: PreparedUvSource::Uv0,
             uv1_scroll: PreparedUvSource::Uv1,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PreparedTextureScrollSet {
+    pub base_color: bool,
+    pub normal: bool,
+    pub mask: bool,
+    pub material_map: bool,
+    pub multi_map: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub material_properties: bool,
+    pub tile_properties: bool,
+    pub sheen_properties: bool,
+    pub sphere_properties: bool,
+    pub tile_matrix: bool,
+    pub index: bool,
+    pub other: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1045,7 +1082,9 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                     model.materials().get(mesh.material_slot),
                     draw_role,
                 );
-                prepared_material.feature_flags.uses_flow |= mesh_has_flow_attributes(mesh);
+                prepared_material.feature_flags.uses_flow =
+                    matches!(prepared_material.flow_mode, MaterialFlowMode::Flow)
+                        && mesh_has_primary_flow_attribute(mesh);
                 PreparedMesh {
                     mesh_index,
                     material_slot: mesh.material_slot,
@@ -1104,10 +1143,8 @@ fn prepared_mesh_visibility(
     }
 }
 
-fn mesh_has_flow_attributes(mesh: &ModelMesh) -> bool {
-    mesh.vertices
-        .iter()
-        .any(|vertex| vertex.flow0.is_some() || vertex.flow1.is_some())
+fn mesh_has_primary_flow_attribute(mesh: &ModelMesh) -> bool {
+    mesh.vertices.iter().any(|vertex| vertex.flow0.is_some())
 }
 
 pub fn prepare_material_for_draw_role(
@@ -1118,14 +1155,18 @@ pub fn prepare_material_for_draw_role(
         material.and_then(|material| material.shader_package_name.as_deref()),
     );
     let texture_bindings = prepared_texture_bindings(material);
+    let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
 
     PreparedMaterial {
         render_pass: prepared_render_pass(material, draw_role, shader_family),
         shader_family,
+        flow_mode: material
+            .map(|material| material.flow_mode)
+            .unwrap_or_default(),
         alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
-        uv_sources: PreparedMaterialUvSources::default(),
+        uv_sources,
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
         unsupported_inputs: prepared_material_unsupported_inputs(
             material,
@@ -1216,11 +1257,61 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
     }
 }
 
+pub fn prepared_material_uv_sources(
+    _material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> PreparedMaterialUvSources {
+    let mut sources = PreparedMaterialUvSources::default();
+    if matches!(shader_family, MaterialShaderFamily::BgUvScroll) {
+        // MeddleTools bguvscroll connects only Color/Normal/Specular Map0 to UV0Scroll.
+        sources.scroll.base_color = texture_bindings.base_color.is_some();
+        sources.scroll.normal = texture_bindings.normal.is_some();
+        sources.scroll.specular = texture_bindings.specular.is_some();
+    }
+    sources
+}
+
+fn prepared_material_uses_scroll(
+    material: &ModelMaterial,
+    uv_sources: PreparedMaterialUvSources,
+) -> bool {
+    let textures = uv_sources.textures;
+    let scroll = uv_sources.scroll;
+    [
+        (scroll.base_color, textures.base_color),
+        (scroll.normal, textures.normal),
+        (scroll.mask, textures.mask),
+        (scroll.material_map, textures.material_map),
+        (scroll.multi_map, textures.multi_map),
+        (scroll.specular, textures.specular),
+        (scroll.emissive, textures.emissive),
+        (scroll.material_properties, textures.material_properties),
+        (scroll.tile_properties, textures.tile_properties),
+        (scroll.sheen_properties, textures.sheen_properties),
+        (scroll.sphere_properties, textures.sphere_properties),
+        (scroll.tile_matrix, textures.tile_matrix),
+        (scroll.index, textures.index),
+        (scroll.other, textures.other),
+    ]
+    .into_iter()
+    .any(|(enabled, source)| enabled && prepared_uv_source_has_scroll(material.uv_scroll, source))
+}
+
+fn prepared_uv_source_has_scroll(uv_scroll: [f32; 4], source: PreparedUvSource) -> bool {
+    match source {
+        PreparedUvSource::Uv0 => material_vec2_differs([uv_scroll[0], uv_scroll[1]], [0.0; 2]),
+        PreparedUvSource::Uv1 => material_vec2_differs([uv_scroll[2], uv_scroll[3]], [0.0; 2]),
+        PreparedUvSource::Uv2 | PreparedUvSource::Uv3 => false,
+    }
+}
+
 pub fn prepared_material_feature_flags(
     material: Option<&ModelMaterial>,
     shader_family: MaterialShaderFamily,
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialFeatureFlags {
+    let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
     let mut flags = PreparedMaterialFeatureFlags {
         uses_color_table: texture_bindings.index.is_some()
             || texture_bindings.material_properties.is_some()
@@ -1230,7 +1321,6 @@ pub fn prepared_material_feature_flags(
             || texture_bindings.tile_matrix.is_some(),
         uses_tile: texture_bindings.tile_properties.is_some(),
         uses_detail: texture_bindings.multi_map.is_some(),
-        uses_scroll: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
         ..PreparedMaterialFeatureFlags::default()
     };
 
@@ -1252,7 +1342,7 @@ pub fn prepared_material_feature_flags(
         || material_vec4_differs(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
         || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
-    flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4])
+    flags.uses_scroll = prepared_material_uses_scroll(material, uv_sources)
         || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
     flags.uses_outline = material.outline_width.is_finite()
         && material.outline_width > 0.0
@@ -2230,6 +2320,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
+                flow_mode: MaterialFlowMode::Standard,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2249,6 +2340,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2354,7 +2446,7 @@ mod color_table_bake_tests {
                 uses_color_table: true,
                 uses_tile: true,
                 uses_detail: true,
-                uses_scroll: true,
+                uses_scroll: false,
                 uses_flow: false,
                 uses_dye: true,
                 uses_outline: true,
@@ -2393,10 +2485,29 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .feature_flags,
             PreparedMaterialFeatureFlags {
-                uses_scroll: true,
                 uses_toon: true,
                 ..PreparedMaterialFeatureFlags::default()
             }
+        );
+        material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
+        );
+        material = test_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.base_color_texture = Some(1);
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
+        );
+        material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
         );
         material = test_material();
         material.lightshaft_tex_anim = [0.5, 0.0, 0.0, 0.0];
@@ -2520,11 +2631,12 @@ mod color_table_bake_tests {
     #[test]
     fn prepared_material_reports_texture_and_scroll_uv_sources() {
         let mut material = test_material();
-        material.shader_package_name = Some("characterScroll.shpk".to_string());
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
         material.base_color_texture = Some(1);
         material.normal_texture = Some(2);
         material.multi_map_texture = Some(3);
         material.material_properties_texture = Some(4);
+        material.specular_texture = Some(5);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal).uv_sources,
@@ -2544,6 +2656,12 @@ mod color_table_bake_tests {
                     tile_matrix: PreparedUvSource::Uv0,
                     index: PreparedUvSource::Uv0,
                     other: PreparedUvSource::Uv0,
+                },
+                scroll: PreparedTextureScrollSet {
+                    base_color: true,
+                    normal: true,
+                    specular: true,
+                    ..PreparedTextureScrollSet::default()
                 },
                 uv0_scroll: PreparedUvSource::Uv0,
                 uv1_scroll: PreparedUvSource::Uv1,
@@ -2718,17 +2836,53 @@ mod color_table_bake_tests {
         let mut flow_vertex = test_model_vertex();
         flow_vertex.flow0 = Some([0.25, 0.5, 0.75, 1.0]);
         flow_mesh.vertices = vec![flow_vertex];
+        let mut material = test_material();
+        material.flow_mode = MaterialFlowMode::Flow;
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
-            materials: vec![test_material()],
+            materials: vec![material],
             textures: Vec::new(),
-            meshes: vec![plain_mesh, flow_mesh],
+            meshes: vec![plain_mesh, flow_mesh.clone()],
         };
 
         let prepared = prepare_model_for_render(&model);
 
         assert!(!prepared.meshes[0].prepared_material.feature_flags.uses_flow);
         assert!(prepared.meshes[1].prepared_material.feature_flags.uses_flow);
+
+        let mut standard_material = test_material();
+        standard_material.flow_mode = MaterialFlowMode::Standard;
+        let standard_model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![standard_material],
+            textures: Vec::new(),
+            meshes: vec![flow_mesh],
+        };
+        assert!(
+            !prepare_model_for_render(&standard_model).meshes[0]
+                .prepared_material
+                .feature_flags
+                .uses_flow
+        );
+
+        let mut secondary_only_mesh = test_model_mesh(None, 0);
+        let mut secondary_only_vertex = test_model_vertex();
+        secondary_only_vertex.flow1 = Some([0.25, 0.5, 0.75, 1.0]);
+        secondary_only_mesh.vertices = vec![secondary_only_vertex];
+        let mut flow_material = test_material();
+        flow_material.flow_mode = MaterialFlowMode::Flow;
+        let secondary_only_model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![flow_material],
+            textures: Vec::new(),
+            meshes: vec![secondary_only_mesh],
+        };
+        assert!(
+            !prepare_model_for_render(&secondary_only_model).meshes[0]
+                .prepared_material
+                .feature_flags
+                .uses_flow
+        );
     }
 
     #[test]
@@ -2836,6 +2990,10 @@ mod color_table_bake_tests {
             MaterialShaderFamily::Bg
         );
         assert_eq!(
+            material_shader_family(Some("bguvscroll.shpk")),
+            MaterialShaderFamily::BgUvScroll
+        );
+        assert_eq!(
             material_shader_family(Some("lightshaft.shpk")),
             MaterialShaderFamily::LightShaft
         );
@@ -2881,6 +3039,7 @@ mod color_table_bake_tests {
             alpha_threshold: 0.0,
             draw_depth_mode: MaterialDrawDepthMode::None,
             lighting_mode: MaterialLightingMode::Default,
+            flow_mode: MaterialFlowMode::Standard,
             transparency: 0.0,
             alpha_aperture: 2.0,
             alpha_offset: 0.0,

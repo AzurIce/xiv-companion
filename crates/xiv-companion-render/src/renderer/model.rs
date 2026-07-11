@@ -1,10 +1,11 @@
 use wgpu::util::DeviceExt;
 
 use crate::{
-    MaterialAlphaMode, MaterialDrawDepthMode, MaterialLightingMode, MaterialRenderMode,
-    ModelMaterial, ModelMeshDrawRole, ModelRenderData, ModelTexture, ModelTextureKind,
-    PreparedAlphaSource, PreparedMaterial, PreparedRenderPass, PreparedTextureAddressMode,
-    PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource, prepare_model_for_render,
+    MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
+    MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData, ModelTexture,
+    ModelTextureKind, PreparedAlphaSource, PreparedMaterial, PreparedRenderPass,
+    PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource,
+    prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1494,6 +1495,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
     let uv_sources = material_uv_source_params(prepared_material);
+    let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -1590,6 +1592,11 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_sources1: uv_sources.1,
         uv_sources2: uv_sources.2,
         uv_sources3: uv_sources.3,
+        uv_scroll_masks0: uv_scroll_masks.0,
+        uv_scroll_masks1: uv_scroll_masks.1,
+        uv_scroll_masks2: uv_scroll_masks.2,
+        uv_scroll_masks3: uv_scroll_masks.3,
+        feature_params: material_feature_params(prepared_material),
         draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
     };
@@ -2350,6 +2357,7 @@ fn fallback_material() -> ModelMaterial {
         alpha_threshold: 0.0,
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
+        flow_mode: MaterialFlowMode::Standard,
         transparency: 0.0,
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
@@ -2667,6 +2675,47 @@ fn material_uv_source_params(
     )
 }
 
+fn material_uv_scroll_mask_params(
+    prepared_material: PreparedMaterial,
+) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    let scroll = prepared_material.uv_sources.scroll;
+    let value = |enabled| if enabled { 1.0 } else { 0.0 };
+    (
+        [
+            value(scroll.base_color),
+            value(scroll.normal),
+            value(scroll.mask),
+            value(scroll.material_map),
+        ],
+        [
+            value(scroll.multi_map),
+            value(scroll.specular),
+            value(scroll.emissive),
+            value(scroll.material_properties),
+        ],
+        [
+            value(scroll.tile_properties),
+            value(scroll.sheen_properties),
+            value(scroll.sphere_properties),
+            value(scroll.tile_matrix),
+        ],
+        [value(scroll.index), value(scroll.other), 0.0, 0.0],
+    )
+}
+
+fn material_feature_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    [
+        if prepared_material.feature_flags.uses_flow {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+        0.0,
+    ]
+}
+
 fn prepared_uv_source_value(source: PreparedUvSource) -> f32 {
     match source {
         PreparedUvSource::Uv0 => 0.0,
@@ -2845,6 +2894,11 @@ struct MaterialUniform {
     uv_sources1: [f32; 4],
     uv_sources2: [f32; 4],
     uv_sources3: [f32; 4],
+    uv_scroll_masks0: [f32; 4],
+    uv_scroll_masks1: [f32; 4],
+    uv_scroll_masks2: [f32; 4],
+    uv_scroll_masks3: [f32; 4],
+    feature_params: [f32; 4],
     draw_role_params: [f32; 4],
     debug_color: [f32; 4],
 }
@@ -3024,8 +3078,8 @@ mod tests {
         PreparedMaterialResourceAvailability, PreparedMaterialRuntimeFallbacks,
         PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources, PreparedTextureAddressMode,
         PreparedTextureBindings, PreparedTextureColorSpace, PreparedTextureFilter,
-        PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureUvSources,
-        PreparedUvSource, prepare_material_for_draw_role,
+        PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureScrollSet,
+        PreparedTextureUvSources, PreparedUvSource, prepare_material_for_draw_role,
     };
 
     #[test]
@@ -3124,6 +3178,7 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3308,6 +3363,7 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            flow_mode: MaterialFlowMode::Standard,
             alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet {
@@ -3394,6 +3450,7 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3643,6 +3700,7 @@ mod tests {
         let mut prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Transparent,
             shader_family: MaterialShaderFamily::CharacterTransparency,
+            flow_mode: MaterialFlowMode::Standard,
             alpha_policy: crate::PreparedMaterialAlphaPolicy {
                 source: PreparedAlphaSource::NormalBlue,
                 draw_depth_mode: MaterialDrawDepthMode::Dither,
@@ -3866,6 +3924,7 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            flow_mode: MaterialFlowMode::Standard,
             alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3886,6 +3945,12 @@ mod tests {
                     index: PreparedUvSource::Uv1,
                     other: PreparedUvSource::Uv2,
                 },
+                scroll: PreparedTextureScrollSet {
+                    base_color: true,
+                    normal: true,
+                    specular: true,
+                    ..PreparedTextureScrollSet::default()
+                },
                 uv0_scroll: PreparedUvSource::Uv0,
                 uv1_scroll: PreparedUvSource::Uv1,
             },
@@ -3905,6 +3970,24 @@ mod tests {
                 [1.0, 2.0, 0.0, 0.0]
             )
         );
+        assert_eq!(
+            material_uv_scroll_mask_params(prepared),
+            (
+                [1.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0; 4],
+                [0.0; 4],
+            )
+        );
+    }
+
+    #[test]
+    fn material_feature_params_encode_prepared_flow_policy() {
+        let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+        assert_eq!(material_feature_params(prepared), [0.0; 4]);
+
+        prepared.feature_flags.uses_flow = true;
+        assert_eq!(material_feature_params(prepared), [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -4105,6 +4188,7 @@ mod tests {
             prepared_material: PreparedMaterial {
                 render_pass: pass,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
                 alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),

@@ -1,11 +1,12 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialLightingMode,
-    MaterialRenderMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
-    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialTextureArrays, ModelMesh,
-    ModelMeshDrawRole, ModelRenderData, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
-    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
-    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialFlowMode,
+    MaterialLightingMode, MaterialRenderMode, ModelBounds, ModelColorDyeTable, ModelData,
+    ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
+    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
+    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
+    PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
+    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
     WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
     WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
     WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
@@ -51,6 +52,12 @@ const ENABLE_LIGHTING: u32 = 0x0033_C8B5;
 const ENABLE_LIGHTING_OFF: u32 = 0x93D6_C21A;
 #[cfg(feature = "game-data")]
 const ENABLE_LIGHTING_ON: u32 = 0xD1E6_0FD9;
+#[cfg(feature = "game-data")]
+const CATEGORY_FLOW_MAP_TYPE: u32 = 0x40D1_481E;
+#[cfg(feature = "game-data")]
+const FLOW_MAP_STANDARD: u32 = 0x337C_6BC4;
+#[cfg(feature = "game-data")]
+const FLOW_MAP_FLOW: u32 = 0x71AD_A939;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
@@ -768,7 +775,10 @@ fn material_needs_tile_arrays(material: &ModelMaterial) -> bool {
 fn material_needs_detail_arrays(material: &ModelMaterial) -> bool {
     let shader_family =
         crate::model::material_shader_family(material.shader_package_name.as_deref());
-    if shader_family != crate::model::MaterialShaderFamily::Bg {
+    if !matches!(
+        shader_family,
+        crate::model::MaterialShaderFamily::Bg | crate::model::MaterialShaderFamily::BgUvScroll
+    ) {
         return false;
     }
     let bindings = crate::model::prepared_texture_bindings(Some(material));
@@ -1591,6 +1601,9 @@ fn known_shader_label(id: u32) -> Option<String> {
             "GetSubColor",
             "GetSubColorFace",
             "GetSubColorHair",
+            "CategoryFlowMapType",
+            "Standard",
+            "Flow",
         ],
     )
 }
@@ -2146,6 +2159,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
+        let flow_mode = composed_material_flow_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
@@ -2229,6 +2243,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             alpha_threshold,
             draw_depth_mode,
             lighting_mode,
+            flow_mode,
             transparency,
             alpha_aperture,
             alpha_offset,
@@ -2725,6 +2740,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
+        let flow_mode = composed_material_flow_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
@@ -2809,6 +2825,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             alpha_threshold,
             draw_depth_mode,
             lighting_mode,
+            flow_mode,
             transparency,
             alpha_aperture,
             alpha_offset,
@@ -3585,6 +3602,15 @@ fn composed_material_lighting_mode(semantics: &ComposedMaterialSemantics) -> Mat
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_flow_mode(semantics: &ComposedMaterialSemantics) -> MaterialFlowMode {
+    match semantics.material_key_value(CATEGORY_FLOW_MAP_TYPE) {
+        None | Some(FLOW_MAP_STANDARD) => MaterialFlowMode::Standard,
+        Some(FLOW_MAP_FLOW) => MaterialFlowMode::Flow,
+        Some(_) => MaterialFlowMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
 }
@@ -4182,6 +4208,7 @@ fn fallback_weapon_material(
         alpha_threshold: 0.0,
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
+        flow_mode: MaterialFlowMode::Standard,
         transparency: 0.0,
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
@@ -5858,6 +5885,33 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_lighting_mode(&semantics),
             MaterialLightingMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_character_flow_mode_preserves_default_override_and_unknown() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Standard
+        );
+
+        semantics.apply_shader_package_key_default(CATEGORY_FLOW_MAP_TYPE, FLOW_MAP_STANDARD);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Standard
+        );
+
+        semantics.apply_material_key(CATEGORY_FLOW_MAP_TYPE, FLOW_MAP_FLOW);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Flow
+        );
+
+        semantics.apply_material_key(CATEGORY_FLOW_MAP_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Unknown
         );
     }
 
