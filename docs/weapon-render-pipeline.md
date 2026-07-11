@@ -226,7 +226,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 
 真实 45059 `characterglass.shpk` 样本只有 normal/mask/index 与 ColorTable 派生 base，没有独立 base texture；MTRL 覆盖 `DrawDepthMode_Dither`，`g_GlassIOR=1`、`g_GlassThicknessMax=0`，normal Blue 实测范围为 `57..255`。改用 normal-B alpha 后，雪景玻璃罩不再是灰暗球体，内部景物保持可见且表面纹理可观察。
 
-`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy；`DrawDepthMode_Dither` 当前只记录并传入 uniform，尚未建立 depth prepass。`GlassBlendMode` 是 scene key而非 MTRL material key，仍需设计显式 renderer 输入或有来源的默认值。
+`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy；`DrawDepthMode_Dither` 当前只记录并传入 uniform，尚未建立 depth prepass。Meddle `Names.cs` 只能确认该 material key 适用于 `characterglass.shpk` / `charactertransparency.shpk`，没有暴露游戏使用的抖动矩阵或噪声公式；MeddleTools 也不实现运行时 depth pass。下一批会采用明确标注为近似的稳定屏幕空间有序抖动：opaque/cutout 后、透明颜色 pass 前，对 Dither 的 Transparent/Glass batch 使用同一 prepared alpha source，仅写 depth、不写颜色。该行为与覆盖更多 shader family 的 scene key `ApplyDitherClip` 分开处理。`GlassBlendMode` 是 scene key而非 MTRL material key，仍需设计显式 renderer 输入或有来源的默认值。
 
 这不是完整游戏 glass shader，目前只能显示内部模型并提供近似透明外壳。
 
@@ -258,6 +258,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - cutout pipeline：写 depth，绘制 `Cutout` batch；当前仍由 WGSL alpha test discard。
    - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` batch。
    - glass pipeline：alpha blending，不写 depth，绘制 `Glass` batch；仍沿用现有 glass 近似参数。
+   - planned dither depth prepass：opaque/cutout 后、transparent/glass 颜色 pass 前，仅重绘 `DrawDepthMode_Dither` batch；fragment 使用与颜色 pass 一致的 base-alpha/normal-B prepared source 和稳定 4x4 屏幕空间阈值，只写 depth。Meddle/MeddleTools 没有提供游戏公式，因此该 pass 只解决透明表面的深度覆盖近似，不代表复刻 `ApplyDitherClip` scene key。
    - additive pipeline：additive blending，不写 depth，绘制 `AdditiveLightShaft` batch。
    - opaque/cutout/transparent/glass/additive 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
    - `PreparedMesh` 先过滤非 surface：shadow、terrainShadow、verticalFog 不进入当前渲染；lightShaft 不作为普通 surface，但会分类为 `AdditiveLightShaft` 并保留到 additive pass；materialChange/crestChange 已拆为独立 draw role 并暂时保留在主 pass；mesh category glass 会强制进入 `Glass` prepared pass。

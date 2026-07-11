@@ -141,7 +141,7 @@
 
 - cutout/glass 已有独立 wgpu pipeline 入口，但 shader 行为仍分别沿用现有 alpha test 与 glass 近似；additive-lightshaft 已有最小 additive pipeline，并已消费第一组 `lightshaft.shpk` 参数，但完整 lightshaft 节点行为尚未实现。
 - 多套 UV 已开始通过 prepared source 和 UV scroll 参与采样；tile/detail arrays 已参与 shading，但 secondary tangent frame、`color1`、flow、detail/multi maps 的完整解释仍未完成，scroll 也缺少 shader node 级别的 texture-role 路由。
-- alpha/glass/transparency 已从固定 glass opacity 前进到 prepared alpha source：character glass/transparency 强制进入对应 pass，normal B 驱动 alpha，`EnableLighting` 可控制 transparency lighting；但 `DrawDepthMode_Dither` 目前只被记录并传入 uniform，尚未实现 dither depth prepass，`GlassBlendMode`、折射和真实厚度传输仍缺失，且尚无真实 charactertransparency 武器样本。
+- alpha/glass/transparency 已从固定 glass opacity 前进到 prepared alpha source：character glass/transparency 强制进入对应 pass，normal B 驱动 alpha，`EnableLighting` 可控制 transparency lighting；但 `DrawDepthMode_Dither` 目前只被记录并传入 uniform，尚未实现 dither depth prepass，`GlassBlendMode`、折射和真实厚度传输仍缺失，且尚无真实 charactertransparency 武器样本。Meddle 只确认 `DrawDepthMode_Dither` 的 material key/value 与适用 SHPK，没有游戏抖动公式；MeddleTools 不实现运行时 depth pass。它还必须与 scene-level `ApplyDitherClip` 区分，后者覆盖更多 shader family。
 - renderer debug view 已能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果；更细的 per-texture independent sampler policy 仍未实现。
 
 计划：
@@ -508,7 +508,8 @@ character transparency/glass 已完成第一版 alpha source 与 prepared policy
 - `DrawDepthMode` / `EnableLighting` 已结构化并进入 `PreparedMaterial.alphaPolicy`；character glass/transparency 会强制进入 Glass/Transparent pass。
 - MeddleTools `shaders.blend` 已确认 character alpha 使用 normal Blue，stockings 强制 1；ColorTable baked base 不再写固定 glass alpha，glass 材质 opacity 不再重复乘 0.28。
 - WGSL 已用 normal B 驱动 character glass/transparency alpha，`EnableLightingOff` 可关闭 transparency lighting，并提高 glass transmission tint，45059 灰暗球体回归已明显改善。
-- `DrawDepthMode_Dither` 尚未执行 depth prepass；`GlassBlendMode`、折射、真实厚度和 scene color transmission 仍未实现。
+- `DrawDepthMode_Dither` 尚未执行 depth prepass。下一步在 opaque/cutout 后、transparent/glass 颜色 pass 前增加专用 pipeline：只选择 prepared depth mode 为 Dither 的透明 batch，按同一 prepared alpha source 做稳定 4x4 屏幕空间有序抖动，只写 depth、不写颜色，并保持原透明颜色 pass 不写 depth。该公式是缺少游戏 shader 实现时的保守近似，不扩展为 `ApplyDitherClip` scene-key 行为。
+- `GlassBlendMode`、折射、真实厚度和 scene color transmission 仍未实现。
 - water/river 仍需确认 `g_Transparency` 是透明度还是 alpha，再接入对应 renderer。
 - 区分 cutout、blend、glass、additive。
 - 对 alpha test 使用真实阈值和 shader package 规则。
@@ -570,7 +571,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；下一步继续结构化 shader-family-specific texture role/UV 规则，并寻找能覆盖 bg detail、reflection、stockings、tattoo、occlusion 的真实武器样本。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
 2. 结果处理：把当前在 WGSL 中的 tile layer、detail layer、ORB 通道和组合权重逐步提升为更明确的 prepared 规则，尤其处理 TileMatrix float channels、detail/multi-detail mask 和越界诊断，减少 renderer 内部猜测。
-3. 渲染器：characterTransparency/glass 的 normal-B alpha、lighting policy 已完成第一版；下一步是 `DrawDepthMode_Dither` depth prepass 与 `GlassBlendMode` scene input，再处理真实 outline pass、toon lighting和 shader-family-specific scroll/flow。water/river 的 `g_Transparency` 单独推进，tile ORB/detail 权重在获得真实样本后再校准。
+3. 渲染器：characterTransparency/glass 的 normal-B alpha、lighting policy 已完成第一版；下一步是专用 `DrawDepthMode_Dither` depth-only pipeline，并用 45059 验证深度覆盖和玻璃颜色没有被意外改写。之后设计 `GlassBlendMode` scene input，再处理真实 outline pass、toon lighting和 shader-family-specific scroll/flow。water/river 的 `g_Transparency` 单独推进，tile ORB/detail 权重在获得真实样本后再校准。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
 
