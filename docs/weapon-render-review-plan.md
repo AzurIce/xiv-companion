@@ -114,7 +114,7 @@
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
 2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器、URL 状态和首个正式染色 snapshot；后续补第二通道与 metallic 染剂视觉组合。EXD 颜色继续只用于 UI，不作为实际覆盖值。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
-4. 对 runtime-only 数据不盲猜：decal/crest 已建立透明纹理 fallback，materialChange 已建立基础材质 fallback；下一步让 renderer 消费这些决策。GPU ColorTable 继续只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
+4. 对 runtime-only 数据不盲猜：decal/crest 已建立透明纹理 fallback，materialChange 已建立基础材质 fallback；renderer final pass 已执行 crest discard 与基础材质路径，mesh-role debug 仍保留几何可见性。GPU ColorTable 继续只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
 ### 2. 解析后的结果处理
 
@@ -156,7 +156,7 @@
 
 计划：
 
-1. 先让 prepared pass 真正分管 pipeline：additive lightshaft 已有最小管线；后续继续拆独立 cutout、transparent/glass 行为，保持现有视觉输出尽量稳定，并补 synthetic pipeline tests。
+1. prepared pass 已分管 opaque、cutout、transparent、glass、additive lightshaft、dither depth 与 outline pipeline；后续重点是补完整 family-specific 行为和真实 blend/depth 语义，保持现有视觉输出稳定并继续扩充 synthetic pipeline tests。
 2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：per-role scroll、Map1/UV1Scroll、tile/detail 和 Flow primary tangent 已接入，后续优先补 multi map mask，再做 secondary normal/bitangent、flow1 与 color1。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
 4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果已可检查；后续补 per-texture independent sampler policy，并继续把这些视图作为真实武器样本回归的主要判断工具。
@@ -187,7 +187,7 @@
 
 已完成：`weapon-render-pipeline.md` 已同步 Legacy ColorTable bake、mesh-level transparent sorting、GPU material bind group、顶点字段保留和剩余限制。
 
-- 后续 roadmap 仍以本文为准，避免把独立 cutout/glass/lightshaft pipeline、submesh/shape visibility、tile/detail array 等未完成内容写成当前能力。
+- 后续 roadmap 仍以本文为准；独立 cutout/glass/lightshaft pipeline、显式 submesh visibility 与 tile/detail array 已是当前能力，实际 shape morph、runtime 默认 visibility 和完整 family shader 仍是缺口。
 
 验证：
 
@@ -215,7 +215,7 @@
 
 后续优先参数：
 
-- `GlassBlendMode`、dither depth、water alpha/base/primary wave 与 Map1/UV1Scroll 已完成；后续补 reflection/stockings/tattoo/occlusion。water refraction/whitecap/WaveMap1 与 AlphaMulti variants 等待真实节点连接或游戏 shader 证据。
+- `GlassBlendMode`、dither depth、water alpha/base/primary wave、Map1/UV1Scroll、stockings opaque alpha/pipeline 与 tattoo normal-Alpha 已完成；后续补 reflection/occlusion。water refraction/whitecap/WaveMap1 与 AlphaMulti variants 等待真实节点连接或游戏 shader 证据。
 
 验证：
 
@@ -314,7 +314,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 建议中间结构包含：
 
 - mesh draw role：normal、glass、lightShaft、shadowOnly、ignored、materialChange、crestChange；已有第一版 `PreparedMesh`，并保留 submesh attribute mask/name、attribute visibility 决策与 shape influence active/inactive 状态
-- material shader family：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、lightShaft、unknown；已有第一版分类，后续逐个补 shader-family-specific 行为
+- material shader family：character、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、bgUvScroll、crystal、lightShaft、water、unknown；已有第一版分类，后续逐个补 shader-family-specific 行为
 - texture bindings：base、normal、mask、material、multi、specular、emissive、tile/sheen/sphere/tileMatrix、ColorTable index，以及 tile normal/ORB、detail diffuse/normal arrays 已有第一版；renderer 将四张数组合并为两个 GPU pair atlas，并复用 nearest sampler 做选层采样
 - UV source：每个 texture 或 shader family 应使用 uv0/uv1/uv2/uv3 哪一套；已有第一版 texture-role 默认与 scroll uv0/uv1 来源，后续还要补 shader-family-specific 规则
 - alpha policy：opaque、cutout、blend、glass、additive/lightshaft；`AdditiveLightShaft` 已作为 prepared pass 分类存在，并进入最小 wgpu additive pass
@@ -344,7 +344,7 @@ Web 离线模式拿不到这些，需要决定哪些提供替代输入。
 - `glass` 会强制进入 transparent pass。
 - `lightShaft` 已标为独立 draw role，并映射到 `AdditiveLightShaft` prepared pass；renderer 会保留为 additive batch，不再作为普通 surface 绘制。
 - `shadow`、`terrainShadow`、`verticalFog` 默认不作为主 surface 渲染。
-- `materialChange`、`crestChange` 已拆为独立 draw role，暂时继续进入主 pass；prepared summary 分别标出基础材质与透明纹理 fallback，但 renderer 尚未消费该 fallback。
+- `materialChange`、`crestChange` 已拆为独立 draw role并进入主 pass；prepared summary 分别标出基础材质与透明纹理 fallback，renderer final pass 会让 crest fallback discard、materialChange 使用基础材质，mesh-role debug 仍显示二者几何。
 - submesh attribute mask/name 已进入 `ModelMesh` 与 `PreparedMesh`，并随 phantom summary 输出；`PreparedModelOptions.enabledAttributeMask` 已支持显式运行时 mask，按 `requiredMask & !enabledMask == 0` 判断 submesh 是否可见。mesh-level shape influence 已进入 `ModelMesh` 与 `PreparedMesh`，`PreparedModelOptions.enabledShapeMask` 已支持 active/inactive 审计；Web 离线默认仍不猜 mask，实际 shape morph 仍未应用。
 
 验证：
@@ -448,12 +448,12 @@ MeddleTools 会在 Blender 中通过节点图 bake diffuse、normal、roughness�
 - `Glass`：已有独立 glass pipeline，不写 depth，参与 mesh-level sorting；当前仍使用透明 alpha blending 和现有 glass 近似参数。
 - `AdditiveLightShaft`：lightshaft 已有 prepared 分类，renderer 会保留为 additive batch，使用加法混合且不写 depth。
 
-当前仍未完成的是把 cutout/glass/lightshaft 行为做成更完整的 shader-family-specific 管线：
+当前仍未完成的是让已独立分派的 cutout/glass/lightshaft pipeline 具备更完整的 shader-family-specific 行为：
 
 - opaque pass：写 depth
 - cutout pass：已有独立 pipeline，写 depth，alpha test discard；尚未有 shader-family-specific cutout 行为
 - transparent pass：不写 depth，mesh-level sorted
-- glass pass：已有独立 pipeline，不写 depth，参与 mesh-level sorted；尚未有独立 blend/参数模型
+- glass pass：已有独立 pipeline，不写 depth，参与 mesh-level sorted，并支持显式 Mul/Add scene option；当前 Mul 仍是 alpha-blend 近似，尚无真实乘法、折射与厚度传输
 - additive/lightshaft pass：已有最小加法混合、不写 depth；已解析并保守消费 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU/V`、`g_Ray`，但尚未复刻完整 lightshaft 节点语义
 
 shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 surface；lightShaft 不作为普通 surface，但会通过 additive pass 绘制。
@@ -461,7 +461,7 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 验证：
 
 - 已增加 prepared material / render pass 单元测试，覆盖 opaque、cutout、transparent、glass、mesh glass override 和 culling policy。
-- 后续仍需要透明/glass/lightshaft synthetic fixture。
+- 已有 water transparency、tattoo dither alpha、GlassBlend override、outline 与 lightshaft 编译/画面验证；后续仍需针对 family-specific cutout、真实 glass composition 和完整 lightshaft 节点补 fixture。
 - P0 样本 snapshot。
 
 ### P1: 着色器模块化
@@ -508,11 +508,11 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 2. 寻找真实 bg 武器样本，校准 detail/multi-detail diffuse、normal 与 mask 权重。
 3. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
 
-这些贴图已经进入 shader binding 并提供 debug view；后续重点是校准 tile/detail 组合，并实现更接近 MeddleTools 的 reflection/sphere 节点。
+这些贴图已经进入 shader binding并提供 debug view；tile/ORB 通道已按节点证据收敛，detail 最终 influence 与 reflection/sphere 仍需更多证据。下一项用 synthetic WGPU fixture 分别改变 sheen/sphere ramp，至少证明当前近似消费能稳定影响最终画面且两者不是静默 binding。
 
 验证：
 
-- 已有 native snapshot 覆盖 bind layout/WGSL 编译；后续仍需要 synthetic ColorTable ramp 生成明显 tile/sheen/sphere 差异。
+- tile 已有真实/synthetic 选层、TileMatrix 和 ORB 通道验证；下一项补 synthetic ColorTable sheen/sphere ramp 最终画面差异。该测试只证明数据链路与当前近似生效，不证明近似公式等价于游戏 shader。
 - 与 MeddleTools ramp 输出对照。
 
 ### P1: 改善 alpha/glass/transparency
