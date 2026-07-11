@@ -12,6 +12,7 @@ struct Material {
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
     alpha_params: vec4<f32>, // x: aperture, y: offset, z: shadow alpha threshold, w: transparency
+    alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue, y: lighting, z: dither depth, w: prepared pass 0=surface 1=transparent 2=glass
     glass_params: vec4<f32>, // x: IOR, y: max thickness
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
@@ -168,7 +169,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let extra = resolve_extra_properties(input);
     let tile_array = resolve_tile_array(input, extra);
     let detail_array = resolve_detail_array(input);
-    let normal = resolve_normal(input, front_facing, normal_uv, tile_array, detail_array);
+    let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
+    let normal = resolve_normal(input, front_facing, sampled_normal, tile_array, detail_array);
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
@@ -192,13 +194,14 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let sampled_specular = textureSample(specular_texture, base_color_sampler, specular_uv).rgb;
     let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
     let texture_mix = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
-    let texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
+    let base_texture_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
+    let texture_alpha = resolve_surface_alpha(base_texture_alpha, sampled_normal.b);
     let material_specular = select(material.specular_color.rgb, sampled_specular, material.properties.y > 0.5)
         * specular_color_mask.rgb;
     let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
-    let is_blend = material.render.z > 1.5 && material.render.z < 2.5;
-    let is_glass = material.render.z > 2.5 || material.render.x > 1.5;
+    let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
+    let is_glass = material.alpha_policy_params.w > 1.5;
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
     let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
@@ -208,7 +211,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         alpha = resolve_alpha_shaping(alpha);
     }
     if is_glass {
-        alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.05, 0.55);
+        alpha = clamp(material.render.y * texture_alpha * input.color.a, 0.0, 1.0);
     }
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     if camera.options.w > 0.5 {
@@ -236,7 +239,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         discard;
     }
     if is_lightshaft {
-        let lightshaft = resolve_lightshaft_color(base, texture_alpha, input.color.a);
+        let lightshaft = resolve_lightshaft_color(base, base_texture_alpha, input.color.a);
         var out: FragmentOutput;
         out.color = lightshaft;
         out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
@@ -245,19 +248,29 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let rim = pow(1.0 - max(normal.z, 0.0), 2.0) * select(0.16, 0.58, is_glass);
     let specular_tint = mix(material_specular, base, metalness * 0.35);
     let glass_factors = resolve_glass_factors();
-    let glass_tint = mix(base, vec3<f32>(0.70, 0.93, 1.0), 0.55 + glass_factors.y * 0.18);
+    let glass_tint = mix(
+        vec3<f32>(0.82, 0.94, 1.0),
+        clamp(base, vec3<f32>(0.0), vec3<f32>(2.0)),
+        0.18 + glass_factors.y * 0.22,
+    );
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
     let tile_ao = mix(1.0, clamp(tile_array.orb.r, 0.0, 1.0), tile_array.weight * 0.35);
     let ambient = mix(0.08, 0.22, ssao_mask) * tile_ao;
-    let glass_ambient = mix(0.06, 0.10, ssao_mask);
+    let glass_ambient = mix(0.52, 0.62, ssao_mask);
     let opaque_lit = base * (ambient + diffuse * 0.74)
         + specular_tint * specular * specular_scale * 0.24
         + vec3<f32>(rim);
-    let glass_lit = glass_tint * (glass_ambient + diffuse * 0.18)
+    let glass_lit = glass_tint * (glass_ambient + diffuse * 0.12)
         + material_specular * specular * (0.65 + glass_factors.z * 0.25)
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
-    let lit = select(opaque_lit, glass_lit, is_glass);
-    let extra_lit = resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass);
+    let lighting_enabled = material.alpha_policy_params.y > 0.5;
+    let surface_lit = select(base, opaque_lit, lighting_enabled);
+    let lit = select(surface_lit, glass_lit, is_glass);
+    let extra_lit = select(
+        vec3<f32>(0.0),
+        resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass),
+        lighting_enabled,
+    );
     let outlined = resolve_outline_rim(lit + extra_lit, rim, is_glass);
     let color = outlined + emissive;
     let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -604,6 +617,16 @@ fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
     return mix(raw_alpha, shaped, shaping_enabled);
 }
 
+fn resolve_surface_alpha(base_alpha: f32, normal_blue: f32) -> f32 {
+    if material.alpha_policy_params.x > 1.5 {
+        return clamp(normal_blue, 0.0, 1.0);
+    }
+    if material.alpha_policy_params.x > 0.5 {
+        return clamp(base_alpha, 0.0, 1.0);
+    }
+    return 1.0;
+}
+
 fn resolve_glass_factors() -> vec3<f32> {
     let ior_delta = clamp((clamp(material.glass_params.x, 1.0, 2.5) - 1.0) / 1.5, 0.0, 1.0);
     let thickness_delta = clamp((max(material.glass_params.y, 0.0) - 0.01) * 8.0, 0.0, 1.0);
@@ -713,7 +736,7 @@ fn resolve_lightshaft_color(base: vec3<f32>, texture_alpha: f32, vertex_alpha: f
 fn resolve_normal(
     input: VertexOutput,
     front_facing: bool,
-    uv: vec2<f32>,
+    normal_sample: vec4<f32>,
     tile_array: TileArraySample,
     detail_array: DetailArraySample,
 ) -> vec3<f32> {
@@ -730,7 +753,7 @@ fn resolve_normal(
     let tangent = normalize(cross(bitangent, geometric_normal)) * tangent_sign;
     let sampled = select(
         vec3<f32>(0.0, 0.0, 1.0),
-        decode_normal(textureSample(normal_texture, data_sampler, uv)),
+        decode_normal(normal_sample),
         has_primary,
     );
     let normal_scale = resolve_effective_normal_scale(detail_array.available > 0.5);

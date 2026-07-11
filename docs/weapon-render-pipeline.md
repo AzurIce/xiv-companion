@@ -200,7 +200,7 @@ WeaponMaterialRenderMode::Glass
 `g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 已解析进材质数据、phantom summary 和 renderer uniform；WGSL 当前只在 aperture/offset 非默认时对非 glass/lightshaft alpha 做受限 shaping，`g_ShadowAlphaThreshold` 仍未驱动 shadow pass。
 `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 转换成 UV0/UV1 scroll multiplier 并进入 renderer uniform，Web 渲染循环会用 RAF 时间驱动保守滚动采样，native snapshot 默认时间为 0。
 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已解析进材质数据和 renderer uniform；LightShaft draw role 会启用保守 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 与 `g_Ray` 强度近似，尚未复刻完整节点语义。
-`g_Transparency` 已解析进材质数据和 phantom summary，但 Meddle `Names.cs` 与 MeddleTools 均表明它属于 water/river，不是 character transparency/glass 的 opacity 参数。当前不会让它改变 character/glass opacity。
+`g_Transparency` 已解析进材质数据和 phantom summary，但 Meddle `Names.cs` 与 MeddleTools 均表明它属于 water/river，不是 character transparency/glass 的 opacity 参数。默认值按 shader family 处理为 water/river 1.0、其它 family 0.0；当前不会让它改变 character/glass opacity。
 
 ### 7.2 Transparent
 
@@ -219,14 +219,14 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 当前实现做简化 glass：
 
 - render mode 标记为 `Glass`。
-- opacity 设为 `0.28`。
+- prepared alpha source 使用 normal texture Blue；ColorTable baked base 保持 opaque，不再写入固定 glass alpha。
 - `g_GlassIOR` / `g_GlassThicknessMax` 已解析并进入 uniform，当前只轻量调节 tint、specular 与 fresnel，不驱动 opacity、折射或真实厚度传输。
-- WGSL 中降低 diffuse、增加蓝白 tint、增强 fresnel/specular。
+- WGSL 使用较亮的 transmission tint、normal-B alpha 与 fresnel/specular；`EnableLightingOff` 的 character transparency 可绕过 surface lighting。
 - 进入透明 pass。
 
-真实 45059 `characterglass.shpk` 样本只有 normal/mask/index 与 ColorTable 派生 base，没有独立 base texture；MTRL 覆盖 `DrawDepthMode_Dither`，`g_GlassIOR=1`、`g_GlassThicknessMax=0`。当前固定 opacity 与偏暗 tint 仍会把雪景玻璃罩画成灰暗球体，是下一批需要修正的明确回归样本。
+真实 45059 `characterglass.shpk` 样本只有 normal/mask/index 与 ColorTable 派生 base，没有独立 base texture；MTRL 覆盖 `DrawDepthMode_Dither`，`g_GlassIOR=1`、`g_GlassThicknessMax=0`，normal Blue 实测范围为 `57..255`。改用 normal-B alpha 后，雪景玻璃罩不再是灰暗球体，内部景物保持可见且表面纹理可观察。
 
-Meddle 还表明 `DrawDepthMode` 是 character glass/transparency 的 material key，`EnableLighting` 是 character transparency material key；`GlassBlendMode` 是 scene key而非 MTRL material key。后续 prepared alpha policy 应消费前两者，并把 scene-level blend mode 保持为显式 renderer 输入或有来源的默认值。
+`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy；`DrawDepthMode_Dither` 当前只记录并传入 uniform，尚未建立 depth prepass。`GlassBlendMode` 是 scene key而非 MTRL material key，仍需设计显式 renderer 输入或有来源的默认值。
 
 这不是完整游戏 glass shader，目前只能显示内部模型并提供近似透明外壳。
 
@@ -304,7 +304,7 @@ Meddle 作为 Dalamud 插件不主要靠离线猜路径，它从运行时对象�
 
 1. Prepared draw role / pass：`PreparedModel` / `PreparedMesh` 已完成第一步主 pass 过滤并保留 submesh attribute metadata；显式 `enabledAttributeMask` 输入已可隐藏 disabled submesh，默认离线模式仍保持不过滤；renderer 内部已有 `Opaque/Cutout/Transparent/Glass/AdditiveLightShaft` prepared pass 分类，Cutout/Glass 已有独立 wgpu pipeline 入口，`AdditiveLightShaft` 已进入最小 additive wgpu pipeline 并消费第一组 lightshaft 参数；后续还需要 runtime shape visibility、更完整的 cutout/glass shader 行为和 lightshaft 节点语义。
 2. GPU 顶点格式：uv1-uv3、color1、secondary normal/bitangent、flow 已进入 GPU 顶点输入；PreparedMaterial 已有第一版 feature flags、UV source 和 unsupported/runtime-only 输入摘要，其中 `usesFlow` 已由 `PreparedModel` 按 mesh 顶点属性汇总，`usesDye` 会识别旧 `hasColorDyeTable` 或结构化 `ModelColorDyeTable`；下一步是按 shader family、UV source 与 flags 实际消费这些通道。
-3. Glass：参考 Meddle/Penumbra shader key 和 material params，解析更多 glass 参数，而不是固定 0.28。
+3. Glass：normal-B alpha、`DrawDepthMode` / `EnableLighting` prepared policy 已接入；后续实现 dither depth prepass、`GlassBlendMode` scene input、折射与真实厚度传输。
 4. Material params：`g_AlphaThreshold`、`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold`、`g_Transparency`、`g_GlassIOR`、`g_GlassThicknessMax`、`g_NormalScale`、`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale`、`g_TileIndex`、`g_TileAlpha`、`g_TileScale`、`g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex`、`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor`、`g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset`、`g_DetailColorUvScale`、`g_DetailNormalUvScale`、`g_UVScrollTime` 以及 `lightshaft.shpk` 的 `g_Color/g_TexAnim/g_TexU/g_TexV/g_Ray` 已进入结构化材质字段；共享 tile/detail atlas 与相关 index/UV/normal scale 已有第一版 WGSL 消费。后续要继续处理 transparency alpha、独立 multi normal/map、toon lighting、真实 outline pass、ORB/detail 权重与 shader-family-specific UV scroll。
 5. Tile/Sphere/Sheen：renderer 已消费 ColorTable extra maps 和共享 tile/detail pair atlas；后续要校准 ORB/detail 通道权重、补 shader-family-specific UV source，并实现更接近 MeddleTools 的 reflection/sphere 规则。
 6. 纹理采样配置：数据层已有第一版 role policy，renderer 已从 prepared policy 派生 color/data/nearest-data sampler，并已绑定 `_id.tex`、ColorTable extra maps 与共享 arrays；后续重点是 per-texture independent sampler 和 shader 级 clip/extend。

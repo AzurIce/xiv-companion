@@ -1,10 +1,10 @@
 use wgpu::util::DeviceExt;
 
 use crate::{
-    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    ModelTexture, ModelTextureKind, PreparedMaterial, PreparedRenderPass,
-    PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource,
-    prepare_model_for_render,
+    MaterialAlphaMode, MaterialDrawDepthMode, MaterialLightingMode, MaterialRenderMode,
+    ModelMaterial, ModelMeshDrawRole, ModelRenderData, ModelTexture, ModelTextureKind,
+    PreparedAlphaSource, PreparedMaterial, PreparedRenderPass, PreparedTextureAddressMode,
+    PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1421,6 +1421,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
         alpha_params: material_alpha_params(material),
+        alpha_policy_params: material_alpha_policy_params(prepared_material),
         glass_params: material_glass_params(material),
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
@@ -2208,6 +2209,8 @@ fn fallback_material() -> ModelMaterial {
         render_mode: MaterialRenderMode::Opaque,
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        draw_depth_mode: MaterialDrawDepthMode::None,
+        lighting_mode: MaterialLightingMode::Default,
         transparency: 0.0,
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
@@ -2320,6 +2323,36 @@ fn material_alpha_params(material: &ModelMaterial) -> [f32; 4] {
         finite_or(material.alpha_offset, 0.0),
         finite_or(material.shadow_alpha_threshold, 0.5).clamp(0.0, 1.0),
         finite_or(material.transparency, 0.0).clamp(0.0, 1.0),
+    ]
+}
+
+fn material_alpha_policy_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let source = match prepared_material.alpha_policy.source {
+        PreparedAlphaSource::Opaque => 0.0,
+        PreparedAlphaSource::BaseColorAlpha => 1.0,
+        PreparedAlphaSource::NormalBlue => 2.0,
+    };
+    let pass = match prepared_material.render_pass {
+        PreparedRenderPass::Transparent => 1.0,
+        PreparedRenderPass::Glass => 2.0,
+        _ => 0.0,
+    };
+    [
+        source,
+        if prepared_material.alpha_policy.lighting_enabled {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(
+            prepared_material.alpha_policy.draw_depth_mode,
+            MaterialDrawDepthMode::Dither
+        ) {
+            1.0
+        } else {
+            0.0
+        },
+        pass,
     ]
 }
 
@@ -2626,6 +2659,7 @@ struct MaterialUniform {
     properties: [f32; 4],
     render: [f32; 4],
     alpha_params: [f32; 4],
+    alpha_policy_params: [f32; 4],
     glass_params: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
@@ -2911,6 +2945,7 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
@@ -3030,6 +3065,7 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet {
                 base_color: color_sampling,
@@ -3115,6 +3151,7 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
@@ -3337,6 +3374,34 @@ mod tests {
     }
 
     #[test]
+    fn material_alpha_policy_params_encode_prepared_shader_policy() {
+        let mut prepared = PreparedMaterial {
+            render_pass: PreparedRenderPass::Transparent,
+            shader_family: MaterialShaderFamily::CharacterTransparency,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy {
+                source: PreparedAlphaSource::NormalBlue,
+                draw_depth_mode: MaterialDrawDepthMode::Dither,
+                lighting_enabled: false,
+            },
+            texture_bindings: PreparedTextureBindings::default(),
+            texture_sampling: PreparedTextureSamplingSet::default(),
+            uv_sources: PreparedMaterialUvSources::default(),
+            feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            render_backfaces: true,
+        };
+        assert_eq!(material_alpha_policy_params(prepared), [2.0, 0.0, 1.0, 1.0]);
+
+        prepared.render_pass = PreparedRenderPass::Glass;
+        prepared.alpha_policy.source = PreparedAlphaSource::BaseColorAlpha;
+        prepared.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::None;
+        prepared.alpha_policy.lighting_enabled = true;
+        assert_eq!(material_alpha_policy_params(prepared), [1.0, 1.0, 0.0, 2.0]);
+    }
+
+    #[test]
     fn material_glass_params_preserve_shader_inputs() {
         let mut material = fallback_material();
         assert_eq!(material_glass_params(&material), [1.0, 0.01, 0.0, 0.0]);
@@ -3536,6 +3601,7 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet::default(),
             uv_sources: PreparedMaterialUvSources {
@@ -3774,6 +3840,7 @@ mod tests {
             prepared_material: PreparedMaterial {
                 render_pass: pass,
                 shader_family: MaterialShaderFamily::Unknown,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),

@@ -400,6 +400,10 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub alpha_threshold: f32,
     #[serde(default)]
+    pub draw_depth_mode: MaterialDrawDepthMode,
+    #[serde(default)]
+    pub lighting_mode: MaterialLightingMode,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_alpha_aperture")]
     pub alpha_aperture: f32,
@@ -567,6 +571,25 @@ pub enum MaterialAlphaMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialDrawDepthMode {
+    #[default]
+    None,
+    Dither,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialLightingMode {
+    #[default]
+    Default,
+    Enabled,
+    Disabled,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
     CharacterStockings,
@@ -693,6 +716,8 @@ pub struct PreparedMeshShapeInfluences {
 pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
     pub shader_family: MaterialShaderFamily,
+    #[serde(default)]
+    pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
     #[serde(default)]
@@ -706,6 +731,33 @@ pub struct PreparedMaterial {
     #[serde(default)]
     pub runtime_fallbacks: PreparedMaterialRuntimeFallbacks,
     pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialAlphaPolicy {
+    pub source: PreparedAlphaSource,
+    pub draw_depth_mode: MaterialDrawDepthMode,
+    pub lighting_enabled: bool,
+}
+
+impl Default for PreparedMaterialAlphaPolicy {
+    fn default() -> Self {
+        Self {
+            source: PreparedAlphaSource::Opaque,
+            draw_depth_mode: MaterialDrawDepthMode::None,
+            lighting_enabled: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedAlphaSource {
+    #[default]
+    Opaque,
+    BaseColorAlpha,
+    NormalBlue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1060,8 +1112,9 @@ pub fn prepare_material_for_draw_role(
     let texture_bindings = prepared_texture_bindings(material);
 
     PreparedMaterial {
-        render_pass: prepared_render_pass(material, draw_role),
+        render_pass: prepared_render_pass(material, draw_role, shader_family),
         shader_family,
+        alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
         uv_sources: PreparedMaterialUvSources::default(),
@@ -1077,6 +1130,55 @@ pub fn prepare_material_for_draw_role(
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
+    }
+}
+
+pub fn prepared_material_alpha_policy(
+    material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+) -> PreparedMaterialAlphaPolicy {
+    let Some(material) = material else {
+        return PreparedMaterialAlphaPolicy::default();
+    };
+    let is_character_family = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
+    let source = if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
+        PreparedAlphaSource::Opaque
+    } else if matches!(
+        shader_family,
+        MaterialShaderFamily::CharacterGlass | MaterialShaderFamily::CharacterTransparency
+    ) || (is_character_family
+        && !matches!(material.alpha_mode, MaterialAlphaMode::Opaque))
+    {
+        PreparedAlphaSource::NormalBlue
+    } else {
+        match material.alpha_mode {
+            MaterialAlphaMode::Opaque => PreparedAlphaSource::Opaque,
+            MaterialAlphaMode::Mask | MaterialAlphaMode::Blend | MaterialAlphaMode::Glass => {
+                PreparedAlphaSource::BaseColorAlpha
+            }
+        }
+    };
+    let lighting_enabled = !matches!(
+        (shader_family, material.lighting_mode),
+        (
+            MaterialShaderFamily::CharacterTransparency,
+            MaterialLightingMode::Disabled
+        )
+    );
+
+    PreparedMaterialAlphaPolicy {
+        source,
+        draw_depth_mode: material.draw_depth_mode,
+        lighting_enabled,
     }
 }
 
@@ -1283,6 +1385,7 @@ fn material_vec4_differs(value: [f32; 4], default: [f32; 4]) -> bool {
 fn prepared_render_pass(
     material: Option<&ModelMaterial>,
     draw_role: ModelMeshDrawRole,
+    shader_family: MaterialShaderFamily,
 ) -> PreparedRenderPass {
     if matches!(draw_role, ModelMeshDrawRole::LightShaft) {
         return PreparedRenderPass::AdditiveLightShaft;
@@ -1292,6 +1395,12 @@ fn prepared_render_pass(
     }
     if matches!(draw_role, ModelMeshDrawRole::Glass) {
         return PreparedRenderPass::Glass;
+    }
+    if matches!(shader_family, MaterialShaderFamily::CharacterGlass) {
+        return PreparedRenderPass::Glass;
+    }
+    if matches!(shader_family, MaterialShaderFamily::CharacterTransparency) {
+        return PreparedRenderPass::Transparent;
     }
 
     let Some(material) = material else {
@@ -2034,6 +2143,39 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_character_alpha_policy_uses_shader_family_inputs() {
+        let mut material = test_material();
+        material.shader_package_name = Some("characterglass.shpk".to_string());
+        material.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Glass);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalBlue
+        );
+        assert_eq!(
+            prepared.alpha_policy.draw_depth_mode,
+            MaterialDrawDepthMode::Dither
+        );
+        assert!(prepared.alpha_policy.lighting_enabled);
+
+        material.shader_package_name = Some("charactertransparency.shpk".to_string());
+        material.lighting_mode = MaterialLightingMode::Disabled;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalBlue
+        );
+        assert!(!prepared.alpha_policy.lighting_enabled);
+
+        material.shader_package_name = Some("characterstockings.shpk".to_string());
+        material.alpha_mode = MaterialAlphaMode::Blend;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.alpha_policy.source, PreparedAlphaSource::Opaque);
+    }
+
+    #[test]
     fn prepared_material_preserves_culling_and_missing_material_defaults() {
         let mut material = test_material();
         material.render_backfaces = false;
@@ -2044,6 +2186,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
+                alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
@@ -2059,6 +2202,7 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
@@ -2676,6 +2820,8 @@ mod color_table_bake_tests {
             render_mode: MaterialRenderMode::Opaque,
             alpha_mode: MaterialAlphaMode::Opaque,
             alpha_threshold: 0.0,
+            draw_depth_mode: MaterialDrawDepthMode::None,
+            lighting_mode: MaterialLightingMode::Default,
             transparency: 0.0,
             alpha_aperture: 2.0,
             alpha_offset: 0.0,

@@ -5,14 +5,15 @@ pub mod renderer;
 pub mod test_support;
 
 pub use model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialRenderMode,
-    MaterialShaderFamily, ModelBounds, ModelData, ModelMaterial, ModelMaterialTextureArrays,
-    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeInfo, ModelSubmeshInfo, ModelTexture,
-    ModelTextureKind, ModelVertex, PackedModelId, PreparedMaterial, PreparedMaterialFeatureFlags,
-    PreparedMaterialResourceAvailability, PreparedMaterialRuntimeFallbacks,
-    PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources, PreparedMesh,
-    PreparedMeshShapeInfluences, PreparedMeshVisibility, PreparedModel, PreparedModelOptions,
-    PreparedRenderPass, PreparedRuntimeFallback, PreparedTextureAddressMode,
+    BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialDrawDepthMode,
+    MaterialLightingMode, MaterialRenderMode, MaterialShaderFamily, ModelBounds, ModelData,
+    ModelMaterial, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
+    ModelShapeInfo, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
+    PreparedAlphaSource, PreparedMaterial, PreparedMaterialAlphaPolicy,
+    PreparedMaterialFeatureFlags, PreparedMaterialResourceAvailability,
+    PreparedMaterialRuntimeFallbacks, PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources,
+    PreparedMesh, PreparedMeshShapeInfluences, PreparedMeshVisibility, PreparedModel,
+    PreparedModelOptions, PreparedRenderPass, PreparedRuntimeFallback, PreparedTextureAddressMode,
     PreparedTextureBindings, PreparedTextureColorSpace, PreparedTextureFilter,
     PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureUvSources,
     PreparedUvSource, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,

@@ -1,11 +1,11 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelColorDyeTable,
-    ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
-    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
-    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
-    PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
-    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
-    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialLightingMode,
+    MaterialRenderMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
+    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialTextureArrays, ModelMesh,
+    ModelMeshDrawRole, ModelRenderData, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
+    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
+    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
+    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
     WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
     WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
     WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
@@ -41,6 +41,16 @@ const G_ALPHA_OFFSET: u32 = 0xD07A_6A65;
 const G_SHADOW_ALPHA_THRESHOLD: u32 = 0xD925_FF32;
 #[cfg(feature = "game-data")]
 const G_TRANSPARENCY: u32 = 0x53E8_417B;
+#[cfg(feature = "game-data")]
+const DRAW_DEPTH_MODE: u32 = 0xE8DA_5B62;
+#[cfg(feature = "game-data")]
+const DRAW_DEPTH_MODE_DITHER: u32 = 0x7B80_4D6E;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING: u32 = 0x0033_C8B5;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING_OFF: u32 = 0x93D6_C21A;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING_ON: u32 = 0xD1E6_0FD9;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
@@ -2125,7 +2135,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
-        let transparency = composed_material_transparency(&semantics);
+        let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
+        let lighting_mode = composed_material_lighting_mode(&semantics);
+        let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
@@ -2203,6 +2215,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            draw_depth_mode,
+            lighting_mode,
             transparency,
             alpha_aperture,
             alpha_offset,
@@ -2361,7 +2375,6 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         color_table_rows,
         set.index,
         set.emissive.is_none(),
-        shader_opacity_override(&material.shader_package_name),
         textures,
     ) {
         if let Some(base_color) = set.base_color {
@@ -2695,7 +2708,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
-        let transparency = composed_material_transparency(&semantics);
+        let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
+        let lighting_mode = composed_material_lighting_mode(&semantics);
+        let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
@@ -2774,6 +2789,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             render_mode,
             alpha_mode,
             alpha_threshold,
+            draw_depth_mode,
+            lighting_mode,
             transparency,
             alpha_aperture,
             alpha_offset,
@@ -2934,7 +2951,6 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         color_table_rows,
         set.index,
         set.emissive.is_none(),
-        shader_opacity_override(&material.shader_package_name),
         textures,
     ) {
         if let Some(base_color) = set.base_color {
@@ -3118,6 +3134,10 @@ struct ResolvedMaterialValue<T> {
 impl ComposedMaterialSemantics {
     fn has_material_key(&self, key: u32, value: u32) -> bool {
         self.material_keys.get(&key).map(|entry| entry.value) == Some(value)
+    }
+
+    fn material_key_value(&self, key: u32) -> Option<u32> {
+        self.material_keys.get(&key).map(|entry| entry.value)
     }
 
     fn sampler_kind_resolution(&self, texture_usage: u32) -> MaterialSamplerKindResolution {
@@ -3324,7 +3344,6 @@ fn bake_weapon_color_table_textures(
     rows: Option<&[ColorTableRowColors]>,
     index_texture: Option<usize>,
     bake_emissive: bool,
-    opacity_override: Option<f32>,
     textures: &mut Vec<WeaponModelTexture>,
 ) -> Option<BakedWeaponTextureIndices> {
     let rows = rows?;
@@ -3332,10 +3351,7 @@ fn bake_weapon_color_table_textures(
     let width = index_texture.width;
     let height = index_texture.height;
     let id_rgba = index_texture.rgba.clone();
-    let mut baked = bake_color_table_maps(rows, &id_rgba)?;
-    if let Some(opacity) = opacity_override {
-        apply_alpha_override(&mut baked.diffuse_rgba, opacity);
-    }
+    let baked = bake_color_table_maps(rows, &id_rgba)?;
     let material_key = normalize_game_resource_path(material_path);
 
     let base_path = format!("baked://{material_key}#colorset-diffuse");
@@ -3452,6 +3468,8 @@ fn weapon_material_alpha_mode(
     let shader = shader_package_name.to_ascii_lowercase();
     if shader.contains("glass") {
         WeaponMaterialAlphaMode::Glass
+    } else if shader.contains("transparency") {
+        WeaponMaterialAlphaMode::Blend
     } else if shader_flags & ENABLE_TRANSLUCENCY != 0 {
         WeaponMaterialAlphaMode::Blend
     } else if alpha_test && apply_alpha_test_material_key_applies(&shader) {
@@ -3487,7 +3505,7 @@ fn weapon_material_opacity(mode: WeaponMaterialRenderMode) -> f32 {
     match mode {
         WeaponMaterialRenderMode::Opaque => 1.0,
         WeaponMaterialRenderMode::Transparent => 1.0,
-        WeaponMaterialRenderMode::Glass => 0.28,
+        WeaponMaterialRenderMode::Glass => 1.0,
     }
 }
 
@@ -3511,8 +3529,38 @@ fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> O
 }
 
 #[cfg(feature = "game-data")]
-fn composed_material_transparency(semantics: &ComposedMaterialSemantics) -> f32 {
-    composed_material_finite_constant(semantics, G_TRANSPARENCY, 0.0).clamp(0.0, 1.0)
+fn composed_material_transparency(
+    semantics: &ComposedMaterialSemantics,
+    shader_package_name: &str,
+) -> f32 {
+    let default = matches!(
+        crate::model::material_shader_family(Some(shader_package_name)),
+        crate::model::MaterialShaderFamily::Water
+    )
+    .then_some(1.0)
+    .unwrap_or(0.0);
+    composed_material_finite_constant(semantics, G_TRANSPARENCY, default).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_draw_depth_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> MaterialDrawDepthMode {
+    match semantics.material_key_value(DRAW_DEPTH_MODE) {
+        None => MaterialDrawDepthMode::None,
+        Some(DRAW_DEPTH_MODE_DITHER) => MaterialDrawDepthMode::Dither,
+        Some(_) => MaterialDrawDepthMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lighting_mode(semantics: &ComposedMaterialSemantics) -> MaterialLightingMode {
+    match semantics.material_key_value(ENABLE_LIGHTING) {
+        None => MaterialLightingMode::Default,
+        Some(ENABLE_LIGHTING_ON) => MaterialLightingMode::Enabled,
+        Some(ENABLE_LIGHTING_OFF) => MaterialLightingMode::Disabled,
+        Some(_) => MaterialLightingMode::Unknown,
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -3768,21 +3816,6 @@ fn composed_material_finite_constant(
 }
 
 #[cfg(feature = "game-data")]
-fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
-    let alpha_mode =
-        weapon_material_alpha_mode(shader_package_name, 0, &WeaponTextureSet::default(), false);
-    let mode = weapon_material_render_mode(alpha_mode);
-    (mode == WeaponMaterialRenderMode::Glass).then_some(weapon_material_opacity(mode))
-}
-
-#[cfg(feature = "game-data")]
-fn apply_alpha_override(rgba: &mut [u8], opacity: f32) {
-    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel[3] = pixel[3].min(alpha);
-    }
-}
-
 #[cfg(feature = "game-data")]
 fn combine_base_with_colorset_texture(
     material_path: &str,
@@ -4111,6 +4144,8 @@ fn fallback_weapon_material(
         render_mode: WeaponMaterialRenderMode::Opaque,
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        draw_depth_mode: MaterialDrawDepthMode::None,
+        lighting_mode: MaterialLightingMode::Default,
         transparency: 0.0,
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
@@ -4954,6 +4989,54 @@ mod weapon_material_tests {
 
     #[test]
     #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_character_glass_uses_normal_blue_alpha_policy() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45059,
+            item_name: "冬雪之幻梦".to_string(),
+            model_main: 4_295_034_963,
+            model_sub: 773_094_181_015,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.shader_package_name.as_deref() == Some("characterglass.shpk"))
+            .expect("character glass material");
+        let normal = &model.textures[material.normal_texture.expect("glass normal texture")];
+        let (blue_min, blue_max) = normal
+            .rgba
+            .chunks_exact(4)
+            .fold((u8::MAX, u8::MIN), |(min, max), pixel| {
+                (min.min(pixel[2]), max.max(pixel[2]))
+            });
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        eprintln!(
+            "glass normal blue range={blue_min}..{blue_max}, depth={:?}, lighting={:?}",
+            material.draw_depth_mode, material.lighting_mode
+        );
+        assert_eq!(material.draw_depth_mode, MaterialDrawDepthMode::Dither);
+        assert_eq!(material.lighting_mode, MaterialLightingMode::Default);
+        assert_eq!(
+            prepared.render_pass,
+            crate::model::PreparedRenderPass::Glass
+        );
+        assert_eq!(
+            prepared.alpha_policy.source,
+            crate::model::PreparedAlphaSource::NormalBlue
+        );
+        assert!(blue_min < blue_max);
+        assert!(blue_min < u8::MAX);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
     fn installed_weapon_stain_changes_baked_color_table() {
         let game_dir =
             std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
@@ -5515,7 +5598,6 @@ mod weapon_material_tests {
             Some(&rows),
             Some(0),
             true,
-            None,
             &mut textures,
         )
         .expect("bake");
@@ -5527,6 +5609,7 @@ mod weapon_material_tests {
         );
         assert_eq!(&tile_matrix.rgba[0..4], &[255, 0, 64, 255]);
         assert_eq!(tile_matrix.rgba_f32, Some(vec![[2.0, -0.5, 0.25, 1.5]]));
+        assert_eq!(textures[baked.base_color].rgba[3], 255);
     }
 
     #[test]
@@ -5668,18 +5751,75 @@ mod weapon_material_tests {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[(G_TRANSPARENCY, &[0.35])]);
 
-        assert_eq!(composed_material_transparency(&semantics), 0.0);
+        assert_eq!(
+            composed_material_transparency(&semantics, "character.shpk"),
+            0.0
+        );
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            1.0
+        );
 
         semantics.apply_shader_package_material_constants(&shader_package);
-        assert_eq!(composed_material_transparency(&semantics), 0.35);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            0.35
+        );
 
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[0.72], 0);
         semantics.apply_material_constants(&material);
-        assert_eq!(composed_material_transparency(&semantics), 0.72);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            0.72
+        );
 
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[8.0], 0);
         semantics.apply_material_constants(&material);
-        assert_eq!(composed_material_transparency(&semantics), 1.0);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            1.0
+        );
+    }
+
+    #[test]
+    fn composed_character_transparency_keys_preserve_depth_and_lighting_policy() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::None
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Default
+        );
+
+        semantics.apply_shader_package_key_default(DRAW_DEPTH_MODE, DRAW_DEPTH_MODE_DITHER);
+        semantics.apply_shader_package_key_default(ENABLE_LIGHTING, ENABLE_LIGHTING_ON);
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::Dither
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Enabled
+        );
+
+        semantics.apply_material_key(ENABLE_LIGHTING, ENABLE_LIGHTING_OFF);
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Disabled
+        );
+
+        semantics.apply_material_key(DRAW_DEPTH_MODE, 0xDEAD_BEEF);
+        semantics.apply_material_key(ENABLE_LIGHTING, 0xCAFE_BABE);
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::Unknown
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Unknown
+        );
     }
 
     #[test]
@@ -6374,7 +6514,7 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn only_base_texture_alpha_affects_material_transparency() {
+    fn base_texture_alpha_drives_generic_alpha_classification() {
         for kind in [
             WeaponModelTextureKind::Normal,
             WeaponModelTextureKind::Mask,
@@ -6433,6 +6573,23 @@ mod weapon_material_tests {
         assert_eq!(
             weapon_material_alpha_mode("character.shpk", 0, &texture_set, false),
             WeaponMaterialAlphaMode::Blend
+        );
+    }
+
+    #[test]
+    fn character_transparency_and_glass_packages_force_transparent_passes() {
+        let texture_set = WeaponTextureSet::default();
+        assert_eq!(
+            weapon_material_alpha_mode("charactertransparency.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Blend
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("characterglass.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Glass
+        );
+        assert_eq!(
+            weapon_material_opacity(WeaponMaterialRenderMode::Glass),
+            1.0
         );
     }
 
