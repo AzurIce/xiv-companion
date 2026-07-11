@@ -33,7 +33,7 @@ struct Material {
     shader_multi_emissive_color: vec4<f32>,
     outline_params: vec4<f32>, // rgb: outline color, a: outline width
     specular_color_mask: vec4<f32>,
-    surface_params: vec4<f32>, // x: ssao mask, y: texture mip bias, z: shadow pos offset
+    surface_params: vec4<f32>, // x: ssao mask, y: texture mip bias, z: shadow pos offset, w: character mip bias
     detail_color_uv_scale: vec4<f32>, // xy: detail color repeat, zw: multi detail color repeat
     detail_normal_uv_scale: vec4<f32>, // xy: detail normal repeat, zw: multi detail normal repeat
     uv_scroll: vec4<f32>, // xy: uv0 scroll multiplier, zw: uv1 scroll multiplier
@@ -196,9 +196,15 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
     let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
     let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
     let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
-    let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
-    let sampled_secondary_base = textureSample(tile_properties_texture, base_color_sampler, secondary_base_uv);
-    let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
+    let mip_bias = resolve_texture_mip_bias();
+    let sampled_base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
+    let sampled_secondary_base = textureSampleBias(
+        tile_properties_texture,
+        base_color_sampler,
+        secondary_base_uv,
+        mip_bias,
+    );
+    let sampled_normal = textureSampleBias(normal_texture, data_sampler, normal_uv, mip_bias);
     let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let secondary_weight = clamp(input.color.a, 0.0, 1.0)
         * material.secondary_map_params.x
@@ -243,18 +249,25 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let specular_uv = resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y);
     let emissive_uv = resolve_uv(input, material.uv_sources1.z, material.uv_scroll_masks1.z);
     let material_properties_uv = resolve_uv(input, material.uv_sources1.w, material.uv_scroll_masks1.w);
+    let mip_bias = resolve_texture_mip_bias();
 
     let extra = resolve_extra_properties(input);
     let tile_array = resolve_tile_array(input, extra);
     let detail_array = resolve_detail_array(input);
-    let sampled_normal = textureSample(normal_texture, data_sampler, normal_uv);
-    let sampled_secondary_normal = textureSample(sheen_properties_texture, data_sampler, secondary_normal_uv);
+    let sampled_normal = textureSampleBias(normal_texture, data_sampler, normal_uv, mip_bias);
+    let sampled_secondary_normal = textureSampleBias(
+        sheen_properties_texture,
+        data_sampler,
+        secondary_normal_uv,
+        mip_bias,
+    );
     let secondary_blend = clamp(input.color.a, 0.0, 1.0) * material.secondary_map_params.w;
-    let sampled_specular = textureSample(specular_texture, data_sampler, specular_uv).rgb;
-    let sampled_secondary_specular = textureSample(
+    let sampled_specular = textureSampleBias(specular_texture, data_sampler, specular_uv, mip_bias).rgb;
+    let sampled_secondary_specular = textureSampleBias(
         sphere_properties_texture,
         data_sampler,
         secondary_specular_uv,
+        mip_bias,
     ).rgb;
     let effective_specular_sample = mix(
         sampled_specular,
@@ -292,9 +305,19 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let normal_half = max(dot(normal, half_dir), 0.0);
     let specular = pow(normal_half, specular_power);
     let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
-    let sampled_base = textureSample(base_color_texture, base_color_sampler, base_uv);
-    let sampled_secondary_base = textureSample(tile_properties_texture, base_color_sampler, secondary_base_uv);
-    let emissive_tex = textureSample(emissive_texture, base_color_sampler, emissive_uv).rgb;
+    let sampled_base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
+    let sampled_secondary_base = textureSampleBias(
+        tile_properties_texture,
+        base_color_sampler,
+        secondary_base_uv,
+        mip_bias,
+    );
+    let emissive_tex = textureSampleBias(
+        emissive_texture,
+        base_color_sampler,
+        emissive_uv,
+        mip_bias,
+    ).rgb;
     let primary_texture = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
     let secondary_color_weight = secondary_blend * material.secondary_map_params.x;
     let scroll_texture_mix = mix(
@@ -505,16 +528,29 @@ fn uv_debug_color(uv: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(fract(uv.x), fract(uv.y), 0.5);
 }
 
+fn resolve_texture_mip_bias() -> f32 {
+    return select(
+        0.0,
+        clamp(material.surface_params.y, -16.0, 15.99),
+        material.surface_params.w > 0.5,
+    );
+}
+
 fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
     if material.params.w <= 0.5 {
         return vec3<f32>(1.0, material.specular_color.a, material.params.y);
     }
-    return textureSample(mask_texture, data_sampler, uv).rgb;
+    return textureSampleBias(mask_texture, data_sampler, uv, resolve_texture_mip_bias()).rgb;
 }
 
 fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
     if material.properties.x > 0.5 {
-        return textureSample(material_properties_texture, data_sampler, uv);
+        return textureSampleBias(
+            material_properties_texture,
+            data_sampler,
+            uv,
+            resolve_texture_mip_bias(),
+        );
     }
 
     let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);

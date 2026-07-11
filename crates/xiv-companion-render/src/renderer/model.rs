@@ -1582,7 +1582,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         shader_multi_emissive_color: material_shader_multi_emissive_color(material),
         outline_params: material_outline_params(material),
         specular_color_mask: material_specular_color_mask(material),
-        surface_params: material_surface_params(material),
+        surface_params: material_surface_params(material, prepared_material),
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
@@ -1614,50 +1614,50 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .base_color_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon white texture",
                 1,
                 1,
                 &[255, 255, 255, 255],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
     let mask_texture_view = effective_mask_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon mask texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral mask texture",
                 1,
                 1,
                 &[255, 128, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1665,50 +1665,50 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .emissive_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon emissive texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon black emissive texture",
                 1,
                 1,
                 &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
     let normal_texture_view = effective_normal_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon normal texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::Normal,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon flat normal texture",
                 1,
                 1,
                 &[128, 128, 255, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::Normal,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1716,18 +1716,18 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .material_properties_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon material properties texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral material properties texture",
@@ -1739,7 +1739,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                     255,
                     255,
                 ],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1747,18 +1747,18 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .specular_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon specular texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral specular texture",
@@ -1770,7 +1770,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                     unorm_byte(material.specular_color[2]),
                     255,
                 ],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -2116,7 +2116,10 @@ fn sampler_descriptor_for_sampling(
         address_mode_w: address_mode,
         mag_filter: filter_mode,
         min_filter: filter_mode,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        mipmap_filter: match sampling.filter {
+            PreparedTextureFilter::Linear => wgpu::MipmapFilterMode::Linear,
+            PreparedTextureFilter::Nearest => wgpu::MipmapFilterMode::Nearest,
+        },
         ..Default::default()
     }
 }
@@ -2258,6 +2261,228 @@ fn create_array_pair_texture(
         );
     }
     texture
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RgbaMipSemantic {
+    SrgbColor,
+    LinearData,
+    Normal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RgbaMipLevel {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+fn create_mipped_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    semantic: RgbaMipSemantic,
+) -> wgpu::Texture {
+    let levels = rgba_mip_chain(width, height, rgba, semantic);
+    let format = match semantic {
+        RgbaMipSemantic::SrgbColor => wgpu::TextureFormat::Rgba8UnormSrgb,
+        RgbaMipSemantic::LinearData | RgbaMipSemantic::Normal => wgpu::TextureFormat::Rgba8Unorm,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip_level, level) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip_level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.rgba,
+            if level.height == 1 {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }
+            } else {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.width * 4),
+                    rows_per_image: Some(level.height),
+                }
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    texture
+}
+
+fn rgba_mip_chain(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    semantic: RgbaMipSemantic,
+) -> Vec<RgbaMipLevel> {
+    let width = width.max(1);
+    let height = height.max(1);
+    let expected_len = width as usize * height as usize * 4;
+    let mut base = vec![0; expected_len];
+    let copy_len = expected_len.min(rgba.len());
+    base[..copy_len].copy_from_slice(&rgba[..copy_len]);
+    let mut levels = vec![RgbaMipLevel {
+        width,
+        height,
+        rgba: base,
+    }];
+
+    while levels
+        .last()
+        .is_some_and(|level| level.width > 1 || level.height > 1)
+    {
+        let source = levels.last().expect("mip chain has a base level");
+        let target_width = (source.width / 2).max(1);
+        let target_height = (source.height / 2).max(1);
+        let mut target = vec![0; target_width as usize * target_height as usize * 4];
+        for target_y in 0..target_height {
+            let source_y_start = target_y * source.height / target_height;
+            let source_y_end =
+                ((target_y + 1) * source.height / target_height).max(source_y_start + 1);
+            for target_x in 0..target_width {
+                let source_x_start = target_x * source.width / target_width;
+                let source_x_end =
+                    ((target_x + 1) * source.width / target_width).max(source_x_start + 1);
+                let target_offset = ((target_y * target_width + target_x) * 4) as usize;
+                downsample_rgba_texel(
+                    source,
+                    source_x_start,
+                    source_x_end,
+                    source_y_start,
+                    source_y_end,
+                    semantic,
+                    &mut target[target_offset..target_offset + 4],
+                );
+            }
+        }
+        levels.push(RgbaMipLevel {
+            width: target_width,
+            height: target_height,
+            rgba: target,
+        });
+    }
+    levels
+}
+
+fn downsample_rgba_texel(
+    source: &RgbaMipLevel,
+    x_start: u32,
+    x_end: u32,
+    y_start: u32,
+    y_end: u32,
+    semantic: RgbaMipSemantic,
+    target: &mut [u8],
+) {
+    let sample_count = ((x_end - x_start) * (y_end - y_start)) as f32;
+    let mut sums = [0.0; 4];
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let offset = ((y * source.width + x) * 4) as usize;
+            let pixel = &source.rgba[offset..offset + 4];
+            match semantic {
+                RgbaMipSemantic::SrgbColor => {
+                    for channel in 0..3 {
+                        sums[channel] += srgb_to_linear(pixel[channel]);
+                    }
+                    sums[3] += f32::from(pixel[3]) / 255.0;
+                }
+                RgbaMipSemantic::LinearData => {
+                    for channel in 0..4 {
+                        sums[channel] += f32::from(pixel[channel]) / 255.0;
+                    }
+                }
+                RgbaMipSemantic::Normal => {
+                    for channel in 0..3 {
+                        sums[channel] += f32::from(pixel[channel]) / 127.5 - 1.0;
+                    }
+                    sums[3] += f32::from(pixel[3]) / 255.0;
+                }
+            }
+        }
+    }
+
+    match semantic {
+        RgbaMipSemantic::SrgbColor => {
+            for channel in 0..3 {
+                target[channel] = linear_to_srgb_byte(sums[channel] / sample_count);
+            }
+        }
+        RgbaMipSemantic::LinearData => {
+            for channel in 0..3 {
+                target[channel] = unorm_byte(sums[channel] / sample_count);
+            }
+        }
+        RgbaMipSemantic::Normal => {
+            let averaged = [
+                sums[0] / sample_count,
+                sums[1] / sample_count,
+                sums[2] / sample_count,
+            ];
+            let length =
+                (averaged[0] * averaged[0] + averaged[1] * averaged[1] + averaged[2] * averaged[2])
+                    .sqrt();
+            let normal = if length > 1.0e-6 {
+                [
+                    averaged[0] / length,
+                    averaged[1] / length,
+                    averaged[2] / length,
+                ]
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+            for channel in 0..3 {
+                target[channel] = unorm_byte(normal[channel] * 0.5 + 0.5);
+            }
+        }
+    }
+    target[3] = unorm_byte(sums[3] / sample_count);
+}
+
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = f32::from(value) / 255.0;
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_byte(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let encoded = if value <= 0.0031308 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    unorm_byte(encoded)
 }
 
 fn create_rgba_texture(
@@ -2715,12 +2940,26 @@ fn material_specular_color_mask(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.specular_color_mask, [1.0; 4])
 }
 
-fn material_surface_params(material: &ModelMaterial) -> [f32; 4] {
+fn material_surface_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let uses_texture_mip_bias = matches!(
+        prepared_material.shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
     [
         finite_or(material.ssao_mask, 1.0),
         finite_or(material.texture_mip_bias, 0.0),
         finite_or(material.shadow_pos_offset, 0.0),
-        0.0,
+        if uses_texture_mip_bias { 1.0 } else { 0.0 },
     ]
 }
 
@@ -3575,6 +3814,7 @@ mod tests {
         );
         assert_eq!(linear_repeat.mag_filter, wgpu::FilterMode::Linear);
         assert_eq!(linear_repeat.min_filter, wgpu::FilterMode::Linear);
+        assert_eq!(linear_repeat.mipmap_filter, wgpu::MipmapFilterMode::Linear);
         assert_eq!(linear_repeat.address_mode_u, wgpu::AddressMode::Repeat);
         assert_eq!(linear_repeat.address_mode_v, wgpu::AddressMode::Repeat);
 
@@ -3588,6 +3828,7 @@ mod tests {
         );
         assert_eq!(nearest_clip.mag_filter, wgpu::FilterMode::Nearest);
         assert_eq!(nearest_clip.min_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(nearest_clip.mipmap_filter, wgpu::MipmapFilterMode::Nearest);
         assert_eq!(nearest_clip.address_mode_u, wgpu::AddressMode::ClampToEdge);
         assert_eq!(nearest_clip.address_mode_v, wgpu::AddressMode::ClampToEdge);
     }
@@ -3701,6 +3942,36 @@ mod tests {
 
         material.water_wave_texture = None;
         assert_eq!(effective_normal_texture(&material, water), Some(2));
+    }
+
+    #[test]
+    fn rgba_mip_chain_downsamples_each_texture_semantic() {
+        let alternating = [
+            0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0,
+        ];
+        let srgb = rgba_mip_chain(2, 2, &alternating, RgbaMipSemantic::SrgbColor);
+        let linear = rgba_mip_chain(2, 2, &alternating, RgbaMipSemantic::LinearData);
+        assert_eq!(srgb.len(), 2);
+        assert_eq!(srgb[1].rgba, [188, 188, 188, 128]);
+        assert_eq!(linear[1].rgba, [128, 128, 128, 128]);
+
+        let normals = [
+            255, 128, 128, 0, 128, 255, 128, 255, 255, 128, 128, 0, 128, 255, 128, 255,
+        ];
+        let normal = rgba_mip_chain(2, 2, &normals, RgbaMipSemantic::Normal);
+        assert_eq!(normal[1].rgba, [218, 218, 128, 128]);
+    }
+
+    #[test]
+    fn rgba_mip_chain_reaches_one_by_one_for_odd_dimensions() {
+        let levels = rgba_mip_chain(3, 5, &vec![255; 3 * 5 * 4], RgbaMipSemantic::LinearData);
+        assert_eq!(
+            levels
+                .iter()
+                .map(|level| (level.width, level.height))
+                .collect::<Vec<_>>(),
+            [(3, 5), (1, 2), (1, 1)]
+        );
     }
 
     #[test]
@@ -4076,10 +4347,15 @@ mod tests {
     #[test]
     fn material_outline_specular_surface_params_preserve_shader_inputs() {
         let mut material = fallback_material();
+        let unknown = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert_eq!(material_outline_params(&material), [0.0, 0.0, 0.0, 0.0]);
         assert_eq!(material_specular_color_mask(&material), [1.0; 4]);
-        assert_eq!(material_surface_params(&material), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            material_surface_params(&material, unknown),
+            [1.0, 0.0, 0.0, 0.0]
+        );
 
+        material.shader_package_name = Some("character.shpk".to_string());
         material.outline_color = [0.1, 0.2, 0.3, 0.4];
         material.outline_width = 0.05;
         material.specular_color_mask = [0.7, 0.8, 0.9, 1.0];
@@ -4091,7 +4367,11 @@ mod tests {
             material_specular_color_mask(&material),
             [0.7, 0.8, 0.9, 1.0]
         );
-        assert_eq!(material_surface_params(&material), [0.6, -0.75, 0.125, 0.0]);
+        let character = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_surface_params(&material, character),
+            [0.6, -0.75, 0.125, 1.0]
+        );
 
         material.outline_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
         material.outline_width = f32::NEG_INFINITY;
@@ -4104,7 +4384,10 @@ mod tests {
             material_specular_color_mask(&material),
             [1.0, 0.3, 1.0, 0.5]
         );
-        assert_eq!(material_surface_params(&material), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            material_surface_params(&material, character),
+            [1.0, 0.0, 0.0, 1.0]
+        );
     }
 
     #[test]

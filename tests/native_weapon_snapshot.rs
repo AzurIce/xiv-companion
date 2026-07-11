@@ -254,6 +254,40 @@ fn render_mock_character_tile_channel_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic character texture mip bias snapshots with native wgpu"]
+fn render_mock_character_texture_mip_bias_snapshot() {
+    let unbiased = mock_texture_mip_bias_model(-8.0);
+    let blurred = mock_texture_mip_bias_model(4.0);
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic character texture mip bias snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic character texture mip bias PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let unbiased_pixels = render("native-character-mip-bias-negative-eight", &unbiased);
+    let blurred_pixels = render("native-character-mip-bias-four", &blurred);
+    let rgb_difference: u64 = unbiased_pixels
+        .chunks_exact(4)
+        .zip(blurred_pixels.chunks_exact(4))
+        .map(|(unbiased, blurred)| {
+            (0..3)
+                .map(|channel| unbiased[channel].abs_diff(blurred[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    assert!(
+        rgb_difference > 100_000,
+        "g_TextureMipBias must select different levels from the uploaded mip chain"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic detail multi blend snapshots with native wgpu"]
 fn render_mock_detail_multi_blend_snapshot() {
     let primary = mock_detail_blend_model(0.0);
@@ -671,6 +705,96 @@ fn mock_tile_channel_model(orb: [u8; 4], normal: [u8; 4]) -> WeaponModelData {
         texture.rgba = pixel.repeat(texture.rgba.len() / 4);
     }
     model
+}
+
+fn mock_texture_mip_bias_model(texture_mip_bias: f32) -> WeaponModelData {
+    let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
+        "slot": 0,
+        "materialIndex": 0,
+        "name": "synthetic character mip bias",
+        "path": null,
+        "shaderPackageName": "character.shpk",
+        "fallbackColor": [1.0, 1.0, 1.0],
+        "diffuseColor": [1.0, 1.0, 1.0],
+        "specularColor": [0.0, 0.0, 0.0],
+        "emissiveColor": [0.0, 0.0, 0.0],
+        "roughness": 1.0,
+        "metalness": 0.0,
+        "textureMipBias": texture_mip_bias,
+        "textureIndices": [0],
+        "baseColorTexture": 0
+    }))
+    .expect("deserialize synthetic character mip bias material");
+    let width = 256u16;
+    let height = 256u16;
+    let mut rgba = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let bright = ((x / 8) + (y / 8)) % 2 == 0;
+            rgba.extend_from_slice(if bright {
+                &[255, 255, 255, 255]
+            } else {
+                &[24, 48, 96, 255]
+            });
+        }
+    }
+    let positions = [
+        [-0.8, -0.8, 0.0],
+        [0.8, -0.8, 0.0],
+        [0.8, 0.8, 0.0],
+        [-0.8, 0.8, 0.0],
+    ];
+    let uvs = [[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]];
+    let vertices = positions
+        .into_iter()
+        .zip(uvs)
+        .map(|(position, uv)| {
+            let mut vertex = vertex(position, [1.0; 4]);
+            vertex.uv0 = uv;
+            vertex
+        })
+        .collect();
+
+    WeaponModelData {
+        item_id: 6,
+        item_name: "Synthetic Character Mip Bias".to_string(),
+        model_main: PackedModelId::from_raw(6),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics: Vec::new(),
+        loaded_paths: vec!["synthetic/character_mip_bias.mdl".to_string()],
+        bounds: WeaponModelBounds {
+            min: [-0.8, -0.8, 0.0],
+            max: [0.8, 0.8, 0.0],
+            center: [0.0, 0.0, 0.0],
+            radius: 1.2,
+        },
+        materials: vec![material],
+        textures: vec![WeaponModelTexture {
+            path: "synthetic/character_mip_bias.tex".to_string(),
+            kind: ModelTextureKind::BaseColor,
+            width,
+            height,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba,
+            rgba_f32: None,
+        }],
+        meshes: vec![WeaponModelMesh {
+            path: "synthetic/character_mip_bias.mdl".to_string(),
+            part_index: 0,
+            mesh_category: Some("normal".to_string()),
+            submesh: None,
+            shape_influences: Vec::new(),
+            material_index: 0,
+            material_slot: 0,
+            material_name: "synthetic character mip bias".to_string(),
+            color: [1.0; 3],
+            bone_table: None,
+            vertices,
+            indices: vec![0, 1, 2, 0, 2, 3],
+        }],
+    }
 }
 
 fn mock_detail_blend_model(vertex_alpha: f32) -> WeaponModelData {
