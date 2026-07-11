@@ -226,7 +226,9 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 
 真实 45059 `characterglass.shpk` 样本只有 normal/mask/index 与 ColorTable 派生 base，没有独立 base texture；MTRL 覆盖 `DrawDepthMode_Dither`，`g_GlassIOR=1`、`g_GlassThicknessMax=0`，normal Blue 实测范围为 `57..255`。改用 normal-B alpha 后，雪景玻璃罩不再是灰暗球体，内部景物保持可见且表面纹理可观察。
 
-`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy。renderer 会在 opaque/cutout 后、透明颜色 pass 前重绘 `DrawDepthMode_Dither` 的 Transparent/Glass batch，使用与颜色 pass 相同的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值，只写 depth、不写两个颜色 target；透明颜色 pass 仍按 mesh center 排序、alpha blend 且不写 depth。Meddle `Names.cs` 只能确认该 material key 适用于 `characterglass.shpk` / `charactertransparency.shpk`，没有暴露游戏使用的抖动矩阵或噪声公式；MeddleTools 也不实现运行时 depth pass，因此当前阈值公式是保守近似。该行为与覆盖更多 shader family 的 scene key `ApplyDitherClip` 分开处理。`GlassBlendMode` 是 scene key而非 MTRL material key，仍需设计显式 renderer 输入或有来源的默认值。
+`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy。renderer 会在 opaque/cutout 后、透明颜色 pass 前重绘 `DrawDepthMode_Dither` 的 Transparent/Glass batch，使用与颜色 pass 相同的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值，只写 depth、不写两个颜色 target；透明颜色 pass 仍按 mesh center 排序、alpha blend 且不写 depth。Meddle `Names.cs` 只能确认该 material key 适用于 `characterglass.shpk` / `charactertransparency.shpk`，没有暴露游戏使用的抖动矩阵或噪声公式；MeddleTools 也不实现运行时 depth pass，因此当前阈值公式是保守近似。该行为与覆盖更多 shader family 的 scene key `ApplyDitherClip` 分开处理。
+
+`GlassBlendMode` 是 scene key而非 MTRL material key。Meddle 只提供默认 `GlassBlendMode_Mul` 与可选 `GlassBlendMode_Add` 的名字/CRC，MeddleTools 没有对应节点或 bake 行为，因此不能从静态材质恢复场景选择，也没有证据把 Mul 直接解释为某个硬件 blend equation。下一批将其作为显式 `ModelRenderOptions` 输入：默认 Mul 保持当前 alpha-blend glass 近似以避免改变现有结果，Add 只让 Glass batch 选择 additive pipeline；Web 和 snapshot 调用方可明确选择。真实乘法/scene-color composition 仍需游戏 shader 或运行时捕获证据。
 
 这不是完整游戏 glass shader，目前只能显示内部模型并提供近似透明外壳。
 
