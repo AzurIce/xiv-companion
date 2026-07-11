@@ -2,10 +2,10 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
-    MaterialRenderMode, MaterialShaderFamily, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial, PreparedRenderPass,
-    PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource,
-    prepare_model_for_render,
+    MaterialRenderMode, MaterialShaderFamily, MaterialValueMode, ModelMaterial, ModelMeshDrawRole,
+    ModelRenderData, ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial,
+    PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling,
+    PreparedUvSource, prepare_model_for_render,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1572,7 +1572,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         toon_sheen_params: material_toon_sheen_params(material),
         toon_params: material_toon_params(material, prepared_material),
         sheen_sphere_params: material_sheen_sphere_params(material),
-        detail_params: material_detail_params(material),
+        detail_params: material_detail_params(material, prepared_material),
         array_params: material_array_params(prepared_material),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
@@ -2660,11 +2660,19 @@ fn material_sheen_sphere_params(material: &ModelMaterial) -> [f32; 4] {
     ]
 }
 
-fn material_detail_params(material: &ModelMaterial) -> [f32; 4] {
+fn material_detail_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let uses_multi_blend = matches!(prepared_material.value_mode, MaterialValueMode::Multi)
+        && matches!(
+            prepared_material.shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        );
     [
         finite_or(material.detail_id, 0.0),
         finite_or(material.multi_detail_id, 0.0),
-        0.0,
+        if uses_multi_blend { 1.0 } else { 0.0 },
         0.0,
     ]
 }
@@ -3954,7 +3962,11 @@ mod tests {
     #[test]
     fn material_detail_params_preserve_detail_uv_values() {
         let mut material = fallback_material();
-        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
         assert_eq!(material_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(material_multi_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(material_detail_color_uv_scale(&material), [4.0; 4]);
@@ -3966,7 +3978,20 @@ mod tests {
         material.multi_detail_color = [0.1, 0.3, 0.5, 0.7];
         material.detail_color_uv_scale = [8.0, 6.0, 4.0, 2.0];
         material.detail_normal_uv_scale = [7.0, 5.0, 3.0, 1.0];
-        assert_eq!(material_detail_params(&material), [3.0, 5.0, 0.0, 0.0]);
+        material.shader_package_name = Some("bg.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [3.0, 5.0, 1.0, 0.0]
+        );
+        material.value_mode = MaterialValueMode::Single;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [3.0, 5.0, 0.0, 0.0]
+        );
+        material.value_mode = MaterialValueMode::Multi;
         assert_eq!(material_detail_color(&material), [0.2, 0.4, 0.6, 0.8]);
         assert_eq!(material_multi_detail_color(&material), [0.1, 0.3, 0.5, 0.7]);
         assert_eq!(
@@ -3984,7 +4009,11 @@ mod tests {
         material.multi_detail_color = [f32::NEG_INFINITY, 0.3, 0.5, f32::NAN];
         material.detail_color_uv_scale = [1.0, f32::NAN, f32::INFINITY, 2.0];
         material.detail_normal_uv_scale = [f32::NEG_INFINITY, 3.0, 4.0, f32::NAN];
-        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [0.0, 0.0, 1.0, 0.0]
+        );
         assert_eq!(material_detail_color(&material), [0.25, 0.5, 0.5, 0.5]);
         assert_eq!(material_multi_detail_color(&material), [0.5, 0.3, 0.5, 1.0]);
         assert_eq!(

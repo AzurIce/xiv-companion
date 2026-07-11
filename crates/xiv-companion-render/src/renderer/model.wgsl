@@ -23,7 +23,7 @@ struct Material {
     toon_sheen_params: vec4<f32>, // x: toon index, y: toon light scale, z: sheen rate, w: sheen tint rate
     toon_params: vec4<f32>, // x: light spec aperture, y: reflection scale, z: spec index, w: prepared toon
     sheen_sphere_params: vec4<f32>, // x: sheen aperture, y: sphere map index
-    detail_params: vec4<f32>, // x: detail id, y: multi detail id
+    detail_params: vec4<f32>, // x: detail id, y: multi detail id, z: GetMultiValues detail blend
     array_params: vec4<f32>, // x: tile layers, y: detail layers, z: has tile pair, w: has detail pair
     detail_color: vec4<f32>,
     multi_detail_color: vec4<f32>,
@@ -613,14 +613,20 @@ fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
     let multi_tint = clamp(multi_diffuse * 2.0 * material.multi_detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
     let detail_weight = clamp(material.detail_color.a, 0.0, 1.0) * 0.22;
     let multi_weight = clamp(material.multi_detail_color.a, 0.0, 1.0) * 0.14;
-    out.diffuse = detail_diffuse;
-    out.normal = normalize(vec3<f32>(
-        detail_normal.xy * clamp(material.shader_params.z, 0.0, 4.0)
-            + multi_normal.xy * clamp(material.shader_params.w, 0.0, 4.0) * 0.65,
-        max(detail_normal.z * multi_normal.z, 0.05),
+    let multi_blend = select(0.0, clamp(input.color.a, 0.0, 1.0), material.detail_params.z > 0.5);
+    let scaled_detail_normal = normalize(vec3<f32>(
+        detail_normal.xy * clamp(material.shader_params.z, 0.0, 4.0),
+        detail_normal.z,
     ));
-    out.tint = mix(vec3<f32>(1.0), detail_tint, detail_weight)
-        * mix(vec3<f32>(1.0), multi_tint, multi_weight);
+    let scaled_multi_normal = normalize(vec3<f32>(
+        multi_normal.xy * clamp(material.shader_params.w, 0.0, 4.0),
+        multi_normal.z,
+    ));
+    let primary_tint = mix(vec3<f32>(1.0), detail_tint, detail_weight);
+    let secondary_tint = mix(vec3<f32>(1.0), multi_tint, multi_weight);
+    out.diffuse = mix(detail_diffuse, multi_diffuse, multi_blend);
+    out.normal = normalize(mix(scaled_detail_normal, scaled_multi_normal, multi_blend));
+    out.tint = mix(primary_tint, secondary_tint, multi_blend);
     out.normal_weight = 0.32;
     out.available = 1.0;
     return out;
@@ -900,7 +906,8 @@ fn resolve_detail_tint(input: VertexOutput, detail_array: DetailArraySample) -> 
         input.uv0,
         0.65,
     );
-    return detail * multi_detail;
+    let multi_blend = select(0.0, clamp(input.color.a, 0.0, 1.0), material.detail_params.z > 0.5);
+    return mix(detail, multi_detail, multi_blend);
 }
 
 fn resolve_single_detail_tint(
