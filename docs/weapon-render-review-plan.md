@@ -59,7 +59,7 @@
 - Meddle `OnRenderMaterialUtil` 证明 weapon decal/FC crest 属于运行时 on-render 输入，不是静态 MTRL sampler。`PreparedMaterial.runtimeFallbacks` 已明确缺失 decal/crest 时使用透明纹理语义，materialChange 使用基础材质语义；renderer final 模式会 discard crest fallback，mesh-role debug 仍可见，materialChange 继续使用基础材质。
 - `bguvscroll.shpk` 已单独分类为 `MaterialShaderFamily::BgUvScroll`；primary Color/Normal/Specular Map0 使用 UV0Scroll，secondary Map1 使用 UV1Scroll。三种 Map1 已有独立 texture kind、model/prepared binding、per-role source/scroll mask 和 Web diagnostics；WGSL 在 `GetMultiValues` 下按 vertex alpha 统一混合 color、color alpha、normal 与 specular。`characterscroll.shpk` 不会误继承该动画。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
-- renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。tile-matrix 现已从错误的 `Rgba8Unorm` 上传改成基线 WebGPU 支持的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，直接消费 `ModelTexture.rgbaF32` 的 UU/UV/VU/VV；payload 长度错误或单通道 non-finite 时回退对应 RGBA8/identity。native synthetic fixture 使用相同 clamp 后 RGBA8、仅改变 float scale 1/2，已验证最终输出不同。
+- renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。tile-matrix 现已从错误的 `Rgba8Unorm` 上传改成基线 WebGPU 支持的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，直接消费 `ModelTexture.rgbaF32` 的 UU/UV/VU/VV；payload 长度错误或单通道 non-finite 时回退对应 RGBA8/identity。native synthetic fixtures 已验证相同 clamp 后 RGBA8、仅改变 float matrix scale 1/2 会改变输出，并分别证明 sheen 与 sphere ramp 能独立改变最终画面；后两项只证明当前近似数据链路生效，不证明公式等价于游戏 shader。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`；共享 detail normal atlas 可用时 WGSL 会按 detail/multi-detail ID 与各自 UV scale 采样并组合 tangent-space normal，缺图时才回到 primary normal 的受限 fallback。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 优先用逐像素 ColorTable `TileProperties.r * 64` 选 tile layer，没有该贴图时回退 `g_TileIndex`，并结合 TileMatrix/TileScale 采样 tile normal/ORB。Blender 节点检查确认 `chara_detail_blend` 只把 ORB Blue 作为黑色到 base color 的直接 darkening factor，R/G 与 Orb Alpha 均未连接；normal detail 权重为 tile-normal Alpha × TileAlpha。WGSL 已按该公式修正 color/normal，删除无证据的 R=AO/G=roughness/B=specular property 映射和程序化 tile specular wave；ORB debug 仍保留原始 RGB。
@@ -222,7 +222,7 @@
 - 用合成 MTRL fixture 测 shader constant 解析。
 - 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp；multi/detail normal scale fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 传递；native synthetic WGPU fixture 验证 ORB R/G/Alpha 不改变输出、ORB Blue 直接 darken base，以及 tile-normal Alpha × TileAlpha 控制 normal contribution。
-- 已增加 toon/sheen/sphere focused tests，覆盖 `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 的 shader package default、material override、非 finite fallback 和 renderer uniform 传递；sheen/sphere 常量的 WGSL 消费通过 native snapshot 编译验证。
+- 已增加 toon/sheen/sphere focused tests，覆盖 `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 的 shader package default、material override、非 finite fallback 和 renderer uniform 传递；native synthetic WGPU fixture 使用 half-vector 对齐法线验证 sheen ramp、使用高 rim 法线验证 sphere ramp，二者均对最终 PNG 产生显著且独立的像素变化。
 - 已增加 detail focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；detail tint fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 shader color focused tests，覆盖 `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；diffuse/multi diffuse 与 emissive/multi emissive 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 outline/specular/occlusion focused tests，覆盖 `g_OutlineColor`、`g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、`g_TextureMipBias`、`g_ShadowPosOffset` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；outline、`g_SpecularColorMask` / `g_SSAOMask` 的 WGSL 消费通过 native snapshot 编译验证。mip focused tests 另覆盖奇数尺寸完整链、sRGB/data/normal downsample 和 linear/nearest mip sampler；synthetic WGPU fixture 以高频 base texture 验证 `-8/+4` bias 产生显著不同的最终输出。
@@ -508,11 +508,11 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 2. 寻找真实 bg 武器样本，校准 detail/multi-detail diffuse、normal 与 mask 权重。
 3. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
 
-这些贴图已经进入 shader binding并提供 debug view；tile/ORB 通道已按节点证据收敛，detail 最终 influence 与 reflection/sphere 仍需更多证据。下一项用 synthetic WGPU fixture 分别改变 sheen/sphere ramp，至少证明当前近似消费能稳定影响最终画面且两者不是静默 binding。
+这些贴图已经进入 shader binding并提供 debug view；tile/ORB 通道已按节点证据收敛，sheen/sphere ramp 已用 synthetic WGPU fixture 证明当前近似消费能稳定影响最终画面。detail 最终 influence 与 reflection/sphere 的真实游戏公式仍需更多证据。
 
 验证：
 
-- tile 已有真实/synthetic 选层、TileMatrix 和 ORB 通道验证；下一项补 synthetic ColorTable sheen/sphere ramp 最终画面差异。该测试只证明数据链路与当前近似生效，不证明近似公式等价于游戏 shader。
+- tile 已有真实/synthetic 选层、TileMatrix 和 ORB 通道验证；sheen/sphere 也已有各自只改变一张 ramp 的 synthetic 最终画面差异。后者只证明数据链路与当前近似生效，不证明近似公式等价于游戏 shader。
 - 与 MeddleTools ramp 输出对照。
 
 ### P1: 改善 alpha/glass/transparency
@@ -551,7 +551,7 @@ WebGPU bind group 已支持每材质 color/data/nearest 三组 sampler；`Clip` 
 验证：
 
 - 已有 prepared texture sampling 测试覆盖 `_id.tex` nearest policy，避免颜色边界被 linear 混合污染。
-- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；ColorTable extra maps 已用 nearest sampler 采样并提供 debug view；三组 sampler descriptor 已由 prepared sampling policy 派生。仍需 synthetic shader fixture 验证 tile/sheen/sphere 可见效果。
+- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；ColorTable extra maps 已用 nearest sampler 采样并提供 debug view；三组 sampler descriptor 已由 prepared sampling policy 派生。tile/sheen/sphere 可见效果均已有 synthetic shader fixture。
 
 ### P2: 视觉验证和调试视图
 

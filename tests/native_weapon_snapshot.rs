@@ -288,6 +288,53 @@ fn render_mock_character_texture_mip_bias_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic ColorTable extra ramp snapshots with native wgpu"]
+fn render_mock_color_table_extra_ramp_snapshot() {
+    let sheen_normal = [-0.231, 0.405, 0.884];
+    let sphere_normal = [0.8, 0.0, 0.6];
+    let neutral_sheen = mock_extra_ramp_model([0, 0, 0, 255], [0, 0, 0, 255], sheen_normal);
+    let sheen = mock_extra_ramp_model([255, 255, 0, 255], [0, 0, 0, 255], sheen_normal);
+    let neutral_sphere = mock_extra_ramp_model([0, 0, 0, 255], [0, 0, 0, 255], sphere_normal);
+    let sphere = mock_extra_ramp_model([0, 0, 0, 255], [255, 255, 0, 255], sphere_normal);
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic ColorTable extra ramp snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic ColorTable extra ramp PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let rgb_difference = |left: &[u8], right: &[u8]| -> u64 {
+        left.chunks_exact(4)
+            .zip(right.chunks_exact(4))
+            .map(|(left, right)| {
+                (0..3)
+                    .map(|channel| left[channel].abs_diff(right[channel]) as u64)
+                    .sum::<u64>()
+            })
+            .sum()
+    };
+
+    let neutral_sheen_pixels = render("native-extra-ramp-neutral-sheen", &neutral_sheen);
+    let sheen_pixels = render("native-extra-ramp-sheen", &sheen);
+    let neutral_sphere_pixels = render("native-extra-ramp-neutral-sphere", &neutral_sphere);
+    let sphere_pixels = render("native-extra-ramp-sphere", &sphere);
+    let sheen_difference = rgb_difference(&neutral_sheen_pixels, &sheen_pixels);
+    let sphere_difference = rgb_difference(&neutral_sphere_pixels, &sphere_pixels);
+    assert!(
+        sheen_difference > 100_000,
+        "ColorTable sheen properties must affect final shading"
+    );
+    assert!(
+        sphere_difference > 100_000,
+        "ColorTable sphere properties must affect final shading"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic detail multi blend snapshots with native wgpu"]
 fn render_mock_detail_multi_blend_snapshot() {
     let primary = mock_detail_blend_model(0.0);
@@ -795,6 +842,64 @@ fn mock_texture_mip_bias_model(texture_mip_bias: f32) -> WeaponModelData {
             indices: vec![0, 1, 2, 0, 2, 3],
         }],
     }
+}
+
+fn mock_extra_ramp_model(
+    sheen: [u8; 4],
+    sphere: [u8; 4],
+    surface_normal: [f32; 3],
+) -> WeaponModelData {
+    let mut model = mock_texture_mip_bias_model(0.0);
+    model.item_id = 7;
+    model.item_name = "Synthetic ColorTable Extra Ramp".to_string();
+    model.model_main = PackedModelId::from_raw(7);
+    model.loaded_paths = vec!["synthetic/extra_ramp.mdl".to_string()];
+    model.materials = vec![
+        serde_json::from_value(serde_json::json!({
+            "slot": 0,
+            "materialIndex": 0,
+            "name": "synthetic extra ramp",
+            "path": null,
+            "shaderPackageName": "character.shpk",
+            "fallbackColor": [0.38, 0.46, 0.58],
+            "diffuseColor": [1.0, 1.0, 1.0],
+            "specularColor": [0.9, 0.95, 1.0],
+            "emissiveColor": [0.0, 0.0, 0.0],
+            "roughness": 0.3,
+            "metalness": 0.0,
+            "textureIndices": [0, 1],
+            "sheenPropertiesTexture": 0,
+            "spherePropertiesTexture": 1
+        }))
+        .expect("deserialize synthetic ColorTable extra ramp material"),
+    ];
+    model.textures = vec![
+        WeaponModelTexture {
+            path: "synthetic/sheen_properties.tex".to_string(),
+            kind: ModelTextureKind::SheenProperties,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: sheen.to_vec(),
+            rgba_f32: None,
+        },
+        WeaponModelTexture {
+            path: "synthetic/sphere_properties.tex".to_string(),
+            kind: ModelTextureKind::SphereProperties,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: sphere.to_vec(),
+            rgba_f32: None,
+        },
+    ];
+    for vertex in &mut model.meshes[0].vertices {
+        vertex.normal = surface_normal;
+    }
+    model.meshes[0].material_name = "synthetic extra ramp".to_string();
+    model
 }
 
 fn mock_detail_blend_model(vertex_alpha: f32) -> WeaponModelData {
