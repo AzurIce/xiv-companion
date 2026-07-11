@@ -143,14 +143,14 @@ FFXIV TEX header offset 14/15 分别是 `MipLevels:u8` 与 `ArraySize:u8`。当�
 atlas_height = array_layer_height * array_size
 ```
 
-`ModelTexture` 保留 `arraySize` 和 `arrayLayerHeight`；`ModelMaterial.textureArrays`、`PreparedTextureBindings` 与 `PreparedMaterial.resourceAvailability` 保留四个数组索引、加载错误和成对完整性。真实 SqPack 验证结果：character arrays 为 `64x4096 / 64 layers`，bg detail arrays 为 `256x8192 / 32 layers`。
+`ModelTexture` 保留 `arraySize` 和 `arrayLayerHeight`；`ModelMaterial.textureArrays`、`PreparedTextureBindings` 与 `PreparedMaterial.resourceAvailability` 保留四个数组索引、加载错误和成对完整性。model-level preparation 还会输出每组数组的结构化 status 与 layer count，区分 missing binding/texture、wrong kind、non-canonical shared binding、invalid layout、incompatible pair 与 ready；standalone material preparation 因没有 texture 集合保持 unvalidated。真实 SqPack 验证结果：character arrays 为 `64x4096 / 64 layers`，bg detail arrays 为 `256x8192 / 32 layers`。
 
 renderer 会把 tile normal/ORB 横向合并成一张 GPU pair atlas，把 detail diffuse/normal 合并成另一张，避免四个独立 binding 使 fragment sampled texture 数超过常见 WebGPU 16 张限制。WGSL 使用 nearest + repeat，并按以下规则选层：
 
 - character tile：优先使用逐像素 `TileProperties.r * 64`，没有 ColorTable tile map 时回退 `g_TileIndex`；结合 TileMatrix 与 `g_TileScale` 生成层内 UV。
 - bg detail：`g_DetailID` / `g_MultiDetailID` 取整并 clamp 到数组范围，color/normal 分别使用对应 UV scale。
 
-tile normal 会与 primary tangent-space normal 组合；tile ORB 当前保守按 R=AO、G=roughness、B=specular scale 使用。detail diffuse 以 0.5 为中性值，与 detail color 组合；detail normal 使用 RG 重建 Z，再按 detail/multi-detail normal scale 混合。prepared 层在数组索引成对存在时清除 `unsupportedInputs.tileArray/detailArray`；renderer 还会验证类型、层数、尺寸和 RGBA 长度，失败时禁用数组并使用中性纹理。当前 prepared summary 尚不能回报这种布局级失败。
+tile normal 会与 primary tangent-space normal 组合；tile ORB 当前保守按 R=AO、G=roughness、B=specular scale 使用。detail diffuse 以 0.5 为中性值，与 detail color 组合；detail normal 使用 RG 重建 Z，再按 detail/multi-detail normal scale 混合。model-level prepared 只有在数组实际验证为 Ready 时才清除 `unsupportedInputs.tileArray/detailArray`；renderer uniform 直接消费 prepared layer count/ready flag，GPU pair atlas 创建仍保留防御性验证并在失败时使用中性纹理。45052 的真实 summary 为 tile Ready/64 layers、detail MissingBindings。
 
 验证边界：45052 已用 final/tile-normal/tile-ORB snapshot 验证逐像素选层；当前没有真实 bg 武器样本，detail 混合权重仍是保守实现，待样本校准。
 

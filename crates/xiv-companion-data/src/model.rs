@@ -956,6 +956,32 @@ pub struct PreparedMaterialUnsupportedInputs {
 pub struct PreparedMaterialResourceAvailability {
     pub tile_array_complete: bool,
     pub detail_array_complete: bool,
+    #[serde(default)]
+    pub tile_array: PreparedTextureArrayResource,
+    #[serde(default)]
+    pub detail_array: PreparedTextureArrayResource,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureArrayResource {
+    pub status: PreparedTextureArrayStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_count: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedTextureArrayStatus {
+    #[default]
+    MissingBindings,
+    Unvalidated,
+    MissingTexture,
+    WrongTextureKind,
+    NonCanonicalBinding,
+    InvalidLayout,
+    IncompatiblePair,
+    Ready,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1201,6 +1227,23 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 prepared_material.feature_flags.uses_flow =
                     matches!(prepared_material.flow_mode, MaterialFlowMode::Flow)
                         && mesh_has_primary_flow_attribute(mesh);
+                prepared_material.resource_availability =
+                    prepared_material_resource_availability_for_model(
+                        model.materials().get(mesh.material_slot),
+                        model.textures(),
+                    );
+                prepared_material.unsupported_inputs.tile_array =
+                    prepared_material.feature_flags.uses_tile
+                        && !matches!(
+                            prepared_material.resource_availability.tile_array.status,
+                            PreparedTextureArrayStatus::Ready
+                        );
+                prepared_material.unsupported_inputs.detail_array =
+                    prepared_material.feature_flags.uses_detail
+                        && !matches!(
+                            prepared_material.resource_availability.detail_array.status,
+                            PreparedTextureArrayStatus::Ready
+                        );
                 PreparedMesh {
                     mesh_index,
                     material_slot: mesh.material_slot,
@@ -1586,12 +1629,123 @@ pub fn prepared_material_resource_availability(
     let Some(material) = material else {
         return PreparedMaterialResourceAvailability::default();
     };
+    let tile_array_complete =
+        material.texture_arrays.tile_normal.is_some() && material.texture_arrays.tile_orb.is_some();
+    let detail_array_complete = material.texture_arrays.detail_diffuse.is_some()
+        && material.texture_arrays.detail_normal.is_some();
     PreparedMaterialResourceAvailability {
-        tile_array_complete: material.texture_arrays.tile_normal.is_some()
-            && material.texture_arrays.tile_orb.is_some(),
-        detail_array_complete: material.texture_arrays.detail_diffuse.is_some()
-            && material.texture_arrays.detail_normal.is_some(),
+        tile_array_complete,
+        detail_array_complete,
+        tile_array: unvalidated_texture_array_resource(tile_array_complete),
+        detail_array: unvalidated_texture_array_resource(detail_array_complete),
     }
+}
+
+fn unvalidated_texture_array_resource(bindings_complete: bool) -> PreparedTextureArrayResource {
+    PreparedTextureArrayResource {
+        status: if bindings_complete {
+            PreparedTextureArrayStatus::Unvalidated
+        } else {
+            PreparedTextureArrayStatus::MissingBindings
+        },
+        layer_count: None,
+    }
+}
+
+fn prepared_material_resource_availability_for_model(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> PreparedMaterialResourceAvailability {
+    let mut availability = prepared_material_resource_availability(material);
+    let Some(material) = material else {
+        return availability;
+    };
+    availability.tile_array = prepared_texture_array_resource(
+        material.texture_arrays.tile_normal,
+        material.texture_arrays.tile_orb,
+        textures,
+        ModelTextureKind::TileNormalArray,
+        ModelTextureKind::TileOrbArray,
+    );
+    availability.detail_array = prepared_texture_array_resource(
+        material.texture_arrays.detail_diffuse,
+        material.texture_arrays.detail_normal,
+        textures,
+        ModelTextureKind::DetailDiffuseArray,
+        ModelTextureKind::DetailNormalArray,
+    );
+    availability
+}
+
+fn prepared_texture_array_resource(
+    first_index: Option<usize>,
+    second_index: Option<usize>,
+    textures: &[ModelTexture],
+    first_kind: ModelTextureKind,
+    second_kind: ModelTextureKind,
+) -> PreparedTextureArrayResource {
+    let (Some(first_index), Some(second_index)) = (first_index, second_index) else {
+        return PreparedTextureArrayResource::default();
+    };
+    let (Some(first), Some(second)) = (textures.get(first_index), textures.get(second_index))
+    else {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::MissingTexture,
+            layer_count: None,
+        };
+    };
+    if first.kind != first_kind || second.kind != second_kind {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::WrongTextureKind,
+            layer_count: None,
+        };
+    }
+    if textures
+        .iter()
+        .position(|texture| texture.kind == first_kind)
+        != Some(first_index)
+        || textures
+            .iter()
+            .position(|texture| texture.kind == second_kind)
+            != Some(second_index)
+    {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::NonCanonicalBinding,
+            layer_count: None,
+        };
+    }
+    if !texture_array_layout_is_valid(first) || !texture_array_layout_is_valid(second) {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::InvalidLayout,
+            layer_count: None,
+        };
+    }
+    if first.width != second.width
+        || first.height != second.height
+        || first.array_size != second.array_size
+        || first.array_layer_height != second.array_layer_height
+    {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::IncompatiblePair,
+            layer_count: None,
+        };
+    }
+    PreparedTextureArrayResource {
+        status: PreparedTextureArrayStatus::Ready,
+        layer_count: Some(first.array_size),
+    }
+}
+
+fn texture_array_layout_is_valid(texture: &ModelTexture) -> bool {
+    let expected_rgba_len = usize::from(texture.width)
+        .checked_mul(usize::from(texture.height))
+        .and_then(|pixel_count| pixel_count.checked_mul(4));
+    texture.width != 0
+        && texture.array_size > 1
+        && texture.array_layer_height != 0
+        && u32::from(texture.height)
+            == u32::from(texture.array_size) * u32::from(texture.array_layer_height)
+        && expected_rgba_len == Some(texture.rgba.len())
 }
 
 pub fn prepared_material_runtime_fallbacks(
@@ -2927,6 +3081,11 @@ mod color_table_bake_tests {
             PreparedMaterialResourceAvailability {
                 tile_array_complete: true,
                 detail_array_complete: false,
+                tile_array: PreparedTextureArrayResource {
+                    status: PreparedTextureArrayStatus::Unvalidated,
+                    layer_count: None,
+                },
+                detail_array: PreparedTextureArrayResource::default(),
             }
         );
         assert_eq!(
@@ -2952,6 +3111,103 @@ mod color_table_bake_tests {
         assert!(!prepared.unsupported_inputs.tile_array);
         assert!(!prepared.unsupported_inputs.detail_array);
         assert!(prepared.unsupported_inputs.multi_map_interpretation);
+    }
+
+    #[test]
+    fn prepared_model_validates_texture_array_resources() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.tile_properties_texture = Some(4);
+        material.multi_map_texture = Some(5);
+        material.texture_arrays.tile_normal = Some(0);
+        material.texture_arrays.tile_orb = Some(1);
+        material.texture_arrays.detail_diffuse = Some(2);
+        material.texture_arrays.detail_normal = Some(3);
+        let textures = vec![
+            test_array_texture(ModelTextureKind::TileNormalArray, 4),
+            test_array_texture(ModelTextureKind::TileOrbArray, 4),
+            test_array_texture(ModelTextureKind::DetailDiffuseArray, 8),
+            test_array_texture(ModelTextureKind::DetailNormalArray, 8),
+        ];
+        let prepare = |material: ModelMaterial, textures: Vec<ModelTexture>| {
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures,
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+        };
+
+        let prepared = prepare(material.clone(), textures.clone());
+        assert_eq!(
+            prepared.resource_availability.tile_array,
+            PreparedTextureArrayResource {
+                status: PreparedTextureArrayStatus::Ready,
+                layer_count: Some(4),
+            }
+        );
+        assert_eq!(
+            prepared.resource_availability.detail_array,
+            PreparedTextureArrayResource {
+                status: PreparedTextureArrayStatus::Ready,
+                layer_count: Some(8),
+            }
+        );
+        assert!(!prepared.unsupported_inputs.tile_array);
+        assert!(!prepared.unsupported_inputs.detail_array);
+
+        let mut missing_material = material.clone();
+        missing_material.texture_arrays.tile_normal = Some(99);
+        let prepared = prepare(missing_material, textures.clone());
+        assert_eq!(
+            prepared.resource_availability.tile_array.status,
+            PreparedTextureArrayStatus::MissingTexture
+        );
+        assert!(prepared.unsupported_inputs.tile_array);
+
+        let mut wrong_kind = textures.clone();
+        wrong_kind[0].kind = ModelTextureKind::BaseColor;
+        assert_eq!(
+            prepare(material.clone(), wrong_kind)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::WrongTextureKind
+        );
+
+        let mut invalid_layout = textures.clone();
+        invalid_layout[0].rgba.pop();
+        assert_eq!(
+            prepare(material.clone(), invalid_layout)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::InvalidLayout
+        );
+
+        let mut incompatible_pair = textures.clone();
+        incompatible_pair[1] = test_array_texture(ModelTextureKind::TileOrbArray, 3);
+        assert_eq!(
+            prepare(material.clone(), incompatible_pair)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::IncompatiblePair
+        );
+
+        let mut non_canonical = textures.clone();
+        non_canonical.extend([textures[0].clone(), textures[1].clone()]);
+        material.texture_arrays.tile_normal = Some(4);
+        material.texture_arrays.tile_orb = Some(5);
+        assert_eq!(
+            prepare(material, non_canonical)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::NonCanonicalBinding
+        );
     }
 
     #[test]
@@ -3553,6 +3809,19 @@ mod color_table_bake_tests {
             bone_table: None,
             vertices: Vec::new(),
             indices: Vec::new(),
+        }
+    }
+
+    fn test_array_texture(kind: ModelTextureKind, array_size: u16) -> ModelTexture {
+        ModelTexture {
+            path: "array.tex".to_string(),
+            kind,
+            width: 1,
+            height: array_size,
+            array_size,
+            array_layer_height: 1,
+            rgba: vec![128; usize::from(array_size) * 4],
+            rgba_f32: None,
         }
     }
 

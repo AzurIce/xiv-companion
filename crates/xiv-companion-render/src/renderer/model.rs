@@ -1573,7 +1573,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         toon_params: material_toon_params(material, prepared_material),
         sheen_sphere_params: material_sheen_sphere_params(material),
         detail_params: material_detail_params(material),
-        array_params: material_array_params(material, model),
+        array_params: material_array_params(prepared_material),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
         shader_diffuse_color: material_shader_diffuse_color(material),
@@ -2150,60 +2150,17 @@ fn sampler_filter_mode(filter: PreparedTextureFilter) -> wgpu::FilterMode {
     }
 }
 
-fn material_array_params<M: ModelRenderData + ?Sized>(
-    material: &ModelMaterial,
-    model: &M,
-) -> [f32; 4] {
-    let tile = material_texture_array_pair(
-        material.texture_arrays.tile_normal,
-        material.texture_arrays.tile_orb,
-        model,
-        ModelTextureKind::TileNormalArray,
-        ModelTextureKind::TileOrbArray,
-    );
-    let detail = material_texture_array_pair(
-        material.texture_arrays.detail_diffuse,
-        material.texture_arrays.detail_normal,
-        model,
-        ModelTextureKind::DetailDiffuseArray,
-        ModelTextureKind::DetailNormalArray,
-    );
+fn material_array_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let tile = prepared_material.resource_availability.tile_array;
+    let detail = prepared_material.resource_availability.detail_array;
+    let tile_ready = matches!(tile.status, crate::PreparedTextureArrayStatus::Ready);
+    let detail_ready = matches!(detail.status, crate::PreparedTextureArrayStatus::Ready);
     [
-        tile.map(|(texture, _)| f32::from(texture.array_size))
-            .unwrap_or(1.0),
-        detail
-            .map(|(texture, _)| f32::from(texture.array_size))
-            .unwrap_or(1.0),
-        if tile.is_some() { 1.0 } else { 0.0 },
-        if detail.is_some() { 1.0 } else { 0.0 },
+        tile.layer_count.map(f32::from).unwrap_or(1.0),
+        detail.layer_count.map(f32::from).unwrap_or(1.0),
+        if tile_ready { 1.0 } else { 0.0 },
+        if detail_ready { 1.0 } else { 0.0 },
     ]
-}
-
-fn material_texture_array_pair<'a, M: ModelRenderData + ?Sized>(
-    first: Option<usize>,
-    second: Option<usize>,
-    model: &'a M,
-    first_kind: ModelTextureKind,
-    second_kind: ModelTextureKind,
-) -> Option<(&'a ModelTexture, &'a ModelTexture)> {
-    let first_index = first?;
-    let second_index = second?;
-    let first = model.textures().get(first_index)?;
-    let second = model.textures().get(second_index)?;
-    (first.kind == first_kind
-        && second.kind == second_kind
-        && model
-            .textures()
-            .iter()
-            .position(|texture| texture.kind == first_kind)
-            == Some(first_index)
-        && model
-            .textures()
-            .iter()
-            .position(|texture| texture.kind == second_kind)
-            == Some(second_index)
-        && texture_array_pair_is_compatible(first, second))
-    .then_some((first, second))
 }
 
 fn model_texture_pair_for_kinds<M: ModelRenderData + ?Sized>(
@@ -3695,59 +3652,22 @@ mod tests {
     }
 
     #[test]
-    fn material_array_params_require_compatible_texture_pairs() {
-        let mut material = fallback_material();
-        material.texture_arrays.tile_normal = Some(0);
-        material.texture_arrays.tile_orb = Some(1);
-        material.texture_arrays.detail_diffuse = Some(2);
-        material.texture_arrays.detail_normal = Some(3);
-        let mut textures = vec![
-            test_array_texture(crate::ModelTextureKind::TileNormalArray, 4),
-            test_array_texture(crate::ModelTextureKind::TileOrbArray, 4),
-            test_array_texture(crate::ModelTextureKind::DetailDiffuseArray, 8),
-            test_array_texture(crate::ModelTextureKind::DetailNormalArray, 8),
-        ];
-        let mut model = crate::ModelData {
-            bounds: crate::ModelBounds::default(),
-            materials: vec![material.clone()],
-            textures: textures.clone(),
-            meshes: Vec::new(),
+    fn material_array_params_encode_prepared_resources() {
+        let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+        prepared.resource_availability.tile_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(4),
         };
+        prepared.resource_availability.detail_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(8),
+        };
+        assert_eq!(material_array_params(prepared), [4.0, 8.0, 1.0, 1.0]);
 
-        assert_eq!(
-            material_array_params(&material, &model),
-            [4.0, 8.0, 1.0, 1.0]
-        );
-
-        model.textures[0].kind = crate::ModelTextureKind::BaseColor;
-        assert_eq!(
-            material_array_params(&material, &model),
-            [1.0, 8.0, 0.0, 1.0]
-        );
-        model.textures[0].kind = crate::ModelTextureKind::TileNormalArray;
-
-        let duplicate_tile_normal = model.textures[0].clone();
-        let duplicate_tile_orb = model.textures[1].clone();
-        model
-            .textures
-            .extend([duplicate_tile_normal, duplicate_tile_orb]);
-        material.texture_arrays.tile_normal = Some(4);
-        material.texture_arrays.tile_orb = Some(5);
-        assert_eq!(
-            material_array_params(&material, &model),
-            [1.0, 8.0, 0.0, 1.0]
-        );
-        material.texture_arrays.tile_normal = Some(0);
-        material.texture_arrays.tile_orb = Some(1);
-
-        textures[1].array_size = 3;
-        textures[1].height = 3;
-        textures[1].rgba.resize(12, 255);
-        model.textures = textures;
-        assert_eq!(
-            material_array_params(&material, &model),
-            [1.0, 8.0, 0.0, 1.0]
-        );
+        prepared.resource_availability.tile_array.status =
+            crate::PreparedTextureArrayStatus::InvalidLayout;
+        prepared.resource_availability.tile_array.layer_count = None;
+        assert_eq!(material_array_params(prepared), [1.0, 8.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -4510,19 +4430,6 @@ mod tests {
             array_size: 1,
             array_layer_height: 1,
             rgba: vec![0, 0, 0, 255],
-            rgba_f32: None,
-        }
-    }
-
-    fn test_array_texture(kind: crate::ModelTextureKind, array_size: u16) -> crate::ModelTexture {
-        crate::ModelTexture {
-            path: "array.tex".to_string(),
-            kind,
-            width: 1,
-            height: array_size,
-            array_size,
-            array_layer_height: 1,
-            rgba: vec![128; usize::from(array_size) * 4],
             rgba_f32: None,
         }
     }
