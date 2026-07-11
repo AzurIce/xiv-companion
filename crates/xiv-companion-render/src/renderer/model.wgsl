@@ -756,15 +756,7 @@ fn resolve_extra_lighting(
     let sphere_tint = mix(vec3<f32>(0.55, 0.68, 0.82), material_specular, sphere_index);
     let sphere_term = rim * sphere_mask * select(0.18, 0.10, is_glass);
 
-    let matrix_delta = vec4<f32>(
-        extra.tile_matrix.x - 1.0,
-        extra.tile_matrix.y,
-        extra.tile_matrix.z,
-        extra.tile_matrix.w - 1.0,
-    );
-    let matrix_term = clamp(length(matrix_delta) * 0.16, 0.0, 0.18) * extra.flags.w;
-
-    return sheen_color + sphere_tint * sphere_term + material_specular * matrix_term * 0.18;
+    return sheen_color + sphere_tint * sphere_term;
 }
 
 fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {

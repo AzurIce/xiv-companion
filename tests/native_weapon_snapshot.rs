@@ -251,6 +251,15 @@ fn render_mock_character_tile_channel_snapshot() {
         rgb_difference(&low_normal_pixels, &high_normal_pixels) > 100_000,
         "tile normal alpha multiplied by TileAlpha must control normal contribution"
     );
+
+    let identity_matrix = mock_uniform_tile_matrix_model(1.0);
+    let repeated_matrix = mock_uniform_tile_matrix_model(2.0);
+    let identity_pixels = render("native-character-uniform-tile-matrix-one", &identity_matrix);
+    let repeated_pixels = render("native-character-uniform-tile-matrix-two", &repeated_matrix);
+    assert_eq!(
+        identity_pixels, repeated_pixels,
+        "TileMatrix must only transform tile UV and cannot directly change lighting"
+    );
 }
 
 #[test]
@@ -751,6 +760,17 @@ fn mock_tile_channel_model(orb: [u8; 4], normal: [u8; 4]) -> WeaponModelData {
         };
         texture.rgba = pixel.repeat(texture.rgba.len() / 4);
     }
+    model
+}
+
+fn mock_uniform_tile_matrix_model(repeat: f32) -> WeaponModelData {
+    let mut model = mock_tile_channel_model([128, 128, 255, 255], [224, 128, 255, 255]);
+    let tile_matrix = model
+        .textures
+        .iter_mut()
+        .find(|texture| texture.kind == ModelTextureKind::TileMatrixProperties)
+        .expect("synthetic model has a TileMatrix texture");
+    tile_matrix.rgba_f32 = Some(vec![[repeat, 0.0, 0.0, repeat]]);
     model
 }
 
