@@ -29,6 +29,7 @@ struct WeaponShaderFamilyAudit {
     scanned_materials: usize,
     family_counts: BTreeMap<String, usize>,
     candidates: Vec<WeaponShaderFamilyCandidate>,
+    unclassified_materials: Vec<WeaponShaderFamilyCandidate>,
     failures: Vec<String>,
 }
 
@@ -72,6 +73,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         scanned_materials: 0,
         family_counts: BTreeMap::new(),
         candidates: Vec::new(),
+        unclassified_materials: Vec::new(),
         failures: Vec::new(),
     };
 
@@ -189,20 +191,23 @@ fn scan_model<R: Resource>(
             .entry(format!("{shader_family:?}"))
             .or_default() += 1;
         report.scanned_materials += 1;
+        let candidate = WeaponShaderFamilyCandidate {
+            item_ids: items.iter().map(|item| item.id).collect(),
+            item_names: items.iter().map(|item| item.name.clone()).collect(),
+            model,
+            model_path: model_path.clone(),
+            material_name: material_name.to_string(),
+            material_path,
+            shader_package_name,
+            shader_family,
+        };
         if matches!(
             shader_family,
             MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
         ) {
-            report.candidates.push(WeaponShaderFamilyCandidate {
-                item_ids: items.iter().map(|item| item.id).collect(),
-                item_names: items.iter().map(|item| item.name.clone()).collect(),
-                model,
-                model_path: model_path.clone(),
-                material_name: material_name.to_string(),
-                material_path,
-                shader_package_name,
-                shader_family,
-            });
+            report.candidates.push(candidate);
+        } else if shader_family == MaterialShaderFamily::Unknown {
+            report.unclassified_materials.push(candidate);
         }
     }
 }

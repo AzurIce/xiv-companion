@@ -657,6 +657,7 @@ pub enum MaterialSubColorMode {
 #[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
+    Skin,
     CharacterStockings,
     CharacterGlass,
     CharacterReflection,
@@ -690,6 +691,7 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "character.shpk" | "characterlegacy.shpk" | "characterinc.shpk" => {
             MaterialShaderFamily::Character
         }
+        "skin.shpk" => MaterialShaderFamily::Skin,
         "characterstockings.shpk" => MaterialShaderFamily::CharacterStockings,
         "characterglass.shpk" => MaterialShaderFamily::CharacterGlass,
         "characterreflection.shpk" => MaterialShaderFamily::CharacterReflection,
@@ -940,6 +942,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub runtime_material_change: bool,
     pub runtime_option_color: bool,
     pub runtime_decal_color: bool,
+    #[serde(default)]
+    pub runtime_skin_color: bool,
     pub runtime_skin_material: bool,
     pub runtime_sub_color: bool,
     pub tile_array: bool,
@@ -1596,6 +1600,7 @@ pub fn prepared_material_unsupported_inputs(
         runtime_material_change: false,
         runtime_option_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
         runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
+        runtime_skin_color: matches!(shader_family, MaterialShaderFamily::Skin),
         runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
         runtime_sub_color: matches!(shader_family, MaterialShaderFamily::CharacterOcclusion)
             || material.is_some_and(|material| {
@@ -1779,7 +1784,8 @@ fn staining_application_is_incomplete(application: &ModelStainingApplication) ->
 fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) -> bool {
     matches!(
         shader_family,
-        MaterialShaderFamily::CharacterStockings
+        MaterialShaderFamily::Skin
+            | MaterialShaderFamily::CharacterStockings
             | MaterialShaderFamily::CharacterGlass
             | MaterialShaderFamily::CharacterReflection
             | MaterialShaderFamily::CharacterTransparency
@@ -2385,7 +2391,7 @@ pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
         }
     }
 
-    body_ids
+    let mut candidates = body_ids
         .into_iter()
         .map(|body_id| {
             format!(
@@ -2393,7 +2399,21 @@ pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
                 model_id = model.model_id,
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if is_equipment_style_glove_model(model) {
+        push_unique_path(
+            &mut candidates,
+            format!(
+                "chara/equipment/e{set_id:04}/model/c0101e{set_id:04}_glv.mdl",
+                set_id = model.model_id,
+            ),
+        );
+    }
+    candidates
+}
+
+pub fn is_equipment_style_glove_model(model: PackedModelId) -> bool {
+    model.model_id >= 8_000 && model.body_id != 0 && model.variant_id == 0
 }
 
 pub fn weapon_material_candidate_paths(
@@ -2440,6 +2460,12 @@ pub fn weapon_material_candidate_paths(
             ),
         );
     }
+    if let Some((race_id, body_id)) = human_body_ids_from_material_file(material_file) {
+        push_unique_path(
+            &mut material_roots,
+            format!("chara/human/c{race_id:04}/obj/body/b{body_id:04}/material"),
+        );
+    }
 
     let mut versions = Vec::new();
     for version in [model.variant_id, model.body_id, 1, 101, 201] {
@@ -2466,6 +2492,14 @@ fn weapon_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> {
     let tail = tail.strip_prefix('b')?;
     let (body_id, _) = tail.split_at_checked(4)?;
     Some((model_id.parse().ok()?, body_id.parse().ok()?))
+}
+
+fn human_body_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> {
+    let tail = material_file.strip_prefix("mt_c")?;
+    let (race_id, tail) = tail.split_at_checked(4)?;
+    let tail = tail.strip_prefix('b')?;
+    let (body_id, _) = tail.split_at_checked(4)?;
+    Some((race_id.parse().ok()?, body_id.parse().ok()?))
 }
 
 pub fn weapon_slot_label(category: u32) -> &'static str {
@@ -2994,6 +3028,7 @@ mod color_table_bake_tests {
                 runtime_material_change: false,
                 runtime_option_color: false,
                 runtime_decal_color: false,
+                runtime_skin_color: false,
                 runtime_skin_material: false,
                 runtime_sub_color: false,
                 tile_array: true,
@@ -3015,6 +3050,7 @@ mod color_table_bake_tests {
                 runtime_material_change: false,
                 runtime_option_color: false,
                 runtime_decal_color: false,
+                runtime_skin_color: false,
                 runtime_skin_material: false,
                 runtime_sub_color: false,
                 tile_array: true,
@@ -3039,6 +3075,13 @@ mod color_table_bake_tests {
         assert!(!stockings.unsupported_inputs.runtime_option_color);
         assert!(!stockings.unsupported_inputs.runtime_decal_color);
         assert!(stockings.unsupported_inputs.runtime_skin_material);
+
+        material.shader_package_name = Some("skin.shpk".to_string());
+        let skin = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(skin.shader_family, MaterialShaderFamily::Skin);
+        assert!(skin.unsupported_inputs.runtime_skin_color);
+        assert!(!skin.unsupported_inputs.runtime_skin_material);
+        assert!(skin.unsupported_inputs.incomplete_shader_family_logic);
 
         material.shader_package_name = Some("crystal.shpk".to_string());
         material.environment_texture = Some(9);
@@ -3635,6 +3678,10 @@ mod color_table_bake_tests {
             MaterialShaderFamily::Character
         );
         assert_eq!(
+            material_shader_family(Some("skin.shpk")),
+            MaterialShaderFamily::Skin
+        );
+        assert_eq!(
             material_shader_family(Some("chara/weapon/test/CHARACTERSTOCKINGS.SHPK")),
             MaterialShaderFamily::CharacterStockings
         );
@@ -4111,6 +4158,22 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn equipment_style_fist_adds_default_human_glove_candidate() {
+        let model = PackedModelId::from_raw(0x0000_0000_0001_2276);
+
+        assert!(is_equipment_style_glove_model(model));
+        assert_eq!(model.model_id, 8_822);
+        assert_eq!(model.body_id, 1);
+        assert_eq!(model.variant_id, 0);
+        assert_eq!(
+            weapon_model_candidate_paths(model)
+                .last()
+                .map(String::as_str),
+            Some("chara/equipment/e8822/model/c0101e8822_glv.mdl")
+        );
+    }
+
+    #[test]
     fn weapon_material_candidates_include_material_name_weapon_root() {
         // 有些双手武器的副手 MDL 放在 w0387，但材质名仍引用主手 w0337 的文件。
         // 不能只在副手自身 material 目录里查，否则会 fallback 成米色。
@@ -4132,5 +4195,19 @@ mod color_table_bake_tests {
         assert!(candidates.contains(
             &"chara/weapon/w0337/obj/body/b0001/material/v0001/mt_w0337b0001_a.mtrl".to_string()
         ));
+    }
+
+    #[test]
+    fn equipment_glove_material_candidates_include_human_body_root() {
+        let model = PackedModelId::from_raw(0x0000_0000_0001_2276);
+        let candidates = weapon_material_candidate_paths(
+            model,
+            "chara/equipment/e8822/model/c0101e8822_glv.mdl",
+            "/mt_c0101b0001_a.mtrl",
+        );
+
+        assert!(candidates.iter().any(|path| {
+            path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+        }));
     }
 }

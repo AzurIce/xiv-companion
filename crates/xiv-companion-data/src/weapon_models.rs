@@ -5977,6 +5977,54 @@ mod weapon_material_tests {
     }
 
     #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_equipment_style_fist_loads_default_human_glove() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 49_100,
+            item_name: "幻境指虎·半影（复制品）".to_string(),
+            model_main: 0x0000_0000_0001_2276,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+
+        assert!(!model.meshes.is_empty());
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| { path == "chara/equipment/e8822/model/c0101e8822_glv.mdl" })
+        );
+        assert!(model.loaded_paths.iter().any(|path| {
+            path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+        }));
+        assert!(
+            model.materials.iter().any(|material| {
+                material.shader_package_name.as_deref() == Some("character.shpk")
+            })
+        );
+        let skin_material = model
+            .materials
+            .iter()
+            .find(|material| material.shader_package_name.as_deref() == Some("skin.shpk"))
+            .expect("skin material");
+        let prepared = crate::model::prepare_material_for_draw_role(
+            Some(skin_material),
+            ModelMeshDrawRole::Normal,
+        );
+        assert_eq!(
+            prepared.shader_family,
+            crate::model::MaterialShaderFamily::Skin
+        );
+        assert!(prepared.unsupported_inputs.runtime_skin_color);
+        assert!(model.bounds.radius.is_finite() && model.bounds.radius > 0.0);
+    }
+
+    #[test]
     fn color_dye_table_debug_preserves_legacy_rows() {
         let color_dye_table = physis::mtrl::ColorDyeTable::LegacyColorDyeTable(
             physis::mtrl::LegacyColorDyeTableData {

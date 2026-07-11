@@ -1,5 +1,9 @@
 #![cfg(feature = "render-test-support")]
 
+#[cfg(feature = "game-data")]
+use physis::resource::SqPackResource;
+#[cfg(feature = "game-data")]
+use xiv_companion::{WeaponModelLoadRequest, load_weapon_model_from_resource_request};
 use xiv_companion_render::test_support::{
     WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
 };
@@ -7,6 +11,35 @@ use xiv_companion_render::{
     ModelTextureKind, PackedModelId, WeaponModelBounds, WeaponModelData, WeaponModelMaterial,
     WeaponModelMesh, WeaponModelTexture, WeaponModelVertex,
 };
+
+#[test]
+#[cfg(feature = "game-data")]
+#[ignore = "renders installed equipment-style fist model to target/weapon-render-snapshots"]
+fn render_installed_equipment_style_fist_snapshot() {
+    let game_dir = std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+    let request = WeaponModelLoadRequest {
+        item_id: 49_100,
+        item_name: "幻境指虎·半影（复制品）".to_string(),
+        model_main: 0x0000_0000_0001_2276,
+        model_sub: 0,
+        stain_ids: [0, 0],
+    };
+    let mut resource = SqPackResource::from_existing(&game_dir);
+    let model = load_weapon_model_from_resource_request(&mut resource, &request)
+        .expect("load equipment-style fist");
+    let snapshot = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("installed-equipment-style-fist-49100")
+            .with_viewport(640, 640),
+        &model,
+    )
+    .expect("render equipment-style fist snapshot");
+
+    eprintln!("png: {}", snapshot.png_path.display());
+    eprintln!(
+        "adapter: {} ({:?})",
+        snapshot.adapter_name, snapshot.adapter_backend
+    );
+}
 
 #[test]
 #[ignore = "writes target/weapon-render-snapshots/native-demo-triangle.png with native wgpu"]
