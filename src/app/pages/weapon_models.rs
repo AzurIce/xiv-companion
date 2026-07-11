@@ -486,6 +486,9 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                     StatRow { label: "Tile ORB Array", value: texture_counts.tile_orb_array.to_string() }
                     StatRow { label: "Detail Diffuse Array", value: texture_counts.detail_diffuse_array.to_string() }
                     StatRow { label: "Detail Normal Array", value: texture_counts.detail_normal_array.to_string() }
+                    StatRow { label: "Water Wave", value: texture_counts.water_wave.to_string() }
+                    StatRow { label: "Water Wave 1", value: texture_counts.water_wave1.to_string() }
+                    StatRow { label: "Water Whitecap", value: texture_counts.water_whitecap.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
                 }
             }
@@ -538,6 +541,9 @@ struct TextureKindCounts {
     tile_orb_array: usize,
     detail_diffuse_array: usize,
     detail_normal_array: usize,
+    water_wave: usize,
+    water_wave1: usize,
+    water_whitecap: usize,
     other: usize,
 }
 
@@ -563,6 +569,9 @@ impl TextureKindCounts {
                 WeaponModelTextureKind::TileOrbArray => counts.tile_orb_array += 1,
                 WeaponModelTextureKind::DetailDiffuseArray => counts.detail_diffuse_array += 1,
                 WeaponModelTextureKind::DetailNormalArray => counts.detail_normal_array += 1,
+                WeaponModelTextureKind::WaterWave => counts.water_wave += 1,
+                WeaponModelTextureKind::WaterWaveSecondary => counts.water_wave1 += 1,
+                WeaponModelTextureKind::WaterWhitecap => counts.water_whitecap += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
             }
         }

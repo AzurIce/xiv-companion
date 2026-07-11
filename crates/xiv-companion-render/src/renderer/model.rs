@@ -2,8 +2,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
-    MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData, ModelTexture,
-    ModelTextureKind, PreparedAlphaSource, PreparedMaterial, PreparedRenderPass,
+    MaterialRenderMode, MaterialShaderFamily, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
+    ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial, PreparedRenderPass,
     PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource,
     prepare_model_for_render,
 };
@@ -1494,6 +1494,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     detail_array_pair_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
+    let effective_normal_texture = effective_normal_texture(material, prepared_material);
     let uv_sources = material_uv_source_params(prepared_material);
     let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
     let uniform = MaterialUniform {
@@ -1526,8 +1527,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
             material.metalness,
-            material
-                .normal_texture
+            effective_normal_texture
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
@@ -1562,6 +1562,9 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         ],
         alpha_params: material_alpha_params(material),
         alpha_policy_params: material_alpha_policy_params(prepared_material),
+        water_deep_color: material_water_deep_color(material),
+        water_refraction_color: material_water_refraction_color(material),
+        water_whitecap_color: material_water_whitecap_color(material),
         glass_params: material_glass_params(material),
         extra_properties: material_extra_texture_flags(material, model),
         shader_params: material_shader_params(material),
@@ -1683,8 +1686,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let normal_texture_view = material
-        .normal_texture
+    let normal_texture_view = effective_normal_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
@@ -2359,6 +2361,9 @@ fn fallback_material() -> ModelMaterial {
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
         transparency: 0.0,
+        water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+        water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+        water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
         shadow_alpha_threshold: 0.5,
@@ -2429,11 +2434,25 @@ fn fallback_material() -> ModelMaterial {
         sphere_properties_texture: None,
         tile_matrix_texture: None,
         index_texture: None,
+        water_wave_texture: None,
+        water_wave1_texture: None,
+        water_whitecap_texture: None,
     }
 }
 
 fn effective_mask_texture(material: &ModelMaterial) -> Option<usize> {
     material.mask_texture
+}
+
+fn effective_normal_texture(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> Option<usize> {
+    if matches!(prepared_material.shader_family, MaterialShaderFamily::Water) {
+        material.water_wave_texture.or(material.normal_texture)
+    } else {
+        material.normal_texture
+    }
 }
 
 fn material_extra_texture_flags<M: ModelRenderData + ?Sized>(
@@ -2467,6 +2486,21 @@ fn material_glass_params(material: &ModelMaterial) -> [f32; 4] {
     ]
 }
 
+fn material_water_deep_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.water_deep_color, [0.3529, 0.372_549, 0.3921, 1.0])
+}
+
+fn material_water_refraction_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(
+        material.water_refraction_color,
+        [0.4117, 0.4313, 0.4509, 1.0],
+    )
+}
+
+fn material_water_whitecap_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.water_whitecap_color, [0.4509, 0.4705, 0.4901, 0.3])
+}
+
 fn material_alpha_params(material: &ModelMaterial) -> [f32; 4] {
     [
         finite_or(material.alpha_aperture, 2.0),
@@ -2481,6 +2515,7 @@ fn material_alpha_policy_params(prepared_material: PreparedMaterial) -> [f32; 4]
         PreparedAlphaSource::Opaque => 0.0,
         PreparedAlphaSource::BaseColorAlpha => 1.0,
         PreparedAlphaSource::NormalBlue => 2.0,
+        PreparedAlphaSource::MaterialTransparency => 3.0,
     };
     let pass = match prepared_material.render_pass {
         PreparedRenderPass::Transparent => 1.0,
@@ -2710,7 +2745,11 @@ fn material_feature_params(prepared_material: PreparedMaterial) -> [f32; 4] {
         } else {
             0.0
         },
-        0.0,
+        if matches!(prepared_material.shader_family, MaterialShaderFamily::Water) {
+            1.0
+        } else {
+            0.0
+        },
         0.0,
         0.0,
     ]
@@ -2864,6 +2903,9 @@ struct MaterialUniform {
     render: [f32; 4],
     alpha_params: [f32; 4],
     alpha_policy_params: [f32; 4],
+    water_deep_color: [f32; 4],
+    water_refraction_color: [f32; 4],
+    water_whitecap_color: [f32; 4],
     glass_params: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
@@ -3505,6 +3547,25 @@ mod tests {
     }
 
     #[test]
+    fn effective_normal_texture_uses_primary_water_wave_only_for_water() {
+        let mut material = fallback_material();
+        material.normal_texture = Some(2);
+        material.water_wave_texture = Some(7);
+        material.water_wave1_texture = Some(8);
+        material.water_whitecap_texture = Some(9);
+
+        let regular = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(effective_normal_texture(&material, regular), Some(2));
+
+        material.shader_package_name = Some("water.shpk".to_string());
+        let water = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(effective_normal_texture(&material, water), Some(7));
+
+        material.water_wave_texture = None;
+        assert_eq!(effective_normal_texture(&material, water), Some(2));
+    }
+
+    #[test]
     fn material_extra_texture_flags_require_loaded_textures() {
         let mut material = fallback_material();
         material.tile_properties_texture = Some(0);
@@ -3722,6 +3783,33 @@ mod tests {
         prepared.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::None;
         prepared.alpha_policy.lighting_enabled = true;
         assert_eq!(material_alpha_policy_params(prepared), [1.0, 1.0, 0.0, 2.0]);
+
+        prepared.render_pass = PreparedRenderPass::Transparent;
+        prepared.alpha_policy.source = PreparedAlphaSource::MaterialTransparency;
+        assert_eq!(material_alpha_policy_params(prepared), [3.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn material_water_colors_preserve_finite_shader_inputs() {
+        let mut material = fallback_material();
+        material.water_deep_color = [0.1, 0.2, 0.3, 0.4];
+        material.water_refraction_color = [0.5, 0.6, 0.7, 0.8];
+        material.water_whitecap_color = [0.9, 1.0, 1.1, 0.25];
+        assert_eq!(material_water_deep_color(&material), [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(
+            material_water_refraction_color(&material),
+            [0.5, 0.6, 0.7, 0.8]
+        );
+        assert_eq!(
+            material_water_whitecap_color(&material),
+            [0.9, 1.0, 1.1, 0.25]
+        );
+
+        material.water_deep_color = [f32::NAN, 0.2, f32::INFINITY, 0.4];
+        assert_eq!(
+            material_water_deep_color(&material),
+            [0.3529, 0.2, 0.3921, 0.4]
+        );
     }
 
     #[test]
@@ -3988,6 +4076,9 @@ mod tests {
 
         prepared.feature_flags.uses_flow = true;
         assert_eq!(material_feature_params(prepared), [1.0, 0.0, 0.0, 0.0]);
+
+        prepared.shader_family = MaterialShaderFamily::Water;
+        assert_eq!(material_feature_params(prepared), [1.0, 1.0, 0.0, 0.0]);
     }
 
     #[test]

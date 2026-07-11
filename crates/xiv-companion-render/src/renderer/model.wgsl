@@ -12,7 +12,10 @@ struct Material {
     properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
     alpha_params: vec4<f32>, // x: aperture, y: offset, z: shadow alpha threshold, w: transparency
-    alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue, y: lighting, z: dither depth, w: prepared pass 0=surface 1=transparent 2=glass
+    alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue 3=material transparency, y: lighting, z: dither depth, w: prepared pass
+    water_deep_color: vec4<f32>,
+    water_refraction_color: vec4<f32>,
+    water_whitecap_color: vec4<f32>,
     glass_params: vec4<f32>, // x: IOR, y: max thickness
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
@@ -47,7 +50,7 @@ struct Material {
     uv_scroll_masks1: vec4<f32>, // multi, specular, emissive, material properties
     uv_scroll_masks2: vec4<f32>, // tile, sheen, sphere, tile matrix
     uv_scroll_masks3: vec4<f32>, // ColorTable index, other
-    feature_params: vec4<f32>, // x: use flow0 as primary tangent
+    feature_params: vec4<f32>, // x: use flow0 as primary tangent, y: water family
     draw_role_params: vec4<f32>, // x: lightshaft, y: transparent crest fallback, z: base material fallback
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
 };
@@ -265,7 +268,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
     let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
-    let base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
+    let generic_base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
+    let is_water = material.feature_params.y > 0.5;
+    let base = select(
+        generic_base,
+        clamp(material.water_deep_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
+        is_water,
+    );
     let alpha = resolve_material_alpha(
         input.color.a,
         base_texture_alpha,
@@ -679,6 +688,9 @@ fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
 }
 
 fn resolve_surface_alpha(base_alpha: f32, normal_blue: f32) -> f32 {
+    if material.alpha_policy_params.x > 2.5 {
+        return clamp(material.alpha_params.w, 0.0, 1.0);
+    }
     if material.alpha_policy_params.x > 1.5 {
         return clamp(normal_blue, 0.0, 1.0);
     }
@@ -705,7 +717,9 @@ fn resolve_material_alpha(
         clamp(material.diffuse_color.a * texture_alpha * vertex_alpha, 0.0, 1.0),
         uses_alpha,
     );
-    if uses_alpha && !is_glass && !is_lightshaft {
+    if material.alpha_policy_params.x > 2.5 {
+        alpha = texture_alpha;
+    } else if uses_alpha && !is_glass && !is_lightshaft {
         alpha = resolve_alpha_shaping(alpha);
     }
     if is_glass {

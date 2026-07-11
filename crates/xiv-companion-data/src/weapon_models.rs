@@ -43,6 +43,12 @@ const G_SHADOW_ALPHA_THRESHOLD: u32 = 0xD925_FF32;
 #[cfg(feature = "game-data")]
 const G_TRANSPARENCY: u32 = 0x53E8_417B;
 #[cfg(feature = "game-data")]
+const G_WATER_DEEP_COLOR: u32 = 0xD315_E728;
+#[cfg(feature = "game-data")]
+const G_WATER_REFRACTION_COLOR: u32 = 0xBA16_3700;
+#[cfg(feature = "game-data")]
+const G_WATER_WHITECAP_COLOR: u32 = 0x29FA_2AC1;
+#[cfg(feature = "game-data")]
 const DRAW_DEPTH_MODE: u32 = 0xE8DA_5B62;
 #[cfg(feature = "game-data")]
 const DRAW_DEPTH_MODE_DITHER: u32 = 0x7B80_4D6E;
@@ -1550,6 +1556,9 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_AlphaOffset",
             "g_ShadowAlphaThreshold",
             "g_Transparency",
+            "g_WaterDeepColor",
+            "g_RefractionColor",
+            "g_WhitecapColor",
             "g_TexAnim",
             "g_TexU",
             "g_TexV",
@@ -2161,6 +2170,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
+        let water_deep_color = composed_material_water_deep_color(&semantics);
+        let water_refraction_color = composed_material_water_refraction_color(&semantics);
+        let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
@@ -2245,6 +2257,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             lighting_mode,
             flow_mode,
             transparency,
+            water_deep_color,
+            water_refraction_color,
+            water_whitecap_color,
             alpha_aperture,
             alpha_offset,
             shadow_alpha_threshold,
@@ -2315,6 +2330,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
             index_texture: texture_set.index,
+            water_wave_texture: texture_set.water_wave,
+            water_wave1_texture: texture_set.water_wave1,
+            water_whitecap_texture: texture_set.water_whitecap,
         };
     }
 
@@ -2391,6 +2409,15 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWave => {
+                set.water_wave.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWaveSecondary => {
+                set.water_wave1.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWhitecap => {
+                set.water_whitecap.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::TileNormalArray
             | WeaponModelTextureKind::TileOrbArray
@@ -2742,6 +2769,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
+        let water_deep_color = composed_material_water_deep_color(&semantics);
+        let water_refraction_color = composed_material_water_refraction_color(&semantics);
+        let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
@@ -2827,6 +2857,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             lighting_mode,
             flow_mode,
             transparency,
+            water_deep_color,
+            water_refraction_color,
+            water_whitecap_color,
             alpha_aperture,
             alpha_offset,
             shadow_alpha_threshold,
@@ -2897,6 +2930,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
             index_texture: texture_set.index,
+            water_wave_texture: texture_set.water_wave,
+            water_wave1_texture: texture_set.water_wave1,
+            water_whitecap_texture: texture_set.water_whitecap,
         };
     }
 
@@ -2975,6 +3011,15 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             }
             WeaponModelTextureKind::Index => {
                 set.index.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWave => {
+                set.water_wave.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWaveSecondary => {
+                set.water_wave1.get_or_insert(texture_index);
+            }
+            WeaponModelTextureKind::WaterWhitecap => {
+                set.water_whitecap.get_or_insert(texture_index);
             }
             WeaponModelTextureKind::TileNormalArray
             | WeaponModelTextureKind::TileOrbArray
@@ -3102,6 +3147,9 @@ struct WeaponTextureSet {
     sphere_properties: Option<usize>,
     tile_matrix: Option<usize>,
     index: Option<usize>,
+    water_wave: Option<usize>,
+    water_wave1: Option<usize>,
+    water_whitecap: Option<usize>,
     has_alpha: bool,
 }
 
@@ -3578,6 +3626,33 @@ fn composed_material_transparency(
     .then_some(1.0)
     .unwrap_or(0.0);
     composed_material_finite_constant(semantics, G_TRANSPARENCY, default).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_deep_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_DEEP_COLOR,
+        [0.3529, 0.372_549, 0.3921, 1.0],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_refraction_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_REFRACTION_COLOR,
+        [0.4117, 0.4313, 0.4509, 1.0],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_whitecap_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_WHITECAP_COLOR,
+        [0.4509, 0.4705, 0.4901, 0.3],
+    )
 }
 
 #[cfg(feature = "game-data")]
@@ -4210,6 +4285,9 @@ fn fallback_weapon_material(
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
         transparency: 0.0,
+        water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+        water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+        water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
         shadow_alpha_threshold: 0.5,
@@ -4280,6 +4358,9 @@ fn fallback_weapon_material(
         sphere_properties_texture: None,
         tile_matrix_texture: None,
         index_texture: None,
+        water_wave_texture: None,
+        water_wave1_texture: None,
+        water_whitecap_texture: None,
     }
 }
 
@@ -4732,9 +4813,15 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_Sampler0", WeaponModelTextureKind::BaseColor),
         ("g_Sampler1", WeaponModelTextureKind::BaseColor),
         ("g_SamplerEnvMap", WeaponModelTextureKind::Other),
-        ("g_SamplerWaveMap", WeaponModelTextureKind::Other),
-        ("g_SamplerWaveMap1", WeaponModelTextureKind::Other),
-        ("g_SamplerWhitecapMap", WeaponModelTextureKind::Other),
+        ("g_SamplerWaveMap", WeaponModelTextureKind::WaterWave),
+        (
+            "g_SamplerWaveMap1",
+            WeaponModelTextureKind::WaterWaveSecondary,
+        ),
+        (
+            "g_SamplerWhitecapMap",
+            WeaponModelTextureKind::WaterWhitecap,
+        ),
     ]
 }
 
@@ -5848,6 +5935,49 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_material_water_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.3529, 0.372_549, 0.3921, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_refraction_color(&semantics),
+            [0.4117, 0.4313, 0.4509, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_whitecap_color(&semantics),
+            [0.4509, 0.4705, 0.4901, 0.3]
+        );
+
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_WATER_DEEP_COLOR, &[0.1, 0.2, 0.3]),
+            (G_WATER_REFRACTION_COLOR, &[0.4, 0.5, 0.6]),
+            (G_WATER_WHITECAP_COLOR, &[0.7, 0.8, 0.9, 0.25]),
+        ]);
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_refraction_color(&semantics),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_whitecap_color(&semantics),
+            [0.7, 0.8, 0.9, 0.25]
+        );
+
+        let material = test_mtrl_with_constant(G_WATER_DEEP_COLOR, &[0.9, f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.9, 0.372_549, 0.3921, 1.0]
+        );
+    }
+
+    #[test]
     fn composed_character_transparency_keys_preserve_depth_and_lighting_policy() {
         let mut semantics = ComposedMaterialSemantics::default();
         assert_eq!(
@@ -6605,11 +6735,15 @@ mod weapon_material_tests {
         );
         assert_eq!(
             classify_sampler_name("g_SamplerWaveMap"),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::WaterWave)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerWaveMap1"),
+            Some(WeaponModelTextureKind::WaterWaveSecondary)
         );
         assert_eq!(
             classify_sampler_usage(physis::shpk::ShaderPackage::crc("g_SamplerWhitecapMap")),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::WaterWhitecap)
         );
     }
 
@@ -6623,9 +6757,12 @@ mod weapon_material_tests {
             test_texture("multi.tex", WeaponModelTextureKind::MultiMap),
             test_texture("specular.tex", WeaponModelTextureKind::Specular),
             test_texture("id.tex", WeaponModelTextureKind::Index),
+            test_texture("wave.tex", WeaponModelTextureKind::WaterWave),
+            test_texture("wave1.tex", WeaponModelTextureKind::WaterWaveSecondary),
+            test_texture("whitecap.tex", WeaponModelTextureKind::WaterWhitecap),
         ];
         assert_eq!(
-            choose_fallback_base_texture(&[0, 1, 2, 3, 4, 5, 6], &textures),
+            choose_fallback_base_texture(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], &textures),
             None
         );
     }
@@ -6654,6 +6791,9 @@ mod weapon_material_tests {
             WeaponModelTextureKind::SphereProperties,
             WeaponModelTextureKind::TileMatrixProperties,
             WeaponModelTextureKind::Index,
+            WeaponModelTextureKind::WaterWave,
+            WeaponModelTextureKind::WaterWaveSecondary,
+            WeaponModelTextureKind::WaterWhitecap,
             WeaponModelTextureKind::Other,
         ] {
             let texture = test_texture_with_alpha("non-base-alpha.tex", kind, 0);

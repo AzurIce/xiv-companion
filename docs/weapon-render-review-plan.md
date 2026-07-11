@@ -70,8 +70,8 @@
 - `g_GlassIOR`、`g_GlassThicknessMax` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `glassParams` uniform；WGSL 当前把非默认 IOR/thickness 用作 glass tint、specular 与 rim fresnel 的轻量调节，不改变 glass opacity 或折射。
 - `g_UVScrollTime` / `0x9A696A17` 已按 MeddleTools `UvScrollMapping` 结构化进 `ModelMaterial.uvScroll` 和 renderer uniform；`ModelRenderOptions.uv_scroll_time` 进入 camera uniform，Web 渲染循环用 RAF 时间驱动，native snapshot 默认时间为 0 保持稳定。prepared `usesScroll` 现在要求存在非零 multiplier 且至少一个明确可滚动 texture role，lightshaft 的独立 `g_TexAnim` 路径不受影响。
 - `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已结构化进 `ModelMaterial` 和 phantom summary；renderer uniform 已传入 WGSL，`LightShaft` draw role 会启用保守的 additive tint、`g_TexAnim.xy` UV 动画、`g_TexU/V` 仿射 UV 和 `g_Ray` 强度近似。完整 MeddleTools 节点语义仍未复刻。
-- `g_Transparency` 已结构化进 `ModelMaterial.transparency` 和 phantom summary；MeddleTools `meddle water.shpk` group 的 headless Blender 连接检查确认它直接连接 group `Alpha`，因此数值方向就是 renderer alpha，而不是需要反转的“透明程度”。同一 group 中 `g_WaterDeepColor` 直接连接 Base Color，`g_SamplerWaveMap` 通过 `Normal_Fix` 使用 R/G 解码 normal；`g_RefractionColor`、`g_WhitecapColor`、`g_SamplerWaveMap1`、`g_SamplerWhitecapMap` 虽有输入和 mapping，但当前 group 没有输出连接。现有 renderer 尚未执行这些 water 专用语义。
-- 当前 sampler 分类把 wave/wave1/whitecap/env 全部压成 `ModelTextureKind::Other`，`WeaponTextureSet` 不保留 water wave binding；在没有常规 base texture 时，generic fallback 还可能把第一张 `Other` wave map 误当 base color。应新增 dedicated water wave role，避免 fallback 误选，并只消费已由节点连接证实的 primary wave map。
+- `g_Transparency` 已按 MeddleTools `meddle water.shpk` 的直接 Alpha 连接进入 `PreparedAlphaSource::MaterialTransparency`；小于 1 时 water 进入 Transparent pass，WGSL 直接输出该 alpha，不乘 vertex/base alpha 或 character alpha shaping。`g_WaterDeepColor`、`g_RefractionColor`、`g_WhitecapColor` 已结构化进 model/summary/uniform，其中 deep color 按节点直接作为 water base；refraction/whitecap 因节点未连接而只保留输入。`g_SamplerWaveMap` 通过现有 normal binding 使用 R/G 解码 normal。
+- sampler 分类已将 `g_SamplerWaveMap`、`g_SamplerWaveMap1`、`g_SamplerWhitecapMap` 拆成 `WaterWave/WaterWaveSecondary/WaterWhitecap`，同步/异步 loader、`WeaponTextureSet`、`ModelMaterial`、prepared bindings 与 Web texture counts 均保留各自索引。三者不会再被 generic fallback 误当 base；renderer 只消费节点已证实的 primary wave，secondary/whitecap 暂不增加 GPU binding。
 - `g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `alphaParams` uniform；WGSL 当前只在 aperture/offset 非默认时对非 glass/lightshaft alpha 做受限 shaping，`g_ShadowAlphaThreshold` 仍未驱动 shadow pass。
 - character transparency/glass 的控制入口已结构化：`ModelMaterial.drawDepthMode` 保留 `None/Dither/Unknown`，`lightingMode` 保留 default/enabled/disabled/unknown；`PreparedMaterial.alphaPolicy` 输出 alpha source、depth mode 与 lighting enabled。MeddleTools `shaders.blend` 进一步确认 character Alpha 输出来自 `g_SamplerNormal` Blue，stockings 分支才强制为 1；renderer 已按该规则让 character blend/glass/transparency 从 normal B 取 alpha，并让 `EnableLightingOff` 的 character transparency 走 unlit surface。`GlassBlendMode` 已作为显式 scene option 进入 renderer、Web 和 snapshot；Mul/Add 当前分别使用现有 alpha blend 与 additive pipeline 近似。
 - `ModelDebugMode` 已提供 renderer debug 视图：final、base、normal、mask、material properties、specular、emissive、alpha、UV0-UV3、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、tile/sheen/sphere properties、tile matrix，以及 tile normal/ORB、detail diffuse/normal atlas 选层结果；Web 控件和 snapshot/test render options 共用同一入口。phantom 可通过 `XIV_PHANTOM_ARRAY_DEBUG=1` 输出四张数组诊断图。
@@ -81,7 +81,7 @@
 - 多套 UV、secondary normal/bitangent、`color1`、flow 已进 GPU 输入；Flow material mode 已让 WGSL 将插值后的 `flow0.xyz` 正交化为 primary tangent，并结合已有 bitangent 方向构造 normal mapping frame。`flow1`、secondary normal/bitangent 和 `color1` 仍未进入实际 family-specific shading，继续保留给 secondary map/tangent set，不伪造未证实的动画用途。
 - `g_SamplerColorMap1`、`g_SamplerNormalMap1` 已能被 sampler 分类识别，但 `WeaponTextureSet` 对同 texture kind 只保留第一张；`g_SamplerSpecularMap1` 也尚无独立 role/binding。Map1 资源虽然可能已经加载到 texture list，prepared 和 renderer 仍无法独立绑定三张 secondary map。由于当前 fragment sampled texture 数已接近 WebGPU 常见 16 张限制，后续应单独设计配对 atlas 或重排 binding，不能在本批直接增加三个 sampled texture binding。
 - mesh category、submesh attribute mask/name 和 shape influence 摘要已进入第一版 `PreparedModel` / `PreparedMesh`；`PreparedModelOptions.enabledAttributeMask` 已可按显式运行时 attribute mask 隐藏 disabled submesh，`enabledShapeMask` 已可审计 active/inactive shape influence，但 Web 离线默认仍不猜这些 mask。bone/skin/morph 和实际 shape vertex replacement 仍没有进入后续渲染决策。
-- 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps、tile/detail、bguvscroll 和 Flow 已有第一版实时消费，但 water 专用 alpha/base/normal、Map1、ORB/detail 通道权重、reflection 等节点逻辑仍不完整。
+- 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps、tile/detail、bguvscroll、Flow 与 water alpha/base/primary normal 已有第一版实时消费，但 water refraction/whitecap/WaveMap1、Map1、ORB/detail 通道权重、reflection 等节点逻辑仍不完整。
 - 运行时 GPU ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。静态 stain0/stain1 已有完整离线输入和 STM 应用路径，decal/crest 与 materialChange 已执行默认 fallback，但仍不能显示真实运行时 crest/decal 内容。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
@@ -203,11 +203,11 @@
 - 已完成：`g_AlphaAperture`、`g_AlphaOffset`、`g_ShadowAlphaThreshold` 进入 `ModelMaterial`，默认值分别为 `2`、`0`、`0.5`；renderer uniform 已进入 WGSL，其中 aperture/offset 非默认时会对非 glass/lightshaft alpha 做受限 shaping；shadow alpha 与 transparency opacity 仍待后续 shader-family 语义确认。
 - 已完成：`g_UVScrollTime` / `0x9A696A17` 进入 `ModelMaterial.uvScroll`，按 MeddleTools 映射转换为 `[-x, y, -z, w]`；`bguvscroll.shpk` 的当前 primary base/normal/specular 已通过 prepared per-role mask 使用 UV0Scroll，其它 role 与 `characterscroll.shpk` 不继承该动画。UV1Scroll 等待 Map1 独立绑定。
 - 已完成：`lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 进入 `ModelMaterial`，默认值分别为白色、零动画、identity U/V 和零 ray；renderer uniform 已按 draw role 只对 lightShaft batch 启用保守消费，其中 `g_Color` 控制 additive tint/alpha，`g_TexAnim.xy` 驱动 UV 动画，`g_TexU/V` 作为 UV 仿射基向量，`g_Ray` 当前只作强度近似。
-- 已完成解析：`g_Transparency` 进入 `ModelMaterial.transparency`，材质 override 优先于 shader package default 并 clamp 到 0..1；默认值已按 water/river=1.0、其它 family=0.0 处理，且不会参与 character/glass opacity。MeddleTools 已确认 water 输出 Alpha 直接等于该值，下一步接入 prepared pass 与 WGSL。
+- 已完成：`g_Transparency` 进入 `ModelMaterial.transparency`，material override 优先并 clamp 到 0..1；water prepared pass/alpha source 与 WGSL 已直接消费，character/glass 不受影响。`g_WaterDeepColor/g_RefractionColor/g_WhitecapColor` 及三种 water sampler role 也已结构化，primary wave 已复用 normal binding。
 
 后续优先参数：
 
-- `GlassBlendMode` 的显式 scene input 与 dither depth prepass 已完成；water/river 的 `g_Transparency` 方向已由 MeddleTools 节点确认，本批应接入 alpha/pass，并结构化 deep/refraction/whitecap colors 与 primary wave map。之后补 reflection/stockings/tattoo/occlusion 等 shader-family keys/constants；lightshaft 仍需补 `g_Ray` 的真实节点行为和 synthetic render fixture。
+- `GlassBlendMode`、dither depth 与 water alpha/base/primary wave 已完成；后续补 reflection/stockings/tattoo/occlusion 等 shader-family keys/constants，或先设计 Map1/UV1Scroll。water refraction/whitecap/WaveMap1 等待真实节点连接或游戏 shader 证据；lightshaft 仍需补 `g_Ray` 的真实节点行为。
 
 验证：
 
@@ -224,6 +224,7 @@
 - 已增加 role-specific scroll/flow focused tests，覆盖 bguvscroll primary role mask、静态 role、零 multiplier、CharacterScroll 不自动滚动、Flow key default/override/unknown、Standard + flow attribute 不启用、Flow + flow0 才启用、flow1-only 不启用，以及 renderer scroll mask/flow uniform 编码；native WGPU snapshot 已验证 WGSL/bind layout，45052/45059 phantom 已回归。
 - 已增加 lightshaft focused tests，覆盖 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 的 shader package default、material override、renderer uniform 默认值和 LightShaft draw-role shader 开关。
 - 已增加 `g_Transparency` focused tests，覆盖 water/river family 默认 1.0、其它 family 默认 0.0、shader package default、material override 和 clamp。
+- 已增加 water focused tests，覆盖 deep/refraction/whitecap constant default/override/fallback、三种 sampler role、specialized texture 不参与 base fallback、prepared direct-alpha/pass、primary wave effective normal、uniform finite fallback 与 Web/wasm 枚举消费。ignored native synthetic water 会比较解码 RGBA，确认 alpha 0.35/1.0 与 wave/flat normal 均产生可见差异；45052/45059 phantom 已回归。当前 phantom 列表没有真实 water/river 武器样本。
 - 用本地 SqPack 样本输出 material debug，对照 MeddleTools `node_configs.py` 中对应 mapping。
 
 ### P1: 处理染色数据入口
@@ -506,14 +507,14 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 
 ### P1: 改善 alpha/glass/transparency
 
-character transparency/glass 已完成第一版 alpha source 与 prepared policy：
+character transparency/glass 与 water 已完成第一版 alpha source / prepared policy：
 
 - `DrawDepthMode` / `EnableLighting` 已结构化并进入 `PreparedMaterial.alphaPolicy`；character glass/transparency 会强制进入 Glass/Transparent pass。
 - MeddleTools `shaders.blend` 已确认 character alpha 使用 normal Blue，stockings 强制 1；ColorTable baked base 不再写固定 glass alpha，glass 材质 opacity 不再重复乘 0.28。
 - WGSL 已用 normal B 驱动 character glass/transparency alpha，`EnableLightingOff` 可关闭 transparency lighting，并提高 glass transmission tint，45059 灰暗球体回归已明显改善。
 - `DrawDepthMode_Dither` 已执行专用 depth prepass：opaque/cutout 后、transparent/glass 颜色 pass 前，只选择 prepared depth mode 为 Dither 的透明 batch；WGSL 复用颜色 pass 的 base-alpha/normal-B alpha 计算，按稳定 4x4 屏幕空间阈值 discard；pipeline 只写 depth，两个颜色 target 的 write mask 为空，原透明颜色 pass 继续不写 depth。双面和背面剔除材质各有对应 pipeline。该公式是缺少游戏 shader 实现时的保守近似，不扩展为 `ApplyDitherClip` scene-key 行为。
 - `GlassBlendMode` 已成为显式 `ModelGlassBlendMode::{Multiply, Additive}` renderer input。默认 Multiply 保持当前 alpha-blend glass pipeline；Additive 只把 Glass batch 切到 additive pipeline，不影响普通 Transparent 或 LightShaft 分类。Web 渲染面板已增加 Glass Mul/Add 选项；phantom harness 可通过 `XIV_PHANTOM_GLASS_BLEND=additive` 验证。45059 默认 Mul 保持原透明雪景，Add 会明显高亮，说明分派生效。由于没有真实 blend equation 证据，Multiply 暂不改成硬件乘法，Add 也只视为近似；折射、真实厚度和 scene color transmission 仍未实现。
-- water/river 仍需确认 `g_Transparency` 是透明度还是 alpha，再接入对应 renderer。
+- water/river 已确认并接入 `g_Transparency -> Alpha`、`g_WaterDeepColor -> Base Color`、primary wave RG normal；refraction/whitecap/WaveMap1 等待额外证据。
 - 区分 cutout、blend、glass、additive。
 - 对 alpha test 使用真实阈值和 shader package 规则。
 - 透明排序保留 mesh-level，但为复杂模型预留 per-triangle 或 weighted blended OIT 方案。
@@ -574,7 +575,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；下一步继续结构化 shader-family-specific texture role/UV 规则，并寻找能覆盖 bg detail、reflection、stockings、tattoo、occlusion 的真实武器样本。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
 2. 结果处理：把当前在 WGSL 中的 tile layer、detail layer、ORB 通道和组合权重逐步提升为更明确的 prepared 规则，尤其处理 TileMatrix float channels、detail/multi-detail mask 和越界诊断，减少 renderer 内部猜测。
-3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll primary role 路由与 Flow primary tangent 已完成第一版。当前推进 water/river：prepared alpha source 使用 `g_Transparency`，deep color 作为 base，primary wave map 作为 normal；refraction/whitecap 保留结构化输入但不伪造未连接行为。当前 material bind group 已使用 15 个 sampled textures，新增一张 dedicated wave map 会达到 WebGPU 常见上限 16，因此 WaveMap1/WhitecapMap 不能直接继续横向加 binding。
+3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll、Flow 与 water direct alpha/deep color/primary wave 已完成第一版。water primary wave 复用现有 normal binding，因此 sampled texture 数仍为 15；WaveMap1/WhitecapMap 只保留 parsed/prepared 索引。下一步优先设计 Map1 配对/binding 与 UV1Scroll，或推进 reflection/stockings/tattoo/occlusion。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
 

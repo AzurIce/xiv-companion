@@ -407,6 +407,12 @@ pub struct ModelMaterial {
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
     pub transparency: f32,
+    #[serde(default = "default_material_water_deep_color")]
+    pub water_deep_color: [f32; 4],
+    #[serde(default = "default_material_water_refraction_color")]
+    pub water_refraction_color: [f32; 4],
+    #[serde(default = "default_material_water_whitecap_color")]
+    pub water_whitecap_color: [f32; 4],
     #[serde(default = "default_material_alpha_aperture")]
     pub alpha_aperture: f32,
     #[serde(default)]
@@ -541,6 +547,12 @@ pub struct ModelMaterial {
     pub tile_matrix_texture: Option<usize>,
     #[serde(default)]
     pub index_texture: Option<usize>,
+    #[serde(default)]
+    pub water_wave_texture: Option<usize>,
+    #[serde(default)]
+    pub water_wave1_texture: Option<usize>,
+    #[serde(default)]
+    pub water_whitecap_texture: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -779,6 +791,7 @@ pub enum PreparedAlphaSource {
     Opaque,
     BaseColorAlpha,
     NormalBlue,
+    MaterialTransparency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -915,6 +928,12 @@ pub struct PreparedTextureBindings {
     pub sphere_properties: Option<usize>,
     pub tile_matrix: Option<usize>,
     pub index: Option<usize>,
+    #[serde(default)]
+    pub water_wave: Option<usize>,
+    #[serde(default)]
+    pub water_wave1: Option<usize>,
+    #[serde(default)]
+    pub water_whitecap: Option<usize>,
     pub tile_normal_array: Option<usize>,
     pub tile_orb_array: Option<usize>,
     pub detail_diffuse_array: Option<usize>,
@@ -937,6 +956,12 @@ pub struct PreparedTextureSamplingSet {
     pub sphere_properties: PreparedTextureSampling,
     pub tile_matrix: PreparedTextureSampling,
     pub index: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_wave: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_wave1: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_whitecap: PreparedTextureSampling,
     #[serde(default = "default_texture_array_sampling")]
     pub tile_normal_array: PreparedTextureSampling,
     #[serde(default = "default_texture_array_sampling")]
@@ -968,6 +993,9 @@ impl Default for PreparedTextureSamplingSet {
             ),
             tile_matrix: prepared_texture_sampling_for_kind(ModelTextureKind::TileMatrixProperties),
             index: prepared_texture_sampling_for_kind(ModelTextureKind::Index),
+            water_wave: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWave),
+            water_wave1: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWaveSecondary),
+            water_whitecap: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWhitecap),
             tile_normal_array: prepared_texture_sampling_for_kind(
                 ModelTextureKind::TileNormalArray,
             ),
@@ -985,6 +1013,10 @@ impl Default for PreparedTextureSamplingSet {
 
 fn default_texture_array_sampling() -> PreparedTextureSampling {
     prepared_texture_sampling_for_kind(ModelTextureKind::TileNormalArray)
+}
+
+fn default_water_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::WaterWave)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1199,7 +1231,9 @@ pub fn prepared_material_alpha_policy(
             | MaterialShaderFamily::CharacterTattoo
             | MaterialShaderFamily::CharacterOcclusion
     );
-    let source = if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
+    let source = if matches!(shader_family, MaterialShaderFamily::Water) {
+        PreparedAlphaSource::MaterialTransparency
+    } else if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
         PreparedAlphaSource::Opaque
     } else if matches!(
         shader_family,
@@ -1250,6 +1284,9 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
         index: material.index_texture,
+        water_wave: material.water_wave_texture,
+        water_wave1: material.water_wave1_texture,
+        water_whitecap: material.water_whitecap_texture,
         tile_normal_array: material.texture_arrays.tile_normal,
         tile_orb_array: material.texture_arrays.tile_orb,
         detail_diffuse_array: material.texture_arrays.detail_diffuse,
@@ -1478,6 +1515,9 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
         | ModelTextureKind::MaterialMap
         | ModelTextureKind::MultiMap
         | ModelTextureKind::MaterialProperties
+        | ModelTextureKind::WaterWave
+        | ModelTextureKind::WaterWaveSecondary
+        | ModelTextureKind::WaterWhitecap
         | ModelTextureKind::Other => PreparedTextureSampling {
             color_space: PreparedTextureColorSpace::NonColor,
             filter: PreparedTextureFilter::Linear,
@@ -1528,6 +1568,12 @@ fn prepared_render_pass(
     let Some(material) = material else {
         return PreparedRenderPass::Opaque;
     };
+    if matches!(shader_family, MaterialShaderFamily::Water)
+        && material.transparency.is_finite()
+        && material.transparency < 1.0
+    {
+        return PreparedRenderPass::Transparent;
+    }
 
     match material.alpha_mode {
         MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
@@ -1543,6 +1589,18 @@ fn prepared_render_pass(
 
 fn default_material_opacity() -> f32 {
     1.0
+}
+
+fn default_material_water_deep_color() -> [f32; 4] {
+    [0.3529, 0.372_549, 0.3921, 1.0]
+}
+
+fn default_material_water_refraction_color() -> [f32; 4] {
+    [0.4117, 0.4313, 0.4509, 1.0]
+}
+
+fn default_material_water_whitecap_color() -> [f32; 4] {
+    [0.4509, 0.4705, 0.4901, 0.3]
 }
 
 fn default_material_normal_scale() -> f32 {
@@ -1682,6 +1740,9 @@ pub enum ModelTextureKind {
     TileOrbArray,
     DetailDiffuseArray,
     DetailNormalArray,
+    WaterWave,
+    WaterWaveSecondary,
+    WaterWhitecap,
     Other,
 }
 
@@ -2310,6 +2371,33 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_water_uses_material_transparency_and_primary_wave_binding() {
+        let mut material = test_material();
+        material.shader_package_name = Some("water.shpk".to_string());
+        material.transparency = 0.4;
+        material.water_wave_texture = Some(7);
+        material.water_wave1_texture = Some(8);
+        material.water_whitecap_texture = Some(9);
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(prepared.shader_family, MaterialShaderFamily::Water);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::MaterialTransparency
+        );
+        assert_eq!(prepared.texture_bindings.water_wave, Some(7));
+        assert_eq!(prepared.texture_bindings.water_wave1, Some(8));
+        assert_eq!(prepared.texture_bindings.water_whitecap, Some(9));
+
+        material.transparency = 1.0;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal).render_pass,
+            PreparedRenderPass::Opaque
+        );
+    }
+
+    #[test]
     fn prepared_material_preserves_culling_and_missing_material_defaults() {
         let mut material = test_material();
         material.render_backfaces = false;
@@ -2394,6 +2482,9 @@ mod color_table_bake_tests {
         material.texture_arrays.tile_orb = Some(15);
         material.texture_arrays.detail_diffuse = Some(16);
         material.texture_arrays.detail_normal = Some(17);
+        material.water_wave_texture = Some(18);
+        material.water_wave1_texture = Some(19);
+        material.water_whitecap_texture = Some(20);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -2412,6 +2503,9 @@ mod color_table_bake_tests {
                 sphere_properties: Some(11),
                 tile_matrix: Some(12),
                 index: Some(13),
+                water_wave: Some(18),
+                water_wave1: Some(19),
+                water_whitecap: Some(20),
                 tile_normal_array: Some(14),
                 tile_orb_array: Some(15),
                 detail_diffuse_array: Some(16),
@@ -2949,6 +3043,14 @@ mod color_table_bake_tests {
             address_mode: PreparedTextureAddressMode::Repeat,
         };
         let sampling_set = PreparedTextureSamplingSet::default();
+        let water_sampling = PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        };
+        assert_eq!(sampling_set.water_wave, water_sampling);
+        assert_eq!(sampling_set.water_wave1, water_sampling);
+        assert_eq!(sampling_set.water_whitecap, water_sampling);
         assert_eq!(sampling_set.tile_normal_array, array_sampling);
         assert_eq!(sampling_set.tile_orb_array, array_sampling);
         assert_eq!(sampling_set.detail_diffuse_array, array_sampling);
@@ -3041,6 +3143,9 @@ mod color_table_bake_tests {
             lighting_mode: MaterialLightingMode::Default,
             flow_mode: MaterialFlowMode::Standard,
             transparency: 0.0,
+            water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+            water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+            water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
             alpha_aperture: 2.0,
             alpha_offset: 0.0,
             shadow_alpha_threshold: 0.5,
@@ -3111,6 +3216,9 @@ mod color_table_bake_tests {
             sphere_properties_texture: None,
             tile_matrix_texture: None,
             index_texture: None,
+            water_wave_texture: None,
+            water_wave1_texture: None,
+            water_whitecap_texture: None,
         }
     }
 
