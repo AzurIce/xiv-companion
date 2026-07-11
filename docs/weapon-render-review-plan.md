@@ -62,7 +62,7 @@
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，当前用于保守的 specular/sheen/sphere-like highlight 调制，并提供独立 debug view 检查这些烘焙 ramp。tile-matrix 现已从错误的 `Rgba8Unorm` 上传改成基线 WebGPU 支持的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，直接消费 `ModelTexture.rgbaF32` 的 UU/UV/VU/VV；payload 长度错误或单通道 non-finite 时回退对应 RGBA8/identity。native synthetic fixture 使用相同 clamp 后 RGBA8、仅改变 float scale 1/2，已验证最终输出不同。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`；共享 detail normal atlas 可用时 WGSL 会按 detail/multi-detail ID 与各自 UV scale 采样并组合 tangent-space normal，缺图时才回到 primary normal 的受限 fallback。
-- `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 优先用逐像素 ColorTable `TileProperties.r * 64` 选 tile layer，没有该贴图时回退 `g_TileIndex`，并结合 TileMatrix/TileScale 采样 tile normal/ORB。Blender 节点检查确认 `chara_detail_blend` 只把 ORB Blue 作为黑色到 base color 的直接 darkening factor，R/G 与 Orb Alpha 均未连接；normal detail 权重则为 tile-normal Alpha × TileAlpha。当前 R=AO/G=roughness/B=specular 与 tile specular wave 均无证据，且忽略 normal Alpha。下一步按节点公式修正 color/normal 并删除伪造 property/specular 调制。
+- `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 优先用逐像素 ColorTable `TileProperties.r * 64` 选 tile layer，没有该贴图时回退 `g_TileIndex`，并结合 TileMatrix/TileScale 采样 tile normal/ORB。Blender 节点检查确认 `chara_detail_blend` 只把 ORB Blue 作为黑色到 base color 的直接 darkening factor，R/G 与 Orb Alpha 均未连接；normal detail 权重为 tile-normal Alpha × TileAlpha。WGSL 已按该公式修正 color/normal，删除无证据的 R=AO/G=roughness/B=specular property 映射和程序化 tile specular wave；ORB debug 仍保留原始 RGB。
 - `g_ToonIndex`、`g_ToonLightScale`、`g_ToonLightSpecAperture`、`g_ToonReflectionScale`、`g_ToonSpecIndex`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 已按 Meddle `Names.cs` CRC/default 结构化进 `ModelMaterial`、phantom summary 与 renderer `toonSheenParams` / `toonParams` / `sheenSphereParams` uniform。`PreparedMaterialFeatureFlags.usesToon` 对 character family 启用；WGSL 已实现平滑双段 diffuse、aperture/spec-index band 与 reflection rim 的解析式近似，sheen/sphere 保持原高光/反射输入。MeddleTools 源码和 Blender character node group 均无 toon socket/node，24 组 phantom 原始参数均为默认值，因此当前不伪造 lookup texture，并保留近似限制。
 - `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 已结构化进 `ModelMaterial` 和 renderer detail uniforms；WGSL 会按两个 detail ID 选层，用 color/normal 各自 UV scale 采样 detail pair atlas，并以 0.5 为 diffuse 中性值做保守 tint/normal 组合。Blender 节点检查确认 `bg_detail_blend.MultiBlendWeight` 同时驱动 primary/multi diffuse 与 normal 的 A/B mix；renderer 现已在 bg `GetMultiValues` 时用 vertex alpha 统一 mix 两层，Single 固定 primary，数组缺失时的 procedural tint fallback 也使用同一规则。detail 对 base 的最终 influence reroute 在 MeddleTools 中仍未连接且源码标为 borked，因此总强度继续保守并保持完整 mask unsupported。
 - `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 已按 Meddle `Names.cs` CRC/default 和 MeddleTools `ColorMapping` 结构化进 `ModelMaterial`、phantom summary 与 renderer uniforms；WGSL 已把 `g_DiffuseColor` 作为 base tint，把 `g_MultiDiffuseColor` 作为 mask-gated 的保守 base tint 补充，把 `g_EmissiveColor` 作为附加发光，并在 mask/material 通道存在时保守加入 `g_MultiEmissiveColor`；完整 multi map 通道解释仍未实现。
@@ -88,7 +88,7 @@
 - `g_SamplerColorMap1`、`g_SamplerNormalMap1`、`g_SamplerSpecularMap1` 已拆成 secondary logical roles；`GetValues` 已结构化为 Single/Multi/AlphaMulti/AlphaMulti2/AlphaMulti3/MultiMaterial/Compatibility/Unknown。MeddleTools `meddle bg.shpk` 已证明 `GetMultiValues` 的 vertex-alpha 混合公式并完成消费；`GetAlphaMultiValues2/3` 在 MeddleTools 配置中仍明确标为未映射，prepared 会报告 `secondaryMapBlend` unsupported 而不猜测。
 - fragment stage 保持 15 张 sampled texture：仅 `BgUvScroll + GetMultiValues` 将 secondary color/normal/specular 复用到物理 binding 9/10/11，其它 family 仍使用这些 binding 的 tile/sheen/sphere 语义。Specular Map0/1 也已按 MeddleTools 从旧 sRGB 假设修正为 Non-Color + Linear/Repeat。
 - mesh category、submesh attribute mask/name 和 shape influence 摘要已进入第一版 `PreparedModel` / `PreparedMesh`；`PreparedModelOptions.enabledAttributeMask` 已可按显式运行时 attribute mask 隐藏 disabled submesh，`enabledShapeMask` 已可审计 active/inactive shape influence，但 Web 离线默认仍不猜这些 mask。bone/skin/morph 和实际 shape vertex replacement 仍没有进入后续渲染决策。
-- 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps、tile/detail、bguvscroll Map0/Map1、Flow 与 water alpha/base/primary normal 已有第一版实时消费，但 water refraction/whitecap/WaveMap1、AlphaMulti variants、ORB/detail 通道权重、reflection 等节点逻辑仍不完整。
+- 材质语义仍被压缩成少量近似规则和 Opaque/Mask/Blend/Glass；ColorTable extra maps、tile/detail、bguvscroll Map0/Map1、Flow 与 water alpha/base/primary normal 已有第一版实时消费，但 water refraction/whitecap/WaveMap1、AlphaMulti variants、detail 最终 influence、reflection 等节点逻辑仍不完整。
 - 运行时 GPU ColorTable、decal、crest、on-render material output 是 Meddle 运行时路径的优势；当前离线 Web 预览没有等价输入。静态 stain0/stain1 已有完整离线输入和 STM 应用路径，decal/crest 与 materialChange 已执行默认 fallback，但仍不能显示真实运行时 crest/decal 内容。
 - 文档 `weapon-render-pipeline.md` 已同步到当前实现；后续设计和优先级以本文 roadmap 为准。
 
@@ -202,7 +202,7 @@
 - 已完成：`g_AlphaThreshold` 进入 `ModelMaterial.alphaThreshold`，用于 cutout discard 阈值。
 - 已完成：`g_NormalScale` 进入 `ModelMaterial.normalScale`，默认 1.0，材质 override 优先于 shader package default，renderer 会 clamp 到 0..4 后作用于 normal map XY 强度。
 - 已完成：`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 进入 `ModelMaterial`，默认 1.0，材质 override 优先于 shader package default；renderer uniform 已进入 WGSL，detail pair 可用时会组合真实 detail/multi-detail normal，缺图时才作为 primary normal map 强度的低权重 fallback；独立 multi normal map 与 family-specific 权重仍待后续实现。
-- 已完成：`g_TileIndex`、`g_TileAlpha`、`g_TileScale` 进入 `ModelMaterial`，默认值分别为 `0`、`1`、`[16,16]`；renderer 已优先按 ColorTable tile properties、回退按 `g_TileIndex` 选择真实 tile normal/ORB atlas layer，并结合 TileMatrix/TileScale 采样。下一步把 ORB 从错误的 RGB property 解释改为节点证明的 Blue color darkening，并让 tile normal Alpha 与 TileAlpha 共同控制 normal 权重。
+- 已完成：`g_TileIndex`、`g_TileAlpha`、`g_TileScale` 进入 `ModelMaterial`，默认值分别为 `0`、`1`、`[16,16]`；renderer 已优先按 ColorTable tile properties、回退按 `g_TileIndex` 选择真实 tile normal/ORB atlas layer，并结合 TileMatrix/TileScale 采样。ORB 已从错误的 RGB property 解释改为节点证明的 Blue color darkening，tile normal Alpha 与 TileAlpha 共同控制 normal 权重。
 - 已完成：完整 toon/sheen/sphere 参数族进入 `ModelMaterial`；其中 `g_ToonLightSpecAperture=50`、`g_ToonReflectionScale=2.5`、`g_ToonSpecIndex≈0` 已补齐同步/异步 composition、known constant label、phantom summary、renderer uniform 和 focused tests。prepared `usesToon` 限定 character family；WGSL 默认启用克制的解析式 toon，`g_SheenRate` / `g_SheenTintRate` / `g_SheenAperture` 与 `g_SphereMapIndex` 保持既有消费。45052 默认/strong override snapshot 已验证参数方向。
 - 已完成：`g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 进入 `ModelMaterial`，默认值分别为 `0`、`0`、`[0.5,0.5,0.5,1]`、`[0.5,0.5,0.5,1]`、`[4,4,4,4]`、`[4,4,4,4]`；renderer 已按两个 ID 和各自 UV scale 采样真实 detail diffuse/normal atlas。primary/multi diffuse、normal、debug sample 与缺图 tint fallback 均已按 MeddleTools 的 `MultiBlendWeight` 语义改为 GetMultiValues + vertex-alpha mix，Single 固定 primary；synthetic WGPU fixture 已验证 alpha 0/1 切层，最终 influence 仍待真实 bg 样本校准。
 - 已完成：`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 进入 `ModelMaterial`，默认值分别为白色、白色、黑色、黑色；renderer uniform 已进入 WGSL，当前 `g_DiffuseColor` 会调制 base，`g_MultiDiffuseColor` 会在 mask/material 通道存在时作为低权重 base tint 补充，`g_EmissiveColor` 会加到 emissive，`g_MultiEmissiveColor` 只在 mask/material 通道存在时保守加权；完整 multi map 通道解释仍待后续实现。
@@ -221,7 +221,7 @@
 
 - 用合成 MTRL fixture 测 shader constant 解析。
 - 已增加 normal scale focused tests，覆盖 primary/multi/detail normal scale 的 shader package default、material override 和 clamp；multi/detail normal scale fallback 的 WGSL 消费通过 native snapshot 编译验证。
-- 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 传递；tile specular fallback 的 WGSL 消费通过 native snapshot 编译验证。
+- 已增加 tile select focused tests，覆盖 `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 的 shader package default、material override 和 renderer uniform 传递；native synthetic WGPU fixture 验证 ORB R/G/Alpha 不改变输出、ORB Blue 直接 darken base，以及 tile-normal Alpha × TileAlpha 控制 normal contribution。
 - 已增加 toon/sheen/sphere focused tests，覆盖 `g_ToonIndex`、`g_ToonLightScale`、`g_SheenRate`、`g_SheenTintRate`、`g_SheenAperture`、`g_SphereMapIndex` 的 shader package default、material override、非 finite fallback 和 renderer uniform 传递；sheen/sphere 常量的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 detail focused tests，覆盖 `g_DetailID`、`g_MultiDetailID`、`g_DetailColor`、`g_MultiDetailColor`、`g_DetailColorUvScale`、`g_DetailNormalUvScale` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；detail tint fallback 的 WGSL 消费通过 native snapshot 编译验证。
 - 已增加 shader color focused tests，覆盖 `g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_MultiEmissiveColor` 的 shader package default、material override、短数组 fallback、非 finite fallback 和 renderer uniform 传递；diffuse/multi diffuse 与 emissive/multi emissive 的 WGSL 消费通过 native snapshot 编译验证。
@@ -386,7 +386,7 @@ ColorTable bake 已能产出多张贴图，但目前 renderer 只消费其中一
 - base/color map
 - normal map + normal scale：`g_NormalScale` 已实际用于 primary normal；`g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已作为低权重 primary normal fallback，后续仍需要接入 shader-family-specific multi/detail normal map 组合
 - mask/material map 的通道解释
-- multi map/detail map 的第二层颜色/法线影响；detail color/UV scale、tile index/scale、multi/detail normal scale 与 bguvscroll Map0/Map1 已进入第一版组合；后续重点是校准 ORB/detail 权重和补 multi map mask
+- multi map/detail map 的第二层颜色/法线影响；detail color/UV scale、tile index/scale、multi/detail normal scale 与 bguvscroll Map0/Map1 已进入第一版组合；ORB/tile-normal 通道已按节点证据对齐，后续重点是校准 detail 最终 influence 和补 multi map mask
 - vertex color 的具体启用条件
 
 然后再支持：
@@ -504,7 +504,7 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 
 仍建议的后续顺序：
 
-1. 用更多真实 character 样本确认 TileMatrix 与 `g_TileScale` 的组合边界，并校准 ORB 通道权重。
+1. 用更多真实 character 样本确认 TileMatrix 与 `g_TileScale` 的组合边界，并核对 ORB Blue darkening 的资源色彩空间。
 2. 寻找真实 bg 武器样本，校准 detail/multi-detail diffuse、normal 与 mask 权重。
 3. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
 
@@ -584,7 +584,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 从当前状态继续推进时，优先级应按依赖关系排：
 
 1. 数据解析：共享 arrays 与 runtime fallback 本轮已贯通；stockings/tattoo runtime input diagnostics、Environment role 与 `GetSubColor` Face/Hair mode 均已结构化，occlusion 的 runtime sub-color 依赖已进入 prepared diagnostics。下一步继续 shader-family-specific texture role/UV 规则和真实样本调查。runtime GPU ColorTable 继续只作为 unsupported 输入标记。
-2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。共享 array 的 binding/layout/pair status 与 layer count 已从 renderer 前置到 prepared，非法资源不再只静默回退；Meddle 的 `TileIndex = half * 64` 与本仓 `/64` bake 证明 WGSL 的 `TileProperties.r * 64` 语义继续保留。TileMatrix 已按 Meddle/MeddleTools 的 UU/UV/VU/VV 顺序使用未 clamp float GPU texture；detail/multi-detail 已从固定叠加改为节点证明的 MultiBlendWeight A/B mix。下一项按 `chara_detail_blend` 修正 ORB Blue darkening 与 normal-alpha × TileAlpha 权重，完整 MultiMap influence 继续等待证据。
+2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。共享 array 的 binding/layout/pair status 与 layer count 已从 renderer 前置到 prepared，非法资源不再只静默回退；Meddle 的 `TileIndex = half * 64` 与本仓 `/64` bake 证明 WGSL 的 `TileProperties.r * 64` 语义继续保留。TileMatrix 已按 Meddle/MeddleTools 的 UU/UV/VU/VV 顺序使用未 clamp float GPU texture；detail/multi-detail 已从固定叠加改为节点证明的 MultiBlendWeight A/B mix；ORB Blue darkening 与 normal-alpha × TileAlpha 权重也已按 `chara_detail_blend` 对齐。完整 MultiMap influence 继续等待证据。
 3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline、tattoo normal-A alpha 与 water direct alpha/deep color/primary wave 已完成第一版。tattoo 的 OptionColor/DecalColor 混色仍不猜测。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。characterReflection generic approximation 与 stockings/tattoo/occlusion runtime 输入均已有独立 diagnostic；后续再寻找真实 reflection 节点/样本。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
 5. 验证：继续扩充第二通道/metallic 染色 case，寻找 bg detail 样本，并为 transparency/glass/scroll 等下一批行为增加 synthetic 与真实 snapshot。
@@ -607,7 +607,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 1. 已完成 GPU 顶点格式扩展；prepared UV source、per-role scroll、Map1/UV1Scroll 和 Flow primary tangent 已进入 WGSL。后续让 shader-family 逻辑继续消费其它 `uv1-uv3` 用途、`color1`、secondary tangent frame 和 `flow1`。
 2. 已完成第一版 per-material texture/sampler config，renderer 已派生 color/data/nearest 三组 sampler；共享 tile/detail arrays 已进入两个 GPU pair atlas、选层采样与 debug view。后续补 per-texture independent sampler 和 shader 级 clip/extend。
-3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 与共享 tile/detail arrays 已进入 renderer；`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_OutlineColor/g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、sheen/sphere 常量、detail tint/normal、tile normal/ORB、alpha aperture/offset 和 glass IOR/thickness 已有第一版 WGSL 消费。后续补 shader-family-specific source/scroll 和更准确的通道权重。
+3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 与共享 tile/detail arrays 已进入 renderer；`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_OutlineColor/g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、sheen/sphere 常量、detail tint/normal、tile normal/ORB、alpha aperture/offset 和 glass IOR/thickness 已有第一版 WGSL 消费。ORB/tile-normal 通道已按节点证据收敛；后续补 shader-family-specific source/scroll 和 detail/multi-map 的准确 influence。
 4. 已完成第一版 shader family 分类和 alpha policy/prepared pass 分类；后续把 character/glass/transparency/scroll/lightshaft/reflection 等 family 的关键节点拆成明确 WGSL 函数块，而不是继续扩大单个主 shader 分支。
 
 完成标准：

@@ -198,6 +198,62 @@ fn render_mock_float_tile_matrix_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic character tile channel snapshots with native wgpu"]
+fn render_mock_character_tile_channel_snapshot() {
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic character tile channel snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic character tile channel PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let rgb_difference = |left: &[u8], right: &[u8]| -> u64 {
+        left.chunks_exact(4)
+            .zip(right.chunks_exact(4))
+            .map(|(left, right)| {
+                (0..3)
+                    .map(|channel| left[channel].abs_diff(right[channel]) as u64)
+                    .sum::<u64>()
+            })
+            .sum()
+    };
+
+    let low_rg = mock_tile_channel_model([0, 0, 160, 0], [224, 128, 255, 0]);
+    let high_rg = mock_tile_channel_model([255, 255, 160, 255], [224, 128, 255, 0]);
+    let low_rg_pixels = render("native-character-tile-low-rg", &low_rg);
+    let high_rg_pixels = render("native-character-tile-high-rg", &high_rg);
+    assert_eq!(
+        low_rg_pixels, high_rg_pixels,
+        "ORB red, green, and alpha must not affect character tile shading"
+    );
+
+    let low_blue = mock_tile_channel_model([128, 128, 32, 255], [224, 128, 255, 0]);
+    let high_blue = mock_tile_channel_model([128, 128, 224, 255], [224, 128, 255, 0]);
+    let low_blue_pixels = render("native-character-tile-low-blue", &low_blue);
+    let high_blue_pixels = render("native-character-tile-high-blue", &high_blue);
+    assert!(
+        rgb_difference(&low_blue_pixels, &high_blue_pixels) > 100_000,
+        "ORB blue must directly darken character base color"
+    );
+
+    let low_normal_alpha = mock_tile_channel_model([128, 128, 255, 255], [224, 128, 255, 0]);
+    let high_normal_alpha = mock_tile_channel_model([128, 128, 255, 255], [224, 128, 255, 255]);
+    let low_normal_pixels = render("native-character-tile-normal-alpha-low", &low_normal_alpha);
+    let high_normal_pixels = render(
+        "native-character-tile-normal-alpha-high",
+        &high_normal_alpha,
+    );
+    assert!(
+        rgb_difference(&low_normal_pixels, &high_normal_pixels) > 100_000,
+        "tile normal alpha multiplied by TileAlpha must control normal contribution"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic detail multi blend snapshots with native wgpu"]
 fn render_mock_detail_multi_blend_snapshot() {
     let primary = mock_detail_blend_model(0.0);
@@ -602,6 +658,19 @@ fn mock_tile_matrix_model(repeat: f32) -> WeaponModelData {
             indices: vec![0, 1, 2, 0, 2, 3],
         }],
     }
+}
+
+fn mock_tile_channel_model(orb: [u8; 4], normal: [u8; 4]) -> WeaponModelData {
+    let mut model = mock_tile_matrix_model(1.0);
+    for texture in &mut model.textures {
+        let pixel = match texture.kind {
+            ModelTextureKind::TileNormalArray => normal,
+            ModelTextureKind::TileOrbArray => orb,
+            _ => continue,
+        };
+        texture.rgba = pixel.repeat(texture.rgba.len() / 4);
+    }
+    model
 }
 
 fn mock_detail_blend_model(vertex_alpha: f32) -> WeaponModelData {

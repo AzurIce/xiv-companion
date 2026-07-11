@@ -280,17 +280,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         properties.x = effective_specular_sample.b;
         properties.y = effective_specular_sample.g;
     }
-    properties.y = mix(properties.y, clamp(tile_array.orb.g, 0.08, 1.0), tile_array.weight * 0.35);
-    properties.w *= mix(1.0, clamp(tile_array.orb.b, 0.0, 1.0), tile_array.weight * 0.25);
     let metalness = clamp(properties.x, 0.0, 1.0);
     let roughness = clamp(properties.y, 0.08, 1.0);
     let gloss_strength = clamp(properties.z, 0.0, 1.0);
     let specular_strength = clamp(properties.w, 0.0, 1.0);
-    let tile_specular_scale = resolve_tile_specular_scale(input, extra);
     let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
     let specular_scale = specular_strength
         * mix(1.0, mask.r * 1.35, material.params.w)
-        * tile_specular_scale
         * specular_color_mask.a;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let normal_half = max(dot(normal, half_dir), 0.0);
@@ -331,7 +327,12 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
     let shader_tint = resolve_shader_diffuse_tint(mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
-    let generic_base = material.diffuse_color.rgb * texture_mix * vertex_tint * shader_tint * detail_tint;
+    let generic_base = material.diffuse_color.rgb
+        * texture_mix
+        * vertex_tint
+        * shader_tint
+        * detail_tint
+        * tile_array.color_multiplier;
     let scroll_base = texture_mix * vertex_tint;
     let family_base = select(generic_base, scroll_base, material.secondary_map_params.w > 0.5);
     let is_water = material.feature_params.y > 0.5;
@@ -396,8 +397,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         0.18 + glass_factors.y * 0.22,
     );
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
-    let tile_ao = mix(1.0, clamp(tile_array.orb.r, 0.0, 1.0), tile_array.weight * 0.35);
-    let ambient = mix(0.08, 0.22, ssao_mask) * tile_ao;
+    let ambient = mix(0.08, 0.22, ssao_mask);
     let glass_ambient = mix(0.52, 0.62, ssao_mask);
     let opaque_lit = base * (ambient + toon_lighting.x * 0.74)
         + specular_tint * toon_lighting.y * specular_scale * 0.24
@@ -527,7 +527,8 @@ fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
 struct TileArraySample {
     normal: vec3<f32>,
     orb: vec3<f32>,
-    weight: f32,
+    normal_weight: f32,
+    color_multiplier: f32,
 };
 
 struct DetailArraySample {
@@ -541,8 +542,9 @@ struct DetailArraySample {
 fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArraySample {
     var out: TileArraySample;
     out.normal = vec3<f32>(0.0, 0.0, 1.0);
-    out.orb = vec3<f32>(1.0, 0.5, 1.0);
-    out.weight = 0.0;
+    out.orb = vec3<f32>(1.0);
+    out.normal_weight = 0.0;
+    out.color_multiplier = 1.0;
     if material.array_params.z <= 0.5 {
         return out;
     }
@@ -571,7 +573,8 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
     );
     out.normal = decode_normal(normal_sample);
     out.orb = orb_sample.rgb;
-    out.weight = tile_alpha;
+    out.normal_weight = clamp(normal_sample.a, 0.0, 1.0) * tile_alpha;
+    out.color_multiplier = clamp(orb_sample.b, 0.0, 1.0);
     return out;
 }
 
@@ -726,28 +729,6 @@ fn resolve_extra_lighting(
     let matrix_term = clamp(length(matrix_delta) * 0.16, 0.0, 0.18) * extra.flags.w;
 
     return sheen_color + sphere_tint * sphere_term + material_specular * matrix_term * 0.18;
-}
-
-fn resolve_tile_specular_scale(input: VertexOutput, extra: ExtraProperties) -> f32 {
-    let ramp_tile_alpha = clamp(extra.tile.y, 0.0, 1.0);
-    let ramp_scale = mix(1.0, mix(0.88, 1.16, ramp_tile_alpha), extra.flags.x);
-
-    let shader_tile_alpha = clamp(material.tile_params.y, 0.0, 1.0);
-    let tile_repeat = max(abs(material.tile_params.zw), vec2<f32>(0.001));
-    let repeat_delta = length((tile_repeat - vec2<f32>(16.0)) / 16.0);
-    let shader_tile_enabled = select(
-        0.0,
-        1.0,
-        abs(material.tile_params.x) > 0.001 ||
-            abs(shader_tile_alpha - 1.0) > 0.001 ||
-            repeat_delta > 0.001,
-    );
-    let tile_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x) * tile_repeat;
-    let tile_phase = dot(tile_uv, vec2<f32>(1.0, 0.618)) + material.tile_params.x * 0.137;
-    let tile_pattern = 0.5 + 0.5 * sin(tile_phase * 6.2831853);
-    let shader_alpha_scale = mix(0.97, 1.03, shader_tile_alpha);
-    let shader_pattern_scale = mix(0.98, 1.02, tile_pattern);
-    return ramp_scale * mix(1.0, shader_alpha_scale * shader_pattern_scale, shader_tile_enabled);
 }
 
 fn resolve_alpha_shaping(raw_alpha: f32) -> f32 {
@@ -960,7 +941,7 @@ fn resolve_normal(
     let face_sign = select(-1.0, 1.0, front_facing);
     let geometric_normal = normalize(input.normal) * face_sign;
     let has_primary = material.params.z > 0.5 || material.secondary_map_params.y > 0.5;
-    let has_array_normal = tile_array.weight > 0.001 || detail_array.normal_weight > 0.001;
+    let has_array_normal = tile_array.normal_weight > 0.001 || detail_array.normal_weight > 0.001;
     let has_bitangent = dot(input.bitangent.xyz, input.bitangent.xyz) > 0.0001;
     let flow_tangent_plane = input.flow0.xyz - geometric_normal * dot(input.flow0.xyz, geometric_normal);
     let uses_flow = material.feature_params.x > 0.5 && dot(flow_tangent_plane, flow_tangent_plane) > 0.0001;
@@ -1012,12 +993,17 @@ fn resolve_normal(
     );
     let mapped = normalize(vec3<f32>(
         sampled.x * normal_scale
-            + tile_array.normal.x * tile_array.weight * 0.65
+            + tile_array.normal.x * tile_array.normal_weight
             + detail_array.normal.x * detail_array.normal_weight,
         sampled.y * camera.options.y * normal_scale
-            + tile_array.normal.y * camera.options.y * tile_array.weight * 0.65
+            + tile_array.normal.y * camera.options.y * tile_array.normal_weight
             + detail_array.normal.y * camera.options.y * detail_array.normal_weight,
-        max(sampled.z * tile_array.normal.z * detail_array.normal.z, 0.05),
+        max(
+            sampled.z
+                * mix(1.0, tile_array.normal.z, tile_array.normal_weight)
+                * detail_array.normal.z,
+            0.05,
+        ),
     ));
     return normalize(tangent * mapped.x + bitangent * mapped.y + geometric_normal * mapped.z);
 }
