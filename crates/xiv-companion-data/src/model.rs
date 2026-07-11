@@ -2210,9 +2210,8 @@ impl Default for ColorTableRowColors {
 /// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
 /// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
 /// metalness / roughness / gloss strength / specular strength。
-/// 额外的 ColorTable 语义贴图同样为线性 unorm，用于预览 MeddleTools 中的
-/// TileProperties / SheenProperties / SphereProperties / TileMatrixProperties ramp。
-/// TileMatrix 同时在 `tile_matrix_rgba_f32` 中保留未 clamp 的 UU / UV / VU / VV。
+/// 额外的 ColorTable 语义贴图提供线性 unorm fallback；SheenProperties、
+/// SphereProperties 与 TileMatrixProperties 同时保留未 clamp 的 float 通道。
 /// TileIndex 与 SphereIndex 在调用前已从 Dawntrail half bits 解码，
 /// bake 时分别按 0..64 与 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
@@ -2222,7 +2221,9 @@ pub struct BakedColorTableMaps {
     pub material_rgba: Vec<u8>,
     pub tile_properties_rgba: Vec<u8>,
     pub sheen_properties_rgba: Vec<u8>,
+    pub sheen_properties_rgba_f32: Vec<[f32; 4]>,
     pub sphere_properties_rgba: Vec<u8>,
+    pub sphere_properties_rgba_f32: Vec<[f32; 4]>,
     pub tile_matrix_rgba: Vec<u8>,
     pub tile_matrix_rgba_f32: Vec<[f32; 4]>,
     /// 所有行 emissive 全黑时为 None
@@ -2250,7 +2251,9 @@ pub fn bake_color_table_maps(
     let mut material_rgba = Vec::with_capacity(pixel_count * 4);
     let mut tile_properties_rgba = Vec::with_capacity(pixel_count * 4);
     let mut sheen_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sheen_properties_rgba_f32 = Vec::with_capacity(pixel_count);
     let mut sphere_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sphere_properties_rgba_f32 = Vec::with_capacity(pixel_count);
     let mut tile_matrix_rgba = Vec::with_capacity(pixel_count * 4);
     let mut tile_matrix_rgba_f32 = Vec::with_capacity(pixel_count);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
@@ -2293,14 +2296,12 @@ pub fn bake_color_table_maps(
             &mut tile_properties_rgba,
             [tile_index / 64.0, tile_alpha, 1.0, 1.0],
         );
-        push_unorm_pixel(
-            &mut sheen_properties_rgba,
-            [sheen_rate, sheen_tint, sheen_aperture, 1.0],
-        );
-        push_unorm_pixel(
-            &mut sphere_properties_rgba,
-            [sphere_index / 255.0, sphere_mask, 1.0, 1.0],
-        );
+        let sheen_properties = [sheen_rate, sheen_tint, sheen_aperture, 1.0];
+        sheen_properties_rgba_f32.push(sheen_properties);
+        push_unorm_pixel(&mut sheen_properties_rgba, sheen_properties);
+        let sphere_properties = [sphere_index / 255.0, sphere_mask, 1.0, 1.0];
+        sphere_properties_rgba_f32.push(sphere_properties);
+        push_unorm_pixel(&mut sphere_properties_rgba, sphere_properties);
         tile_matrix_rgba_f32.push(tile_matrix);
         push_unorm_pixel(&mut tile_matrix_rgba, tile_matrix);
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
@@ -2312,7 +2313,9 @@ pub fn bake_color_table_maps(
         material_rgba,
         tile_properties_rgba,
         sheen_properties_rgba,
+        sheen_properties_rgba_f32,
         sphere_properties_rgba,
+        sphere_properties_rgba_f32,
         tile_matrix_rgba,
         tile_matrix_rgba_f32,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
@@ -3987,8 +3990,31 @@ mod color_table_bake_tests {
 
         assert_eq!(&baked.tile_properties_rgba[0..4], &[64, 191, 255, 255]);
         assert_eq!(&baked.sheen_properties_rgba[0..4], &[64, 128, 191, 255]);
+        assert_eq!(
+            baked.sheen_properties_rgba_f32,
+            vec![[0.25, 0.5, 0.75, 1.0]]
+        );
         assert_eq!(&baked.sphere_properties_rgba[0..4], &[128, 64, 255, 255]);
+        assert_eq!(
+            baked.sphere_properties_rgba_f32,
+            vec![[128.0 / 255.0, 0.25, 1.0, 1.0]]
+        );
         assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 191, 128, 64]);
+    }
+
+    #[test]
+    fn bake_preserves_hdr_sheen_aperture_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                sheen_aperture: 4.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 0, 0, 255]).expect("bake");
+
+        assert_eq!(&baked.sheen_properties_rgba[0..4], &[0, 0, 255, 255]);
+        assert_eq!(baked.sheen_properties_rgba_f32, vec![[0.0, 0.0, 4.0, 1.0]]);
     }
 
     #[test]

@@ -3556,22 +3556,24 @@ fn bake_weapon_color_table_textures(
         baked.tile_properties_rgba,
     );
 
-    let sheen_properties = push_or_replace_baked_texture(
+    let sheen_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sheen-properties"),
         WeaponModelTextureKind::SheenProperties,
         width,
         height,
         baked.sheen_properties_rgba,
+        Some(baked.sheen_properties_rgba_f32),
     );
 
-    let sphere_properties = push_or_replace_baked_texture(
+    let sphere_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sphere-properties"),
         WeaponModelTextureKind::SphereProperties,
         width,
         height,
         baked.sphere_properties_rgba,
+        Some(baked.sphere_properties_rgba_f32),
     );
 
     let tile_matrix = push_or_replace_baked_texture_with_float_channels(
@@ -5892,6 +5894,86 @@ mod weapon_material_tests {
         assert_eq!(&tile_matrix.rgba[0..4], &[255, 0, 64, 255]);
         assert_eq!(tile_matrix.rgba_f32, Some(vec![[2.0, -0.5, 0.25, 1.5]]));
         assert_eq!(textures[baked.base_color].rgba[3], 255);
+    }
+
+    #[test]
+    fn baked_sheen_and_sphere_textures_preserve_float_channels() {
+        let rows = vec![
+            ColorTableRowColors {
+                sheen_aperture: 4.0,
+                sphere_index: 2.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let mut textures = vec![WeaponModelTexture {
+            path: "index.tex".to_string(),
+            kind: WeaponModelTextureKind::Index,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 1,
+            rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
+        }];
+
+        let baked = bake_weapon_color_table_textures(
+            "material.mtrl",
+            Some(&rows),
+            Some(0),
+            true,
+            &mut textures,
+        )
+        .expect("bake");
+
+        assert_eq!(textures[baked.sheen_properties].rgba[2], 255);
+        assert_eq!(
+            textures[baked.sheen_properties].rgba_f32,
+            Some(vec![[0.0, 0.0, 4.0, 1.0]])
+        );
+        assert_eq!(textures[baked.sphere_properties].rgba[0], 2);
+        assert_eq!(
+            textures[baked.sphere_properties].rgba_f32,
+            Some(vec![[2.0 / 255.0, 0.0, 1.0, 1.0]])
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45059_preserves_hdr_sheen_ramp() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45059,
+            item_name: "冬雪之幻梦".to_string(),
+            model_main: 4_295_034_963,
+            model_sub: 773_094_181_015,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let sheen = model
+            .textures
+            .iter()
+            .find(|texture| {
+                texture.kind == WeaponModelTextureKind::SheenProperties
+                    && texture
+                        .rgba_f32
+                        .as_deref()
+                        .is_some_and(|pixels| pixels.iter().any(|pixel| pixel[2] == 4.0))
+            })
+            .expect("45059 HDR sheen properties");
+
+        assert!(sheen.rgba.chunks_exact(4).any(|pixel| pixel[2] == 255));
+        assert!(
+            sheen
+                .rgba_f32
+                .as_deref()
+                .expect("float sheen payload")
+                .iter()
+                .any(|pixel| pixel[2] == 4.0)
+        );
     }
 
     #[test]

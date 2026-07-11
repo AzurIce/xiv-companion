@@ -1,3 +1,4 @@
+use half::f16;
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -1822,75 +1823,96 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     } else {
         material.sheen_properties_texture
     };
-    let sheen_properties_texture_view = sheen_binding_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon sheen/secondary normal texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral sheen/secondary normal texture",
-                1,
-                1,
-                if uses_secondary_maps {
-                    &[128, 128, 255, 255]
-                } else {
-                    &[0, 0, 0, 255]
-                },
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+    let sheen_binding_texture = sheen_binding_texture.and_then(|index| model.textures().get(index));
+    let sheen_properties_texture_view = if uses_secondary_maps {
+        sheen_binding_texture.map_or_else(
+            || {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    "weapon neutral secondary normal texture",
+                    1,
+                    1,
+                    &[128, 128, 255, 255],
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+            |texture| {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    &format!("weapon secondary normal texture {}", texture.path),
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+        )
+    } else {
+        create_float_ramp_texture(
+            device,
+            queue,
+            sheen_binding_texture
+                .map(|texture| format!("weapon sheen texture {}", texture.path))
+                .as_deref()
+                .unwrap_or("weapon neutral sheen texture"),
+            sheen_binding_texture,
+            [0.0, 0.0, 0.0, 1.0],
+        )
+    }
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let sphere_binding_texture = if uses_secondary_maps {
         material.secondary_specular_texture
     } else {
         material.sphere_properties_texture
     };
-    let sphere_properties_texture_view = sphere_binding_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon sphere/secondary specular texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            let neutral_pixels = if uses_secondary_maps {
-                [
+    let sphere_binding_texture =
+        sphere_binding_texture.and_then(|index| model.textures().get(index));
+    let sphere_properties_texture_view = if uses_secondary_maps {
+        sphere_binding_texture.map_or_else(
+            || {
+                let neutral_pixels = [
                     unorm_byte(material.specular_color[0]),
                     unorm_byte(material.specular_color[1]),
                     unorm_byte(material.specular_color[2]),
                     255,
-                ]
-            } else {
-                [0, 0, 255, 255]
-            };
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral sphere/secondary specular texture",
-                1,
-                1,
-                &neutral_pixels,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+                ];
+                create_rgba_texture(
+                    device,
+                    queue,
+                    "weapon neutral secondary specular texture",
+                    1,
+                    1,
+                    &neutral_pixels,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+            |texture| {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    &format!("weapon secondary specular texture {}", texture.path),
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+        )
+    } else {
+        create_float_ramp_texture(
+            device,
+            queue,
+            sphere_binding_texture
+                .map(|texture| format!("weapon sphere texture {}", texture.path))
+                .as_deref()
+                .unwrap_or("weapon neutral sphere texture"),
+            sphere_binding_texture,
+            [0.0, 0.0, 1.0, 1.0],
+        )
+    }
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let tile_matrix_texture = material
         .tile_matrix_texture
         .and_then(|index| model.textures().get(index));
@@ -2591,6 +2613,101 @@ fn create_tile_matrix_texture(
         },
     );
     texture
+}
+
+fn create_float_ramp_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    source: Option<&ModelTexture>,
+    neutral: [f32; 4],
+) -> wgpu::Texture {
+    let (width, height, pixels) = float_ramp_texture_pixels(source, neutral);
+    let mut bytes = Vec::with_capacity(pixels.len() * 8);
+    for pixel in pixels {
+        for channel in pixel {
+            bytes.extend_from_slice(&f16::from_f32(channel).to_bits().to_le_bytes());
+        }
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &bytes,
+        if height == 1 {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            }
+        } else {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 8),
+                rows_per_image: Some(height),
+            }
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
+fn float_ramp_texture_pixels(
+    source: Option<&ModelTexture>,
+    neutral: [f32; 4],
+) -> (u32, u32, Vec<[f32; 4]>) {
+    let Some(source) = source.filter(|texture| texture.width != 0 && texture.height != 0) else {
+        return (1, 1, vec![neutral]);
+    };
+    let width = u32::from(source.width);
+    let height = u32::from(source.height);
+    let pixel_count = usize::from(source.width) * usize::from(source.height);
+    let float_pixels = source
+        .rgba_f32
+        .as_deref()
+        .filter(|pixels| pixels.len() == pixel_count);
+    let unorm_pixels = (source.rgba.len() >= pixel_count * 4).then_some(source.rgba.as_slice());
+    let pixels = (0..pixel_count)
+        .map(|pixel_index| {
+            let mut fallback = neutral;
+            if let Some(unorm_pixels) = unorm_pixels {
+                for channel in 0..4 {
+                    fallback[channel] = f32::from(unorm_pixels[pixel_index * 4 + channel]) / 255.0;
+                }
+            }
+            let Some(float_pixel) = float_pixels.map(|pixels| pixels[pixel_index]) else {
+                return fallback;
+            };
+            for channel in 0..4 {
+                if float_pixel[channel].is_finite() {
+                    fallback[channel] = float_pixel[channel];
+                }
+            }
+            fallback
+        })
+        .collect();
+    (width, height, pixels)
 }
 
 fn tile_matrix_texture_pixels(source: Option<&ModelTexture>) -> (u32, u32, Vec<[f32; 4]>) {
@@ -4041,6 +4158,29 @@ mod tests {
         assert_eq!(
             tile_matrix_texture_pixels(None),
             (1, 1, vec![[1.0, 0.0, 0.0, 1.0]])
+        );
+    }
+
+    #[test]
+    fn float_ramp_texture_pixels_preserve_hdr_channels_and_fallbacks() {
+        let mut texture = test_texture(crate::ModelTextureKind::SheenProperties);
+        texture.rgba = vec![26, 51, 255, 255];
+        texture.rgba_f32 = Some(vec![[0.1, 0.2, 4.0, 1.0]]);
+        assert_eq!(
+            float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]),
+            (1, 1, vec![[0.1, 0.2, 4.0, 1.0]])
+        );
+
+        texture.rgba_f32 = Some(vec![[f32::NAN, 0.2, f32::INFINITY, 1.0]]);
+        let (_, _, pixels) = float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixels[0], [26.0 / 255.0, 0.2, 1.0, 1.0]);
+
+        texture.rgba_f32 = Some(Vec::new());
+        let (_, _, pixels) = float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixels[0], [26.0 / 255.0, 51.0 / 255.0, 1.0, 1.0]);
+        assert_eq!(
+            float_ramp_texture_pixels(None, [0.0, 0.0, 0.0, 1.0]),
+            (1, 1, vec![[0.0, 0.0, 0.0, 1.0]])
         );
     }
 
