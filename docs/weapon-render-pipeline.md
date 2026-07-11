@@ -67,7 +67,7 @@ chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/model/w{model_id:04}b{body_id
 - mesh category 会映射成 `ModelMeshDrawRole`，并和 submesh attribute metadata 一起进入第一版 `PreparedModel` / `PreparedMesh`，作为 renderer-friendly 的第一步 prepared draw role。若调用方显式提供 `PreparedModelOptions.enabledAttributeMask`，prepared 阶段会按 submesh 所需 attribute mask 计算 visibility；默认离线模式不猜运行时 enabled mask。
 - ignored phantom snapshot 的 `model-summary.json` 会输出 mesh category、submesh attributes、bone table、shape 影响摘要，并链接 full MDL metadata JSON。
 
-注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；`PreparedMaterial` 已记录 UV source、per-role scroll mask 和结构化 flow mode。只有 `CategoryFlowMapType=Flow` 且 mesh 有 `flow0` 时 `usesFlow` 才启用，fragment shader 会把 `flow0.xyz` 正交化后作为 primary normal tangent；`characterstockings.shpk` 普通 surface 会按最终 alpha=1 选择 opaque pass，但 runtime skin texture/body decal 仍不可用；`flow1`、secondary normal/bitangent 和 color1 仍待后续 family-specific 逻辑。
+注意：renderer 当前 GPU 顶点格式已上传 position、normal、uv0-uv3、bitangent、color0/color1、secondary normal/bitangent、flow0/flow1，WGSL `VertexInput` 也已声明对应 location；`PreparedMaterial` 已记录 UV source、per-role scroll mask 和结构化 flow mode。只有 `CategoryFlowMapType=Flow` 且 mesh 有 `flow0` 时 `usesFlow` 才启用，fragment shader 会把 `flow0.xyz` 正交化后作为 primary normal tangent；`characterstockings.shpk` 普通 surface 会按最终 alpha=1 选择 opaque pass，但 runtime skin material 仍不可用并由 `runtimeSkinMaterial` 标记；`charactertattoo.shpk` 缠绕的 OptionColor/DecalColor 分别由 `runtimeOptionColor`/`runtimeDecalColor` 标记，不使用静态猜测；`flow1`、secondary normal/bitangent 和 color1 仍待后续 family-specific 逻辑。
 
 注意：顶点色在 FFXIV 角色/武器 shader 里不一定是纯颜色，常参与遮罩/alpha/材质调制；当前 renderer 只作近似 tint 使用。
 

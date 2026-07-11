@@ -915,6 +915,9 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub runtime_color_table: bool,
     pub decal_or_crest: bool,
     pub runtime_material_change: bool,
+    pub runtime_option_color: bool,
+    pub runtime_decal_color: bool,
+    pub runtime_skin_material: bool,
     pub tile_array: bool,
     pub detail_array: bool,
     pub incomplete_shader_family_logic: bool,
@@ -1504,6 +1507,9 @@ pub fn prepared_material_unsupported_inputs(
         runtime_color_table: feature_flags.uses_color_table,
         decal_or_crest: matches!(draw_role, ModelMeshDrawRole::CrestChange),
         runtime_material_change: false,
+        runtime_option_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
+        runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
+        runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
         tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
         detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
@@ -2754,6 +2760,9 @@ mod color_table_bake_tests {
                 runtime_color_table: true,
                 decal_or_crest: true,
                 runtime_material_change: false,
+                runtime_option_color: false,
+                runtime_decal_color: false,
+                runtime_skin_material: false,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
@@ -2768,12 +2777,28 @@ mod color_table_bake_tests {
                 runtime_color_table: true,
                 decal_or_crest: false,
                 runtime_material_change: false,
+                runtime_option_color: false,
+                runtime_decal_color: false,
+                runtime_skin_material: false,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
             }
         );
+
+        material = test_material();
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        let tattoo = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(tattoo.unsupported_inputs.runtime_option_color);
+        assert!(tattoo.unsupported_inputs.runtime_decal_color);
+        assert!(!tattoo.unsupported_inputs.runtime_skin_material);
+
+        material.shader_package_name = Some("characterstockings.shpk".to_string());
+        let stockings = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!stockings.unsupported_inputs.runtime_option_color);
+        assert!(!stockings.unsupported_inputs.runtime_decal_color);
+        assert!(stockings.unsupported_inputs.runtime_skin_material);
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
