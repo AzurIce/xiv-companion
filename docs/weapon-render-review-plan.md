@@ -10,7 +10,7 @@
 
 ## 核验依据
 
-本轮核验时间：2026-07-10。
+本轮核验时间：2026-07-12。
 
 当前结论基于以下代码和参考实现抽查：
 
@@ -60,6 +60,7 @@
 - `bguvscroll.shpk` 已单独分类为 `MaterialShaderFamily::BgUvScroll`；primary Color/Normal/Specular Map0 使用 UV0Scroll，secondary Map1 使用 UV1Scroll。三种 Map1 已有独立 texture kind、model/prepared binding、per-role source/scroll mask 和 Web diagnostics；WGSL 在 `GetMultiValues` 下按 vertex alpha 统一混合 color、color alpha、normal 与 specular。`characterscroll.shpk` 不会误继承该动画。
 - `ModelMesh` / `PreparedMesh` 已保留 mesh-level shape influence 摘要；`PreparedModelOptions.enabledShapeMask` 已可按显式 shape mask 标出 active/inactive shape influence，但当前不把 shape mask 当 draw visibility，也尚未执行 morph/vertex replacement。
 - renderer 已绑定并消费 ColorTable extra maps：tile、sheen、sphere、tile-matrix 以 Non-Color texture view + nearest sampler 进入 WGSL，并提供独立 debug view 检查这些烘焙 ramp。tile-matrix 现已从错误的 `Rgba8Unorm` 上传改成基线 WebGPU 支持的 `Rgba32Float` unfilterable texture + non-filtering nearest sampler，直接消费 `ModelTexture.rgbaF32` 的 UU/UV/VU/VV；payload 长度错误或单通道 non-finite 时回退对应 RGBA8/identity。Blender `tile_select` 节点检查确认矩阵只形成 tile UV vector，WGSL 已删除无证据的 matrix identity delta specular，只保留 UV 变换；patterned tile matrix fixture 保证 scale 1/2 的 UV 差异仍可见，uniform tile fixture 则验证相同变化不会直接改变光照。sheen 与 sphere ramp 已分别用 synthetic final-output fixture 证明当前近似数据链路生效，但不代表公式等价于游戏 shader。45059 两行 raw `SphereIndex=0x4000` 已确认是 half `2.0`；`ColorTableRowColors` 现会先 half 解码再按 `/255` bake，low-level debug 继续保留 raw `u16`。focused test 断言 raw/semantic/baked 三层值，真实 45059 sphere-properties 的平均 R 也从错误饱和修正为 `2/255`。
+- ColorTable extra ramp 的 HDR 保真仍不完整：`SheenProperties` 与 `SphereProperties` 当前只生成/上传 `Rgba8Unorm`，而 MeddleTools `PackedColorTableRampLookup` 会把 ColorTable float 直接写入 Blender color ramp，不做 UNORM clamp。45059 真实材质同一行的 `SheenAperture=4.0` 因而会在本仓 bake 中截成 `1.0`；`SphereIndex` 虽已按 `/255` 归一化，但为避免以后其它超范围字段再次静默量化，本轮计划让 sheen/sphere 像 TileMatrix 一样同时保留 float payload，并由 renderer 使用 unfilterable float texture + non-filtering nearest sampler，RGBA8 仅作为兼容/debug fallback。
 - `g_NormalScale` 已从 composed material constants 提升为 `ModelMaterial.normalScale`，支持 shader package default 与 material override；renderer 会用它缩放 tangent-space normal map 强度。
 - `g_MultiNormalScale`、`g_DetailNormalScale`、`g_MultiDetailNormalScale` 已结构化进 `ModelMaterial` 和 renderer `shaderParams`；共享 detail normal atlas 可用时 WGSL 会按 detail/multi-detail ID 与各自 UV scale 采样并组合 tangent-space normal，缺图时才回到 primary normal 的受限 fallback。
 - `g_TileIndex`、`g_TileAlpha`、`g_TileScale` 已结构化进 `ModelMaterial` 和 renderer `tileParams`；WGSL 优先用逐像素 ColorTable `TileProperties.r * 64` 选 tile layer，没有该贴图时回退 `g_TileIndex`，并结合 TileMatrix/TileScale 采样 tile normal/ORB。Blender 节点检查确认 `chara_detail_blend` 只把 ORB Blue 作为黑色到 base color 的直接 darkening factor，R/G 与 Orb Alpha 均未连接；normal detail 权重为 tile-normal Alpha × TileAlpha。WGSL 已按该公式修正 color/normal，删除无证据的 R=AO/G=roughness/B=specular property 映射和程序化 tile specular wave；ORB debug 仍保留原始 RGB。
@@ -505,8 +506,9 @@ shadow、terrainShadow、verticalFog 在主预览中默认不画，避免错误 
 仍建议的后续顺序：
 
 1. TileMatrix identity delta 对 specular 的无证据调制已删除，uniform/patterned tile arrays 已分别验证“只改变 UV 不改变材质光照”；后续用更多真实 character 样本确认 TileMatrix 与 `g_TileScale` 的组合边界，并核对 ORB Blue darkening 的资源色彩空间。
-2. 寻找真实 bg 武器样本，校准 detail/multi-detail diffuse、normal 与 mask 权重。
-3. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
+2. 修正 SheenProperties/SphereProperties 的 RGBA8 量化：保留 bake 后 float ramp、以 `Rgba32Float` 上传，并覆盖超出 `[0,1]` 的 focused/真实样本回归。
+3. 寻找真实 bg 武器样本，校准 detail/multi-detail diffuse、normal 与 mask 权重。
+4. sphere 作为环境/反射近似，接入更接近 MeddleTools 的 reflection/sphere 节点。
 
 这些贴图已经进入 shader binding并提供 debug view；tile/ORB 通道已按节点证据收敛，sheen/sphere ramp 已用 synthetic WGPU fixture 证明当前近似消费能稳定影响最终画面。detail 最终 influence 与 reflection/sphere 的真实游戏公式仍需更多证据。
 
