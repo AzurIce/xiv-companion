@@ -1,8 +1,8 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialFlowMode,
-    MaterialLightingMode, MaterialRenderMode, MaterialValueMode, ModelBounds, ModelColorDyeTable,
-    ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
-    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
+    MaterialLightingMode, MaterialRenderMode, MaterialSubColorMode, MaterialValueMode, ModelBounds,
+    ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow,
+    ModelMaterial, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData,
     ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
     PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
     WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
@@ -80,6 +80,12 @@ const GET_ALPHA_MULTI_VALUES: u32 = 0x9418_20BE;
 const GET_ALPHA_MULTI_VALUES2: u32 = 0xE49A_D72B;
 #[cfg(feature = "game-data")]
 const GET_ALPHA_MULTI_VALUES3: u32 = 0x939D_E7BD;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR: u32 = 0x2482_6489;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR_FACE: u32 = 0x6E5B_8F10;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR_HAIR: u32 = 0xF7B8_956E;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
@@ -2186,6 +2192,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let value_mode = composed_material_value_mode(&semantics);
+        let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2274,6 +2281,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             lighting_mode,
             flow_mode,
             value_mode,
+            sub_color_mode,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -2806,6 +2814,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let value_mode = composed_material_value_mode(&semantics);
+        let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2895,6 +2904,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             lighting_mode,
             flow_mode,
             value_mode,
+            sub_color_mode,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -3769,6 +3779,16 @@ fn composed_material_value_mode(semantics: &ComposedMaterialSemantics) -> Materi
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_sub_color_mode(semantics: &ComposedMaterialSemantics) -> MaterialSubColorMode {
+    match semantics.material_key_value(GET_SUB_COLOR) {
+        None => MaterialSubColorMode::None,
+        Some(GET_SUB_COLOR_FACE) => MaterialSubColorMode::Face,
+        Some(GET_SUB_COLOR_HAIR) => MaterialSubColorMode::Hair,
+        Some(_) => MaterialSubColorMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
 }
@@ -4368,6 +4388,7 @@ fn fallback_weapon_material(
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
         value_mode: MaterialValueMode::Single,
+        sub_color_mode: MaterialSubColorMode::None,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -6164,6 +6185,33 @@ mod weapon_material_tests {
             semantics.apply_material_key(GET_VALUES, value);
             assert_eq!(composed_material_value_mode(&semantics), expected);
         }
+    }
+
+    #[test]
+    fn composed_sub_color_mode_preserves_known_and_unknown_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::None
+        );
+
+        semantics.apply_shader_package_key_default(GET_SUB_COLOR, GET_SUB_COLOR_FACE);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Face
+        );
+
+        semantics.apply_material_key(GET_SUB_COLOR, GET_SUB_COLOR_HAIR);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Hair
+        );
+
+        semantics.apply_material_key(GET_SUB_COLOR, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Unknown
+        );
     }
 
     #[test]

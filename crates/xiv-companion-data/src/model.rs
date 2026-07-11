@@ -408,6 +408,8 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub value_mode: MaterialValueMode,
     #[serde(default)]
+    pub sub_color_mode: MaterialSubColorMode,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_water_deep_color")]
     pub water_deep_color: [f32; 4],
@@ -643,6 +645,16 @@ pub enum MaterialValueMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialSubColorMode {
+    #[default]
+    None,
+    Face,
+    Hair,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
     CharacterStockings,
@@ -777,6 +789,8 @@ pub struct PreparedMaterial {
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
     pub value_mode: MaterialValueMode,
+    #[serde(default)]
+    pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
     pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
@@ -926,6 +940,7 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub runtime_option_color: bool,
     pub runtime_decal_color: bool,
     pub runtime_skin_material: bool,
+    pub runtime_sub_color: bool,
     pub tile_array: bool,
     pub detail_array: bool,
     pub incomplete_shader_family_logic: bool,
@@ -1265,6 +1280,9 @@ pub fn prepare_material_for_draw_role(
         value_mode: material
             .map(|material| material.value_mode)
             .unwrap_or_default(),
+        sub_color_mode: material
+            .map(|material| material.sub_color_mode)
+            .unwrap_or_default(),
         alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
         texture_sampling: PreparedTextureSamplingSet::default(),
@@ -1532,6 +1550,13 @@ pub fn prepared_material_unsupported_inputs(
         runtime_option_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
         runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
         runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
+        runtime_sub_color: matches!(shader_family, MaterialShaderFamily::CharacterOcclusion)
+            || material.is_some_and(|material| {
+                matches!(
+                    material.sub_color_mode,
+                    MaterialSubColorMode::Face | MaterialSubColorMode::Hair
+                )
+            }),
         tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
         detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
@@ -2547,6 +2572,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Character,
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
+                sub_color_mode: MaterialSubColorMode::None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2568,6 +2594,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
+                sub_color_mode: MaterialSubColorMode::None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2794,6 +2821,7 @@ mod color_table_bake_tests {
                 runtime_option_color: false,
                 runtime_decal_color: false,
                 runtime_skin_material: false,
+                runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
@@ -2813,6 +2841,7 @@ mod color_table_bake_tests {
                 runtime_option_color: false,
                 runtime_decal_color: false,
                 runtime_skin_material: false,
+                runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
                 incomplete_shader_family_logic: true,
@@ -2842,6 +2871,18 @@ mod color_table_bake_tests {
         assert!(crystal.feature_flags.uses_environment_map);
         assert!(crystal.unsupported_inputs.environment_mapping);
         assert!(crystal.unsupported_inputs.incomplete_shader_family_logic);
+
+        material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.sub_color_mode = MaterialSubColorMode::Face;
+        let sub_color = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(sub_color.sub_color_mode, MaterialSubColorMode::Face);
+        assert!(sub_color.unsupported_inputs.runtime_sub_color);
+
+        material.sub_color_mode = MaterialSubColorMode::None;
+        material.shader_package_name = Some("characterocclusion.shpk".to_string());
+        let occlusion = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(occlusion.unsupported_inputs.runtime_sub_color);
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
@@ -3390,6 +3431,7 @@ mod color_table_bake_tests {
             lighting_mode: MaterialLightingMode::Default,
             flow_mode: MaterialFlowMode::Standard,
             value_mode: MaterialValueMode::Single,
+            sub_color_mode: MaterialSubColorMode::None,
             transparency: 0.0,
             water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
             water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
