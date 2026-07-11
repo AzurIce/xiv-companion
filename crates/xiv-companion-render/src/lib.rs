@@ -31,5 +31,6 @@ pub use model::{
 
 #[cfg(feature = "renderer")]
 pub use renderer::{
-    ModelDebugMode, ModelRenderOptions, ModelRenderer, WeaponRenderOptions, WeaponRenderer,
+    ModelDebugMode, ModelGlassBlendMode, ModelRenderOptions, ModelRenderer, WeaponRenderOptions,
+    WeaponRenderer,
 };

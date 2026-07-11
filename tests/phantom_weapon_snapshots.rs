@@ -17,7 +17,7 @@ use xiv_companion::{
     load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
     renderer::{
-        ModelDebugMode, ModelRenderOptions,
+        ModelDebugMode, ModelGlassBlendMode, ModelRenderOptions,
         test_support::{WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options},
     },
 };
@@ -421,7 +421,11 @@ fn render_case(
         WeaponModelSnapshotOptions::new("snapshot")
             .with_output_dir(&case_dir)
             .with_viewport(1024, 1024)
-            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0]),
+            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+            .with_render_options(ModelRenderOptions {
+                glass_blend_mode: phantom_glass_blend_mode(),
+                ..ModelRenderOptions::default()
+            }),
         &model,
     )
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
@@ -526,6 +530,33 @@ fn phantom_array_debug_enabled() -> bool {
     std::env::var("XIV_PHANTOM_ARRAY_DEBUG")
         .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn phantom_glass_blend_mode() -> ModelGlassBlendMode {
+    parse_phantom_glass_blend_mode(&std::env::var("XIV_PHANTOM_GLASS_BLEND").unwrap_or_default())
+}
+
+fn parse_phantom_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
+    match value.to_ascii_lowercase().as_str() {
+        "add" | "additive" => ModelGlassBlendMode::Additive,
+        _ => ModelGlassBlendMode::Multiply,
+    }
+}
+
+#[test]
+fn phantom_glass_blend_mode_parser_preserves_scene_choice() {
+    assert_eq!(
+        parse_phantom_glass_blend_mode("additive"),
+        ModelGlassBlendMode::Additive
+    );
+    assert_eq!(
+        parse_phantom_glass_blend_mode("ADD"),
+        ModelGlassBlendMode::Additive
+    );
+    assert_eq!(
+        parse_phantom_glass_blend_mode("unknown"),
+        ModelGlassBlendMode::Multiply
+    );
 }
 
 fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {

@@ -72,6 +72,13 @@ impl ModelDebugMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelGlassBlendMode {
+    #[default]
+    Multiply,
+    Additive,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelRenderOptions {
     pub normal_mapping: bool,
@@ -80,6 +87,7 @@ pub struct ModelRenderOptions {
     pub bloom_strength: f32,
     pub uv_scroll_time: f32,
     pub debug_mode: ModelDebugMode,
+    pub glass_blend_mode: ModelGlassBlendMode,
 }
 
 impl Default for ModelRenderOptions {
@@ -91,6 +99,7 @@ impl Default for ModelRenderOptions {
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
             debug_mode: ModelDebugMode::Final,
+            glass_blend_mode: ModelGlassBlendMode::Multiply,
         }
     }
 }
@@ -108,6 +117,7 @@ impl ModelRenderOptions {
                 0.0
             },
             debug_mode: self.debug_mode,
+            glass_blend_mode: self.glass_blend_mode,
         }
     }
 
@@ -807,7 +817,13 @@ impl ModelRenderer {
                 sorted_transparent_batches(&self.draw_batches, yaw, pitch);
             for batch in sorted_transparent_batches {
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
-                    if batch.render_backfaces() {
+                    if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
+                        if batch.render_backfaces() {
+                            &self.additive_pipeline
+                        } else {
+                            &self.additive_culled_pipeline
+                        }
+                    } else if batch.render_backfaces() {
                         &self.glass_pipeline
                     } else {
                         &self.glass_culled_pipeline
@@ -2777,6 +2793,11 @@ impl DrawBatch {
                 MaterialDrawDepthMode::Dither
             )
     }
+
+    fn uses_additive_glass_pipeline(&self, glass_blend_mode: ModelGlassBlendMode) -> bool {
+        self.pass() == PreparedRenderPass::Glass
+            && matches!(glass_blend_mode, ModelGlassBlendMode::Additive)
+    }
 }
 
 #[repr(C)]
@@ -3088,6 +3109,21 @@ mod tests {
         let mut opaque = test_batch(2, PreparedRenderPass::Opaque, [0.0; 3]);
         opaque.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
         assert!(!opaque.uses_dither_depth_prepass());
+    }
+
+    #[test]
+    fn glass_blend_mode_only_switches_glass_batches_to_additive() {
+        assert_eq!(
+            ModelRenderOptions::default().glass_blend_mode,
+            ModelGlassBlendMode::Multiply
+        );
+
+        let glass = test_batch(0, PreparedRenderPass::Glass, [0.0; 3]);
+        assert!(!glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Multiply));
+        assert!(glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
+
+        let transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
+        assert!(!transparent.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
     }
 
     #[test]

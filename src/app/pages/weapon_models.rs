@@ -18,7 +18,7 @@ use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
 };
 use crate::app::utils::{cx, format_integer};
-use xiv_companion::renderer::{ModelDebugMode, WeaponRenderOptions};
+use xiv_companion::renderer::{ModelDebugMode, ModelGlassBlendMode, WeaponRenderOptions};
 
 use xiv_companion::{
     PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
@@ -626,6 +626,20 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "detail-diffuse-array", "Detail Diffuse" }
                     option { value: "detail-normal-array", "Detail Normal" }
                 }
+                label { class: "flex items-center justify-between gap-3",
+                    span { class: "text-muted-foreground", "Glass" }
+                    select {
+                        class: "{input_class(\"h-8 w-24 cursor-pointer py-1 text-xs\")}",
+                        value: "{glass_blend_mode_value(current.glass_blend_mode)}",
+                        onchange: move |event| {
+                            let mut next = options();
+                            next.glass_blend_mode = parse_glass_blend_mode(&event.value());
+                            options.set(next);
+                        },
+                        option { value: "multiply", "Mul" }
+                        option { value: "additive", "Add" }
+                    }
+                }
                 RenderCheckbox {
                     label: "Normal",
                     checked: current.normal_mapping,
@@ -825,6 +839,20 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "detail-diffuse-array" => ModelDebugMode::DetailDiffuseArray,
         "detail-normal-array" => ModelDebugMode::DetailNormalArray,
         _ => ModelDebugMode::Final,
+    }
+}
+
+fn glass_blend_mode_value(mode: ModelGlassBlendMode) -> &'static str {
+    match mode {
+        ModelGlassBlendMode::Multiply => "multiply",
+        ModelGlassBlendMode::Additive => "additive",
+    }
+}
+
+fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
+    match value {
+        "additive" => ModelGlassBlendMode::Additive,
+        _ => ModelGlassBlendMode::Multiply,
     }
 }
 
@@ -1173,5 +1201,16 @@ mod weapon_url_tests {
         ] {
             assert_eq!(WeaponSlotFilter::from_key(filter.key()), Some(filter));
         }
+    }
+
+    #[test]
+    fn glass_blend_mode_values_round_trip() {
+        for mode in [ModelGlassBlendMode::Multiply, ModelGlassBlendMode::Additive] {
+            assert_eq!(parse_glass_blend_mode(glass_blend_mode_value(mode)), mode);
+        }
+        assert_eq!(
+            parse_glass_blend_mode("unknown"),
+            ModelGlassBlendMode::Multiply
+        );
     }
 }
