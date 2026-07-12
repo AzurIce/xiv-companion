@@ -4,13 +4,14 @@ pub use crate::model::{
     MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
     ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
     ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
-    ModelRenderData, ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind,
-    ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
-    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
+    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
+    PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts,
+    WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode,
+    WeaponModelBounds, WeaponModelData, WeaponModelLoadCandidateDiagnostic,
+    WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic, WeaponModelLoadRole,
+    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
+    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
     weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
@@ -1168,15 +1169,25 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
         let color = material_color(mesh.material_index);
         for range in mesh_index_ranges(mesh.indices.len(), &mesh.submeshes) {
             let raw_indices = &mesh.indices[range.start..range.end];
-            let Some((vertices, indices)) = remap_mesh_vertices(&mesh.vertices, raw_indices) else {
+            let Some((vertices, indices, shape_targets)) = remap_mesh_vertices_with_shapes(
+                &mesh.vertices,
+                raw_indices,
+                range.start,
+                &mesh.shape_targets,
+            ) else {
                 continue;
             };
+            let shape_influences = shape_targets
+                .iter()
+                .map(|target| target.shape.clone())
+                .collect();
             meshes.push(WeaponModelMesh {
                 path: mesh_path_with_submesh(path, mesh.mesh_index, range.submesh_index),
                 part_index: mesh.mesh_index as u32,
                 mesh_category: Some(mesh.category.clone()),
                 submesh: range.submesh.clone(),
-                shape_influences: mesh.shape_influences.clone(),
+                shape_influences,
+                shape_targets,
                 material_index: mesh.material_index,
                 material_slot: mesh.material_index as usize,
                 material_name: mesh.material_name.clone(),
@@ -1292,47 +1303,90 @@ fn mesh_path_with_submesh(path: &str, part_index: usize, submesh_index: Option<u
 }
 
 #[cfg(feature = "game-data")]
+#[cfg(test)]
 fn remap_mesh_vertices(
     vertices: &[WeaponModelVertex],
     indices: &[u16],
 ) -> Option<(Vec<WeaponModelVertex>, Vec<u32>)> {
+    let (vertices, indices, _) = remap_mesh_vertices_with_shapes(vertices, indices, 0, &[])?;
+    Some((vertices, indices))
+}
+
+#[cfg(feature = "game-data")]
+fn remap_mesh_vertices_with_shapes(
+    vertices: &[WeaponModelVertex],
+    indices: &[u16],
+    index_position_offset: usize,
+    shape_targets: &[crate::mdl_geometry::MdlGeometryShapeTarget],
+) -> Option<(Vec<WeaponModelVertex>, Vec<u32>, Vec<ModelShapeTarget>)> {
     if indices.len() % 3 != 0 {
         return None;
     }
 
     let mut remapped_vertices = Vec::new();
-    let mut remap = HashMap::<u16, u32>::new();
+    let mut remap = HashMap::<(u16, Vec<(usize, usize)>), u32>::new();
     let mut remapped_indices = Vec::with_capacity(indices.len());
+    let mut replacements_by_position = HashMap::<usize, Vec<(usize, usize)>>::new();
+    for (target_index, target) in shape_targets.iter().enumerate() {
+        for replacement in &target.replacements {
+            if replacement.replacing_vertex_index >= vertices.len() {
+                continue;
+            }
+            replacements_by_position
+                .entry(replacement.base_indices_index)
+                .or_default()
+                .push((target_index, replacement.replacing_vertex_index));
+        }
+    }
+    for replacements in replacements_by_position.values_mut() {
+        replacements.sort_unstable();
+        replacements.dedup_by_key(|(target_index, _)| *target_index);
+    }
+    let mut target_deltas = vec![Vec::new(); shape_targets.len()];
 
-    for triangle in indices.chunks_exact(3) {
-        let a = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[0])?;
-        let b = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[1])?;
-        let c = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[2])?;
-        remapped_indices.extend([a, b, c]);
+    for (local_position, index) in indices.iter().copied().enumerate() {
+        let source_vertex = *vertices.get(usize::from(index))?;
+        let replacements = replacements_by_position
+            .get(&index_position_offset.saturating_add(local_position))
+            .cloned()
+            .unwrap_or_default();
+        let key = (index, replacements.clone());
+        let remapped_index = if let Some(remapped_index) = remap.get(&key) {
+            *remapped_index
+        } else {
+            let remapped_index = remapped_vertices.len() as u32;
+            remapped_vertices.push(source_vertex);
+            for (target_index, replacing_vertex_index) in &replacements {
+                let replacement = vertices[*replacing_vertex_index];
+                target_deltas[*target_index].push(ModelShapeVertexDelta {
+                    vertex_index: remapped_index,
+                    position: subtract_vec3(replacement.position, source_vertex.position),
+                    normal: subtract_vec3(replacement.normal, source_vertex.normal),
+                });
+            }
+            remap.insert(key, remapped_index);
+            remapped_index
+        };
+        remapped_indices.push(remapped_index);
     }
 
-    Some((remapped_vertices, remapped_indices))
+    let shape_targets = shape_targets
+        .iter()
+        .zip(target_deltas)
+        .filter_map(|(target, vertex_deltas)| {
+            (!vertex_deltas.is_empty()).then(|| ModelShapeTarget {
+                shape: target.info.clone(),
+                vertex_deltas,
+            })
+        })
+        .collect();
+
+    Some((remapped_vertices, remapped_indices, shape_targets))
 }
 
 #[cfg(feature = "game-data")]
-fn remap_vertex_index(
-    vertices: &[WeaponModelVertex],
-    remapped_vertices: &mut Vec<WeaponModelVertex>,
-    remap: &mut HashMap<u16, u32>,
-    index: u16,
-) -> Option<u32> {
-    if usize::from(index) >= vertices.len() {
-        return None;
-    }
-
-    if let Some(remapped_index) = remap.get(&index) {
-        Some(*remapped_index)
-    } else {
-        let remapped_index = remapped_vertices.len() as u32;
-        remapped_vertices.push(vertices[usize::from(index)]);
-        remap.insert(index, remapped_index);
-        Some(remapped_index)
-    }
+fn subtract_vec3(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
 }
 
 #[cfg(feature = "game-data")]
@@ -6098,6 +6152,46 @@ mod weapon_material_tests {
     }
 
     #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_equipment_fist_preserves_shape_vertex_targets() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 42_697,
+            item_name: "新生王国指虎".to_string(),
+            model_main: 74_357,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let mesh = model
+            .meshes
+            .iter()
+            .find(|mesh| !mesh.shape_targets.is_empty())
+            .expect("mesh with shape targets");
+
+        assert!(mesh.shape_targets.iter().any(|target| {
+            target.shape.name.as_deref() == Some("shp_arm") && !target.vertex_deltas.is_empty()
+        }));
+        assert!(mesh.shape_targets.iter().all(|target| {
+            target
+                .vertex_deltas
+                .iter()
+                .all(|delta| delta.vertex_index < mesh.vertices.len() as u32)
+        }));
+        let shaped = crate::model::model_mesh_vertices_with_shape_mask(mesh, Some(1));
+        assert!(
+            shaped
+                .iter()
+                .zip(&mesh.vertices)
+                .any(|(shaped, base)| shaped.position != base.position
+                    || shaped.normal != base.normal)
+        );
+    }
+
+    #[test]
     fn missing_material_reference_reuses_loaded_same_index() {
         let mut source =
             fallback_weapon_material(0, 0, "/mt_w3004b0001_a.mtrl".to_string(), [0.1, 0.2, 0.3]);
@@ -7591,6 +7685,52 @@ mod weapon_material_tests {
                 .collect::<Vec<_>>(),
             vec![2.0, 0.0, 3.0, 1.0]
         );
+    }
+
+    #[test]
+    fn shape_remap_splits_only_the_targeted_index_occurrence() {
+        let vertices = vec![
+            test_vertex(0.0),
+            test_vertex(1.0),
+            test_vertex(2.0),
+            test_vertex(3.0),
+            test_vertex(10.0),
+        ];
+        let target = crate::mdl_geometry::MdlGeometryShapeTarget {
+            info: crate::model::ModelShapeInfo {
+                index: 0,
+                name: Some("shape_a".to_string()),
+                shape_index_mask: 1,
+                shape_index_mask_hex: "0x00000001".to_string(),
+                shape_mesh_index: 0,
+                shape_value_count: 1,
+            },
+            replacements: vec![crate::mdl_geometry::MdlGeometryShapeReplacement {
+                base_indices_index: 3,
+                replacing_vertex_index: 4,
+            }],
+        };
+
+        let (remapped_vertices, remapped_indices, shape_targets) =
+            remap_mesh_vertices_with_shapes(&vertices, &[0, 1, 2, 0, 2, 3], 0, &[target])
+                .expect("valid shape remap");
+
+        assert_ne!(remapped_indices[0], remapped_indices[3]);
+        assert_eq!(
+            remapped_vertices[remapped_indices[0] as usize].position[0],
+            0.0
+        );
+        assert_eq!(
+            remapped_vertices[remapped_indices[3] as usize].position[0],
+            0.0
+        );
+        assert_eq!(shape_targets.len(), 1);
+        assert_eq!(shape_targets[0].vertex_deltas.len(), 1);
+        assert_eq!(
+            shape_targets[0].vertex_deltas[0].vertex_index,
+            remapped_indices[3]
+        );
+        assert_eq!(shape_targets[0].vertex_deltas[0].position, [10.0, 0.0, 0.0]);
     }
 
     #[test]

@@ -5,8 +5,9 @@ use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
     MaterialRenderMode, MaterialShaderFamily, MaterialValueMode, ModelMaterial, ModelMeshDrawRole,
     ModelRenderData, ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial,
-    PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter, PreparedTextureSampling,
-    PreparedUvSource, prepare_model_for_render,
+    PreparedModelOptions, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter,
+    PreparedTextureSampling, PreparedUvSource, model_mesh_vertices_with_shape_mask,
+    prepare_model_for_render_with_options,
 };
 
 const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -173,6 +174,22 @@ impl ModelRenderer {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
         model: &M,
+    ) -> Self {
+        Self::new_with_prepared_options(
+            device,
+            queue,
+            format,
+            model,
+            PreparedModelOptions::default(),
+        )
+    }
+
+    pub fn new_with_prepared_options<M: ModelRenderData + ?Sized>(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        model: &M,
+        prepared_options: PreparedModelOptions,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model shader"),
@@ -625,7 +642,11 @@ impl ModelRenderer {
             format,
         );
 
-        let (vertices, indices, draw_batches) = flatten_model(model);
+        let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
+        let (bounds_center, bounds_radius) = prepared_options
+            .enabled_shape_mask
+            .and_then(|_| gpu_vertices_bounds(&vertices))
+            .unwrap_or((model.bounds().center, model.bounds().radius));
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon vertex buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -691,8 +712,8 @@ impl ModelRenderer {
             compose_bind_group_layout,
             post_process: None,
             format,
-            bounds_center: model.bounds().center,
-            bounds_radius: model.bounds().radius,
+            bounds_center,
+            bounds_radius,
         }
     }
 
@@ -1058,14 +1079,22 @@ impl PostProcessState {
     }
 }
 
+#[cfg(test)]
 fn flatten_model<M: ModelRenderData + ?Sized>(
     model: &M,
+) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
+    flatten_model_with_options(model, PreparedModelOptions::default())
+}
+
+fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
+    model: &M,
+    prepared_options: PreparedModelOptions,
 ) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
 
-    let prepared_model = prepare_model_for_render(model);
+    let prepared_model = prepare_model_for_render_with_options(model, prepared_options);
     for prepared_mesh in &prepared_model.meshes {
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
@@ -1079,8 +1108,11 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             continue;
         };
 
+        let mesh_vertices =
+            model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask);
+        let center = vertices_bounds_center(&mesh_vertices);
         let base = vertices.len() as u32;
-        vertices.extend(mesh.vertices.iter().map(GpuVertex::from_model_vertex));
+        vertices.extend(mesh_vertices.iter().map(GpuVertex::from_model_vertex));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
         draw_batches.push(DrawBatch {
@@ -1090,17 +1122,17 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             index_start,
             index_count: mesh.indices.len() as u32,
             prepared_material: prepared_mesh.prepared_material,
-            center: mesh_bounds_center(mesh),
+            center,
         });
     }
 
     (vertices, indices, draw_batches)
 }
 
-fn mesh_bounds_center(mesh: &crate::ModelMesh) -> [f32; 3] {
+fn vertices_bounds_center(vertices: &[crate::ModelVertex]) -> [f32; 3] {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in &mesh.vertices {
+    for vertex in vertices {
         for axis in 0..3 {
             min[axis] = min[axis].min(vertex.position[axis]);
             max[axis] = max[axis].max(vertex.position[axis]);
@@ -1116,6 +1148,36 @@ fn mesh_bounds_center(mesh: &crate::ModelMesh) -> [f32; 3] {
         (min[1] + max[1]) * 0.5,
         (min[2] + max[2]) * 0.5,
     ]
+}
+
+fn gpu_vertices_bounds(vertices: &[GpuVertex]) -> Option<([f32; 3], f32)> {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for vertex in vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(vertex.position[axis]);
+            max[axis] = max[axis].max(vertex.position[axis]);
+        }
+    }
+    if min.iter().any(|value| !value.is_finite()) || max.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let radius = vertices
+        .iter()
+        .map(|vertex| {
+            let x = vertex.position[0] - center[0];
+            let y = vertex.position[1] - center[1];
+            let z = vertex.position[2] - center[2];
+            (x * x + y * y + z * z).sqrt()
+        })
+        .fold(0.0_f32, f32::max)
+        .max(0.0001);
+    Some((center, radius))
 }
 
 fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
@@ -4878,6 +4940,44 @@ mod tests {
         assert_eq!(vertices[1].flow1, [0.0; 4]);
     }
 
+    #[test]
+    fn flatten_model_applies_only_explicitly_enabled_shape_targets() {
+        let mut mesh = test_mesh("normal", 0.0);
+        let shape = crate::ModelShapeInfo {
+            index: 0,
+            name: Some("shape_a".to_string()),
+            shape_index_mask: 1,
+            shape_index_mask_hex: "0x00000001".to_string(),
+            shape_mesh_index: 0,
+            shape_value_count: 1,
+        };
+        mesh.shape_influences.push(shape.clone());
+        mesh.shape_targets.push(crate::ModelShapeTarget {
+            shape,
+            vertex_deltas: vec![crate::ModelShapeVertexDelta {
+                vertex_index: 0,
+                position: [5.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 0.0],
+            }],
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        let (base_vertices, _, _) = flatten_model(&model);
+        let (shaped_vertices, _, batches) = flatten_model_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_shape_mask(1),
+        );
+
+        assert_eq!(base_vertices[0].position, [0.0, 0.0, 0.0]);
+        assert_eq!(shaped_vertices[0].position, [5.0, 0.0, 0.0]);
+        assert_eq!(batches[0].center, [2.5, 0.5, 0.0]);
+    }
+
     fn test_prepared_render_pass(
         alpha_mode: MaterialAlphaMode,
         render_mode: MaterialRenderMode,
@@ -4942,6 +5042,7 @@ mod tests {
             mesh_category: Some(category.to_string()),
             submesh: None,
             shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
             material_index: 0,
             material_slot: 0,
             material_name: "test".to_string(),

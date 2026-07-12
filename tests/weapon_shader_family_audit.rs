@@ -32,7 +32,21 @@ struct WeaponShaderFamilyAudit {
     unclassified_materials: Vec<WeaponShaderFamilyCandidate>,
     resource_collisions: Vec<WeaponMaterialResourceCollision>,
     unresolved_material_references: Vec<WeaponUnresolvedMaterialReference>,
+    shape_models: Vec<WeaponShapeModel>,
     failures: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WeaponShapeModel {
+    item_ids: Vec<u32>,
+    item_names: Vec<String>,
+    model: PackedModelId,
+    model_path: String,
+    shape_count: usize,
+    shape_mesh_count: usize,
+    shape_value_count: usize,
+    shape_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +137,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         unclassified_materials: Vec::new(),
         resource_collisions: Vec::new(),
         unresolved_material_references: Vec::new(),
+        shape_models: Vec::new(),
         failures: Vec::new(),
     };
 
@@ -204,6 +219,22 @@ fn scan_model<R: Resource>(
             return;
         }
     };
+    if !metadata.shapes.is_empty() {
+        report.shape_models.push(WeaponShapeModel {
+            item_ids: items.iter().map(|item| item.id).collect(),
+            item_names: items.iter().map(|item| item.name.clone()).collect(),
+            model,
+            model_path: model_path.clone(),
+            shape_count: metadata.shapes.len(),
+            shape_mesh_count: metadata.shape_meshes.len(),
+            shape_value_count: metadata.shape_values.len(),
+            shape_names: metadata
+                .shapes
+                .iter()
+                .filter_map(|shape| shape.name.clone())
+                .collect(),
+        });
+    }
 
     for material_name in metadata
         .materials

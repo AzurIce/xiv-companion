@@ -94,6 +94,8 @@ struct MeshSummary {
     prepared_submesh: Option<ModelSubmeshInfo>,
     prepared_shape_influences: Vec<ModelShapeInfo>,
     prepared_shape_influence_state: PreparedMeshShapeInfluences,
+    shape_target_count: usize,
+    shape_vertex_delta_count: usize,
     metadata_file: Option<String>,
     submesh_index: Option<usize>,
     submeshes: Vec<MeshSubmeshSummary>,
@@ -1043,6 +1045,12 @@ fn mesh_summary(
         prepared_submesh: prepared_mesh.submesh.clone(),
         prepared_shape_influences: prepared_mesh.shape_influences.clone(),
         prepared_shape_influence_state: prepared_mesh.shape_influence_state,
+        shape_target_count: mesh.shape_targets.len(),
+        shape_vertex_delta_count: mesh
+            .shape_targets
+            .iter()
+            .map(|target| target.vertex_deltas.len())
+            .sum(),
         metadata_file,
         submesh_index,
         submeshes: raw_mesh

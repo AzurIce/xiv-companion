@@ -191,6 +191,8 @@ pub struct ModelMesh {
     pub submesh: Option<ModelSubmeshInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_influences: Vec<ModelShapeInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_targets: Vec<ModelShapeTarget>,
     pub material_index: u16,
     #[serde(default)]
     pub material_slot: usize,
@@ -223,6 +225,21 @@ pub struct ModelShapeInfo {
     pub shape_index_mask_hex: String,
     pub shape_mesh_index: usize,
     pub shape_value_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShapeTarget {
+    pub shape: ModelShapeInfo,
+    pub vertex_deltas: Vec<ModelShapeVertexDelta>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShapeVertexDelta {
+    pub vertex_index: u32,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1240,6 +1257,31 @@ impl PreparedRenderPass {
 
 pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> PreparedModel {
     prepare_model_for_render_with_options(model, PreparedModelOptions::default())
+}
+
+pub fn model_mesh_vertices_with_shape_mask(
+    mesh: &ModelMesh,
+    enabled_shape_mask: Option<u32>,
+) -> Vec<ModelVertex> {
+    let Some(enabled_shape_mask) = enabled_shape_mask else {
+        return mesh.vertices.clone();
+    };
+    let mut vertices = mesh.vertices.clone();
+    for target in &mesh.shape_targets {
+        if target.shape.shape_index_mask & enabled_shape_mask == 0 {
+            continue;
+        }
+        for delta in &target.vertex_deltas {
+            let Some(vertex) = vertices.get_mut(delta.vertex_index as usize) else {
+                continue;
+            };
+            for axis in 0..3 {
+                vertex.position[axis] += delta.position[axis];
+                vertex.normal[axis] += delta.normal[axis];
+            }
+        }
+    }
+    vertices
 }
 
 pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
@@ -3567,6 +3609,42 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn shape_targets_add_active_position_and_normal_deltas() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.vertices = vec![test_model_vertex()];
+        mesh.shape_targets = vec![
+            ModelShapeTarget {
+                shape: test_shape_info(0),
+                vertex_deltas: vec![ModelShapeVertexDelta {
+                    vertex_index: 0,
+                    position: [1.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, -1.0],
+                }],
+            },
+            ModelShapeTarget {
+                shape: test_shape_info(1),
+                vertex_deltas: vec![ModelShapeVertexDelta {
+                    vertex_index: 0,
+                    position: [0.0, 2.0, 0.0],
+                    normal: [1.0, 0.0, 0.0],
+                }],
+            },
+        ];
+
+        assert_eq!(
+            model_mesh_vertices_with_shape_mask(&mesh, None)[0].position,
+            [0.0, 0.0, 0.0]
+        );
+        let first = model_mesh_vertices_with_shape_mask(&mesh, Some(0x1));
+        assert_eq!(first[0].position, [1.0, 0.0, 0.0]);
+        assert_eq!(first[0].normal, [0.0, 2.0, -1.0]);
+
+        let both = model_mesh_vertices_with_shape_mask(&mesh, Some(0x3));
+        assert_eq!(both[0].position, [1.0, 2.0, 0.0]);
+        assert_eq!(both[0].normal, [1.0, 2.0, -1.0]);
+    }
+
+    #[test]
     fn prepared_model_reports_mesh_level_flow_feature_flags() {
         let mut plain_mesh = test_model_mesh(None, 0);
         plain_mesh.vertices = vec![test_model_vertex()];
@@ -3951,6 +4029,7 @@ mod color_table_bake_tests {
             mesh_category: category.map(str::to_string),
             submesh: None,
             shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
             material_index: material_slot as u16,
             material_slot,
             material_name: "test".to_string(),
