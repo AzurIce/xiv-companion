@@ -472,8 +472,9 @@ fn render_mock_detail_multi_blend_snapshot() {
 #[test]
 #[ignore = "writes synthetic bguvscroll Map1 snapshots with native wgpu"]
 fn render_mock_secondary_scroll_map_snapshot() {
-    let primary = mock_secondary_scroll_model(0.0);
-    let secondary = mock_secondary_scroll_model(1.0);
+    let primary = mock_secondary_scroll_model(0.0, false);
+    let secondary = mock_secondary_scroll_model(1.0, false);
+    let secondary_frame = mock_secondary_scroll_model(1.0, true);
     let render = |name, model| {
         render_weapon_model_snapshot_with_options(
             WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
@@ -484,6 +485,7 @@ fn render_mock_secondary_scroll_map_snapshot() {
 
     let primary_snapshot = render("native-bguvscroll-primary", &primary);
     let secondary_snapshot = render("native-bguvscroll-secondary", &secondary);
+    let secondary_frame_snapshot = render("native-bguvscroll-secondary-frame", &secondary_frame);
     let pixels = |path| {
         image::open(path)
             .expect("decode synthetic bguvscroll PNG")
@@ -493,6 +495,7 @@ fn render_mock_secondary_scroll_map_snapshot() {
 
     let primary_pixels = pixels(primary_snapshot.png_path);
     let secondary_pixels = pixels(secondary_snapshot.png_path);
+    let secondary_frame_pixels = pixels(secondary_frame_snapshot.png_path);
     assert!(
         primary_pixels
             .chunks_exact(4)
@@ -509,9 +512,22 @@ fn render_mock_secondary_scroll_map_snapshot() {
         primary_pixels, secondary_pixels,
         "GetMultiValues vertex alpha must blend Map0 and Map1"
     );
+    let frame_rgb_difference: u64 = secondary_pixels
+        .chunks_exact(4)
+        .zip(secondary_frame_pixels.chunks_exact(4))
+        .map(|(primary_frame, secondary_frame)| {
+            (0..3)
+                .map(|channel| primary_frame[channel].abs_diff(secondary_frame[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+    assert!(
+        frame_rgb_difference > 10_000,
+        "secondary normal map must use normal1/bitangent1 instead of the primary tangent frame"
+    );
 }
 
-fn mock_secondary_scroll_model(vertex_alpha: f32) -> WeaponModelData {
+fn mock_secondary_scroll_model(vertex_alpha: f32, use_secondary_frame: bool) -> WeaponModelData {
     let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
         "slot": 0,
         "materialIndex": 0,
@@ -594,6 +610,10 @@ fn mock_secondary_scroll_model(vertex_alpha: f32) -> WeaponModelData {
             let mut vertex = vertex(position, [1.0, 1.0, 1.0, vertex_alpha]);
             vertex.uv0 = uv;
             vertex.uv1 = uv;
+            if use_secondary_frame {
+                vertex.normal1 = Some([0.0, 1.0, 0.0]);
+                vertex.bitangent1 = Some([0.0, 0.0, 1.0, 1.0]);
+            }
             vertex
         })
         .collect();

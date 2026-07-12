@@ -83,6 +83,8 @@ struct VertexOutput {
     @location(6) uv3: vec2<f32>,
     @location(7) flow0: vec4<f32>,
     @location(8) flow1: vec4<f32>,
+    @location(9) normal1: vec3<f32>,
+    @location(10) bitangent1: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -163,6 +165,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.uv3 = input.uv3;
     out.flow0 = input.flow0;
     out.flow1 = input.flow1;
+    out.normal1 = normalize(input.normal1);
+    out.bitangent1 = input.bitangent1;
     return out;
 }
 
@@ -180,6 +184,8 @@ fn vs_outline(input: VertexInput) -> VertexOutput {
     out.uv3 = input.uv3;
     out.flow0 = input.flow0;
     out.flow1 = input.flow1;
+    out.normal1 = normalize(input.normal1);
+    out.bitangent1 = input.bitangent1;
     return out;
 }
 
@@ -1008,16 +1014,39 @@ fn resolve_normal(
         decoded_secondary.z,
     ));
     let uses_secondary_maps = material.secondary_map_params.w > 0.5;
-    let secondary_sampled = normalize(mix(
-        scaled_primary,
-        scaled_secondary,
-        secondary_blend * material.secondary_map_params.y,
-    ));
-    let sampled = select(primary_sampled, secondary_sampled, uses_secondary_maps);
+    if uses_secondary_maps {
+        let secondary_geometric_normal = normalize(input.normal1) * face_sign;
+        let has_secondary_bitangent = dot(input.bitangent1.xyz, input.bitangent1.xyz) > 0.0001;
+        let safe_secondary_bitangent = input.bitangent1.xyz + select(
+            vec3<f32>(1.0, 0.0, 0.0),
+            vec3<f32>(0.0),
+            has_secondary_bitangent,
+        );
+        let secondary_bitangent = normalize(safe_secondary_bitangent);
+        let secondary_tangent_sign = select(1.0, -1.0, input.bitangent1.w < 0.0);
+        let secondary_tangent = normalize(cross(secondary_bitangent, secondary_geometric_normal))
+            * secondary_tangent_sign;
+        let primary_world = normalize(
+            tangent * scaled_primary.x
+                + bitangent * scaled_primary.y
+                + geometric_normal * scaled_primary.z,
+        );
+        let secondary_world = normalize(
+            secondary_tangent * scaled_secondary.x
+                + secondary_bitangent * scaled_secondary.y
+                + secondary_geometric_normal * scaled_secondary.z,
+        );
+        return normalize(mix(
+            primary_world,
+            secondary_world,
+            secondary_blend * material.secondary_map_params.y,
+        ));
+    }
+    let sampled = primary_sampled;
     let normal_scale = select(
         resolve_effective_normal_scale(detail_array.available > 0.5),
         1.0,
-        uses_secondary_maps,
+        false,
     );
     let mapped = normalize(vec3<f32>(
         sampled.x * normal_scale
