@@ -11,6 +11,9 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
+#[cfg(target_arch = "wasm32")]
+use xiv_companion::PreparedModelOptions;
+
 use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
 use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
@@ -352,6 +355,7 @@ fn WeaponModelPane(
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let render_options = use_signal(WeaponRenderOptions::default);
+    let mut shape_selection = use_signal(|| (None::<u32>, None::<u32>));
 
     rsx! {
         section { class: "flex min-h-0 min-w-0 flex-col overflow-hidden bg-background",
@@ -388,11 +392,28 @@ fn WeaponModelPane(
                         match model.read().as_ref() {
                             Some(Ok(data))
                                 if data.item_id == item.id && data.stain_ids == stain_ids => {
-                                let key = model_canvas_key(data);
+                                let requested_shape = shape_selection();
+                                let shape_mask = (requested_shape.0 == Some(item.id))
+                                    .then_some(requested_shape.1)
+                                    .flatten()
+                                    .filter(|mask| model_has_shape_mask(data, *mask));
+                                let key = model_canvas_key(data, shape_mask);
+                                let item_id = item.id;
                                 rsx! {
                                     div { key: "{key}", class: "absolute inset-0",
-                                        WeaponModelCanvas { model: data.clone(), render_options }
-                                        WeaponRenderControls { options: render_options }
+                                        WeaponModelCanvas {
+                                            model: data.clone(),
+                                            render_options,
+                                            shape_mask,
+                                        }
+                                        WeaponRenderControls {
+                                            options: render_options,
+                                            model: data.clone(),
+                                            shape_mask,
+                                            on_shape_change: move |mask| {
+                                                shape_selection.set((Some(item_id), mask));
+                                            },
+                                        }
                                     }
                                 }
                             },
@@ -599,10 +620,17 @@ fn SkeletonLine() -> Element {
 }
 
 #[component]
-fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
+fn WeaponRenderControls(
+    options: Signal<WeaponRenderOptions>,
+    model: Rc<WeaponModelData>,
+    shape_mask: Option<u32>,
+    on_shape_change: EventHandler<Option<u32>>,
+) -> Element {
     let current = options();
     let bloom_percent = (current.bloom_strength * 100.0).round() as i32;
     let debug_select_class = input_class("h-8 cursor-pointer py-1 text-xs");
+    let shape_select_class = input_class("h-8 w-24 cursor-pointer py-1 text-xs");
+    let shape_options = model_shape_options(&model);
 
     rsx! {
         div {
@@ -613,6 +641,23 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                 span { class: "text-[11px] text-muted-foreground", "{bloom_percent}%" }
             }
             div { class: "space-y-2",
+                if !shape_options.is_empty() {
+                    label { class: "flex items-center justify-between gap-3",
+                        span { class: "text-muted-foreground", "Shape" }
+                        select {
+                            class: "{shape_select_class}",
+                            value: "{shape_mask.unwrap_or(0)}",
+                            onchange: move |event| {
+                                let mask = event.value().parse::<u32>().ok().filter(|mask| *mask != 0);
+                                on_shape_change.call(mask);
+                            },
+                            option { value: "0", "Base" }
+                            for (_, mask, name) in shape_options.clone() {
+                                option { value: "{mask}", "{name}" }
+                            }
+                        }
+                    }
+                }
                 select {
                     class: "{debug_select_class}",
                     value: "{debug_mode_value(current.debug_mode)}",
@@ -881,14 +926,16 @@ fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
 fn WeaponModelCanvas(
     model: Rc<WeaponModelData>,
     render_options: Signal<WeaponRenderOptions>,
+    shape_mask: Option<u32>,
 ) -> Element {
     let canvas_id = format!(
-        "weapon-model-canvas-{}-{}-{}-{}-{}",
+        "weapon-model-canvas-{}-{}-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
         model.stain_ids[0],
         model.stain_ids[1],
+        shape_mask.unwrap_or(0),
     );
     let init_error = use_signal(|| None::<String>);
 
@@ -896,6 +943,7 @@ fn WeaponModelCanvas(
     {
         let effect_canvas_id = canvas_id.clone();
         let effect_model = model.clone();
+        let effect_shape_mask = shape_mask;
         let mut effect_error = init_error;
         use_effect(move || {
             let canvas_id = effect_canvas_id.clone();
@@ -914,7 +962,10 @@ fn WeaponModelCanvas(
                         .ok_or_else(|| "canvas 未挂载".to_string())?
                         .dyn_into::<HtmlCanvasElement>()
                         .map_err(|_| "canvas 元素类型错误".to_string())?;
-                    WebWeaponCanvasRenderer::from_canvas(canvas, &model).await
+                    let prepared_options = effect_shape_mask
+                        .map(|mask| PreparedModelOptions::default().with_enabled_shape_mask(mask))
+                        .unwrap_or_default();
+                    WebWeaponCanvasRenderer::from_canvas(canvas, &model, prepared_options).await
                 }
                 .await;
 
@@ -1178,15 +1229,51 @@ fn format_vec3(value: [f32; 3]) -> String {
     format!("{:.3}, {:.3}, {:.3}", value[0], value[1], value[2])
 }
 
-fn model_canvas_key(model: &WeaponModelData) -> String {
+fn model_canvas_key(model: &WeaponModelData, shape_mask: Option<u32>) -> String {
     format!(
-        "{}-{}-{}-{}-{}",
+        "{}-{}-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
         model.stain_ids[0],
         model.stain_ids[1],
+        shape_mask.unwrap_or(0),
     )
+}
+
+fn model_shape_options(model: &WeaponModelData) -> Vec<(usize, u32, String)> {
+    let mut options = Vec::new();
+    for shape in model
+        .meshes
+        .iter()
+        .flat_map(|mesh| mesh.shape_influences.iter())
+    {
+        if shape.shape_index_mask == 0
+            || options
+                .iter()
+                .any(|(_, mask, _)| *mask == shape.shape_index_mask)
+        {
+            continue;
+        }
+        options.push((
+            shape.index,
+            shape.shape_index_mask,
+            shape
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Shape {}", shape.index)),
+        ));
+    }
+    options.sort_by_key(|(index, _, _)| *index);
+    options
+}
+
+fn model_has_shape_mask(model: &WeaponModelData, shape_mask: u32) -> bool {
+    model
+        .meshes
+        .iter()
+        .flat_map(|mesh| mesh.shape_influences.iter())
+        .any(|shape| shape.shape_index_mask == shape_mask)
 }
 
 #[cfg(test)]
@@ -1233,5 +1320,68 @@ mod weapon_url_tests {
             parse_glass_blend_mode("unknown"),
             ModelGlassBlendMode::Multiply
         );
+    }
+
+    #[test]
+    fn shape_options_are_unique_sorted_and_rebuild_the_canvas_key() {
+        let model = test_shape_model();
+
+        assert_eq!(
+            model_shape_options(&model),
+            vec![(0, 1, "shape_a".to_string()), (2, 4, "shape_c".to_string()),]
+        );
+        assert!(model_has_shape_mask(&model, 1));
+        assert!(model_has_shape_mask(&model, 4));
+        assert!(!model_has_shape_mask(&model, 2));
+        assert_ne!(
+            model_canvas_key(&model, None),
+            model_canvas_key(&model, Some(1))
+        );
+    }
+
+    fn test_shape_model() -> WeaponModelData {
+        WeaponModelData {
+            item_id: 42,
+            item_name: "shape test".to_string(),
+            model_main: PackedModelId::from_raw(1),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: xiv_companion::ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: vec![xiv_companion::ModelMesh {
+                path: "shape-test.mdl".to_string(),
+                part_index: 0,
+                mesh_category: Some("normal".to_string()),
+                submesh: None,
+                shape_influences: vec![
+                    test_shape_info(2, "shape_c"),
+                    test_shape_info(0, "shape_a"),
+                    test_shape_info(0, "duplicate"),
+                ],
+                shape_targets: Vec::new(),
+                material_index: 0,
+                material_slot: 0,
+                material_name: "shape test".to_string(),
+                color: [1.0; 3],
+                bone_table: None,
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }],
+        }
+    }
+
+    fn test_shape_info(index: usize, name: &str) -> xiv_companion::ModelShapeInfo {
+        let shape_index_mask = 1_u32 << index;
+        xiv_companion::ModelShapeInfo {
+            index,
+            name: Some(name.to_string()),
+            shape_index_mask,
+            shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
+            shape_mesh_index: index,
+            shape_value_count: 1,
+        }
     }
 }
