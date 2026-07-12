@@ -107,7 +107,7 @@
 
 主要不足：
 
-- 染色已接入同步/异步 weapon model load、material summary、ColorTable bake 和 Web stain0/stain1 选择器；EXD 名称、UI 色块、排序和 metallic metadata 也已导出。正式 phantom fixture 已加入 `45052` stain `[1,0]` case，当前视觉覆盖仍应继续扩展到第二通道和 metallic 染剂。
+- 染色已接入同步/异步 weapon model load、material summary、ColorTable bake 和 Web stain0/stain1 选择器；EXD 名称、UI 色块、排序和 metallic metadata 也已导出。正式 phantom fixture 已加入 `45052` stain `[1,0]` case；该材质的 Dawntrail dye table 有 30 行 channel0、2 行 channel1，当前回归只覆盖第一通道且实际改动 2 行。本轮从安装客户端 Stain 表选定固定 metallic 染剂，新增 `45052` `[0,metallic]` 第二通道 case；验证 application report 改动 2 行，并用最终 PNG 像素差异确认它同时区别于未染色和 stain0 case。
 - Meddle 的 runtime 输入，包括 GPU ColorTable、resolved texture/material handle、decal、crest、on-render material output，仍不能由离线 SqPack 还原；其中 decal/crest 与 materialChange 已有显式 prepared fallback，GPU ColorTable 和 handle remap 继续只记录为缺口。
 - reflection/stockings/tattoo/occlusion 等 shader package 已能分类，但很多 shader keys/constants 还没有提升为结构化字段，也没有最小 fixture 覆盖；outline/specular/SSAO、toon/sheen/sphere、alpha aperture/offset/shadow threshold、glass IOR/thickness 和 transparency 已先进入结构化字段但未驱动完整 shader-family 行为，lightshaft 已有第一组结构化 constants 但 `g_Ray` 与节点级行为仍是近似。
 - texture/sampler 语义仍有少量兜底路径依赖；MeddleTools 里 `_id.tex`、tile/detail arrays 使用 Non-Color + Closest/Repeat 的规则已经进入 prepared policy。tile/detail vertical atlas 已进入 GPU/WGSL 并完成第一版选层和组合，后续重点转为通道解释、权重校准和 shader-family-specific UV 路由。
@@ -115,7 +115,7 @@
 计划：
 
 1. 先继续扩充可审计信息：在 material/prepared debug 中补齐 texture role 的最终来源、shader family、sampler policy、UV source、feature flags 和未支持 runtime 输入标记。
-2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器、URL 状态和首个正式染色 snapshot；后续补第二通道与 metallic 染剂视觉组合。EXD 颜色继续只用于 UI，不作为实际覆盖值。
+2. 染色体验链路已完成请求、STM、bake、EXD metadata、Web 双通道选择器、URL 状态和首个正式染色 snapshot；本轮补 45052 第二通道 + metallic 染剂正式 snapshot 与像素差异断言。EXD 颜色继续只用于 UI，不作为实际覆盖值。
 3. 逐步结构化 shader-family 参数：优先 glass/transparency/lightshaft/scroll，再处理 reflection/stockings/tattoo/occlusion；每补一个参数都加合成 MTRL fixture 和真实样本 debug 对照。
 4. 对 runtime-only 数据不盲猜：decal/crest 已建立透明纹理 fallback，materialChange 已建立基础材质 fallback；renderer final pass 已执行 crest discard 与基础材质路径，mesh-role debug 仍保留几何可见性。GPU ColorTable 继续只在 debug 中标明缺失，避免离线预览伪装成完整运行时渲染。
 
@@ -591,7 +591,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 2. 结果处理：Crystal/Environment 的“已解析、未渲染”状态已进入明确 prepared family/feature/unsupported 字段；`multiMapInterpretation` 也已区分共享 detail array 缺失与 MultiMap 通道未实现。共享 array 的 binding/layout/pair status 与 layer count 已从 renderer 前置到 prepared，非法资源不再只静默回退；Dawntrail TileIndex/SphereIndex 均已从 raw half bits 解码后进入语义 bake，TileIndex 的 `half * 64` 与本仓 `/64` bake 继续证明 WGSL 的 `TileProperties.r * 64`，SphereIndex 则由 45059 的 `0x4000 -> 2.0 -> R=2/255` 验证。TileMatrix 已按 UU/UV/VU/VV 顺序使用未 clamp float GPU texture，并只保留节点证明的 UV 变换；detail/multi-detail 已从固定叠加改为节点证明的 MultiBlendWeight A/B mix，ORB Blue darkening 与 normal-alpha × TileAlpha 权重也已按 `chara_detail_blend` 对齐。普通材质纹理 mip chain 与 character `g_TextureMipBias` 已贯通；完整 MultiMap influence 继续等待证据。
 3. 渲染器：characterTransparency/glass、dither depth、GlassBlend、outline、toon、bguvscroll Map0/Map1、Flow、stockings opaque alpha/pipeline、tattoo normal-A alpha 与 water direct alpha/deep color/primary wave 已完成第一版。tattoo 的 OptionColor/DecalColor 混色仍不猜测。secondary color/normal/specular 只在 `BgUvScroll + GetMultiValues` 中复用 tile/sheen/sphere 物理 binding，按 UV1Scroll 和 vertex alpha 混合；其它 `GetValues` 变体保持显式未支持，sampled texture 数仍为 15。characterReflection generic approximation 与 stockings/tattoo/occlusion runtime 输入均已有独立 diagnostic；后续再寻找真实 reflection 节点/样本。
 4. runtime 输入：默认 crest/decal 透明 fallback 与 materialChange 基础材质 fallback 已执行；后续只在调用方能提供真实 on-render texture 时增加显式输入，不从静态 MTRL 伪造。
-5. 验证：继续扩充第二通道/metallic 染色 case；weapon scope 已确认无 bg detail 样本，相关权重等待游戏 shader 或非武器 fixture。继续为 transparency/glass/scroll 等行为增加 synthetic 与真实 snapshot，并用 catalog audit 防止真实加载缺口被小型 phantom 集合漏掉。
+5. 验证：45052 第二通道/metallic 染色 case 本轮补齐，并与 baseline/stain0 做像素差异断言；weapon scope 已确认无 bg detail 样本，相关权重等待游戏 shader 或非武器 fixture。继续为 transparency/glass/scroll 等行为增加 synthetic 与真实 snapshot，并用 catalog audit 防止真实加载缺口被小型 phantom 集合漏掉。
 
 ### 第一阶段：可审计和不误画
 
