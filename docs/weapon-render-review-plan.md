@@ -47,7 +47,7 @@
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 不进入普通 surface pass，但 renderer 会保留为 additive batch。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、skin、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、bgUvScroll、lightShaft、water、unknown，并进入 `PreparedMaterial`；lightshaft、bguvscroll 已有第一版行为，skin 会显式报告 runtime SkinColor/完整节点缺口，其它特殊 family 也仍有不同程度的节点缺口。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，以及 character tile normal/ORB 和 bg detail diffuse/normal 四个共享数组 atlas，并随 prepared material 输出。
-- `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/emissive 为 sRGB + linear + repeat，normal/mask/specular/material/multi/material-properties 为 Non-Color + linear + repeat，index、ColorTable extra maps 和共享 tile/detail arrays 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
+- `PreparedTextureSamplingSet` 已表达并执行 texture role 采样策略：base/emissive 为 sRGB + linear，normal/mask/specular/material/multi/material-properties 为 Non-Color + linear，index、ColorTable extra maps 和共享 tile/detail arrays 为 Non-Color + nearest；renderer 的 15 个现有 texture binding 均有独立 sampler binding，并从对应 role policy 派生 descriptor。
 - `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，请求级 stain IDs 已接入实际 model load。
 - 数据层已实现 Legacy `chara/base_material/stainingtemplate.stm` 与 Dawntrail `chara/base_material/stainingtemplate_gud.stm` 的通用 parser，覆盖 v1.1/v2.0/v2.1、u16/u32 keys、singleton/direct/indexed column 编码、1-based stain ID lookup，以及 Dawntrail template ID 减 1000 后回退 Legacy STM；同时已有按 Legacy/Dawntrail dye flags 覆盖 renderer-friendly ColorTable rows 的纯函数与诊断报告。
 - `WeaponModelLoadRequest.stainIds` 已作为请求级 `[stain0, stain1]` 输入进入同步/异步 SqPack 加载；请求仅在存在非零 stain 时各加载一次 Legacy/GUD STM，材质会在 summary 和 ColorTable bake 前应用染色。`WeaponModelData.stainIds` 与 `ModelMaterial.stainingApplication` 会保留输入、模板路径、行统计和错误，phantom summary 可直接审计；资源 key 也包含 stain IDs，避免不同染色请求冲突。
@@ -130,14 +130,14 @@
 主要不足：
 
 - shape mesh/morph 已支持显式离线应用：MDL geometry 保留 shape value，submesh remap 按受影响的 index-buffer position 拆点并输出稀疏 position/normal target，renderer 构建 GPU vertex buffer 时仅在调用方显式提供 mask 后累加 active target delta，默认保持 base geometry。仍缺 runtime name/bit mapping、skinning runtime 输入和更细的 per-submesh prepared draw。
-- `PreparedMaterialUvSources` 已开始驱动 renderer 选择采样 UV；`PreparedTextureSamplingSet` 已开始驱动 renderer 的 color/data/nearest 三组 sampler descriptor，但还没有做到每个 texture role 独立 sampler。
+- `PreparedMaterialUvSources` 已驱动 renderer 选择采样 UV；`PreparedTextureSamplingSet` 也已逐 texture binding 驱动独立 sampler descriptor。
 - shader-family-specific 规则还没有进入中间层，例如 character base texture 如何与 ColorTable diffuse 混合、material/multi map 通道如何解释、scroll/reflection 使用哪套 UV/flow。
 - `usesDye`、decal/crest、runtime ColorTable、runtime material change、tile/detail array 这些 capability flags 已有第一版 prepared unsupported summary；stain 与共享数组已进入 renderer，crest/decal 缺失时的透明 fallback 和 materialChange 基础材质 fallback 也已执行。runtime ColorTable 与真实 on-render crest/decal 内容仍缺显式输入。
 
 计划：
 
 1. 扩展 preparation 输入：stain 已进入 `WeaponModelLoadRequest`，decal/crest 与 materialChange 已有默认 fallback；后续只在有真实调用方需求时增加显式 runtime decal/crest 资源入口。`enabledShapeMask` 继续保持审计输入，默认不猜运行时状态。
-2. 把 prepared texture/sampler/UV source 从“输出给 debug”推进到“驱动 renderer binding”：UV source 已接入 renderer material uniform 和 WGSL 采样选择；prepared sampler policy 已驱动 color/data/nearest 三组 sampler descriptor；后续继续接入 shader-family-specific source、nearest data resources 和 per-texture sampler。
+2. 把 prepared texture/sampler/UV source 从“输出给 debug”推进到“驱动 renderer binding”：UV source 已接入 renderer material uniform 和 WGSL 采样选择；prepared sampler policy 已逐 binding 驱动 15 个 sampler；后续继续接入 shader-family-specific source 和 nearest data resources。
 3. 将 shader-family-specific 规则下沉到 prepared 层：为 character/glass/transparency/scroll/lightshaft/reflection 等输出明确的 feature flags、UV source、blend/alpha policy 和需要的 texture roles。
 4. 继续让 phantom `model-summary.json` 输出 preparation 结果，新增“为什么没画/为什么用了 fallback”的原因字段，作为后续真实样本验证的主要入口。draw/runtime fallback 已有 prepared 字段；stale MTRL reference 也已通过 `ModelMaterial.referenceFallback` 输出 kind、requested name 与 source slot/index/name/path。
 
@@ -145,7 +145,7 @@
 
 审查结论：
 
-- renderer 已上传扩展顶点格式，并已将 base/normal/mask/emissive/specular/material-properties/tile/sheen/sphere/tile-matrix 绑定到 material bind group；color/data/nearest data sampler 已初步分开。
+- renderer 已上传扩展顶点格式，并已将 base/normal/mask/emissive/specular/material-properties/tile/sheen/sphere/tile-matrix 绑定到 material bind group；每个现有 texture binding 已有独立 sampler。
 - 透明 batch 已按 mesh-level back-to-front 排序；glass 已进入透明管线；cutout 有 alpha test；ColorTable extra maps 已在 WGSL 中产生可观察的保守高光/反射近似。
 - 当前 `model.wgsl` 仍是单个近似 shader，虽然已能按 prepared UV source 在 `uv0-uv3` 间选择采样 UV，但 shader-family-specific 规则仍少，实际材质多数仍走 `uv0`、primary normal/bitangent、`color0` 的近似路径；与 MeddleTools 节点图和 bake pass 的差距仍集中在 shader 行为，而不是字段缺失。
 
@@ -155,14 +155,14 @@
 - 多套 UV 已开始通过 prepared source 和 per-role UV scroll 参与采样；Map1/UV1Scroll、tile/detail arrays 与 Flow primary tangent 已参与 shading，但 secondary tangent frame、`color1`、`flow1`、detail/multi maps 的完整解释仍未完成。
 - alpha/glass/transparency 已从固定 glass opacity 前进到 prepared alpha source：character glass/transparency 强制进入对应 pass，normal B 驱动 alpha，`EnableLighting` 可控制 transparency lighting；`DrawDepthMode_Dither` 已驱动专用 depth-only prepass，使用与颜色 pass 一致的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值。`GlassBlendMode` 已作为显式 scene option 进入 renderer/Web/snapshot，但 Mul 仍保留现有 alpha-blend 近似，Add 只选择硬件 additive pipeline；折射和真实厚度传输仍缺失，且尚无真实 charactertransparency 武器样本。Meddle 只确认 `DrawDepthMode_Dither` 的 material key/value 与适用 SHPK，没有游戏抖动公式；MeddleTools 不实现运行时 depth pass，因此当前公式是保守近似。它仍与 scene-level `ApplyDitherClip` 区分，后者覆盖更多 shader family。`GlassBlendMode` 也只有 scene key 的 Mul/Add 名字与默认值，没有 MTRL 来源或 MeddleTools 节点语义，因此没有写入 parsed material。
 - `characterstockings.shpk` 已按 MeddleTools `meddle character.shpk` 的 `IS_STOCKING` 节点行为把最终 alpha source 和普通 surface render pass 都固定为 Opaque；即使静态 base alpha 或 alpha-test 预分类为 Mask/Blend，也不会误进 Cutout/Transparent。Glass/Crest/LightShaft 等 mesh draw role 仍保持更高优先级。Meddle `OnRenderMaterialUtil` 同时证明 stockings 会复制 runtime skin material textures 并应用 legacy body decal；离线 loader 尚无这些运行时输入，因此仍保留 `incompleteShaderFamilyLogic`，不宣称完整支持。
-- renderer debug view 已能切换 base、normal、mask/material、specular、emissive、alpha、UV、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果；更细的 per-texture independent sampler policy 仍未实现。MeddleTools 当前唯一明确的非 Repeat 静态角色是 `skin.shpk + GetMaterialValueFace` diffuse 使用 Linear/EXTEND，另一个 CLIP 是 runtime `Decal`；结构化 `GetMaterialValue` 已让 Face 驱动现有材质级 color sampler 的 ClampToEdge，不增加新 binding，data/nearest sampler 保持各自 policy。49100 Body 样本继续使用 Repeat；若后续发现同一材质内其它 sRGB role 需要不同 address mode，再拆真正 per-texture sampler。
+- renderer debug view 已能切换 base、normal、mask/material、specular、emissive、alpha、UV、两套 vertex color、secondary normal、flow0/flow1、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果。15 个 texture binding 已使用独立 sampler；`skin.shpk + GetMaterialValueFace` diffuse 的 ClampToEdge 不再连带改变 emissive。另一个明确的 CLIP 角色是 runtime `Decal`，仍等待显式输入和 shader 级 UV clip。
 
 计划：
 
 1. prepared pass 已分管 opaque、cutout、transparent、glass、additive lightshaft、dither depth 与 outline pipeline；后续重点是补完整 family-specific 行为和真实 blend/depth 语义，保持现有视觉输出稳定并继续扩充 synthetic pipeline tests。
 2. 让 WGSL 继续按 prepared UV source 和 feature flags 消费更多通道：per-role scroll、Map1/UV1Scroll、tile/detail 和 Flow primary tangent 已接入，后续优先补 multi map mask，再做 secondary normal/bitangent、flow1 与 color1。
 3. 按 shader family 拆函数而不是继续堆主函数：base color、normal、material properties、alpha、emissive、glass、tile/sheen/sphere、scroll/reflection 分块，先用分支承载，必要时再拆 shader module/pipeline。
-4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex color、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果已可检查；后续补 per-texture independent sampler policy，并继续把这些视图作为真实武器样本回归的主要判断工具。
+4. 继续补 debug render modes：base、normal、mask/material、specular、emissive、alpha、UV set、vertex channels、mesh/draw-role color、ColorTable index、material map、multi map、ColorTable extra maps 与四种 array 选层结果已可检查；per-texture sampler policy 已独立执行，后续按需要增加 policy preview。
 
 ## 1. 数据解析改进
 
@@ -540,7 +540,7 @@ character transparency/glass 与 water 已完成第一版 alpha source / prepare
 
 ### P1: 纹理采样配置
 
-当前进度：数据层已有第一版 `PreparedTextureSamplingSet`，renderer 的 material bind group 当前仍把逐 role policy 压缩为 color/data/nearest 三组共享 sampler；这会让 skin face 的 base clamp 同时影响 emissive 等同组纹理，执行层尚未忠实实现 prepared policy。本轮计划把现有 15 个 texture binding 全部改为各自 sampler binding：base、normal、mask、emissive、material-properties、specular、tile/sheen/sphere/tile-matrix、index、material/multi map、tile/detail pair。WebGPU 基线每 shader stage 至少支持 16 samplers，当前正好使用 15，保留一个预算；TileMatrix 使用 non-filtering sampler，bguvscroll 复用 extra binding 时 sampler policy 随 secondary color/normal/specular role 切换。
+当前进度：数据层 `PreparedTextureSamplingSet` 已由 renderer 逐 role 执行。material bind group 的 15 个现有 texture binding 均有独立 sampler：base、normal、mask、emissive、material-properties、specular、tile/sheen/sphere/tile-matrix、index、material/multi map、tile/detail pair。WebGPU 基线每 shader stage 至少支持 16 samplers，当前使用 15 并保留一个预算；TileMatrix 使用 non-filtering sampler，bguvscroll 复用 extra binding 时 sampler policy 随 secondary color/normal/specular role 切换。skin face 的 base clamp 不再影响 emissive。
 
 仍需要按 texture role 完整落地：
 
@@ -550,12 +550,12 @@ character transparency/glass 与 water 已完成第一版 alpha source / prepare
 - tile/detail arrays 与 ColorTable extra maps: nearest 或 shader-family-specific；当前 renderer 已用 nearest sampler 消费 ColorTable extra maps 和两个 pair atlas，共享 arrays 按 Non-Color + nearest + repeat 采样
 - decal: clip/extend 语义；decal/crest 已确认为 runtime-only on-render texture，并有透明 fallback 元数据，当前尚无显式 runtime texture 输入和独立 GPU binding
 
-当前三组共享 sampler 将在本轮替换为逐 binding sampler；`Clip` address policy 仍只能在 sampler descriptor 层降级为 clamp，后续 decal 或 face override 仍需要 shader 级 UV clip/extend 行为。runtime decal 会需要第 16 个 sampler 或 layout 重排，本轮不提前占用。
+`Clip` address policy 仍只能在 sampler descriptor 层降级为 clamp，后续 decal 或 face override 仍需要 shader 级 UV clip/extend 行为。runtime decal 会需要第 16 个 sampler 或 layout 重排，当前未提前占用。
 
 验证：
 
 - 已有 prepared texture sampling 测试覆盖 `_id.tex` nearest policy，避免颜色边界被 linear 混合污染。
-- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties，并用 data sampler 采样；ColorTable extra maps 已用 nearest sampler 采样并提供 debug view；三组 sampler descriptor 已由 prepared sampling policy 派生。tile/sheen/sphere 可见效果均已有 synthetic shader fixture。
+- renderer 已用 `Rgba8Unorm` 创建 normal/mask/material-properties；ColorTable extra maps 使用各自 nearest sampler 并提供 debug view；全部 15 个 sampler descriptor 均由对应 prepared role policy 派生。focused test 固定 base clamp、emissive repeat 和 index nearest，实际 Vulkan WGPU snapshot 验证 15-sampler pipeline 可创建和渲染。
 
 ### P2: 视觉验证和调试视图
 
@@ -577,7 +577,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 仍待补：
 
-- 本轮完成 per-texture independent sampler binding；sampler policy debug preview 后续按需要补充
+- per-texture independent sampler binding 已完成；sampler policy debug preview 后续按需要补充
 - 已完成 tile normal/ORB、detail diffuse/normal array preview；detail 仍需真实 bg 武器样本校准
 
 这些视图能显著缩短后续对照 Meddle/MeddleTools 的定位时间。
@@ -613,7 +613,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 ### 第二阶段：让解析结果真正进 shader
 
 1. 已完成 GPU 顶点格式扩展；prepared UV source、per-role scroll、Map1/UV1Scroll、Flow primary tangent，以及 bguvscroll Map1 的 secondary normal/bitangent frame 已进入 WGSL。后续让 shader-family 逻辑继续消费其它 `uv1-uv3` 用途、`color1` 和 `flow1`。
-2. 已完成第一版 per-material texture/sampler config，renderer 已派生 color/data/nearest 三组 sampler；共享 tile/detail arrays 已进入两个 GPU pair atlas、选层采样与 debug view。后续补 per-texture independent sampler 和 shader 级 clip/extend。
+2. 已完成 per-material texture/sampler config，renderer 已为 15 个现有 texture binding 派生独立 sampler；共享 tile/detail arrays 已进入两个 GPU pair atlas、选层采样与 debug view。后续补 shader 级 clip/extend 和 runtime decal binding。
 3. ColorTable diffuse/specular/material-properties/tile/sheen/sphere/tile-matrix 与共享 tile/detail arrays 已进入 renderer；`g_DiffuseColor`、`g_MultiDiffuseColor`、`g_EmissiveColor`、`g_OutlineColor/g_OutlineWidth`、`g_SpecularColorMask`、`g_SSAOMask`、sheen/sphere 常量、detail tint/normal、tile normal/ORB、alpha aperture/offset 和 glass IOR/thickness 已有第一版 WGSL 消费。ORB/tile-normal 通道已按节点证据收敛；后续补 shader-family-specific source/scroll 和 detail/multi-map 的准确 influence。
 4. 已完成第一版 shader family 分类和 alpha policy/prepared pass 分类；后续把 character/glass/transparency/scroll/lightshaft/reflection 等 family 的关键节点拆成明确 WGSL 函数块，而不是继续扩大单个主 shader 分支。
 

@@ -116,7 +116,7 @@ var material_properties_texture: texture_2d<f32>;
 var specular_texture: texture_2d<f32>;
 
 @group(1) @binding(8)
-var data_sampler: sampler;
+var normal_sampler: sampler;
 
 @group(1) @binding(9)
 var tile_properties_texture: texture_2d<f32>;
@@ -131,7 +131,7 @@ var sphere_properties_texture: texture_2d<f32>;
 var tile_matrix_texture: texture_2d<f32>;
 
 @group(1) @binding(13)
-var nearest_data_sampler: sampler;
+var tile_matrix_sampler: sampler;
 
 @group(1) @binding(14)
 var color_table_index_texture: texture_2d<f32>;
@@ -147,6 +147,42 @@ var tile_array_pair_texture: texture_2d<f32>;
 
 @group(1) @binding(18)
 var detail_array_pair_texture: texture_2d<f32>;
+
+@group(1) @binding(19)
+var mask_sampler: sampler;
+
+@group(1) @binding(20)
+var emissive_sampler: sampler;
+
+@group(1) @binding(21)
+var material_properties_sampler: sampler;
+
+@group(1) @binding(22)
+var specular_sampler: sampler;
+
+@group(1) @binding(23)
+var tile_sampler: sampler;
+
+@group(1) @binding(24)
+var sheen_sampler: sampler;
+
+@group(1) @binding(25)
+var sphere_sampler: sampler;
+
+@group(1) @binding(26)
+var index_sampler: sampler;
+
+@group(1) @binding(27)
+var material_map_sampler: sampler;
+
+@group(1) @binding(28)
+var multi_map_sampler: sampler;
+
+@group(1) @binding(29)
+var tile_array_sampler: sampler;
+
+@group(1) @binding(30)
+var detail_array_sampler: sampler;
 
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
@@ -209,11 +245,11 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
     let sampled_base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
     let sampled_secondary_base = textureSampleBias(
         tile_properties_texture,
-        base_color_sampler,
+        tile_sampler,
         secondary_base_uv,
         mip_bias,
     );
-    let sampled_normal = textureSampleBias(normal_texture, data_sampler, normal_uv, mip_bias);
+    let sampled_normal = textureSampleBias(normal_texture, normal_sampler, normal_uv, mip_bias);
     let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let secondary_weight = clamp(input.color.a, 0.0, 1.0)
         * material.secondary_map_params.x
@@ -263,18 +299,18 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let extra = resolve_extra_properties(input);
     let tile_array = resolve_tile_array(input, extra);
     let detail_array = resolve_detail_array(input);
-    let sampled_normal = textureSampleBias(normal_texture, data_sampler, normal_uv, mip_bias);
+    let sampled_normal = textureSampleBias(normal_texture, normal_sampler, normal_uv, mip_bias);
     let sampled_secondary_normal = textureSampleBias(
         sheen_properties_texture,
-        data_sampler,
+        sheen_sampler,
         secondary_normal_uv,
         mip_bias,
     );
     let secondary_blend = clamp(input.color.a, 0.0, 1.0) * material.secondary_map_params.w;
-    let sampled_specular = textureSampleBias(specular_texture, data_sampler, specular_uv, mip_bias).rgb;
+    let sampled_specular = textureSampleBias(specular_texture, specular_sampler, specular_uv, mip_bias).rgb;
     let sampled_secondary_specular = textureSampleBias(
         sphere_properties_texture,
-        data_sampler,
+        sphere_sampler,
         secondary_specular_uv,
         mip_bias,
     ).rgb;
@@ -317,13 +353,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let sampled_base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
     let sampled_secondary_base = textureSampleBias(
         tile_properties_texture,
-        base_color_sampler,
+        tile_sampler,
         secondary_base_uv,
         mip_bias,
     );
     let emissive_tex = textureSampleBias(
         emissive_texture,
-        base_color_sampler,
+        emissive_sampler,
         emissive_uv,
         mip_bias,
     ).rgb;
@@ -497,26 +533,26 @@ fn debug_fragment_output(
         color = material.debug_color.rgb;
     } else if mode < 14.5 {
         let index_uv = resolve_uv(input, material.uv_sources3.x, material.uv_scroll_masks3.x);
-        let index_sample = textureSample(color_table_index_texture, nearest_data_sampler, index_uv);
+        let index_sample = textureSample(color_table_index_texture, index_sampler, index_uv);
         color = vec3<f32>(index_sample.r, index_sample.g, 0.5);
     } else if mode < 15.5 {
         let material_map_uv = resolve_uv(input, material.uv_sources0.w, material.uv_scroll_masks0.w);
-        color = textureSample(material_map_texture, data_sampler, material_map_uv).rgb;
+        color = textureSample(material_map_texture, material_map_sampler, material_map_uv).rgb;
     } else if mode < 16.5 {
         let multi_map_uv = resolve_uv(input, material.uv_sources1.x, material.uv_scroll_masks1.x);
-        color = textureSample(multi_map_texture, data_sampler, multi_map_uv).rgb;
+        color = textureSample(multi_map_texture, multi_map_sampler, multi_map_uv).rgb;
     } else if mode < 17.5 {
         let tile_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
-        color = textureSample(tile_properties_texture, nearest_data_sampler, tile_uv).rgb;
+        color = textureSample(tile_properties_texture, tile_sampler, tile_uv).rgb;
     } else if mode < 18.5 {
         let sheen_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
-        color = textureSample(sheen_properties_texture, nearest_data_sampler, sheen_uv).rgb;
+        color = textureSample(sheen_properties_texture, sheen_sampler, sheen_uv).rgb;
     } else if mode < 19.5 {
         let sphere_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z);
-        color = textureSample(sphere_properties_texture, nearest_data_sampler, sphere_uv).rgb;
+        color = textureSample(sphere_properties_texture, sphere_sampler, sphere_uv).rgb;
     } else if mode < 20.5 {
         let tile_matrix_uv = resolve_uv(input, material.uv_sources2.w, material.uv_scroll_masks2.w);
-        color = textureSample(tile_matrix_texture, nearest_data_sampler, tile_matrix_uv).rgb;
+        color = textureSample(tile_matrix_texture, tile_matrix_sampler, tile_matrix_uv).rgb;
     } else if mode < 21.5 {
         color = tile_array.normal * 0.5 + vec3<f32>(0.5);
     } else if mode < 22.5 {
@@ -557,14 +593,14 @@ fn resolve_mask(uv: vec2<f32>) -> vec3<f32> {
     if material.params.w <= 0.5 {
         return vec3<f32>(1.0, material.specular_color.a, material.params.y);
     }
-    return textureSampleBias(mask_texture, data_sampler, uv, resolve_texture_mip_bias()).rgb;
+    return textureSampleBias(mask_texture, mask_sampler, uv, resolve_texture_mip_bias()).rgb;
 }
 
 fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
     if material.properties.x > 0.5 {
         return textureSampleBias(
             material_properties_texture,
-            data_sampler,
+            material_properties_sampler,
             uv,
             resolve_texture_mip_bias(),
         );
@@ -616,12 +652,12 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
     let tiled_uv = transformed_uv * max(abs(material.tile_params.zw), vec2<f32>(0.001));
     let normal_sample = textureSample(
         tile_array_pair_texture,
-        nearest_data_sampler,
+        tile_array_sampler,
         pair_atlas_uv(tiled_uv, layer, layer_count, 0.0),
     );
     let orb_sample = textureSample(
         tile_array_pair_texture,
-        nearest_data_sampler,
+        tile_array_sampler,
         pair_atlas_uv(tiled_uv, layer, layer_count, 1.0),
     );
     out.normal = decode_normal(normal_sample);
@@ -647,22 +683,22 @@ fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
     let multi_layer = clamp(round(max(material.detail_params.y, 0.0)), 0.0, layer_count - 1.0);
     let detail_diffuse = textureSample(
         detail_array_pair_texture,
-        nearest_data_sampler,
+        detail_array_sampler,
         pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 0.0),
     ).rgb;
     let multi_diffuse = textureSample(
         detail_array_pair_texture,
-        nearest_data_sampler,
+        detail_array_sampler,
         pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 0.0),
     ).rgb;
     let detail_normal = decode_normal(textureSample(
         detail_array_pair_texture,
-        nearest_data_sampler,
+        detail_array_sampler,
         pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 1.0),
     ));
     let multi_normal = decode_normal(textureSample(
         detail_array_pair_texture,
-        nearest_data_sampler,
+        detail_array_sampler,
         pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 1.0),
     ));
     let detail_tint = clamp(detail_diffuse * 2.0 * material.detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
@@ -725,16 +761,16 @@ fn resolve_extra_properties(input: VertexOutput) -> ExtraProperties {
     extra.sphere = vec4<f32>(0.0, 0.0, 1.0, 1.0);
     extra.tile_matrix = vec4<f32>(1.0, 0.0, 0.0, 1.0);
     if has_tile {
-        extra.tile = textureSample(tile_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x));
+        extra.tile = textureSample(tile_properties_texture, tile_sampler, resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x));
     }
     if has_sheen {
-        extra.sheen = textureSample(sheen_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y));
+        extra.sheen = textureSample(sheen_properties_texture, sheen_sampler, resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y));
     }
     if has_sphere {
-        extra.sphere = textureSample(sphere_properties_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z));
+        extra.sphere = textureSample(sphere_properties_texture, sphere_sampler, resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z));
     }
     if has_tile_matrix {
-        extra.tile_matrix = textureSample(tile_matrix_texture, nearest_data_sampler, resolve_uv(input, material.uv_sources2.w, material.uv_scroll_masks2.w));
+        extra.tile_matrix = textureSample(tile_matrix_texture, tile_matrix_sampler, resolve_uv(input, material.uv_sources2.w, material.uv_scroll_masks2.w));
     }
     return extra;
 }

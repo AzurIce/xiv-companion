@@ -421,6 +421,78 @@ impl ModelRenderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 19,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 20,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 21,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 22,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 23,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 24,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 25,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 26,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 27,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 28,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 29,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 30,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
@@ -2075,20 +2147,92 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let color_sampler = create_sampler_for_sampling(
+    let base_color_sampler = create_sampler_for_sampling(
         device,
-        "weapon material color sampler",
-        material_color_sampler_policy(prepared_material),
+        "weapon base color sampler",
+        prepared_material.texture_sampling.base_color,
     );
-    let data_sampler = create_sampler_for_sampling(
+    let normal_sampler = create_sampler_for_sampling(
         device,
-        "weapon material data sampler",
-        material_data_sampler_policy(prepared_material),
+        "weapon normal sampler",
+        prepared_material.texture_sampling.normal,
     );
-    let nearest_data_sampler = create_sampler_for_sampling(
+    let tile_matrix_sampler = create_sampler_for_sampling(
         device,
-        "weapon material nearest data sampler",
-        material_nearest_sampler_policy(prepared_material),
+        "weapon tile matrix sampler",
+        prepared_material.texture_sampling.tile_matrix,
+    );
+    let mask_sampler = create_sampler_for_sampling(
+        device,
+        "weapon mask sampler",
+        prepared_material.texture_sampling.mask,
+    );
+    let emissive_sampler = create_sampler_for_sampling(
+        device,
+        "weapon emissive sampler",
+        prepared_material.texture_sampling.emissive,
+    );
+    let material_properties_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material properties sampler",
+        prepared_material.texture_sampling.material_properties,
+    );
+    let specular_sampler = create_sampler_for_sampling(
+        device,
+        "weapon specular sampler",
+        prepared_material.texture_sampling.specular,
+    );
+    let tile_sampler = create_sampler_for_sampling(
+        device,
+        "weapon tile or secondary color sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_base_color
+        } else {
+            prepared_material.texture_sampling.tile_properties
+        },
+    );
+    let sheen_sampler = create_sampler_for_sampling(
+        device,
+        "weapon sheen or secondary normal sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_normal
+        } else {
+            prepared_material.texture_sampling.sheen_properties
+        },
+    );
+    let sphere_sampler = create_sampler_for_sampling(
+        device,
+        "weapon sphere or secondary specular sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_specular
+        } else {
+            prepared_material.texture_sampling.sphere_properties
+        },
+    );
+    let index_sampler = create_sampler_for_sampling(
+        device,
+        "weapon ColorTable index sampler",
+        prepared_material.texture_sampling.index,
+    );
+    let material_map_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material map sampler",
+        prepared_material.texture_sampling.material_map,
+    );
+    let multi_map_sampler = create_sampler_for_sampling(
+        device,
+        "weapon multi map sampler",
+        prepared_material.texture_sampling.multi_map,
+    );
+    let tile_array_sampler = create_sampler_for_sampling(
+        device,
+        "weapon tile array pair sampler",
+        prepared_material.texture_sampling.tile_normal_array,
+    );
+    let detail_array_sampler = create_sampler_for_sampling(
+        device,
+        "weapon detail array pair sampler",
+        prepared_material.texture_sampling.detail_diffuse_array,
     );
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2105,7 +2249,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&color_sampler),
+                resource: wgpu::BindingResource::Sampler(&base_color_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -2129,7 +2273,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 8,
-                resource: wgpu::BindingResource::Sampler(&data_sampler),
+                resource: wgpu::BindingResource::Sampler(&normal_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 9,
@@ -2149,7 +2293,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 13,
-                resource: wgpu::BindingResource::Sampler(&nearest_data_sampler),
+                resource: wgpu::BindingResource::Sampler(&tile_matrix_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 14,
@@ -2171,20 +2315,56 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 binding: 18,
                 resource: wgpu::BindingResource::TextureView(detail_array_pair_view),
             },
+            wgpu::BindGroupEntry {
+                binding: 19,
+                resource: wgpu::BindingResource::Sampler(&mask_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 20,
+                resource: wgpu::BindingResource::Sampler(&emissive_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 21,
+                resource: wgpu::BindingResource::Sampler(&material_properties_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 22,
+                resource: wgpu::BindingResource::Sampler(&specular_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 23,
+                resource: wgpu::BindingResource::Sampler(&tile_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 24,
+                resource: wgpu::BindingResource::Sampler(&sheen_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 25,
+                resource: wgpu::BindingResource::Sampler(&sphere_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 26,
+                resource: wgpu::BindingResource::Sampler(&index_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 27,
+                resource: wgpu::BindingResource::Sampler(&material_map_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 28,
+                resource: wgpu::BindingResource::Sampler(&multi_map_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 29,
+                resource: wgpu::BindingResource::Sampler(&tile_array_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 30,
+                resource: wgpu::BindingResource::Sampler(&detail_array_sampler),
+            },
         ],
     })
-}
-
-fn material_color_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.base_color
-}
-
-fn material_data_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.normal
-}
-
-fn material_nearest_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.index
 }
 
 fn create_sampler_for_sampling(
@@ -3956,18 +4136,18 @@ mod tests {
     }
 
     #[test]
-    fn material_sampler_groups_use_prepared_sampling_roles() {
-        let color_sampling = test_sampling(
+    fn material_sampler_roles_keep_independent_prepared_policies() {
+        let base_sampling = test_sampling(
+            PreparedTextureColorSpace::Srgb,
+            PreparedTextureFilter::Linear,
+            PreparedTextureAddressMode::ClampToEdge,
+        );
+        let emissive_sampling = test_sampling(
             PreparedTextureColorSpace::Srgb,
             PreparedTextureFilter::Linear,
             PreparedTextureAddressMode::Repeat,
         );
-        let data_sampling = test_sampling(
-            PreparedTextureColorSpace::NonColor,
-            PreparedTextureFilter::Linear,
-            PreparedTextureAddressMode::Clip,
-        );
-        let nearest_sampling = test_sampling(
+        let index_sampling = test_sampling(
             PreparedTextureColorSpace::NonColor,
             PreparedTextureFilter::Nearest,
             PreparedTextureAddressMode::Repeat,
@@ -3982,9 +4162,9 @@ mod tests {
             alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet {
-                base_color: color_sampling,
-                normal: data_sampling,
-                index: nearest_sampling,
+                base_color: base_sampling,
+                emissive: emissive_sampling,
+                index: index_sampling,
                 ..PreparedTextureSamplingSet::default()
             },
             uv_sources: PreparedMaterialUvSources::default(),
@@ -3995,9 +4175,13 @@ mod tests {
             render_backfaces: true,
         };
 
-        assert_eq!(material_color_sampler_policy(prepared), color_sampling);
-        assert_eq!(material_data_sampler_policy(prepared), data_sampling);
-        assert_eq!(material_nearest_sampler_policy(prepared), nearest_sampling);
+        let base = sampler_descriptor_for_sampling("base", prepared.texture_sampling.base_color);
+        let emissive =
+            sampler_descriptor_for_sampling("emissive", prepared.texture_sampling.emissive);
+        let index = sampler_descriptor_for_sampling("index", prepared.texture_sampling.index);
+        assert_eq!(base.address_mode_u, wgpu::AddressMode::ClampToEdge);
+        assert_eq!(emissive.address_mode_u, wgpu::AddressMode::Repeat);
+        assert_eq!(index.mag_filter, wgpu::FilterMode::Nearest);
     }
 
     #[test]
