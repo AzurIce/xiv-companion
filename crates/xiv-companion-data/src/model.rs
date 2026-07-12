@@ -429,6 +429,8 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
+    pub skin_value_mode: MaterialSkinValueMode,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_water_deep_color")]
     pub water_deep_color: [f32; 4],
@@ -674,6 +676,18 @@ pub enum MaterialSubColorMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialSkinValueMode {
+    #[default]
+    None,
+    Face,
+    Body,
+    BodyJjm,
+    FaceEmissive,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
     Skin,
@@ -812,6 +826,8 @@ pub struct PreparedMaterial {
     pub value_mode: MaterialValueMode,
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
+    #[serde(default)]
+    pub skin_value_mode: MaterialSkinValueMode,
     #[serde(default)]
     pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
@@ -1338,6 +1354,7 @@ pub fn prepare_material_for_draw_role(
     );
     let texture_bindings = prepared_texture_bindings(material);
     let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
+    let texture_sampling = prepared_material_texture_sampling(material, shader_family);
 
     PreparedMaterial {
         render_pass: prepared_render_pass(material, draw_role, shader_family),
@@ -1351,9 +1368,12 @@ pub fn prepare_material_for_draw_role(
         sub_color_mode: material
             .map(|material| material.sub_color_mode)
             .unwrap_or_default(),
+        skin_value_mode: material
+            .map(|material| material.skin_value_mode)
+            .unwrap_or_default(),
         alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
-        texture_sampling: PreparedTextureSamplingSet::default(),
+        texture_sampling,
         uv_sources,
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
         unsupported_inputs: prepared_material_unsupported_inputs(
@@ -1368,6 +1388,19 @@ pub fn prepare_material_for_draw_role(
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
     }
+}
+
+fn prepared_material_texture_sampling(
+    material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+) -> PreparedTextureSamplingSet {
+    let mut sampling = PreparedTextureSamplingSet::default();
+    if shader_family == MaterialShaderFamily::Skin
+        && material.is_some_and(|material| material.skin_value_mode == MaterialSkinValueMode::Face)
+    {
+        sampling.base_color.address_mode = PreparedTextureAddressMode::ClampToEdge;
+    }
+    sampling
 }
 
 pub fn prepared_material_alpha_policy(
@@ -2800,6 +2833,7 @@ mod color_table_bake_tests {
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
+                skin_value_mode: MaterialSkinValueMode::None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2822,6 +2856,7 @@ mod color_table_bake_tests {
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
+                skin_value_mode: MaterialSkinValueMode::None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3687,6 +3722,48 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_skin_face_clamps_only_base_color_sampling() {
+        let mut material = test_material();
+        material.shader_package_name = Some("skin.shpk".to_string());
+        material.skin_value_mode = MaterialSkinValueMode::Face;
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+
+        assert_eq!(prepared.skin_value_mode, MaterialSkinValueMode::Face);
+        assert_eq!(
+            prepared.texture_sampling.base_color.address_mode,
+            PreparedTextureAddressMode::ClampToEdge
+        );
+        assert_eq!(
+            prepared.texture_sampling.normal.address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+        assert_eq!(
+            prepared.texture_sampling.index.address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+
+        material.skin_value_mode = MaterialSkinValueMode::Body;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .texture_sampling
+                .base_color
+                .address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.skin_value_mode = MaterialSkinValueMode::Face;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .texture_sampling
+                .base_color
+                .address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+    }
+
+    #[test]
     fn material_shader_family_maps_known_character_shader_packages() {
         assert_eq!(
             material_shader_family(Some("character.shpk")),
@@ -3782,6 +3859,7 @@ mod color_table_bake_tests {
             flow_mode: MaterialFlowMode::Standard,
             value_mode: MaterialValueMode::Single,
             sub_color_mode: MaterialSubColorMode::None,
+            skin_value_mode: MaterialSkinValueMode::None,
             transparency: 0.0,
             water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
             water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
