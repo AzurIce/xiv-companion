@@ -4,8 +4,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use crate::ModelRenderData;
 use crate::renderer::{ModelRenderOptions, ModelRenderer};
+use crate::{ModelRenderData, PreparedModelOptions};
 
 #[derive(Clone, Debug)]
 pub struct WeaponModelSnapshotOptions {
@@ -17,6 +17,7 @@ pub struct WeaponModelSnapshotOptions {
     pub pitch: f32,
     pub zoom: f32,
     pub pan: [f32; 2],
+    pub prepared_model_options: PreparedModelOptions,
     pub render_options: ModelRenderOptions,
     pub power_preference: wgpu::PowerPreference,
     pub force_fallback_adapter: bool,
@@ -53,6 +54,19 @@ impl WeaponModelSnapshotOptions {
         self.render_options = render_options;
         self
     }
+
+    pub fn with_prepared_model_options(
+        mut self,
+        prepared_model_options: PreparedModelOptions,
+    ) -> Self {
+        self.prepared_model_options = prepared_model_options;
+        self
+    }
+
+    pub fn with_enabled_shape_mask(mut self, enabled_shape_mask: u32) -> Self {
+        self.prepared_model_options.enabled_shape_mask = Some(enabled_shape_mask);
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -75,6 +89,7 @@ impl Default for WeaponModelSnapshotOptions {
             pitch: 0.35,
             zoom: 3.2,
             pan: [0.0, 0.0],
+            prepared_model_options: PreparedModelOptions::default(),
             render_options: ModelRenderOptions::default(),
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -233,7 +248,13 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     let depth = create_depth_texture(&device, options.width, options.height);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = ModelRenderer::new(device, queue, format, model);
+    let mut renderer = ModelRenderer::new_with_prepared_options(
+        device,
+        queue,
+        format,
+        model,
+        options.prepared_model_options,
+    );
     renderer.render_to(
         &target_view,
         &depth_view,

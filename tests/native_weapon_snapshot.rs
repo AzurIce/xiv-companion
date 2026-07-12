@@ -42,6 +42,59 @@ fn render_installed_equipment_style_fist_snapshot() {
 }
 
 #[test]
+#[cfg(feature = "game-data")]
+#[ignore = "renders installed shape-morphed fist snapshots to target/weapon-render-snapshots"]
+fn render_installed_equipment_fist_shape_snapshot() {
+    let game_dir = std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+    let request = WeaponModelLoadRequest {
+        item_id: 42_697,
+        item_name: "新生王国指虎".to_string(),
+        model_main: 74_357,
+        model_sub: 0,
+        stain_ids: [0, 0],
+    };
+    let mut resource = SqPackResource::from_existing(&game_dir);
+    let model = load_weapon_model_from_resource_request(&mut resource, &request)
+        .expect("load shape-bearing equipment fist");
+    assert!(
+        model
+            .meshes
+            .iter()
+            .any(|mesh| !mesh.shape_targets.is_empty())
+    );
+
+    let render = |name, shape_mask| {
+        let mut options = WeaponModelSnapshotOptions::new(name).with_viewport(640, 640);
+        if let Some(shape_mask) = shape_mask {
+            options = options.with_enabled_shape_mask(shape_mask);
+        }
+        let snapshot = render_weapon_model_snapshot_with_options(options, &model)
+            .expect("render equipment fist shape snapshot");
+        image::open(&snapshot.png_path)
+            .expect("decode equipment fist shape PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let base = render("installed-equipment-fist-42697-shape-base", None);
+    let shaped = render("installed-equipment-fist-42697-shape-bit0", Some(1));
+    let rgb_difference: u64 = base
+        .chunks_exact(4)
+        .zip(shaped.chunks_exact(4))
+        .map(|(base, shaped)| {
+            (0..3)
+                .map(|channel| base[channel].abs_diff(shaped[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    eprintln!("shape RGB difference: {rgb_difference}");
+    assert!(
+        rgb_difference > 5_000,
+        "enabled shp_arm must produce a stable visible GPU difference"
+    );
+}
+
+#[test]
 #[ignore = "writes target/weapon-render-snapshots/native-demo-triangle.png with native wgpu"]
 fn render_mock_weapon_model_snapshot() {
     let snapshot = render_weapon_model_snapshot_with_options(
