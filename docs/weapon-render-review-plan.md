@@ -42,12 +42,12 @@
 - `weapon-render-pipeline.md` 已同步当前实现：Legacy ColorTable bake、mesh-level transparent sorting、额外材质贴图绑定和剩余限制不再按旧状态描述。
 - Dawntrail 与 Legacy ColorTable 都能通过 `_id.tex` 烘焙出 diffuse、specular、material-properties、tile、sheen、sphere、tile-matrix 等派生贴图。
 - `characterglass.shpk` 已有独立 alpha/render mode，透明 batch 已做 mesh-level back-to-front 排序。
-- renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已传递这些通道，并按 prepared UV source + per-role scroll mask 选择采样 UV，Flow 模式会消费 `flow0` primary tangent。当前 source 仍基本选择 `uv0`，secondary normal/bitangent、`color1` 和 `flow1` 尚未参与实际 shader。
+- renderer GPU 顶点格式已上传 `uv1-uv3`、`color1`、secondary normal/bitangent、`flow0/flow1`；WGSL 已传递 UV、flow 与 secondary normal/bitangent，并按 prepared UV source + per-role scroll mask 选择采样 UV。Flow 模式会消费 `flow0` primary tangent，bguvscroll Map1 normal 会消费 secondary frame；`color1` 和 `flow1` 尚未参与最终材质公式。
 - `PreparedModel` / `PreparedMesh` 已有第一版，按 mesh 输出 draw role、是否进入主 pass 和 prepared material；renderer 与 phantom `model-summary.json` 现在共用这一准备结果。
 - `PreparedMaterial` / `PreparedRenderPass` 已提升到数据层；phantom `model-summary.json` 的主 surface mesh 会输出 prepared material 决策，包含 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 与 culling policy；lightshaft 不进入普通 surface pass，但 renderer 会保留为 additive batch。
 - `MaterialShaderFamily` 已结构化常见 `.shpk`：character、skin、characterStockings、characterGlass、characterReflection、characterTransparency、characterScroll、characterTattoo、characterOcclusion、bg、bgUvScroll、lightShaft、water、unknown，并进入 `PreparedMaterial`；lightshaft、bguvscroll 已有第一版行为，skin 会显式报告 runtime SkinColor/完整节点缺口，其它特殊 family 也仍有不同程度的节点缺口。
 - `PreparedTextureBindings` 已聚合现有材质贴图索引：base、normal、mask、material、multi、specular、emissive、material-properties、tile、sheen、sphere、tile-matrix、ColorTable index，以及 character tile normal/ORB 和 bg detail diffuse/normal 四个共享数组 atlas，并随 prepared material 输出。
-- `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/specular/emissive 为 sRGB + linear + repeat，normal/mask/material/multi/material-properties 为 Non-Color + linear + repeat，index、ColorTable extra maps 和共享 tile/detail arrays 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
+- `PreparedTextureSamplingSet` 已表达第一版 texture role 采样策略：base/emissive 为 sRGB + linear + repeat，normal/mask/specular/material/multi/material-properties 为 Non-Color + linear + repeat，index、ColorTable extra maps 和共享 tile/detail arrays 为 Non-Color + nearest + repeat；renderer 已从该 prepared policy 派生 color/data/nearest 三组 sampler descriptor。
 - `ModelColorDyeTable` 已把 Legacy/Dawntrail 的 template、channel 和各可染通道 flag 从 debug 提升为 `ModelMaterial.colorDyeTable` 的可序列化结构化数据；保留 `hasColorDyeTable` 兼容旧数据，prepared `usesDye` 会识别任一入口，请求级 stain IDs 已接入实际 model load。
 - 数据层已实现 Legacy `chara/base_material/stainingtemplate.stm` 与 Dawntrail `chara/base_material/stainingtemplate_gud.stm` 的通用 parser，覆盖 v1.1/v2.0/v2.1、u16/u32 keys、singleton/direct/indexed column 编码、1-based stain ID lookup，以及 Dawntrail template ID 减 1000 后回退 Legacy STM；同时已有按 Legacy/Dawntrail dye flags 覆盖 renderer-friendly ColorTable rows 的纯函数与诊断报告。
 - `WeaponModelLoadRequest.stainIds` 已作为请求级 `[stain0, stain1]` 输入进入同步/异步 SqPack 加载；请求仅在存在非零 stain 时各加载一次 Legacy/GUD STM，材质会在 summary 和 ColorTable bake 前应用染色。`WeaponModelData.stainIds` 与 `ModelMaterial.stainingApplication` 会保留输入、模板路径、行统计和错误，phantom summary 可直接审计；资源 key 也包含 stain IDs，避免不同染色请求冲突。
@@ -569,6 +569,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 - alpha
 - UV set preview
 - vertex color preview
+- 本轮计划补 secondary vertex channels preview：`color1`、secondary normal、`flow0`、`flow1`。Meddle 只证明这些是 usage-indexed 顶点数组，MeddleTools 没有足够节点证据把 `color1/flow1` 接入最终公式，因此先贯通 renderer/Web debug mode 与 URL round-trip，并用 synthetic fixture 验证每个通道可独立观察
 - mesh category / draw role colors
 - ColorTable row index preview
 - material map / multi map preview
