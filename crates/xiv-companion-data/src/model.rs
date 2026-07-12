@@ -525,6 +525,8 @@ pub struct ModelMaterial {
     pub specular_color_mask: [f32; 4],
     #[serde(default = "default_material_ssao_mask")]
     pub ssao_mask: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient_occlusion_mask: Option<f32>,
     #[serde(default)]
     pub texture_mip_bias: f32,
     #[serde(default)]
@@ -1021,6 +1023,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub character_reflection: bool,
     #[serde(default)]
     pub character_scroll_variant: bool,
+    #[serde(default)]
+    pub ambient_occlusion_mask: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1736,6 +1740,8 @@ pub fn prepared_material_unsupported_inputs(
         multi_map_interpretation: texture_bindings.multi_map.is_some(),
         character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
         character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
+        ambient_occlusion_mask: material
+            .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
     }
 }
 
@@ -3152,6 +3158,7 @@ mod color_table_bake_tests {
                 multi_map_interpretation: true,
                 character_reflection: true,
                 character_scroll_variant: false,
+                ambient_occlusion_mask: false,
             }
         );
         assert_eq!(
@@ -3175,6 +3182,7 @@ mod color_table_bake_tests {
                 multi_map_interpretation: true,
                 character_reflection: true,
                 character_scroll_variant: false,
+                ambient_occlusion_mask: false,
             }
         );
 
@@ -3227,6 +3235,13 @@ mod color_table_bake_tests {
         let scroll = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(scroll.unsupported_inputs.character_scroll_variant);
         assert!(scroll.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.ambient_occlusion_mask = Some(0.5);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .ambient_occlusion_mask
+        );
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
@@ -4001,6 +4016,7 @@ mod color_table_bake_tests {
             outline_width: 0.0,
             specular_color_mask: [1.0, 1.0, 1.0, 1.0],
             ssao_mask: 1.0,
+            ambient_occlusion_mask: None,
             texture_mip_bias: 0.0,
             shadow_pos_offset: 0.0,
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],

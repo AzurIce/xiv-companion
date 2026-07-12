@@ -2866,6 +2866,7 @@ fn fallback_material() -> ModelMaterial {
         outline_width: 0.0,
         specular_color_mask: [1.0, 1.0, 1.0, 1.0],
         ssao_mask: 1.0,
+        ambient_occlusion_mask: None,
         texture_mip_bias: 0.0,
         shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],

@@ -169,6 +169,8 @@ const G_SPECULAR_COLOR_MASK: u32 = 0xCB03_38DC;
 #[cfg(feature = "game-data")]
 const G_SSAO_MASK: u32 = 0xB7FA_33E2;
 #[cfg(feature = "game-data")]
+const G_AMBIENT_OCCLUSION_MASK: u32 = 0x575A_BFB2;
+#[cfg(feature = "game-data")]
 const G_TEXTURE_MIP_BIAS: u32 = 0x3955_1220;
 #[cfg(feature = "game-data")]
 const G_SHADOW_POS_OFFSET: u32 = 0x5351_646E;
@@ -2305,6 +2307,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let outline_width = composed_material_outline_width(&semantics);
         let specular_color_mask = composed_material_specular_color_mask(&semantics);
         let ssao_mask = composed_material_ssao_mask(&semantics);
+        let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
         let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
         let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
@@ -2398,6 +2401,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             outline_width,
             specular_color_mask,
             ssao_mask,
+            ambient_occlusion_mask,
             texture_mip_bias,
             shadow_pos_offset,
             detail_color_uv_scale,
@@ -2935,6 +2939,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let outline_width = composed_material_outline_width(&semantics);
         let specular_color_mask = composed_material_specular_color_mask(&semantics);
         let ssao_mask = composed_material_ssao_mask(&semantics);
+        let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
         let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
         let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
@@ -3029,6 +3034,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             outline_width,
             specular_color_mask,
             ssao_mask,
+            ambient_occlusion_mask,
             texture_mip_bias,
             shadow_pos_offset,
             detail_color_uv_scale,
@@ -4093,6 +4099,15 @@ fn composed_material_ssao_mask(semantics: &ComposedMaterialSemantics) -> f32 {
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_ambient_occlusion_mask(semantics: &ComposedMaterialSemantics) -> Option<f32> {
+    semantics
+        .material_constant_f32_values(G_AMBIENT_OCCLUSION_MASK)
+        .and_then(|values| values.first())
+        .copied()
+        .filter(|value| value.is_finite())
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_texture_mip_bias(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_TEXTURE_MIP_BIAS, 0.0)
 }
@@ -4552,6 +4567,7 @@ fn fallback_weapon_material(
         outline_width: 0.0,
         specular_color_mask: [1.0, 1.0, 1.0, 1.0],
         ssao_mask: 1.0,
+        ambient_occlusion_mask: None,
         texture_mip_bias: 0.0,
         shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
@@ -7143,6 +7159,7 @@ mod weapon_material_tests {
         assert_eq!(composed_material_outline_width(&semantics), 0.0);
         assert_eq!(composed_material_specular_color_mask(&semantics), [1.0; 4]);
         assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
         assert_eq!(composed_material_texture_mip_bias(&semantics), 0.0);
         assert_eq!(composed_material_shadow_pos_offset(&semantics), 0.0);
 
@@ -7201,6 +7218,31 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_SSAO_MASK, &[f32::NEG_INFINITY], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
+    }
+
+    #[test]
+    fn composed_material_ambient_occlusion_mask_preserves_optional_finite_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
+
+        let shader_package =
+            test_shpk_with_material_defaults(&[(G_AMBIENT_OCCLUSION_MASK, &[0.65])]);
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_ambient_occlusion_mask(&semantics),
+            Some(0.65)
+        );
+
+        let material = test_mtrl_with_constant(G_AMBIENT_OCCLUSION_MASK, &[0.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_ambient_occlusion_mask(&semantics),
+            Some(0.25)
+        );
+
+        let material = test_mtrl_with_constant(G_AMBIENT_OCCLUSION_MASK, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
     }
 
     #[test]
