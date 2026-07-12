@@ -540,7 +540,7 @@ character transparency/glass 与 water 已完成第一版 alpha source / prepare
 
 ### P1: 纹理采样配置
 
-当前进度：数据层已有第一版 `PreparedTextureSamplingSet`，renderer 的 material bind group 已分出 color/data/nearest 三组 sampler，并从 prepared policy 派生对应 `wgpu::SamplerDescriptor`；WGSL 现在用 color sampler 采 base/emissive，用 data sampler 采 normal/mask/specular/material-properties/material/multi debug view，用 nearest sampler 采 index 与 ColorTable extra maps。
+当前进度：数据层已有第一版 `PreparedTextureSamplingSet`，renderer 的 material bind group 当前仍把逐 role policy 压缩为 color/data/nearest 三组共享 sampler；这会让 skin face 的 base clamp 同时影响 emissive 等同组纹理，执行层尚未忠实实现 prepared policy。本轮计划把现有 15 个 texture binding 全部改为各自 sampler binding：base、normal、mask、emissive、material-properties、specular、tile/sheen/sphere/tile-matrix、index、material/multi map、tile/detail pair。WebGPU 基线每 shader stage 至少支持 16 samplers，当前正好使用 15，保留一个预算；TileMatrix 使用 non-filtering sampler，bguvscroll 复用 extra binding 时 sampler policy 随 secondary color/normal/specular role 切换。
 
 仍需要按 texture role 完整落地：
 
@@ -550,7 +550,7 @@ character transparency/glass 与 water 已完成第一版 alpha source / prepare
 - tile/detail arrays 与 ColorTable extra maps: nearest 或 shader-family-specific；当前 renderer 已用 nearest sampler 消费 ColorTable extra maps 和两个 pair atlas，共享 arrays 按 Non-Color + nearest + repeat 采样
 - decal: clip/extend 语义；decal/crest 已确认为 runtime-only on-render texture，并有透明 fallback 元数据，当前尚无显式 runtime texture 输入和独立 GPU binding
 
-WebGPU bind group 已支持每材质 color/data/nearest 三组 sampler；`Clip` address policy 当前只能在 sampler descriptor 层降级为 clamp，后续 decal 或 face override 仍需要 shader 级 UV clip/extend 行为。
+当前三组共享 sampler 将在本轮替换为逐 binding sampler；`Clip` address policy 仍只能在 sampler descriptor 层降级为 clamp，后续 decal 或 face override 仍需要 shader 级 UV clip/extend 行为。runtime decal 会需要第 16 个 sampler 或 layout 重排，本轮不提前占用。
 
 验证：
 
@@ -577,7 +577,7 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 
 仍待补：
 
-- per-texture sampler policy preview / independent sampler binding
+- 本轮完成 per-texture independent sampler binding；sampler policy debug preview 后续按需要补充
 - 已完成 tile normal/ORB、detail diffuse/normal array preview；detail 仍需真实 bg 武器样本校准
 
 这些视图能显著缩短后续对照 Meddle/MeddleTools 的定位时间。
