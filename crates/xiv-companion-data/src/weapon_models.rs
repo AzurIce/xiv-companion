@@ -1,17 +1,17 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialDrawDepthMode, MaterialFlowMode,
-    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSubColorMode,
-    MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
-    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
-    ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
-    ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
-    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
-    PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts,
-    WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode,
-    WeaponModelBounds, WeaponModelData, WeaponModelLoadCandidateDiagnostic,
-    WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic, WeaponModelLoadRole,
-    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
-    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
+    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode, MaterialRenderMode,
+    MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode, ModelBounds,
+    ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow,
+    ModelMaterial, ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind,
+    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget,
+    ModelShapeVertexDelta, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
+    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
+    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
+    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
+    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
     weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
@@ -98,6 +98,12 @@ const GET_MATERIAL_VALUE_BODY_JJM: u32 = 0x57FF_3B64;
 const GET_MATERIAL_VALUE_FACE_EMISSIVE: u32 = 0x72E6_97CD;
 #[cfg(feature = "game-data")]
 const GET_MATERIAL_VALUE_FACE: u32 = 0xF567_3524;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT: u32 = 0xF886_E10E;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT_69EB4AE0: u32 = 0x69EB_4AE0;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT_9A8A46F5: u32 = 0x9A8A_46F5;
 #[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
@@ -2260,6 +2266,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let value_mode = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
+        let (character_scroll_variant, character_scroll_variant_raw) =
+            composed_material_character_scroll_variant(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2351,6 +2359,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             value_mode,
             sub_color_mode,
             skin_value_mode,
+            character_scroll_variant,
+            character_scroll_variant_raw,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -2886,6 +2896,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let value_mode = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
+        let (character_scroll_variant, character_scroll_variant_raw) =
+            composed_material_character_scroll_variant(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2978,6 +2990,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             value_mode,
             sub_color_mode,
             skin_value_mode,
+            character_scroll_variant,
+            character_scroll_variant_raw,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -3878,6 +3892,20 @@ fn composed_material_skin_value_mode(
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_character_scroll_variant(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialCharacterScrollVariant, Option<u32>) {
+    let raw = semantics.material_key_value(CHARACTER_SCROLL_VARIANT);
+    let variant = match raw {
+        None => MaterialCharacterScrollVariant::None,
+        Some(CHARACTER_SCROLL_VARIANT_69EB4AE0) => MaterialCharacterScrollVariant::Value69eb4ae0,
+        Some(CHARACTER_SCROLL_VARIANT_9A8A46F5) => MaterialCharacterScrollVariant::Value9a8a46f5,
+        Some(_) => MaterialCharacterScrollVariant::Unknown,
+    };
+    (variant, raw)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
 }
@@ -4485,6 +4513,8 @@ fn fallback_weapon_material(
         value_mode: MaterialValueMode::Single,
         sub_color_mode: MaterialSubColorMode::None,
         skin_value_mode: MaterialSkinValueMode::None,
+        character_scroll_variant: MaterialCharacterScrollVariant::None,
+        character_scroll_variant_raw: None,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -6648,6 +6678,42 @@ mod weapon_material_tests {
             semantics.apply_material_key(GET_MATERIAL_VALUE, value);
             assert_eq!(composed_material_skin_value_mode(&semantics), expected);
         }
+    }
+
+    #[test]
+    fn composed_character_scroll_variant_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (MaterialCharacterScrollVariant::None, None)
+        );
+
+        semantics.apply_shader_package_key_default(
+            CHARACTER_SCROLL_VARIANT,
+            CHARACTER_SCROLL_VARIANT_69EB4AE0,
+        );
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (
+                MaterialCharacterScrollVariant::Value69eb4ae0,
+                Some(CHARACTER_SCROLL_VARIANT_69EB4AE0)
+            )
+        );
+
+        semantics.apply_material_key(CHARACTER_SCROLL_VARIANT, CHARACTER_SCROLL_VARIANT_9A8A46F5);
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (
+                MaterialCharacterScrollVariant::Value9a8a46f5,
+                Some(CHARACTER_SCROLL_VARIANT_9A8A46F5)
+            )
+        );
+
+        semantics.apply_material_key(CHARACTER_SCROLL_VARIANT, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (MaterialCharacterScrollVariant::Unknown, Some(0xDEAD_BEEF))
+        );
     }
 
     #[test]

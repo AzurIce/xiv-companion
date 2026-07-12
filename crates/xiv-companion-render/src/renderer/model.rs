@@ -2827,6 +2827,8 @@ fn fallback_material() -> ModelMaterial {
         value_mode: crate::MaterialValueMode::Single,
         sub_color_mode: crate::MaterialSubColorMode::None,
         skin_value_mode: crate::MaterialSkinValueMode::None,
+        character_scroll_variant: crate::MaterialCharacterScrollVariant::None,
+        character_scroll_variant_raw: None,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],

@@ -23,7 +23,8 @@ use xiv_companion::{
     },
 };
 use xiv_companion_data::{
-    MdlMeshMetadata, MdlMetadata, ModelBoneTable, ModelMaterialTextureArrays,
+    MaterialCharacterScrollVariant, MdlMeshMetadata, MdlMetadata, ModelBoneTable,
+    ModelMaterialTextureArrays,
 };
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +148,8 @@ struct MaterialSummary {
     lighting_mode: String,
     sub_color_mode: String,
     skin_value_mode: String,
+    character_scroll_variant: MaterialCharacterScrollVariant,
+    character_scroll_variant_raw: Option<u32>,
     transparency: f32,
     alpha_aperture: f32,
     alpha_offset: f32,
@@ -1152,6 +1155,8 @@ fn material_summary(
         lighting_mode: format!("{:?}", material.lighting_mode),
         sub_color_mode: format!("{:?}", material.sub_color_mode),
         skin_value_mode: format!("{:?}", material.skin_value_mode),
+        character_scroll_variant: material.character_scroll_variant,
+        character_scroll_variant_raw: material.character_scroll_variant_raw,
         transparency: material.transparency,
         alpha_aperture: material.alpha_aperture,
         alpha_offset: material.alpha_offset,

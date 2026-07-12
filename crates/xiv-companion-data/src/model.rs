@@ -448,6 +448,10 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub skin_value_mode: MaterialSkinValueMode,
     #[serde(default)]
+    pub character_scroll_variant: MaterialCharacterScrollVariant,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_scroll_variant_raw: Option<u32>,
+    #[serde(default)]
     pub transparency: f32,
     #[serde(default = "default_material_water_deep_color")]
     pub water_deep_color: [f32; 4],
@@ -700,6 +704,16 @@ pub enum MaterialSkinValueMode {
     Body,
     BodyJjm,
     FaceEmissive,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialCharacterScrollVariant {
+    #[default]
+    None,
+    Value69eb4ae0,
+    Value9a8a46f5,
     Unknown,
 }
 
@@ -1005,6 +1019,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub environment_mapping: bool,
     pub multi_map_interpretation: bool,
     pub character_reflection: bool,
+    #[serde(default)]
+    pub character_scroll_variant: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1719,6 +1735,7 @@ pub fn prepared_material_unsupported_inputs(
         environment_mapping: texture_bindings.environment.is_some(),
         multi_map_interpretation: texture_bindings.multi_map.is_some(),
         character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
+        character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
     }
 }
 
@@ -3134,6 +3151,7 @@ mod color_table_bake_tests {
                 environment_mapping: false,
                 multi_map_interpretation: true,
                 character_reflection: true,
+                character_scroll_variant: false,
             }
         );
         assert_eq!(
@@ -3156,6 +3174,7 @@ mod color_table_bake_tests {
                 environment_mapping: false,
                 multi_map_interpretation: true,
                 character_reflection: true,
+                character_scroll_variant: false,
             }
         );
 
@@ -3203,6 +3222,11 @@ mod color_table_bake_tests {
         let reflection = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(reflection.unsupported_inputs.character_reflection);
         assert!(reflection.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("characterscroll.shpk".to_string());
+        let scroll = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(scroll.unsupported_inputs.character_scroll_variant);
+        assert!(scroll.unsupported_inputs.incomplete_shader_family_logic);
 
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
@@ -3938,6 +3962,8 @@ mod color_table_bake_tests {
             value_mode: MaterialValueMode::Single,
             sub_color_mode: MaterialSubColorMode::None,
             skin_value_mode: MaterialSkinValueMode::None,
+            character_scroll_variant: MaterialCharacterScrollVariant::None,
+            character_scroll_variant_raw: None,
             transparency: 0.0,
             water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
             water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
