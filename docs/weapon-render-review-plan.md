@@ -568,8 +568,8 @@ UI 和 snapshot/test render options 已加入第一版 debug render mode：
 - emissive
 - alpha
 - UV set preview
-- vertex color preview
-- 本轮计划补 secondary vertex channels preview：`color1`、secondary normal、`flow0`、`flow1`。Meddle 只证明这些是 usage-indexed 顶点数组，MeddleTools 没有足够节点证据把 `color1/flow1` 接入最终公式，因此先贯通 renderer/Web debug mode 与 URL round-trip，并用 synthetic fixture 验证每个通道可独立观察
+- vertex color preview，包括 color0 与 color1
+- secondary normal、flow0、flow1 preview；四种 secondary/flow debug mode 已贯通 renderer、Web 选择器和 URL round-trip。synthetic WGPU fixture 为 `color1`、secondary normal、flow0、flow1 固定不同值并逐对验证最终 PNG RGB difference `>10,000`。Meddle 只证明这些是 usage-indexed 顶点数组，MeddleTools 没有足够节点证据把 `color1/flow1` 接入最终公式，因此当前只用于直接审计，不伪造材质行为
 - mesh category / draw role colors
 - ColorTable row index preview
 - material map / multi map preview

@@ -8,8 +8,8 @@ use xiv_companion_render::test_support::{
     WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
 };
 use xiv_companion_render::{
-    ModelTextureKind, PackedModelId, WeaponModelBounds, WeaponModelData, WeaponModelMaterial,
-    WeaponModelMesh, WeaponModelTexture, WeaponModelVertex,
+    ModelDebugMode, ModelRenderOptions, ModelTextureKind, PackedModelId, WeaponModelBounds,
+    WeaponModelData, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelVertex,
 };
 
 #[test]
@@ -108,6 +108,53 @@ fn render_mock_weapon_model_snapshot() {
         "adapter: {} ({:?})",
         snapshot.adapter_name, snapshot.adapter_backend
     );
+}
+
+#[test]
+#[ignore = "writes synthetic secondary vertex channel debug snapshots with native wgpu"]
+fn render_mock_secondary_vertex_channel_debug_snapshots() {
+    let mut model = mock_weapon_model();
+    for vertex in &mut model.meshes[0].vertices {
+        vertex.color1 = Some([1.0, 0.0, 0.0, 1.0]);
+        vertex.normal1 = Some([0.0, 1.0, 0.0]);
+        vertex.flow0 = Some([-1.0, 0.0, 1.0, 0.0]);
+        vertex.flow1 = Some([0.0, 1.0, -1.0, 0.0]);
+    }
+    let render = |name, debug_mode| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(320, 320)
+                .with_render_options(ModelRenderOptions {
+                    debug_mode,
+                    ..ModelRenderOptions::default()
+                }),
+            &model,
+        )
+        .expect("render secondary vertex channel debug snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode secondary vertex channel debug PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let images = [
+        render("native-debug-vertex-color1", ModelDebugMode::VertexColor1),
+        render("native-debug-normal1", ModelDebugMode::SecondaryNormal),
+        render("native-debug-flow0", ModelDebugMode::Flow0),
+        render("native-debug-flow1", ModelDebugMode::Flow1),
+    ];
+
+    for pair in images.windows(2) {
+        let rgb_difference: u64 = pair[0]
+            .chunks_exact(4)
+            .zip(pair[1].chunks_exact(4))
+            .map(|(left, right)| {
+                (0..3)
+                    .map(|channel| left[channel].abs_diff(right[channel]) as u64)
+                    .sum::<u64>()
+            })
+            .sum();
+        assert!(rgb_difference > 10_000);
+    }
 }
 
 fn mock_weapon_model() -> WeaponModelData {

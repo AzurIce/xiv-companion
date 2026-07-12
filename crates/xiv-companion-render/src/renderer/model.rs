@@ -41,6 +41,10 @@ pub enum ModelDebugMode {
     TileOrbArray,
     DetailDiffuseArray,
     DetailNormalArray,
+    VertexColor1,
+    SecondaryNormal,
+    Flow0,
+    Flow1,
 }
 
 impl ModelDebugMode {
@@ -71,6 +75,10 @@ impl ModelDebugMode {
             ModelDebugMode::TileOrbArray => 22.0,
             ModelDebugMode::DetailDiffuseArray => 23.0,
             ModelDebugMode::DetailNormalArray => 24.0,
+            ModelDebugMode::VertexColor1 => 25.0,
+            ModelDebugMode::SecondaryNormal => 26.0,
+            ModelDebugMode::Flow0 => 27.0,
+            ModelDebugMode::Flow1 => 28.0,
         }
     }
 }
@@ -3941,6 +3949,10 @@ mod tests {
         assert_eq!(ModelDebugMode::TileOrbArray.shader_value(), 22.0);
         assert_eq!(ModelDebugMode::DetailDiffuseArray.shader_value(), 23.0);
         assert_eq!(ModelDebugMode::DetailNormalArray.shader_value(), 24.0);
+        assert_eq!(ModelDebugMode::VertexColor1.shader_value(), 25.0);
+        assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 26.0);
+        assert_eq!(ModelDebugMode::Flow0.shader_value(), 27.0);
+        assert_eq!(ModelDebugMode::Flow1.shader_value(), 28.0);
     }
 
     #[test]

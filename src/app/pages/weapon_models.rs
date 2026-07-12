@@ -679,6 +679,10 @@ fn WeaponRenderControls(
                     option { value: "uv2", "UV2" }
                     option { value: "uv3", "UV3" }
                     option { value: "vertex", "Vertex" }
+                    option { value: "vertex1", "Vertex 1" }
+                    option { value: "normal1", "Normal 1" }
+                    option { value: "flow0", "Flow 0" }
+                    option { value: "flow1", "Flow 1" }
                     option { value: "mesh", "Mesh" }
                     option { value: "ct-index", "CT Index" }
                     option { value: "material-map", "Mat Map" }
@@ -875,6 +879,10 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::TileOrbArray => "tile-orb-array",
         ModelDebugMode::DetailDiffuseArray => "detail-diffuse-array",
         ModelDebugMode::DetailNormalArray => "detail-normal-array",
+        ModelDebugMode::VertexColor1 => "vertex1",
+        ModelDebugMode::SecondaryNormal => "normal1",
+        ModelDebugMode::Flow0 => "flow0",
+        ModelDebugMode::Flow1 => "flow1",
     }
 }
 
@@ -904,6 +912,10 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "tile-orb-array" => ModelDebugMode::TileOrbArray,
         "detail-diffuse-array" => ModelDebugMode::DetailDiffuseArray,
         "detail-normal-array" => ModelDebugMode::DetailNormalArray,
+        "vertex1" => ModelDebugMode::VertexColor1,
+        "normal1" => ModelDebugMode::SecondaryNormal,
+        "flow0" => ModelDebugMode::Flow0,
+        "flow1" => ModelDebugMode::Flow1,
         _ => ModelDebugMode::Final,
     }
 }
@@ -1320,6 +1332,18 @@ mod weapon_url_tests {
             parse_glass_blend_mode("unknown"),
             ModelGlassBlendMode::Multiply
         );
+    }
+
+    #[test]
+    fn secondary_vertex_debug_modes_round_trip() {
+        for mode in [
+            ModelDebugMode::VertexColor1,
+            ModelDebugMode::SecondaryNormal,
+            ModelDebugMode::Flow0,
+            ModelDebugMode::Flow1,
+        ] {
+            assert_eq!(parse_debug_mode(debug_mode_value(mode)), mode);
+        }
     }
 
     #[test]

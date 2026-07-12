@@ -85,6 +85,7 @@ struct VertexOutput {
     @location(8) flow1: vec4<f32>,
     @location(9) normal1: vec3<f32>,
     @location(10) bitangent1: vec4<f32>,
+    @location(11) color1: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -167,6 +168,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.flow1 = input.flow1;
     out.normal1 = normalize(input.normal1);
     out.bitangent1 = input.bitangent1;
+    out.color1 = input.color1;
     return out;
 }
 
@@ -186,6 +188,7 @@ fn vs_outline(input: VertexInput) -> VertexOutput {
     out.flow1 = input.flow1;
     out.normal1 = normalize(input.normal1);
     out.bitangent1 = input.bitangent1;
+    out.color1 = input.color1;
     return out;
 }
 
@@ -520,8 +523,16 @@ fn debug_fragment_output(
         color = tile_array.orb;
     } else if mode < 23.5 {
         color = detail_array.diffuse;
-    } else {
+    } else if mode < 24.5 {
         color = detail_array.normal * 0.5 + vec3<f32>(0.5);
+    } else if mode < 25.5 {
+        color = input.color1.rgb;
+    } else if mode < 26.5 {
+        color = normalize(input.normal1) * 0.5 + vec3<f32>(0.5);
+    } else if mode < 27.5 {
+        color = input.flow0.xyz * 0.5 + vec3<f32>(0.5);
+    } else {
+        color = input.flow1.xyz * 0.5 + vec3<f32>(0.5);
     }
 
     var out: FragmentOutput;
