@@ -573,6 +573,12 @@ mod tests {
                 <= (pair[1].shade, pair[1].sub_order, pair[1].id)
         }));
         assert!(stains.iter().any(|stain| stain.metallic));
+        let metallic_gold = stains
+            .iter()
+            .find(|stain| stain.id == 113)
+            .expect("metallic gold stain");
+        assert_eq!(metallic_gold.name, "闪耀金");
+        assert!(metallic_gold.metallic);
     }
 }
 

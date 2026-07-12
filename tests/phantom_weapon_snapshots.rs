@@ -43,6 +43,8 @@ struct PhantomWeaponCase {
     focus: Vec<String>,
     #[serde(default)]
     stain_ids: [u8; 2],
+    #[serde(default)]
+    expected_rows_changed: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -311,6 +313,7 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
     let mut resource = SqPackResource::from_existing(game_dir_text);
     let mut manifest = Vec::new();
     let mut failures = Vec::new();
+    let mut rendered_artifacts = HashMap::<String, CaseArtifacts>::new();
     let case_filter = phantom_case_filter();
 
     manifest.push("# Phantom weapon snapshots".to_string());
@@ -365,6 +368,7 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
                     markdown_path(case_dir, &artifacts.summary_path),
                     markdown_path(case_dir, &artifacts.raw_manifest_path)
                 ));
+                rendered_artifacts.insert(case.case_id.clone(), artifacts);
             }
             Err(error) => {
                 let message = format!("{} {}: {error:#}", case.item_id, case.name);
@@ -372,6 +376,10 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
                 failures.push(message);
             }
         }
+    }
+
+    if let Err(error) = validate_45052_stain_snapshots(&rendered_artifacts) {
+        failures.push(format!("45052 stain snapshot validation: {error:#}"));
     }
 
     let manifest_path = output_dir.join("index.md");
@@ -423,6 +431,22 @@ fn render_case(
             "{} requested stains {:?}, but no material ColorTable rows changed",
             case.case_id,
             case.stain_ids
+        );
+    }
+    if let Some(expected_rows_changed) = case.expected_rows_changed {
+        let rows_changed = model
+            .materials
+            .iter()
+            .filter_map(|material| material.staining_application.as_ref())
+            .filter(|application| application.error.is_none())
+            .map(|application| application.report.rows_changed)
+            .sum::<usize>();
+        anyhow::ensure!(
+            rows_changed == expected_rows_changed,
+            "{} changed {} ColorTable rows, expected {}",
+            case.case_id,
+            rows_changed,
+            expected_rows_changed
         );
     }
     if let Some(outline_width) = phantom_outline_width() {
@@ -526,6 +550,59 @@ fn render_case(
         summary_path,
         raw_manifest_path,
     })
+}
+
+fn validate_45052_stain_snapshots(artifacts: &HashMap<String, CaseArtifacts>) -> Result<()> {
+    let Some(baseline) = artifacts.get("phantom-45052") else {
+        return Ok(());
+    };
+    let Some(stain0) = artifacts.get("phantom-45052-stain-1") else {
+        return Ok(());
+    };
+    let Some(stain1_metallic) = artifacts.get("phantom-45052-stain1-metallic-gold") else {
+        return Ok(());
+    };
+
+    for (label, left, right) in [
+        ("baseline vs stain0", baseline, stain0),
+        ("baseline vs stain1 metallic", baseline, stain1_metallic),
+        ("stain0 vs stain1 metallic", stain0, stain1_metallic),
+    ] {
+        let difference = snapshot_rgb_difference(&left.snapshot_path, &right.snapshot_path)?;
+        anyhow::ensure!(
+            difference > 100_000,
+            "{label} RGB difference {difference} is too small"
+        );
+        eprintln!("45052 {label} RGB difference: {difference}");
+    }
+
+    Ok(())
+}
+
+fn snapshot_rgb_difference(left_path: &Path, right_path: &Path) -> Result<u64> {
+    let left = image::open(left_path)
+        .with_context(|| format!("failed to open {}", left_path.display()))?
+        .to_rgba8();
+    let right = image::open(right_path)
+        .with_context(|| format!("failed to open {}", right_path.display()))?
+        .to_rgba8();
+    anyhow::ensure!(
+        left.dimensions() == right.dimensions(),
+        "snapshot dimensions differ: {:?} vs {:?}",
+        left.dimensions(),
+        right.dimensions()
+    );
+
+    Ok(left
+        .as_raw()
+        .chunks_exact(4)
+        .zip(right.as_raw().chunks_exact(4))
+        .map(|(left, right)| {
+            (0..3)
+                .map(|channel| u64::from(left[channel].abs_diff(right[channel])))
+                .sum::<u64>()
+        })
+        .sum())
 }
 
 fn snapshot_name(case: &PhantomWeaponCase) -> String {
