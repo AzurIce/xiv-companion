@@ -4798,6 +4798,7 @@ dependencies = [
  "chrono",
  "clap",
  "csv",
+ "serde",
  "serde_json",
  "xiv-companion",
 ]

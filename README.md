@@ -25,10 +25,12 @@ cargo binstall wasm-bindgen-cli@0.2.121 --force
 rustup target add wasm32-unknown-unknown
 ```
 
-Generate or refresh crafting data:
+Generate or refresh game data:
 
 ```bash
-cargo update-craft-data --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/
+cargo run -p xtask-update-craft-data -- \
+  --game-dir ~/Files/_ffxiv/XIVLauncherGamePath/game/ \
+  --datamining-repo /path/to/ffxiv-datamining-cn
 ```
 
 Run the Dioxus dev server:
@@ -45,9 +47,30 @@ dx build --web --release --features web --package xiv-companion --bin xiv-compan
 
 The production bundle is written to `target/dx/xiv-companion/release/web/public`.
 
-`cargo update-craft-data` reads the game `sqpack` data directly through the
+The exporter reads game `sqpack` data directly through the
 `xtask/xtask-update-craft-data` package. Pass either the install directory or
-the inner `game` directory with `--game-dir`.
+the inner `game` directory with `--game-dir`. The optional
+`--datamining-repo` argument adds first-seen patch metadata from a local
+`ffxiv-datamining-cn` checkout.
 
-The command writes `assets/craft-data.json` and `assets/version.json`, then
-audits the generated exchange data by default.
+The command writes the generated resource JSON files and audits exchange data
+by default.
+
+## Data Sources And Acknowledgements
+
+XIV Companion derives its primary game data from the user's local FINAL
+FANTASY XIV installation. Release metadata that is not present directly in the
+current EXD tables is supplemented from these community projects:
+
+- [ffxiv-datamining-cn](https://github.com/thewakingsands/ffxiv-datamining-cn)
+  provides `Item.csv` history for first-seen patch detection and `ExVersion`
+  boundaries for expansion-level fallback.
+- [GarlandTools](https://github.com/ufx/GarlandTools) provides historical item
+  patch metadata for releases before patch 4.45. The source is pinned to commit
+  `04cadd2e1e0de86c20aa9303faa082c7971f8d8b`; newer release metadata is not
+  taken from GarlandTools.
+
+The pinned GarlandTools `patches.json`, its original MIT license, and source
+notes are preserved under [`third_party/garland-tools`](third_party/garland-tools/README.md).
+Thanks to the maintainers and contributors of both projects for preserving and
+publishing this historical data.

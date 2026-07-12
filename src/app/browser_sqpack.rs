@@ -222,7 +222,13 @@ impl BrowserSqPack {
         let mut files = HashMap::new();
         self.preload_sheet(&mut files, "Item", &[Language::ChineseSimplified])
             .await?;
-        self.preload_sheet(&mut files, "ItemSeries", &[Language::ChineseSimplified])
+        self.preload_sheet(
+            &mut files,
+            "FittingShopItemSet",
+            &[Language::ChineseSimplified],
+        )
+        .await?;
+        self.preload_sheet(&mut files, "MirageStoreSetItem", &[Language::None])
             .await?;
         self.preload_sheet(
             &mut files,

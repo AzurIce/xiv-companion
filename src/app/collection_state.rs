@@ -7,7 +7,8 @@ use xiv_companion::CollectionEntryKey;
 
 const STATE_DB_NAME: &str = "xiv-companion-collection-state";
 const STATE_STORE_NAME: &str = "state";
-const STATE_DB_VERSION: u32 = 1;
+const ENTRY_STORE_NAME: &str = "entries";
+const STATE_DB_VERSION: u32 = 2;
 const STATE_KEY: &str = "default";
 
 /// User-owned collection tracking state: which items are marked as obtained.
@@ -16,6 +17,7 @@ pub struct CollectionState {
     pub obtained: HashSet<CollectionEntryKey>,
     pub legacy_item_ids: HashSet<u32>,
     pub updated_at: String,
+    pub needs_entry_migration: bool,
 }
 
 impl CollectionState {
@@ -60,25 +62,42 @@ pub async fn load_collection_state() -> Result<CollectionState, String> {
         .await
         .map_err(|error| format!("读取收藏状态失败: {error}"))?;
 
-    let Some(record) = record else {
-        return Ok(CollectionState::default());
-    };
-
-    let obtained: HashSet<CollectionEntryKey> = js_array_of_strings(&record, "obtainedKeys")
-        .unwrap_or_default()
+    let entry_keys = db
+        .transaction(&[ENTRY_STORE_NAME])
+        .run(|transaction| async move {
+            transaction
+                .object_store(ENTRY_STORE_NAME)?
+                .get_all_keys(None)
+                .await
+        })
+        .await
+        .map_err(|error| format!("读取图鉴条目状态失败: {error}"))?;
+    let mut obtained: HashSet<CollectionEntryKey> = entry_keys
         .into_iter()
+        .filter_map(|key| key.as_string())
         .filter_map(|key| CollectionEntryKey::from_str(&key).ok())
         .collect();
-    let legacy_item_ids = js_array_of_u32(&record, "obtainedIds")
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let updated_at = js_string_field(&record, "updatedAt").unwrap_or_default();
+    let mut legacy_item_ids = HashSet::new();
+    let mut updated_at = String::new();
+    let mut needs_entry_migration = false;
+    if let Some(record) = record {
+        let stored_keys = js_array_of_strings(&record, "obtainedKeys").unwrap_or_default();
+        needs_entry_migration = !stored_keys.is_empty();
+        obtained.extend(
+            stored_keys
+                .into_iter()
+                .filter_map(|key| CollectionEntryKey::from_str(&key).ok()),
+        );
+        legacy_item_ids.extend(js_array_of_u32(&record, "obtainedIds").unwrap_or_default());
+        needs_entry_migration |= !legacy_item_ids.is_empty();
+        updated_at = js_string_field(&record, "updatedAt").unwrap_or_default();
+    }
 
     Ok(CollectionState {
         obtained,
         legacy_item_ids,
         updated_at,
+        needs_entry_migration,
     })
 }
 
@@ -93,7 +112,7 @@ pub async fn save_collection_state(state: &CollectionState) -> Result<(), String
     js_sys::Reflect::set(
         &object,
         &JsValue::from_str("obtainedKeys"),
-        &serde_json::to_string(&keys)
+        &serde_json::to_string(&Vec::<String>::new())
             .map(|json| JsValue::from_str(&json))
             .unwrap_or_else(|_| JsValue::UNDEFINED),
     )
@@ -106,7 +125,7 @@ pub async fn save_collection_state(state: &CollectionState) -> Result<(), String
     .map_err(format_js_error)?;
 
     let db = open_state_db().await?;
-    db.transaction(&[STATE_STORE_NAME])
+    db.transaction(&[STATE_STORE_NAME, ENTRY_STORE_NAME])
         .rw()
         .run({
             move |transaction| async move {
@@ -114,11 +133,34 @@ pub async fn save_collection_state(state: &CollectionState) -> Result<(), String
                     .object_store(STATE_STORE_NAME)?
                     .put_kv(&JsString::from(STATE_KEY), &object)
                     .await?;
+                let entries = transaction.object_store(ENTRY_STORE_NAME)?;
+                entries.clear().await?;
+                for key in keys {
+                    entries.put_kv(&JsString::from(key), &JsValue::TRUE).await?;
+                }
                 Ok(())
             }
         })
         .await
         .map_err(|error| format!("保存收藏状态失败: {error}"))
+}
+
+pub async fn save_collection_entry(key: &CollectionEntryKey, obtained: bool) -> Result<(), String> {
+    let db = open_state_db().await?;
+    let storage_key = JsString::from(key.storage_key());
+    db.transaction(&[ENTRY_STORE_NAME])
+        .rw()
+        .run(move |transaction| async move {
+            let entries = transaction.object_store(ENTRY_STORE_NAME)?;
+            if obtained {
+                entries.put_kv(&storage_key, &JsValue::TRUE).await?;
+            } else {
+                entries.delete(&storage_key).await?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("保存图鉴条目状态失败: {error}"))
 }
 
 async fn open_state_db() -> Result<indexed_db::Database<String>, String> {
@@ -127,7 +169,13 @@ async fn open_state_db() -> Result<indexed_db::Database<String>, String> {
     factory
         .open(STATE_DB_NAME, STATE_DB_VERSION, |event| async move {
             let db = event.database();
-            db.build_object_store(STATE_STORE_NAME).create()?;
+            let names = db.object_store_names();
+            if !names.iter().any(|name| name == STATE_STORE_NAME) {
+                db.build_object_store(STATE_STORE_NAME).create()?;
+            }
+            if !names.iter().any(|name| name == ENTRY_STORE_NAME) {
+                db.build_object_store(ENTRY_STORE_NAME).create()?;
+            }
             Ok(())
         })
         .await

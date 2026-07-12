@@ -77,28 +77,35 @@ UI 不直接调用或识别 `IndexedDbCachedProvider`。
 - `slot_name` / `slot_order`
 - `appearance_key`
 
-套装优先使用 `ItemSeries`。没有 ItemSeries 时，按装备模型的 domain、model id 和 variant 分组。武器、普通装备和首饰使用不同 domain，避免相同 packed model 数值跨模型命名空间碰撞。
+套装关系不使用模型 ID 推断。模型复用属于外观语义，不能代表游戏里的多部位装备套装。
 
-同模提示只在装备内部按 `appearance_key` 判断。
+套装按以下优先级生成：
+
+1. `FittingShopItemSet` 中有正式名称的商城/试穿套装。
+2. `MirageStoreSetItem` 中游戏定义的套装幻影化组合。
+3. 其余普通副本、团队副本、点数和制作装备，按装备等级、品级、职业限制、稀有度、强化/颜色变体与中文名称族跨部位归组。
+4. 武器、无法形成至少两个不同部位的条目保持单件，不伪装成套装。
+
+自动推导组限制在合理套装规模内，并对“过期”“风化”等通用前缀做排除。图鉴页面不提供模型分组。
 
 ### 2.4 版本来源
 
-当前 SqPack 只能提供当前快照，不能直接给出物品首次加入版本。Builtin 生成时会读取本地 `ffxiv-datamining-cn` 的 Item.csv 历史：
+当前 SqPack 只能提供当前快照，不能直接给出物品首次加入的具体补丁。Builtin 生成时会结合 Garland Tools 的历史补丁表、本地 `ffxiv-datamining-cn` 的 `ExVersion.csv` 与 `Item.csv` 历史：
 
-- 每个物品标记首次出现的 patch/build。
-- 仓库最早快照已有的物品归入“历史版本 / 4.45 及以前”。
+- 后续物品按 `Item.csv` Git 历史标记首次出现的 patch/build。
+- 固定在仓库内的 Garland Tools `Supplemental/patches.json` 仅补充 4.45 以前的精确物品版本，不覆盖较新的 datamining 结果。
+- `ExVersion` 的起始 Item ID 用于确定 Garland 未收录条目的资料片，并回退到 2.x、3.x 或 4.45 及以前。
 - Browser local 更新复用 builtin 已知版本；只存在于本地的新条目使用当前本地游戏 build。
 
 ## 3. UI 信息架构
 
 ### 3.1 图鉴
 
-顶层使用固定类型 Tab。装备 Tab 有两个分组模式：
+顶层使用固定类型 Tab。资料片作为所有图鉴类型共享的单选筛选，切换装备、乐谱、坐骑等类型时保留当前资料片。装备在当前资料片下完整列出全部 patch 折叠分组。
 
-- `版本·套装`：资料片 -> patch -> 套装卡片。
-- `同模`：按 appearance key 展示同模型条目。
+至少包含两个不同部位的套装使用默认展开的套装块，显示装备等级、品级范围、职业、部位数、获得进度和各装备部位。无法组成套装的装备直接以独立物品卡显示，不再套一层“单件”容器。搜索、职业、部位与获得状态筛选作用于当前资料片。所有类型均直接显示当前筛选结果，不再提供“继续加载”，并使用稳定 key 复用已有组件。
 
-套装卡片显示职业、最高品级、获得进度和各装备部位。搜索、职业、部位与获得状态筛选作用于当前 Tab。结果按 80 组/条分页追加，不再静默截断。
+获得状态使用按条目寻址的 Dioxus Store。勾选时只更新对应条目及相关套装进度，并在 IndexedDB 中单条增删，不再克隆、序列化和重绘整份获得集合。
 
 ### 3.2 资源库
 
@@ -115,7 +122,7 @@ WeaponModel 显示为“本地按需读取”，并说明其本地目录与武�
 
 ```powershell
 cargo run -p xtask-update-craft-data -- `
-  --game-dir E:\_ff14\game `
+  --game-dir 'G:\最终幻想XIV\game' `
   --datamining-repo E:\_ff14\ffxiv-datamining-cn
 ```
 

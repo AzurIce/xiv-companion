@@ -125,11 +125,12 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
     generated_at: String,
 ) -> Result<CollectionCatalogPackage> {
     let mut game = GameExcel::new(resource, source_label, game_version);
-    let item_series = game.load_named_rows("ItemSeries")?;
     let class_job_categories = game.load_named_rows("ClassJobCategory")?;
     let item_action_types = game.load_item_action_types()?;
-    let items =
-        game.load_collection_items(&item_series, &class_job_categories, &item_action_types)?;
+    let explicit_equipment_sets = game.load_explicit_equipment_sets()?;
+    let mut items = game.load_collection_items(&class_job_categories, &item_action_types)?;
+    assign_equipment_sets(&mut items, &explicit_equipment_sets);
+    sort_collection_items(&mut items);
     let mut counts = CollectionCatalogCounts::default();
     counts.items = items.len();
     for item in &items {
@@ -262,9 +263,45 @@ impl<R: Resource> GameExcel<R> {
         Ok(actions)
     }
 
+    fn load_explicit_equipment_sets(&mut self) -> Result<Vec<EquipmentSetDefinition>> {
+        let fitting_sheet = self.sheet("FittingShopItemSet", Language::ChineseSimplified)?;
+        let mut sets = Vec::new();
+        for_each_row(&fitting_sheet, |row_id, row| {
+            let item_ids = (0..6)
+                .map(|column| number_value(row, column))
+                .filter(|item_id| *item_id != 0)
+                .collect::<Vec<_>>();
+            let name = string_value(row, 6)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned);
+            if item_ids.len() >= 2 {
+                sets.push(EquipmentSetDefinition {
+                    id: format!("fitting:{row_id}"),
+                    name,
+                    item_ids,
+                });
+            }
+        });
+
+        let mirage_sheet = self.sheet("MirageStoreSetItem", Language::None)?;
+        for_each_row(&mirage_sheet, |row_id, row| {
+            let item_ids = (2..=10)
+                .map(|column| number_value(row, column))
+                .filter(|item_id| *item_id != 0)
+                .collect::<Vec<_>>();
+            if item_ids.len() >= 2 {
+                sets.push(EquipmentSetDefinition {
+                    id: format!("mirage:{row_id}"),
+                    name: None,
+                    item_ids,
+                });
+            }
+        });
+        Ok(sets)
+    }
+
     pub fn load_collection_items(
         &mut self,
-        item_series_names: &HashMap<u32, String>,
         class_job_category_names: &HashMap<u32, String>,
         item_action_types: &HashMap<u32, u32>,
     ) -> Result<Vec<CollectionItem>> {
@@ -298,14 +335,11 @@ impl<R: Resource> GameExcel<R> {
             let item_series = number_value(row, 45);
             let class_job_category = number_value(row, 43);
             let (slot_name, slot_order) = equipment_slot(equip_slot_category);
-            let (set_id, set_name) = equipment_set(
-                kind,
-                row_id,
-                item_series,
-                item_series_names.get(&item_series).map(String::as_str),
-                equip_slot_category,
-                model_main,
-            );
+            let (set_id, set_name) = if kind == CollectionKind::Equipment {
+                (format!("item:{row_id}"), name.to_owned())
+            } else {
+                (format!("{}:{row_id}", kind.id()), kind.label().to_string())
+            };
 
             items.push(CollectionItem {
                 id: row_id,
@@ -345,14 +379,7 @@ impl<R: Resource> GameExcel<R> {
             });
         });
 
-        items.sort_by(|left, right| {
-            left.kind
-                .cmp(&right.kind)
-                .then(left.patch.cmp(&right.patch))
-                .then(left.set_name.cmp(&right.set_name))
-                .then(left.slot_order.cmp(&right.slot_order))
-                .then(left.id.cmp(&right.id))
-        });
+        sort_collection_items(&mut items);
         Ok(items)
     }
 
@@ -658,36 +685,201 @@ fn equipment_slot(equip_slot_category: u32) -> (&'static str, u8) {
     }
 }
 
-fn equipment_set(
-    kind: CollectionKind,
-    item_id: u32,
-    item_series: u32,
-    item_series_name: Option<&str>,
-    equip_slot_category: u32,
-    model_main: u64,
-) -> (String, String) {
-    if kind != CollectionKind::Equipment {
-        return (format!("{}:{item_id}", kind.id()), kind.label().to_string());
+#[derive(Clone, Debug)]
+struct EquipmentSetDefinition {
+    id: String,
+    name: Option<String>,
+    item_ids: Vec<u32>,
+}
+
+fn assign_equipment_sets(items: &mut [CollectionItem], explicit_sets: &[EquipmentSetDefinition]) {
+    let indices_by_id = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut assigned = HashSet::new();
+
+    // FittingShopItemSet has canonical display names and is intentionally loaded first.
+    // MirageStoreSetItem supplies additional game-defined multi-piece combinations.
+    for definition in explicit_sets {
+        let indices = definition
+            .item_ids
+            .iter()
+            .filter_map(|item_id| indices_by_id.get(item_id).copied())
+            .filter(|index| items[*index].kind == CollectionKind::Equipment)
+            .collect::<Vec<_>>();
+        if indices.iter().any(|index| assigned.contains(index))
+            || distinct_equipment_slots(items, &indices) < 2
+        {
+            continue;
+        }
+        let name = definition
+            .name
+            .clone()
+            .unwrap_or_else(|| inferred_set_name(items, &indices));
+        for index in indices {
+            items[index].set_id.clone_from(&definition.id);
+            items[index].set_name.clone_from(&name);
+            assigned.insert(index);
+        }
     }
-    if item_series != 0 {
-        return (
-            format!("series:{item_series}"),
-            item_series_name
-                .filter(|name| !name.is_empty())
-                .unwrap_or("未命名套装")
-                .to_string(),
-        );
+
+    // The game has no single sheet covering ordinary dungeon, raid, tomestone, and crafted
+    // armor sets. Derive those families from stable item metadata plus a shared localized name
+    // prefix. Model ids are deliberately excluded: model reuse is appearance data, not set data.
+    let mut buckets: HashMap<(u16, u16, u32, u8, String), Vec<usize>> = HashMap::new();
+    for (index, item) in items.iter().enumerate() {
+        if item.kind == CollectionKind::Equipment
+            && !assigned.contains(&index)
+            && (2..=11).contains(&item.slot_order)
+        {
+            buckets
+                .entry((
+                    item.level_item,
+                    item.level_equip,
+                    item.class_job_category,
+                    item.rarity,
+                    equipment_variant_marker(&item.name).to_string(),
+                ))
+                .or_default()
+                .push(index);
+        }
     }
-    if model_main != 0 {
-        let model_id = model_main & 0xffff;
-        let variant_id = (model_main >> 32) & 0xffff;
-        let domain = equipment_model_domain(equip_slot_category);
-        return (
-            format!("model:{domain}:{model_id}:{variant_id}"),
-            format!("同模型套装 #{model_id:04}"),
-        );
+
+    for indices in buckets.values() {
+        let mut prefixes = HashSet::new();
+        for (position, &left_index) in indices.iter().enumerate() {
+            for &right_index in &indices[position + 1..] {
+                if items[left_index].slot_order == items[right_index].slot_order {
+                    continue;
+                }
+                let prefix = common_name_prefix(&items[left_index].name, &items[right_index].name);
+                if is_meaningful_set_prefix(prefix) {
+                    prefixes.insert(prefix);
+                }
+            }
+        }
+
+        let mut candidates = prefixes
+            .into_iter()
+            .filter_map(|prefix| {
+                let members = indices
+                    .iter()
+                    .copied()
+                    .filter(|index| items[*index].name.starts_with(&prefix))
+                    .collect::<Vec<_>>();
+                let slot_count = distinct_equipment_slots(items, &members);
+                (slot_count >= 2 && members.len() <= 12).then_some((prefix, members, slot_count))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            right
+                .2
+                .cmp(&left.2)
+                .then(right.0.chars().count().cmp(&left.0.chars().count()))
+                .then(right.1.len().cmp(&left.1.len()))
+        });
+
+        for (prefix, members, _) in candidates {
+            let members = members
+                .into_iter()
+                .filter(|index| !assigned.contains(index))
+                .collect::<Vec<_>>();
+            if distinct_equipment_slots(items, &members) < 2 || members.len() > 12 {
+                continue;
+            }
+            let min_item_id = members
+                .iter()
+                .map(|index| items[*index].id)
+                .min()
+                .unwrap_or_default();
+            let set_id = format!("family:{min_item_id}");
+            let set_name = format!("{prefix}套装");
+            for index in members {
+                items[index].set_id.clone_from(&set_id);
+                items[index].set_name.clone_from(&set_name);
+                assigned.insert(index);
+            }
+        }
     }
-    (format!("item:{item_id}"), "未归入套装".to_string())
+}
+
+fn distinct_equipment_slots(items: &[CollectionItem], indices: &[usize]) -> usize {
+    indices
+        .iter()
+        .map(|index| items[*index].slot_order)
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn inferred_set_name(items: &[CollectionItem], indices: &[usize]) -> String {
+    let prefix = indices
+        .iter()
+        .map(|index| items[*index].name.as_str())
+        .reduce(common_name_prefix)
+        .unwrap_or_default();
+    if prefix.chars().count() >= 2 {
+        format!("{prefix}套装")
+    } else {
+        let first = indices
+            .first()
+            .map(|index| items[*index].name.as_str())
+            .unwrap_or("装备");
+        format!("{first}等 {} 件", indices.len())
+    }
+}
+
+fn common_name_prefix<'a>(left: &'a str, right: &str) -> &'a str {
+    let mut end = 0;
+    for ((left_offset, left_char), right_char) in left.char_indices().zip(right.chars()) {
+        if left_char != right_char {
+            break;
+        }
+        end = left_offset + left_char.len_utf8();
+    }
+    left[..end].trim_end_matches([' ', '-', '·', '・', '（', '('])
+}
+
+fn is_meaningful_set_prefix(prefix: &str) -> bool {
+    prefix.chars().count() >= 2
+        && !matches!(
+            prefix,
+            "过期" | "风化" | "陈旧" | "旧化" | "旧化的" | "改良型" | "复制品"
+        )
+}
+
+fn equipment_variant_marker(name: &str) -> &str {
+    if name.ends_with('）') {
+        if let Some(start) = name.rfind('（') {
+            return &name[start..];
+        }
+    }
+    if let Some(start) = name.rfind('+') {
+        if name[start + 1..]
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        {
+            return &name[start..];
+        }
+    }
+    for suffix in ["·改", "·阳", "·阴"] {
+        if name.ends_with(suffix) {
+            return suffix;
+        }
+    }
+    ""
+}
+
+fn sort_collection_items(items: &mut [CollectionItem]) {
+    items.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then(left.patch.cmp(&right.patch))
+            .then(left.set_name.cmp(&right.set_name))
+            .then(left.slot_order.cmp(&right.slot_order))
+            .then(left.id.cmp(&right.id))
+    });
 }
 
 fn equipment_model_domain(equip_slot_category: u32) -> &'static str {
@@ -722,11 +914,88 @@ mod collection_tests {
     }
 
     #[test]
-    fn item_series_wins_over_model_grouping() {
-        assert_eq!(
-            equipment_set(CollectionKind::Equipment, 1, 42, Some("测试套装"), 4, 123),
-            ("series:42".to_string(), "测试套装".to_string())
-        );
+    fn groups_named_equipment_families_across_slots() {
+        let mut items = vec![
+            equipment_item(10, "伊甸之恩御敌战盔", 2),
+            equipment_item(11, "伊甸之恩御敌战铠", 3),
+            equipment_item(12, "伊甸之恩御敌手铠", 4),
+        ];
+        assign_equipment_sets(&mut items, &[]);
+        assert_eq!(items[0].set_id, "family:10");
+        assert_eq!(items[0].set_name, "伊甸之恩御敌套装");
+        assert!(items.iter().all(|item| item.set_id == items[0].set_id));
+    }
+
+    #[test]
+    fn model_reuse_does_not_create_an_equipment_set() {
+        let mut items = vec![
+            equipment_item(20, "红铜头环", 2),
+            equipment_item(21, "旅行者长衣", 3),
+        ];
+        items[0].model_main = 777;
+        items[1].model_main = 777;
+        assign_equipment_sets(&mut items, &[]);
+        assert_eq!(items[0].set_id, "item:20");
+        assert_eq!(items[1].set_id, "item:21");
+    }
+
+    #[test]
+    fn explicit_game_set_wins_over_inferred_family() {
+        let mut items = vec![
+            equipment_item(30, "东方公子长衫", 3),
+            equipment_item(31, "东方公子长裤", 6),
+        ];
+        let definitions = vec![EquipmentSetDefinition {
+            id: "fitting:1".to_string(),
+            name: Some("东方公子套装".to_string()),
+            item_ids: vec![30, 31],
+        }];
+        assign_equipment_sets(&mut items, &definitions);
+        assert!(items.iter().all(|item| item.set_id == "fitting:1"));
+        assert!(items.iter().all(|item| item.set_name == "东方公子套装"));
+    }
+
+    #[test]
+    fn inferred_sets_keep_upgrade_variants_separate() {
+        let mut items = vec![
+            equipment_item(40, "元素御敌头盔+1", 2),
+            equipment_item(41, "元素御敌战甲+1", 3),
+            equipment_item(42, "元素御敌头盔+2", 2),
+            equipment_item(43, "元素御敌战甲+2", 3),
+        ];
+        assign_equipment_sets(&mut items, &[]);
+        assert_eq!(items[0].set_id, items[1].set_id);
+        assert_eq!(items[2].set_id, items[3].set_id);
+        assert_ne!(items[0].set_id, items[2].set_id);
+    }
+
+    fn equipment_item(id: u32, name: &str, slot_order: u8) -> CollectionItem {
+        CollectionItem {
+            id,
+            kind: CollectionKind::Equipment,
+            name: name.to_string(),
+            description: String::new(),
+            icon: 0,
+            item_ui_category: 0,
+            item_search_category: 0,
+            item_action: 0,
+            equip_slot_category: slot_order as u32,
+            slot_name: format!("部位 {slot_order}"),
+            slot_order,
+            level_item: 470,
+            level_equip: 80,
+            rarity: 3,
+            class_job_category: 2,
+            class_job_category_name: "防护职业".to_string(),
+            item_series: 0,
+            set_id: format!("item:{id}"),
+            set_name: name.to_string(),
+            expansion: String::new(),
+            patch: String::new(),
+            model_main: 0,
+            model_sub: 0,
+            appearance_key: String::new(),
+        }
     }
 }
 

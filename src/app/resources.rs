@@ -35,6 +35,7 @@ struct CachedPackageInfo {
     game_version: String,
     revision: String,
     record_count: usize,
+    schema_revision: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -70,7 +71,7 @@ pub struct IndexedDbCachedProvider;
 impl IndexedDbCachedProvider {
     fn schema_revision(request: &ProviderRequest) -> u32 {
         if request.kind == CollectionCatalogKind.into() {
-            2
+            xiv_companion::COLLECTION_CATALOG_SCHEMA_VERSION
         } else {
             1
         }
@@ -156,6 +157,7 @@ impl IndexedDbCachedProvider {
                     game_version: package.game_version,
                     revision: package.generated_at,
                     record_count: package.counts.items,
+                    schema_revision: None,
                 })
                 .map_err(|error| {
                     ResourceError::new(
@@ -172,6 +174,7 @@ impl IndexedDbCachedProvider {
                     game_version: package.game_version,
                     revision: package.generated_at,
                     record_count: package.counts.items,
+                    schema_revision: None,
                 })
                 .map_err(|error| {
                     ResourceError::new(
@@ -188,6 +191,7 @@ impl IndexedDbCachedProvider {
                     game_version: package.game_version,
                     revision: package.generated_at,
                     record_count: package.counts.items,
+                    schema_revision: Some(package.schema_version),
                 })
                 .map_err(|error| {
                     ResourceError::new(
@@ -465,45 +469,44 @@ impl ResourceProvider for IndexedDbCachedProvider {
             })?;
 
             if let Some(record) = cached {
+                let mut incompatible_local = false;
                 if record.source_tag == ResourceOrigin::UserLocal.id() {
                     let expected_schema = Self::schema_revision(&request);
-                    if record.schema_revision >= expected_schema {
-                        let metadata = resource_metadata_from_record(&record);
-                        return Ok(ResourceBlob {
-                            bytes: record.bytes,
-                            fingerprint: Some(record.fingerprint),
-                            metadata,
-                        });
-                    }
                     if let Ok(info) = Self::package_info_from_bytes(&request, &record.bytes) {
-                        let upgraded = CachedResourceRecord {
-                            fingerprint: format!(
-                                "{}:{}:{expected_schema}",
-                                info.game_version, info.revision
-                            ),
-                            source_tag: record.source_tag,
-                            game_version: info.game_version,
-                            schema_revision: expected_schema,
-                            record_count: info.record_count,
-                            saved_at: record.saved_at,
-                            bytes: record.bytes,
-                        };
-                        save_cached_resource(cache_key, &upgraded)
-                            .await
-                            .map_err(|error| {
-                                ResourceError::new(
-                                    ResourceErrorKind::ProviderFailed,
-                                    resource_kind.clone(),
-                                    Some(ResourceSource::IndexedDb),
-                                    error,
-                                )
-                            })?;
-                        let metadata = resource_metadata_from_record(&upgraded);
-                        return Ok(ResourceBlob {
-                            bytes: upgraded.bytes,
-                            fingerprint: Some(upgraded.fingerprint),
-                            metadata,
-                        });
+                        let package_is_compatible = info
+                            .schema_revision
+                            .map(|schema| schema >= expected_schema)
+                            .unwrap_or(record.schema_revision >= expected_schema);
+                        if package_is_compatible {
+                            let upgraded = CachedResourceRecord {
+                                fingerprint: format!(
+                                    "{}:{}:{expected_schema}",
+                                    info.game_version, info.revision
+                                ),
+                                source_tag: record.source_tag,
+                                game_version: info.game_version,
+                                schema_revision: expected_schema,
+                                record_count: info.record_count,
+                                saved_at: record.saved_at,
+                                bytes: record.bytes,
+                            };
+                            save_cached_resource(cache_key, &upgraded)
+                                .await
+                                .map_err(|error| {
+                                    ResourceError::new(
+                                        ResourceErrorKind::ProviderFailed,
+                                        resource_kind.clone(),
+                                        Some(ResourceSource::IndexedDb),
+                                        error,
+                                    )
+                                })?;
+                            let metadata = resource_metadata_from_record(&upgraded);
+                            return Ok(ResourceBlob {
+                                bytes: upgraded.bytes,
+                                fingerprint: Some(upgraded.fingerprint),
+                                metadata,
+                            });
+                        }
                     }
                     log::warn(
                         "resource",
@@ -512,10 +515,11 @@ impl ResourceProvider for IndexedDbCachedProvider {
                             record.schema_revision
                         ),
                     );
+                    incompatible_local = true;
                 }
 
                 let bundled_info = Self::bundled_manifest_entry(&request).await?;
-                if !should_replace_builtin_cache(&record, &bundled_info) {
+                if !incompatible_local && !should_replace_builtin_cache(&record, &bundled_info) {
                     let metadata = resource_metadata_from_record(&record);
                     return Ok(ResourceBlob {
                         bytes: record.bytes,
@@ -878,8 +882,13 @@ async fn load_collection_catalog_from_browser_sqpack() -> Result<Vec<u8>, String
                     item.expansion.clone_from(expansion);
                     item.patch.clone_from(patch);
                 } else {
-                    item.expansion = "本地版本".to_string();
-                    item.patch = game_version.clone();
+                    if let Some((expansion, patch_series)) = local_release_bucket(&game_version) {
+                        item.expansion = expansion.to_string();
+                        item.patch = format!("{patch_series}（本地新增）");
+                    } else {
+                        item.expansion = "本地版本".to_string();
+                        item.patch = game_version.clone();
+                    }
                 }
             }
         }
@@ -898,6 +907,64 @@ async fn load_collection_catalog_from_browser_sqpack() -> Result<Vec<u8>, String
         ),
     );
     Ok(bytes)
+}
+
+fn local_release_bucket(game_version: &str) -> Option<(&'static str, &'static str)> {
+    let year = game_version
+        .split(|character: char| !character.is_ascii_digit())
+        .find(|part| part.len() == 4)?
+        .parse::<u16>()
+        .ok()?;
+    match year {
+        2024.. => Some(("金曦之遗辉", "7.x")),
+        2022..=2023 => Some(("晓月之终途", "6.x")),
+        2019..=2021 => Some(("暗影之逆焰", "5.x")),
+        2017..=2018 => Some(("红莲之狂潮", "4.x")),
+        2015..=2016 => Some(("苍穹之禁城", "3.x")),
+        2013..=2014 => Some(("重生之境", "2.x")),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod local_release_tests {
+    use super::{
+        BundledResourceManifestEntry, CachedResourceRecord, local_release_bucket,
+        should_replace_builtin_cache,
+    };
+
+    #[test]
+    fn local_build_is_grouped_into_its_expansion() {
+        assert_eq!(
+            local_release_bucket("2026.06.18.0000.0000"),
+            Some(("金曦之遗辉", "7.x"))
+        );
+        assert_eq!(
+            local_release_bucket("game-2023.10.03.0000.0000"),
+            Some(("晓月之终途", "6.x"))
+        );
+        assert_eq!(local_release_bucket("unknown"), None);
+    }
+
+    #[test]
+    fn collection_schema_upgrade_replaces_older_local_cache() {
+        let cached = CachedResourceRecord {
+            fingerprint: "local:old:3".to_string(),
+            source_tag: "local".to_string(),
+            game_version: "2026.06.18.0000.0000".to_string(),
+            schema_revision: 3,
+            record_count: 30_000,
+            saved_at: String::new(),
+            bytes: Vec::new(),
+        };
+        let bundled = BundledResourceManifestEntry {
+            game_version: "game-2025.10.23.0000.0000".to_string(),
+            revision: "2026-07-11T18:26:09Z".to_string(),
+            schema_revision: 4,
+            record_count: 29_985,
+        };
+        assert!(should_replace_builtin_cache(&cached, &bundled));
+    }
 }
 
 pub async fn load_weapon_model_from_local(

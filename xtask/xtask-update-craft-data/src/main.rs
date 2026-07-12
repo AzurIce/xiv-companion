@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use serde::Deserialize;
 use serde_json::json;
 use xiv_companion::{
     audit::audit_craft_data,
@@ -39,6 +40,14 @@ struct Args {
     /// Optional ffxiv-datamining-cn repository used to attach first-seen patch metadata.
     #[arg(long, value_name = "DIR")]
     datamining_repo: Option<PathBuf>,
+
+    /// Garland Tools patch metadata used only to fill item releases before patch 4.45.
+    #[arg(
+        long,
+        value_name = "FILE",
+        default_value = "third_party/garland-tools/patches.json"
+    )]
+    garland_patches: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -66,6 +75,10 @@ fn main() -> Result<()> {
     if let Some(repo) = args.datamining_repo.as_deref() {
         apply_item_release_history(&mut collection_catalog, repo)?;
     }
+    apply_garland_item_patches(
+        &mut collection_catalog,
+        &absolutize(&root, &args.garland_patches),
+    )?;
     let game_version = craft_data.game_version.clone();
 
     fs::create_dir_all(&out_dir)
@@ -170,10 +183,72 @@ struct ReleaseMetadata {
     patch: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExpansionBoundary {
+    name: String,
+    item_id_start: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GarlandPatchEntry {
+    #[serde(rename = "type")]
+    kind: String,
+    id: String,
+    patch: f64,
+}
+
+fn apply_garland_item_patches(
+    catalog: &mut xiv_companion::CollectionCatalogPackage,
+    path: &Path,
+) -> Result<()> {
+    let json = fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read Garland patch metadata from {}",
+            path.display()
+        )
+    })?;
+    let item_patches = garland_item_patches(&json).with_context(|| {
+        format!(
+            "failed to parse Garland patch metadata from {}",
+            path.display()
+        )
+    })?;
+
+    for item in &mut catalog.items {
+        let Some(&patch) = item_patches.get(&item.id) else {
+            continue;
+        };
+        let patch = format_patch_number(patch);
+        item.expansion = expansion_label(&patch, "");
+        item.patch = patch;
+    }
+    Ok(())
+}
+
+fn garland_item_patches(json: &str) -> Result<HashMap<u32, f64>> {
+    let entries =
+        serde_json::from_str::<Vec<GarlandPatchEntry>>(json.trim_start_matches('\u{feff}'))?;
+    Ok(entries
+        .into_iter()
+        .filter(|entry| entry.kind == "item" && entry.patch < 4.45)
+        .filter_map(|entry| entry.id.parse::<u32>().ok().map(|id| (id, entry.patch)))
+        .collect())
+}
+
+fn format_patch_number(patch: f64) -> String {
+    if patch.fract() == 0.0 {
+        format!("{patch:.1}")
+    } else {
+        patch.to_string()
+    }
+}
+
 fn apply_item_release_history(
     catalog: &mut xiv_companion::CollectionCatalogPackage,
     repo: &Path,
 ) -> Result<()> {
+    let expansion_boundaries =
+        expansion_boundaries_from_csv(&git_output(repo, &["show", "HEAD:ExVersion.csv"])?)?;
     let log = git_output(
         repo,
         &["log", "--reverse", "--format=%H%x09%s", "--", "Item.csv"],
@@ -191,20 +266,14 @@ fn apply_item_release_history(
     for (index, (commit, subject)) in commits.iter().enumerate() {
         let csv = git_output(repo, &["show", &format!("{commit}:Item.csv")])?;
         let patch = release_label(subject, index == 0);
-        let expansion = if index == 0 {
-            "历史版本".to_string()
-        } else {
-            expansion_label(&patch, subject)
-        };
         for item_id in item_ids_from_csv(&csv)? {
             if seen.insert(item_id) {
-                releases.insert(
-                    item_id,
-                    ReleaseMetadata {
-                        expansion: expansion.clone(),
-                        patch: patch.clone(),
-                    },
-                );
+                let (expansion, patch) = if index == 0 {
+                    baseline_release(item_id, &patch, &expansion_boundaries)
+                } else {
+                    (expansion_label(&patch, subject), patch.clone())
+                };
+                releases.insert(item_id, ReleaseMetadata { expansion, patch });
             }
         }
     }
@@ -216,6 +285,55 @@ fn apply_item_release_history(
         }
     }
     Ok(())
+}
+
+fn expansion_boundaries_from_csv(csv: &str) -> Result<Vec<ExpansionBoundary>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv.as_bytes());
+    let mut boundaries = Vec::new();
+    for record in reader.records().skip(3) {
+        let record = record.context("failed to parse ExVersion.csv")?;
+        let Some(name) = record.get(1).filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let Some(item_id_start) = record.get(4).and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        boundaries.push(ExpansionBoundary {
+            name: name.to_string(),
+            item_id_start,
+        });
+    }
+    boundaries.sort_by_key(|boundary| boundary.item_id_start);
+    if boundaries.is_empty() {
+        return Err(anyhow!(
+            "no expansion item boundaries found in ExVersion.csv"
+        ));
+    }
+    Ok(boundaries)
+}
+
+fn baseline_release(
+    item_id: u32,
+    first_snapshot_patch: &str,
+    boundaries: &[ExpansionBoundary],
+) -> (String, String) {
+    let Some(boundary) = boundaries
+        .iter()
+        .rev()
+        .find(|boundary| item_id >= boundary.item_id_start)
+    else {
+        return ("未归档".to_string(), first_snapshot_patch.to_string());
+    };
+    let patch = match boundary.name.as_str() {
+        "重生之境" => "2.x".to_string(),
+        "苍穹之禁城" => "3.x".to_string(),
+        "红莲之狂潮" => first_snapshot_patch.to_string(),
+        _ => first_snapshot_patch.to_string(),
+    };
+    (boundary.name.clone(), patch)
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String> {
@@ -251,7 +369,7 @@ fn item_ids_from_csv(csv: &str) -> Result<Vec<u32>> {
 }
 
 fn release_label(subject: &str, first_snapshot: bool) -> String {
-    let label = subject
+    let raw_label = subject
         .split_once("patch ")
         .map(|(_, patch)| patch.split_whitespace().next().unwrap_or(patch))
         .or_else(|| {
@@ -260,6 +378,7 @@ fn release_label(subject: &str, first_snapshot: bool) -> String {
                 .map(|(_, version)| version.split_whitespace().next().unwrap_or(version))
         })
         .unwrap_or("未归档版本");
+    let label = patch_for_cn_build(raw_label).unwrap_or(raw_label);
     if first_snapshot {
         format!("{label} 及以前")
     } else {
@@ -267,14 +386,24 @@ fn release_label(subject: &str, first_snapshot: bool) -> String {
     }
 }
 
+fn patch_for_cn_build(build: &str) -> Option<&'static str> {
+    match build {
+        "2025.12.09.0000.0000" | "2025.12.18.0000.0000" | "2025.12.23.0000.0000" => Some("7.4"),
+        "2026.01.21.0000.0000" => Some("7.41"),
+        "2026.02.20.0000.0000" | "2026.03.07.0000.0000" => Some("7.45"),
+        "2026.04.21.0000.0000" | "2026.05.01.0000.0000" => Some("7.5"),
+        _ => None,
+    }
+}
+
 fn expansion_label(patch: &str, subject: &str) -> String {
-    match patch.chars().next() {
-        Some('2') => "重生之境",
-        Some('3') => "苍穹之禁城",
-        Some('4') => "红莲之狂潮",
-        Some('5') => "暗影之逆焰",
-        Some('6') => "晓月之终途",
-        Some('7') => "金曦之遗辉",
+    match patch.split_once('.').map(|(major, _)| major) {
+        Some("2") => "重生之境",
+        Some("3") => "苍穹之禁城",
+        Some("4") => "红莲之狂潮",
+        Some("5") => "暗影之逆焰",
+        Some("6") => "晓月之终途",
+        Some("7") => "金曦之遗辉",
         _ if subject.contains("2019") || subject.contains("2020") || subject.contains("2021") => {
             "暗影之逆焰"
         }
@@ -299,11 +428,55 @@ mod tests {
             "4.45 及以前"
         );
         assert_eq!(expansion_label("6.5", ""), "晓月之终途");
+        assert_eq!(release_label("ver 2025.12.09.0000.0000", false), "7.4");
+        assert_eq!(release_label("ver 2026.04.21.0000.0000", false), "7.5");
+        assert_eq!(
+            release_label("ver 2027.01.01.0000.0000", false),
+            "2027.01.01.0000.0000"
+        );
+        assert_eq!(
+            expansion_label("7.5", "ver 2026.04.21.0000.0000"),
+            "金曦之遗辉"
+        );
     }
 
     #[test]
     fn item_history_csv_handles_multiline_descriptions() {
         let csv = "key,name,description\n1,测试,\"第一行\n2,不是新记录\"\n3,另一项,描述\n";
         assert_eq!(item_ids_from_csv(csv).unwrap(), vec![1, 3]);
+    }
+
+    #[test]
+    fn exversion_boundaries_split_the_first_history_snapshot() {
+        let csv = "key,0,1,2,3,4\n#,Name,AcceptJingle,CompleteJingle,,\nint32,str,ScreenImage,ScreenImage,uint32,uint32\n0,重生之境,1,2,0,61875\n1,苍穹之禁城,342,343,8240,61876\n2,红莲之狂潮,344,345,16090,61877\n";
+        let boundaries = expansion_boundaries_from_csv(csv).unwrap();
+        assert_eq!(
+            baseline_release(8239, "4.45 及以前", &boundaries),
+            ("重生之境".to_string(), "2.x".to_string())
+        );
+        assert_eq!(
+            baseline_release(8240, "4.45 及以前", &boundaries),
+            ("苍穹之禁城".to_string(), "3.x".to_string())
+        );
+        assert_eq!(
+            baseline_release(16090, "4.45 及以前", &boundaries),
+            ("红莲之狂潮".to_string(), "4.45 及以前".to_string())
+        );
+    }
+
+    #[test]
+    fn garland_patch_numbers_keep_major_minor_format() {
+        assert_eq!(format_patch_number(2.0), "2.0");
+        assert_eq!(format_patch_number(2.35), "2.35");
+        assert_eq!(format_patch_number(4.4), "4.4");
+    }
+
+    #[test]
+    fn garland_history_keeps_only_early_item_entries() {
+        let patches = garland_item_patches(
+            "\u{feff}[{\"type\":\"item\",\"id\":\"1\",\"patch\":2.0},{\"type\":\"quest\",\"id\":\"2\",\"patch\":2.1},{\"type\":\"item\",\"id\":\"3\",\"patch\":4.45}]",
+        )
+        .unwrap();
+        assert_eq!(patches, HashMap::from([(1, 2.0)]));
     }
 }
