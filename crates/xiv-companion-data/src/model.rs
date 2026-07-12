@@ -1636,14 +1636,16 @@ pub fn prepared_material_feature_flags(
         uses_tile: texture_bindings.tile_properties.is_some(),
         uses_detail: texture_bindings.multi_map.is_some(),
         uses_environment_map: texture_bindings.environment.is_some(),
-        uses_secondary_maps: matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+        uses_secondary_maps: (matches!(shader_family, MaterialShaderFamily::BgUvScroll)
             && matches!(
                 material.map(|material| material.value_mode),
                 Some(MaterialValueMode::Multi)
             )
             && (texture_bindings.secondary_base_color.is_some()
                 || texture_bindings.secondary_normal.is_some()
-                || texture_bindings.secondary_specular.is_some()),
+                || texture_bindings.secondary_specular.is_some()))
+            || (matches!(shader_family, MaterialShaderFamily::LightShaft)
+                && texture_bindings.secondary_base_color.is_some()),
         ..PreparedMaterialFeatureFlags::default()
     };
 
@@ -1665,8 +1667,7 @@ pub fn prepared_material_feature_flags(
         || material_vec4_differs(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
         || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
-    flags.uses_scroll = prepared_material_uses_scroll(material, uv_sources)
-        || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
+    flags.uses_scroll = prepared_material_uses_scroll(material, uv_sources);
     flags.uses_outline = material.outline_width.is_finite()
         && material.outline_width > 0.0
         && matches!(
@@ -3104,12 +3105,14 @@ mod color_table_bake_tests {
                 .uses_scroll
         );
         material = test_material();
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
         material.lightshaft_tex_anim = [0.5, 0.0, 0.0, 0.0];
+        material.secondary_base_color_texture = Some(1);
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft)
                 .feature_flags,
             PreparedMaterialFeatureFlags {
-                uses_scroll: true,
+                uses_secondary_maps: true,
                 ..PreparedMaterialFeatureFlags::default()
             }
         );

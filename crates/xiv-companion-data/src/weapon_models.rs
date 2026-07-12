@@ -5104,7 +5104,7 @@ fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
         ("g_SamplerBaseColor", WeaponModelTextureKind::BaseColor),
         ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
         ("g_Sampler0", WeaponModelTextureKind::BaseColor),
-        ("g_Sampler1", WeaponModelTextureKind::BaseColor),
+        ("g_Sampler1", WeaponModelTextureKind::SecondaryBaseColor),
         ("g_SamplerEnvMap", WeaponModelTextureKind::Environment),
         ("g_SamplerWaveMap", WeaponModelTextureKind::WaterWave),
         (
@@ -7430,6 +7430,10 @@ mod weapon_material_tests {
 
     #[test]
     fn sampler_classification_covers_meddletools_texture_roles() {
+        assert_eq!(
+            classify_sampler_name("g_Sampler1"),
+            Some(WeaponModelTextureKind::SecondaryBaseColor)
+        );
         assert_eq!(
             classify_sampler_name("g_SamplerColorMap1"),
             Some(WeaponModelTextureKind::SecondaryBaseColor)

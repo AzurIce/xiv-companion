@@ -254,6 +254,42 @@ fn render_mock_water_material_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic lightshaft snapshots with native wgpu"]
+fn render_mock_lightshaft_sampler_blend_snapshot() {
+    let primary_only = mock_lightshaft_model(0.0);
+    let multiplied = mock_lightshaft_model(1.0);
+    let render = |name, model| {
+        render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic lightshaft snapshot")
+    };
+    let pixels = |path| {
+        image::open(path)
+            .expect("decode synthetic lightshaft PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let primary_pixels = pixels(render("native-lightshaft-primary", &primary_only).png_path);
+    let multiplied_pixels = pixels(render("native-lightshaft-multiplied", &multiplied).png_path);
+    let rgb_difference: u64 = primary_pixels
+        .chunks_exact(4)
+        .zip(multiplied_pixels.chunks_exact(4))
+        .map(|(primary, multiplied)| {
+            (0..3)
+                .map(|channel| primary[channel].abs_diff(multiplied[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    assert!(
+        rgb_difference > 100_000,
+        "lightshaft output must use vertex blue to blend Sampler0 with Sampler0*Sampler1"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic tattoo alpha snapshots with native wgpu"]
 fn render_mock_tattoo_normal_alpha_snapshot() {
     let low_alpha = mock_tattoo_model(32);
@@ -697,6 +733,60 @@ fn mock_secondary_scroll_model(vertex_alpha: f32, use_secondary_frame: bool) -> 
             indices: vec![0, 1, 2, 0, 2, 3],
         }],
     }
+}
+
+fn mock_lightshaft_model(vertex_blue: f32) -> WeaponModelData {
+    let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
+        "slot": 0,
+        "materialIndex": 0,
+        "name": "synthetic lightshaft",
+        "path": null,
+        "shaderPackageName": "lightshaft.shpk",
+        "alphaMode": "blend",
+        "fallbackColor": [1.0, 1.0, 1.0],
+        "diffuseColor": [1.0, 1.0, 1.0],
+        "specularColor": [0.0, 0.0, 0.0],
+        "emissiveColor": [0.0, 0.0, 0.0],
+        "roughness": 1.0,
+        "metalness": 0.0,
+        "lightshaftColor": [1.0, 1.0, 1.0, 1.0],
+        "textureIndices": [0, 1],
+        "baseColorTexture": 0,
+        "secondaryBaseColorTexture": 1,
+    }))
+    .expect("deserialize synthetic lightshaft material");
+    let texture = |path: &str, kind, rgba| WeaponModelTexture {
+        path: path.to_string(),
+        kind,
+        width: 1,
+        height: 1,
+        array_size: 1,
+        array_layer_height: 0,
+        rgba,
+        rgba_f32: None,
+    };
+    let mut model = mock_weapon_model();
+    model.item_id = 4;
+    model.item_name = "Synthetic LightShaft".to_string();
+    model.materials = vec![material];
+    model.textures = vec![
+        texture(
+            "synthetic/lightshaft0.tex",
+            ModelTextureKind::BaseColor,
+            vec![255, 160, 80, 255],
+        ),
+        texture(
+            "synthetic/lightshaft1.tex",
+            ModelTextureKind::SecondaryBaseColor,
+            vec![48, 224, 128, 255],
+        ),
+    ];
+    model.meshes[0].mesh_category = Some("lightShaft".to_string());
+    model.meshes[0].material_name = "synthetic lightshaft".to_string();
+    for vertex in &mut model.meshes[0].vertices {
+        vertex.color = [1.0, 1.0, vertex_blue, 1.0];
+    }
+    model
 }
 
 fn mock_tattoo_model(normal_alpha: u8) -> WeaponModelData {

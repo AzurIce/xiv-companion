@@ -3478,6 +3478,17 @@ fn material_secondary_map_params<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_material: PreparedMaterial,
 ) -> [f32; 4] {
+    if matches!(
+        prepared_material.shader_family,
+        MaterialShaderFamily::LightShaft
+    ) {
+        return [
+            texture_presence_flag(model, material.secondary_base_color_texture),
+            0.0,
+            0.0,
+            0.0,
+        ];
+    }
     if !prepared_material.feature_flags.uses_secondary_maps {
         return [0.0; 4];
     }
@@ -4965,6 +4976,33 @@ mod tests {
         assert_eq!(
             material_uv_scroll_mask_params(prepared).2,
             [1.0, 1.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn lightshaft_sampler1_reuses_only_the_secondary_color_binding() {
+        let mut material = fallback_material();
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
+        material.secondary_base_color_texture = Some(0);
+        material.secondary_normal_texture = Some(1);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: vec![
+                test_texture(crate::ModelTextureKind::SecondaryBaseColor),
+                test_texture(crate::ModelTextureKind::SecondaryNormal),
+            ],
+            meshes: Vec::new(),
+        };
+        let prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft);
+
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert!(!prepared.feature_flags.uses_scroll);
+        assert_eq!(material_feature_params(prepared), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(
+            material_secondary_map_params(&material, &model, prepared),
+            [1.0, 0.0, 0.0, 0.0]
         );
     }
 

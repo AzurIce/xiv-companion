@@ -282,10 +282,7 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     let is_lightshaft = material.draw_role_params.x > 0.5;
     let is_crest_fallback = material.draw_role_params.y > 0.5;
-    var base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
-    if is_lightshaft {
-        base_uv = resolve_lightshaft_uv(input);
-    }
+    let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
     let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
     let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
     let secondary_normal_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
@@ -373,6 +370,11 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let texture_mix = select(primary_texture, scroll_texture_mix, material.secondary_map_params.w > 0.5);
     let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
     let base_texture_alpha = mix(primary_alpha, sampled_secondary_base.a, secondary_color_weight);
+    let lightshaft = resolve_lightshaft_color(
+        sampled_base.rgb,
+        sampled_secondary_base.rgb,
+        input.color,
+    );
     let primary_specular = select(
         material.specular_color.rgb,
         sampled_specular,
@@ -414,7 +416,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         1.0,
         material.secondary_map_params.w > 0.5,
     );
-    let alpha = resolve_material_alpha(
+    let surface_alpha = resolve_material_alpha(
         opacity_vertex_alpha,
         base_texture_alpha,
         sampled_normal.b,
@@ -422,6 +424,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         is_lightshaft,
         is_crest_fallback,
     );
+    let alpha = select(surface_alpha, lightshaft.a, is_lightshaft);
     let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
     if camera.options.w > 0.5 {
         return debug_fragment_output(
@@ -448,7 +451,6 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         discard;
     }
     if is_lightshaft {
-        let lightshaft = resolve_lightshaft_color(base, base_texture_alpha, input.color.a);
         var out: FragmentOutput;
         out.color = lightshaft;
         out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
@@ -990,24 +992,21 @@ fn resolve_single_detail_tint(
     return mix(vec3<f32>(1.0), tint, strength);
 }
 
-fn resolve_lightshaft_uv(input: VertexOutput) -> vec2<f32> {
-    let animated = input.uv0 + material.lightshaft_tex_anim.xy * camera.options.z;
-    let basis = vec3<f32>(animated, 1.0);
-    return vec2<f32>(
-        dot(basis, material.lightshaft_tex_u.xyz),
-        dot(basis, material.lightshaft_tex_v.xyz),
+fn resolve_lightshaft_color(
+    primary: vec3<f32>,
+    secondary: vec3<f32>,
+    vertex_color: vec4<f32>,
+) -> vec4<f32> {
+    let multiply_factor = clamp(vertex_color.b, 0.0, 1.0)
+        * material.secondary_map_params.x;
+    let multiplied = mix(
+        primary,
+        primary * secondary,
+        multiply_factor,
     );
-}
-
-fn resolve_lightshaft_color(base: vec3<f32>, texture_alpha: f32, vertex_alpha: f32) -> vec4<f32> {
-    let tint = clamp(material.lightshaft_color, vec4<f32>(0.0), vec4<f32>(8.0));
-    let ray_strength = max(
-        max(material.lightshaft_ray.x, material.lightshaft_ray.y),
-        max(material.lightshaft_ray.z, material.lightshaft_ray.w),
-    );
-    let intensity = max(1.0, clamp(ray_strength, 0.0, 8.0));
-    let alpha = clamp(texture_alpha * vertex_alpha * tint.a, 0.0, 1.0);
-    return vec4<f32>(base * tint.rgb * intensity * alpha, alpha);
+    let emission_color = multiplied * max(material.lightshaft_color.rgb, vec3<f32>(0.0));
+    let emission_strength = dot(emission_color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return vec4<f32>(emission_color * emission_strength, emission_strength * vertex_color.a);
 }
 
 fn resolve_normal(
