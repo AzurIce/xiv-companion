@@ -1720,7 +1720,9 @@ fn known_shader_label(id: u32) -> Option<String> {
             "GetMaterialValueBodyJJM",
             "GetMaterialValueFaceEmissive",
             "GetDecalColor",
+            "GetDecalColorOff",
             "GetDecalColorAlpha",
+            "GetDecalColorRGBA",
             "GetSubColor",
             "GetSubColorFace",
             "GetSubColorHair",
@@ -5707,6 +5709,18 @@ mod weapon_material_tests {
 
         semantics.apply_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         assert!(semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON));
+    }
+
+    #[test]
+    fn known_shader_labels_include_all_meddle_decal_color_values() {
+        for (value, expected) in [
+            (GET_DECAL_COLOR_OFF, "GetDecalColorOff"),
+            (GET_DECAL_COLOR_ALPHA, "GetDecalColorAlpha"),
+            (GET_DECAL_COLOR_RGBA, "GetDecalColorRGBA"),
+        ] {
+            assert_eq!(known_shader_label(value).as_deref(), Some(expected));
+        }
+        assert_eq!(known_shader_label(0xDEAD_BEEF), None);
     }
 
     #[test]
