@@ -234,7 +234,7 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 
 45050 `_b.mtrl` 是 `character.shpk + Blend + GetValuesMultiMaterial`，毛发 mesh 的 807 个顶点中 445 个 A=0；旧实现因此把 400/848 个三角形强制为完全透明。修正后 final 前景像素由 29,559 增至 33,358；`XIV_PHANTOM_ALPHA_DEBUG=1` 输出的 `debug-alpha.png` 显示主体为 opaque，normal B 仍保留毛束边缘和内部缝隙透明。synthetic native WGPU fixture 还验证 character normal-B 与 tattoo normal-A 在 vertex A=0/1 时逐像素一致，同时 normal 通道变化继续产生显著输出差异。
 
-`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy。renderer 会在 opaque/cutout 后、透明颜色 pass 前重绘 `DrawDepthMode_Dither` 的 Transparent/Glass batch，使用与颜色 pass 相同的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值，只写 depth、不写两个颜色 target；透明颜色 pass 仍按 mesh center 排序、alpha blend 且不写 depth。Meddle `Names.cs` 只能确认该 material key 适用于 `characterglass.shpk` / `charactertransparency.shpk`，没有暴露游戏使用的抖动矩阵或噪声公式；MeddleTools 也不实现运行时 depth pass，因此当前阈值公式是保守近似。该行为与覆盖更多 shader family 的 scene key `ApplyDitherClip` 分开处理。
+`DrawDepthMode` 与 `EnableLighting` 已进入 material/prepared policy。renderer 会在 opaque/cutout 后、透明颜色 pass 前重绘 `DrawDepthMode_Dither` 的 Transparent/Glass batch，使用与颜色 pass 相同的 prepared alpha source 和稳定 4x4 屏幕空间有序阈值，只写 depth、不写两个颜色 target；透明颜色 pass 则逐帧按相机方向对所有 Transparent/Glass 三角形中心做全局 back-to-front 排序，将排序后的索引写入独立动态 index buffer，并合并相邻同 batch draw run，继续 alpha blend 且不写 depth。Meddle `Names.cs` 只能确认该 material key 适用于 `characterglass.shpk` / `charactertransparency.shpk`，没有暴露游戏使用的抖动矩阵或噪声公式；MeddleTools 也不实现运行时 depth pass，因此当前阈值公式是保守近似。该行为与覆盖更多 shader family 的 scene key `ApplyDitherClip` 分开处理。
 
 `GlassBlendMode` 是 scene key而非 MTRL material key。Meddle 只提供默认 `GlassBlendMode_Mul` 与可选 `GlassBlendMode_Add` 的名字/CRC，MeddleTools 没有对应节点或 bake 行为，因此不能从静态材质恢复场景选择，也没有证据把 Mul 直接解释为某个硬件 blend equation。renderer 已提供显式 `ModelGlassBlendMode::{Multiply, Additive}` scene option：默认 Multiply 保持当前 alpha-blend glass 近似以避免改变现有结果，Additive 只让 Glass batch 选择 additive pipeline；Web 的 Glass 下拉框、`ModelRenderOptions` 和 phantom snapshot 的 `XIV_PHANTOM_GLASS_BLEND=additive` 共用该入口。45059 的 Additive 验证会明显提高玻璃亮度，证明 pipeline 分派生效，也表明它仍只是硬件 additive 近似。真实乘法/scene-color composition 仍需游戏 shader 或运行时捕获证据。
 
@@ -266,8 +266,8 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
    - renderer 先计算第一版 `PreparedModel`，为每个 mesh 记录 draw role、main-pass 可见性、submesh attribute metadata、attribute visibility 和 `PreparedMaterial`；`PreparedMaterial` 会把材质 alpha/render mode 与 mesh draw role 合成 `Opaque`、`Cutout`、`Transparent`、`Glass`、`AdditiveLightShaft` 五类 prepared render pass，并记录第一版 shader family 分类、texture bindings、texture sampling policy、material feature flags、UV source 和 unsupported/runtime-only 输入摘要。
    - opaque pipeline：写 depth，绘制 `Opaque` batch。
    - cutout pipeline：写 depth，绘制 `Cutout` batch；当前仍由 WGSL alpha test discard。
-   - transparent pipeline：alpha blending，不写 depth，绘制 `Transparent` batch。
-   - glass pipeline：alpha blending，不写 depth，绘制 `Glass` batch；仍沿用现有 glass 近似参数。
+   - transparent pipeline：alpha blending，不写 depth；将 `Transparent` 三角形按当前相机方向排序后绘制。
+   - glass pipeline：alpha blending，不写 depth；与 transparent 三角形全局排序后绘制，仍沿用现有 glass 近似参数。
    - dither depth prepass：opaque/cutout 后、transparent/glass 颜色 pass 前，仅重绘 `DrawDepthMode_Dither` batch；独立双面/背面剔除 pipeline 使用与颜色 pass 一致的 base-alpha/normal-B prepared source 和稳定 4x4 屏幕空间阈值，开启 depth write，并把两个 MRT 的 color write mask 设为空。Meddle/MeddleTools 没有提供游戏公式，因此该 pass 只解决透明表面的深度覆盖近似，不代表复刻 `ApplyDitherClip` scene key。
    - additive/lightshaft pipeline：additive blending，不写 depth；Final 的 `AdditiveLightShaft` 使用专用 `fs_lightshaft`，debug 使用通用 `fs_main`，Additive Glass 仍在透明排序阶段使用通用 additive pipeline。
    - opaque/cutout/transparent/glass/additive 各有 backface 与 culled pipeline，按材质 `render_backfaces` 选择。
@@ -286,7 +286,7 @@ Meddle `OnRenderMaterialUtil` 表明 weapon decal 与 FC crest 来自运行时 `
 
 renderer final 模式会让 `CrestChange` 进入 transparent pass 并 discard，避免透明 fallback 写 depth；mesh-role debug 模式仍显示该几何。`MaterialChange` 继续使用基础材质。真实运行时 crest/decal 内容仍不可用，因此 `decalOrCrest` 保持 unsupported。
 
-透明排序目前做到 mesh-level：`Transparent` 与 `Glass` batch 按相机方向和 mesh center back-to-front 排序。还没有逐三角排序或 weighted blended OIT。
+透明排序已做到逐三角形：静态 index buffer 继续供 opaque、dither depth、outline 和 additive pass 使用；Transparent/Glass 每帧生成按三角形中心全局 back-to-front 排序的动态 index buffer。该方法能修正 45050 这类同一 mesh 内的毛片顺序，但互相穿插或循环遮挡的透明面仍不存在唯一正确顺序，尚未实现 weighted blended OIT。
 
 ## 9. Meddle 调研结论
 

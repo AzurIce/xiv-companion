@@ -168,6 +168,7 @@ pub struct ModelRenderer {
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    transparent_index_buffer: wgpu::Buffer,
     draw_batches: Vec<DrawBatch>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -761,6 +762,17 @@ impl ModelRenderer {
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let transparent_index_count = draw_batches
+            .iter()
+            .map(|batch| batch.transparent_triangles.len() * 3)
+            .sum::<usize>();
+        let transparent_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon transparent index buffer"),
+            size: (transparent_index_count.max(1) * std::mem::size_of::<u32>())
+                as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let material_bind_groups = create_material_bind_groups(
             &device,
             &queue,
@@ -808,6 +820,7 @@ impl ModelRenderer {
             compose_pipeline,
             vertex_buffer,
             index_buffer,
+            transparent_index_buffer,
             draw_batches,
             camera_buffer,
             camera_bind_group,
@@ -853,6 +866,14 @@ impl ModelRenderer {
                 params: [options.bloom_strength(), 0.0, 0.0, 0.0],
             }),
         );
+        let sorted_transparent = sorted_transparent_triangles(&self.draw_batches, yaw, pitch);
+        if !sorted_transparent.indices.is_empty() {
+            self.queue.write_buffer(
+                &self.transparent_index_buffer,
+                0,
+                bytemuck::cast_slice(&sorted_transparent.indices),
+            );
+        }
         let viewport = [viewport[0].max(1), viewport[1].max(1)];
         self.ensure_post_process_targets(viewport);
         let post = self
@@ -959,9 +980,12 @@ impl ModelRenderer {
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
-            let sorted_transparent_batches =
-                sorted_transparent_batches(&self.draw_batches, yaw, pitch);
-            for batch in sorted_transparent_batches {
+            render_pass.set_index_buffer(
+                self.transparent_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            for draw in &sorted_transparent.draws {
+                let batch = &self.draw_batches[draw.batch_index];
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
                     if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
                         if batch.render_backfaces() {
@@ -980,9 +1004,16 @@ impl ModelRenderer {
                     &self.transparent_culled_pipeline
                 };
                 render_pass.set_pipeline(pipeline);
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch_range(
+                    &mut render_pass,
+                    &self.material_bind_groups,
+                    batch,
+                    draw.index_start,
+                    draw.index_count,
+                );
             }
 
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in self
                 .draw_batches
                 .iter()
@@ -1221,11 +1252,19 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
 
         let mesh_vertices =
             model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask);
-        let center = vertices_bounds_center(&mesh_vertices);
         let base = vertices.len() as u32;
         vertices.extend(mesh_vertices.iter().map(GpuVertex::from_model_vertex));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
+        let transparent_triangles = if prepared_mesh
+            .prepared_material
+            .render_pass
+            .sorts_back_to_front()
+        {
+            transparent_triangles(&mesh_vertices, &mesh.indices, base)
+        } else {
+            Vec::new()
+        };
         draw_batches.push(DrawBatch {
             material_slot: prepared_mesh.material_slot,
             material_bind_group_index: draw_batches.len(),
@@ -1233,32 +1272,11 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
             index_start,
             index_count: mesh.indices.len() as u32,
             prepared_material: prepared_mesh.prepared_material,
-            center,
+            transparent_triangles,
         });
     }
 
     (vertices, indices, draw_batches)
-}
-
-fn vertices_bounds_center(vertices: &[crate::ModelVertex]) -> [f32; 3] {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in vertices {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex.position[axis]);
-            max[axis] = max[axis].max(vertex.position[axis]);
-        }
-    }
-
-    if min.iter().any(|value| !value.is_finite()) || max.iter().any(|value| !value.is_finite()) {
-        return [0.0; 3];
-    }
-
-    [
-        (min[0] + max[0]) * 0.5,
-        (min[1] + max[1]) * 0.5,
-        (min[2] + max[2]) * 0.5,
-    ]
 }
 
 fn gpu_vertices_bounds(vertices: &[GpuVertex]) -> Option<([f32; 3], f32)> {
@@ -1291,20 +1309,86 @@ fn gpu_vertices_bounds(vertices: &[GpuVertex]) -> Option<([f32; 3], f32)> {
     Some((center, radius))
 }
 
-fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
+fn transparent_triangles(
+    vertices: &[crate::ModelVertex],
+    indices: &[u32],
+    vertex_base: u32,
+) -> Vec<TransparentTriangle> {
+    indices
+        .chunks_exact(3)
+        .map(|triangle| {
+            let center = (|| {
+                let positions = [
+                    vertices.get(triangle[0] as usize)?.position,
+                    vertices.get(triangle[1] as usize)?.position,
+                    vertices.get(triangle[2] as usize)?.position,
+                ];
+                Some([
+                    (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
+                    (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
+                    (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
+                ])
+            })()
+            .unwrap_or([0.0; 3]);
+            TransparentTriangle {
+                indices: [
+                    vertex_base + triangle[0],
+                    vertex_base + triangle[1],
+                    vertex_base + triangle[2],
+                ],
+                center,
+            }
+        })
+        .collect()
+}
+
+fn sorted_transparent_triangles(
+    draw_batches: &[DrawBatch],
+    yaw: f32,
+    pitch: f32,
+) -> SortedTransparentDraws {
     let sort_dir = transparent_sort_direction(yaw, pitch);
-    let mut batches = draw_batches
+    let mut triangles = draw_batches
         .iter()
-        .filter(|batch| batch.pass().sorts_back_to_front())
+        .enumerate()
+        .filter(|(_, batch)| batch.pass().sorts_back_to_front())
+        .flat_map(|(batch_index, batch)| {
+            batch
+                .transparent_triangles
+                .iter()
+                .map(move |triangle| (batch_index, triangle))
+        })
         .collect::<Vec<_>>();
-    batches.sort_by(|left, right| {
+    triangles.sort_by(|(_, left), (_, right)| {
         let left_depth = glam::Vec3::from(left.center).dot(sort_dir);
         let right_depth = glam::Vec3::from(right.center).dot(sort_dir);
         right_depth
             .partial_cmp(&left_depth)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    batches
+
+    let mut sorted = SortedTransparentDraws {
+        indices: Vec::with_capacity(triangles.len() * 3),
+        draws: Vec::new(),
+    };
+    for (batch_index, triangle) in triangles {
+        let index_start = sorted.indices.len() as u32;
+        sorted.indices.extend_from_slice(&triangle.indices);
+        if let Some(draw) = sorted
+            .draws
+            .last_mut()
+            .filter(|draw| draw.batch_index == batch_index)
+        {
+            draw.index_count += 3;
+        } else {
+            sorted.draws.push(SortedTransparentDraw {
+                batch_index,
+                index_start,
+                index_count: 3,
+            });
+        }
+    }
+    sorted
 }
 
 fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
@@ -1322,16 +1406,28 @@ fn draw_model_batch<'a>(
     material_bind_groups: &'a [wgpu::BindGroup],
     batch: &DrawBatch,
 ) {
+    draw_model_batch_range(
+        render_pass,
+        material_bind_groups,
+        batch,
+        batch.index_start,
+        batch.index_count,
+    );
+}
+
+fn draw_model_batch_range<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    material_bind_groups: &'a [wgpu::BindGroup],
+    batch: &DrawBatch,
+    index_start: u32,
+    index_count: u32,
+) {
     if let Some(bind_group) = material_bind_groups
         .get(batch.material_bind_group_index)
         .or_else(|| material_bind_groups.first())
     {
         render_pass.set_bind_group(1, bind_group, &[]);
-        render_pass.draw_indexed(
-            batch.index_start..batch.index_start + batch.index_count,
-            0,
-            0..1,
-        );
+        render_pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
     }
 }
 
@@ -3854,7 +3950,7 @@ struct PostUniform {
     params: [f32; 4],
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct DrawBatch {
     material_slot: usize,
     material_bind_group_index: usize,
@@ -3862,7 +3958,26 @@ struct DrawBatch {
     index_start: u32,
     index_count: u32,
     prepared_material: PreparedMaterial,
+    transparent_triangles: Vec<TransparentTriangle>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct TransparentTriangle {
+    indices: [u32; 3],
     center: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SortedTransparentDraws {
+    indices: Vec<u32>,
+    draws: Vec<SortedTransparentDraw>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct SortedTransparentDraw {
+    batch_index: usize,
+    index_start: u32,
+    index_count: u32,
 }
 
 impl DrawBatch {
@@ -4028,7 +4143,7 @@ mod tests {
     };
 
     #[test]
-    fn transparent_batches_sort_back_to_front_without_moving_opaque() {
+    fn transparent_triangles_sort_back_to_front_without_moving_opaque() {
         let batches = vec![
             test_batch(0, PreparedRenderPass::Opaque, [0.0, 0.0, 100.0]),
             test_batch(1, PreparedRenderPass::Transparent, [0.0, 0.0, -2.0]),
@@ -4037,14 +4152,101 @@ mod tests {
             test_batch(4, PreparedRenderPass::AdditiveLightShaft, [0.0, 0.0, 200.0]),
         ];
 
-        let sorted = sorted_transparent_batches(&batches, 0.0, 0.0);
+        let sorted = sorted_transparent_triangles(&batches, 0.0, 0.0);
 
         assert_eq!(
             sorted
+                .draws
                 .iter()
-                .map(|batch| batch.material_slot)
+                .map(|draw| batches[draw.batch_index].material_slot)
                 .collect::<Vec<_>>(),
             vec![1, 2]
+        );
+        assert_eq!(sorted.indices, vec![3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn transparent_triangles_reverse_order_with_the_camera() {
+        let mut batch = test_batch(0, PreparedRenderPass::Transparent, [0.0; 3]);
+        batch.transparent_triangles = vec![
+            TransparentTriangle {
+                indices: [0, 1, 2],
+                center: [0.0, 0.0, 3.0],
+            },
+            TransparentTriangle {
+                indices: [3, 4, 5],
+                center: [0.0, 0.0, -2.0],
+            },
+        ];
+
+        let front = sorted_transparent_triangles(std::slice::from_ref(&batch), 0.0, 0.0);
+        let back =
+            sorted_transparent_triangles(std::slice::from_ref(&batch), std::f32::consts::PI, 0.0);
+
+        assert_eq!(front.indices, vec![3, 4, 5, 0, 1, 2]);
+        assert_eq!(back.indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(front.draws.len(), 1);
+        assert_eq!(front.draws[0].index_count, 6);
+    }
+
+    #[test]
+    fn transparent_sort_merges_only_adjacent_batch_runs() {
+        let mut first = test_batch(0, PreparedRenderPass::Transparent, [0.0; 3]);
+        first.transparent_triangles = vec![
+            TransparentTriangle {
+                indices: [0, 1, 2],
+                center: [0.0, 0.0, -3.0],
+            },
+            TransparentTriangle {
+                indices: [6, 7, 8],
+                center: [0.0, 0.0, 3.0],
+            },
+        ];
+        let mut second = test_batch(1, PreparedRenderPass::Glass, [0.0; 3]);
+        second.transparent_triangles = vec![TransparentTriangle {
+            indices: [3, 4, 5],
+            center: [0.0, 0.0, 0.0],
+        }];
+
+        let sorted = sorted_transparent_triangles(&[first, second], 0.0, 0.0);
+
+        assert_eq!(sorted.indices, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            sorted.draws,
+            vec![
+                SortedTransparentDraw {
+                    batch_index: 0,
+                    index_start: 0,
+                    index_count: 3,
+                },
+                SortedTransparentDraw {
+                    batch_index: 1,
+                    index_start: 3,
+                    index_count: 3,
+                },
+                SortedTransparentDraw {
+                    batch_index: 0,
+                    index_start: 6,
+                    index_count: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn transparent_triangle_metadata_uses_global_indices_and_centroids() {
+        let vertices = vec![
+            test_vertex([0.0, 0.0, 0.0]),
+            test_vertex([3.0, 0.0, 0.0]),
+            test_vertex([0.0, 6.0, 0.0]),
+        ];
+
+        assert_eq!(
+            transparent_triangles(&vertices, &[0, 1, 2], 10),
+            vec![TransparentTriangle {
+                indices: [10, 11, 12],
+                center: [1.0, 2.0, 0.0],
+            }]
         );
     }
 
@@ -5365,13 +5567,6 @@ mod tests {
         assert_eq!(vertices.len(), 12);
         assert_eq!(indices.len(), 12);
         assert_eq!(batches.len(), 4);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| batch.center[0])
-                .collect::<Vec<_>>(),
-            vec![0.5, 4.5, 5.5, 6.5]
-        );
         assert_eq!(batches[0].pass(), PreparedRenderPass::Opaque);
         assert_eq!(batches[1].pass(), PreparedRenderPass::AdditiveLightShaft);
         assert_eq!(batches[2].pass(), PreparedRenderPass::Opaque);
@@ -5460,7 +5655,7 @@ mod tests {
 
         assert_eq!(base_vertices[0].position, [0.0, 0.0, 0.0]);
         assert_eq!(shaped_vertices[0].position, [5.0, 0.0, 0.0]);
-        assert_eq!(batches[0].center, [2.5, 0.5, 0.0]);
+        assert_eq!(batches.len(), 1);
     }
 
     fn test_prepared_render_pass(
@@ -5481,6 +5676,14 @@ mod tests {
     }
 
     fn test_batch(material_slot: usize, pass: PreparedRenderPass, center: [f32; 3]) -> DrawBatch {
+        let transparent_triangles = pass.sorts_back_to_front().then(|| TransparentTriangle {
+            indices: [
+                material_slot as u32 * 3,
+                material_slot as u32 * 3 + 1,
+                material_slot as u32 * 3 + 2,
+            ],
+            center,
+        });
         DrawBatch {
             material_slot,
             material_bind_group_index: material_slot,
@@ -5509,7 +5712,7 @@ mod tests {
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
                 render_backfaces: true,
             },
-            center,
+            transparent_triangles: transparent_triangles.into_iter().collect(),
         }
     }
 

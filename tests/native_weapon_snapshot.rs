@@ -416,6 +416,45 @@ fn render_mock_character_normal_channel_alpha_ignores_vertex_alpha_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic transparent triangle sorting snapshots with native wgpu"]
+fn render_mock_transparent_triangle_sorting_snapshot() {
+    let model = mock_transparent_triangle_sorting_model();
+    let render = |name, yaw| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(512, 512)
+                .with_camera(yaw, 0.0, 2.5, [0.0, 0.0])
+                .with_render_options(ModelRenderOptions {
+                    bloom: false,
+                    ..ModelRenderOptions::default()
+                }),
+            &model,
+        )
+        .expect("render synthetic transparent triangle sorting snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic transparent triangle sorting PNG")
+            .to_rgba8()
+            .get_pixel(256, 256)
+            .0
+    };
+
+    let front = render("native-transparent-triangle-sort-front", 0.0);
+    let back = render(
+        "native-transparent-triangle-sort-back",
+        std::f32::consts::PI,
+    );
+
+    assert!(
+        front[2] > front[0].saturating_add(12),
+        "front view must blend the nearer blue layer last: {front:?}"
+    );
+    assert!(
+        back[0] > back[2].saturating_add(12),
+        "back view must re-sort and blend the nearer red layer last: {back:?}"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic float tile matrix snapshots with native wgpu"]
 fn render_mock_float_tile_matrix_snapshot() {
     let identity = mock_tile_matrix_model(1.0);
@@ -1044,6 +1083,87 @@ fn mock_character_normal_blue_model(normal_blue: u8, vertex_alpha: f32) -> Weapo
     model.textures[0].rgba = vec![128, 128, normal_blue, 255];
     model.meshes[0].material_name = "synthetic character normal blue".to_string();
     model
+}
+
+fn mock_transparent_triangle_sorting_model() -> WeaponModelData {
+    let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
+        "slot": 0,
+        "materialIndex": 0,
+        "name": "synthetic transparent triangle sorting",
+        "path": null,
+        "shaderPackageName": "character.shpk",
+        "alphaMode": "blend",
+        "drawDepthMode": "none",
+        "lightingMode": "disabled",
+        "shaderDiffuseColor": [1.0, 1.0, 1.0, 1.0],
+        "fallbackColor": [1.0, 1.0, 1.0],
+        "diffuseColor": [1.0, 1.0, 1.0],
+        "specularColor": [0.0, 0.0, 0.0],
+        "emissiveColor": [0.0, 0.0, 0.0],
+        "roughness": 1.0,
+        "metalness": 0.0,
+        "opacity": 1.0,
+        "renderBackfaces": true,
+        "applyVertexColor": true,
+        "textureIndices": [0],
+        "normalTexture": 0
+    }))
+    .expect("deserialize synthetic transparent triangle sorting material");
+    let normal = WeaponModelTexture {
+        path: "synthetic/transparent_triangle_sorting_normal.tex".to_string(),
+        kind: ModelTextureKind::Normal,
+        width: 1,
+        height: 1,
+        array_size: 1,
+        array_layer_height: 0,
+        rgba: vec![128, 128, 128, 255],
+        rgba_f32: None,
+    };
+    let quad = |z, color| {
+        [
+            vertex([-0.8, -0.8, z], color),
+            vertex([0.8, -0.8, z], color),
+            vertex([0.8, 0.8, z], color),
+            vertex([-0.8, 0.8, z], color),
+        ]
+    };
+    let vertices = quad(-0.15, [1.0, 0.05, 0.05, 1.0])
+        .into_iter()
+        .chain(quad(0.15, [0.05, 0.05, 1.0, 1.0]))
+        .collect();
+
+    WeaponModelData {
+        item_id: 5,
+        item_name: "Synthetic Transparent Triangle Sorting".to_string(),
+        model_main: PackedModelId::from_raw(5),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics: Vec::new(),
+        loaded_paths: vec!["synthetic/transparent_triangle_sorting.mdl".to_string()],
+        bounds: WeaponModelBounds {
+            min: [-0.8, -0.8, -0.15],
+            max: [0.8, 0.8, 0.15],
+            center: [0.0, 0.0, 0.0],
+            radius: 1.2,
+        },
+        materials: vec![material],
+        textures: vec![normal],
+        meshes: vec![WeaponModelMesh {
+            path: "synthetic/transparent_triangle_sorting.mdl".to_string(),
+            part_index: 0,
+            mesh_category: Some("normal".to_string()),
+            submesh: None,
+            shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
+            material_index: 0,
+            material_slot: 0,
+            material_name: "synthetic transparent triangle sorting".to_string(),
+            color: [1.0; 3],
+            bone_table: None,
+            vertices,
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+        }],
+    }
 }
 
 fn mock_tile_matrix_model(repeat: f32) -> WeaponModelData {
