@@ -36,7 +36,7 @@ impl ResourceSpec for CollectionCatalogResource {
             default_policy: SourcePolicy::Fixed(ResourceSource::IndexedDb),
             fallback_policy: FallbackPolicy::default(),
             cache_policy: CachePolicy::ReadWrite,
-            pipeline: "collection-catalog-json-v7",
+            pipeline: "collection-catalog-json-v8",
         }
     }
 

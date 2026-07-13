@@ -401,7 +401,7 @@ fn CollectionKindTab(
             },
             onclick: move |event| onclick.call(event),
             "{kind.label()}"
-            if kind != CollectionKind::Equipment {
+            if collection_kind_is_experimental(kind) {
                 span { class: "ml-1 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground", "实验" }
             }
             span { class: "ml-1 text-xs tabular-nums text-muted-foreground", "{collected}/{total}" }
@@ -446,6 +446,20 @@ fn expansion_display_label(label: &str) -> String {
         _ => return label.to_string(),
     };
     format!("{label} · {series}")
+}
+
+fn collection_kind_is_experimental(kind: CollectionKind) -> bool {
+    matches!(kind, CollectionKind::Emote | CollectionKind::FolkloreBook)
+}
+
+fn collection_kind_uses_patch_sections(kind: CollectionKind) -> bool {
+    matches!(
+        kind,
+        CollectionKind::OrchestrionRoll
+            | CollectionKind::Mount
+            | CollectionKind::Minion
+            | CollectionKind::FashionAccessory
+    )
 }
 
 #[component]
@@ -821,15 +835,46 @@ fn FlatCollectionView(
         .cloned()
         .collect::<Vec<_>>();
     let total = items.len();
+    let mut patches = BTreeMap::<String, Vec<CollectionItem>>::new();
+    if collection_kind_uses_patch_sections(kind) {
+        for item in items.iter().cloned() {
+            patches.entry(item.patch.clone()).or_default().push(item);
+        }
+    }
+    let mut patches = patches.into_iter().collect::<Vec<_>>();
+    patches.sort_by(|left, right| compare_patch_labels(&left.0, &right.0));
     rsx! {
-        div { class: "space-y-4",
-            div { class: "grid gap-2 md:grid-cols-2 xl:grid-cols-3",
-                for item in items {
-                    CollectionItemLine {
-                        key: "{item.id}",
-                        obtained,
-                        item,
-                        on_toggle,
+        div {
+            if collection_kind_uses_patch_sections(kind) {
+                div { class: "divide-y border-y",
+                    for (patch, patch_items) in patches {
+                        section { key: "{patch}", class: "py-4 first:pt-0",
+                            header { class: "mb-3 flex items-baseline gap-2 px-1",
+                                h2 { class: "text-sm font-semibold", "{patch}" }
+                                span { class: "text-xs text-muted-foreground", "{patch_items.len()} 项" }
+                            }
+                            div { class: "grid gap-2 md:grid-cols-2 xl:grid-cols-3",
+                                for item in patch_items {
+                                    CollectionItemLine {
+                                        key: "{item.id}",
+                                        obtained,
+                                        item,
+                                        on_toggle,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                div { class: "grid gap-2 md:grid-cols-2 xl:grid-cols-3",
+                    for item in items {
+                        CollectionItemLine {
+                            key: "{item.id}",
+                            obtained,
+                            item,
+                            on_toggle,
+                        }
                     }
                 }
             }
