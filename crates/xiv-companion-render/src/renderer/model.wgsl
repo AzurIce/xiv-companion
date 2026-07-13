@@ -930,13 +930,20 @@ fn resolve_material_alpha(
     is_crest_fallback: bool,
 ) -> f32 {
     let texture_alpha = resolve_surface_alpha(base_texture_alpha, normal_blue, normal_alpha);
+    let alpha_source = round(material.alpha_policy_params.x);
+    let uses_normal_channel_alpha = alpha_source == 2.0 || alpha_source == 4.0;
+    let opacity_vertex_alpha = select(
+        clamp(vertex_alpha, 0.0, 1.0),
+        1.0,
+        uses_normal_channel_alpha,
+    );
     let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
     let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
     let is_glass = material.alpha_policy_params.w > 1.5;
     let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
     var alpha = select(
         1.0,
-        clamp(material.diffuse_color.a * texture_alpha * vertex_alpha, 0.0, 1.0),
+        clamp(material.diffuse_color.a * texture_alpha * opacity_vertex_alpha, 0.0, 1.0),
         uses_alpha,
     );
     if material.alpha_policy_params.x > 2.5 {
@@ -945,7 +952,7 @@ fn resolve_material_alpha(
         alpha = resolve_alpha_shaping(alpha);
     }
     if is_glass {
-        alpha = clamp(material.render.y * texture_alpha * vertex_alpha, 0.0, 1.0);
+        alpha = clamp(material.render.y * texture_alpha * opacity_vertex_alpha, 0.0, 1.0);
     }
     return alpha;
 }

@@ -366,6 +366,56 @@ fn render_mock_tattoo_normal_alpha_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic character normal-channel alpha snapshots with native wgpu"]
+fn render_mock_character_normal_channel_alpha_ignores_vertex_alpha_snapshot() {
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic character normal-channel alpha snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic character normal-channel alpha PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let rgb_difference = |left: &[u8], right: &[u8]| -> u64 {
+        left.chunks_exact(4)
+            .zip(right.chunks_exact(4))
+            .map(|(left, right)| {
+                (0..3)
+                    .map(|channel| left[channel].abs_diff(right[channel]) as u64)
+                    .sum::<u64>()
+            })
+            .sum()
+    };
+
+    let character_zero = mock_character_normal_blue_model(224, 0.0);
+    let character_one = mock_character_normal_blue_model(224, 1.0);
+    assert_eq!(
+        render("native-character-normal-blue-vertex-zero", &character_zero),
+        render("native-character-normal-blue-vertex-one", &character_one),
+        "character normal-Blue alpha must not be multiplied by vertex alpha"
+    );
+
+    let character_low = mock_character_normal_blue_model(32, 0.0);
+    let low_pixels = render("native-character-normal-blue-low", &character_low);
+    let high_pixels = render("native-character-normal-blue-high", &character_zero);
+    assert!(
+        rgb_difference(&low_pixels, &high_pixels) > 100_000,
+        "normal Blue must continue to control character transparency when vertex alpha is zero"
+    );
+
+    let tattoo_zero = mock_tattoo_vertex_alpha_model(224, 0.0);
+    let tattoo_one = mock_tattoo_vertex_alpha_model(224, 1.0);
+    assert_eq!(
+        render("native-tattoo-normal-alpha-vertex-zero", &tattoo_zero),
+        render("native-tattoo-normal-alpha-vertex-one", &tattoo_one),
+        "tattoo normal-Alpha transparency must not be multiplied by vertex alpha"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic float tile matrix snapshots with native wgpu"]
 fn render_mock_float_tile_matrix_snapshot() {
     let identity = mock_tile_matrix_model(1.0);
@@ -974,6 +1024,26 @@ fn mock_tattoo_model(normal_alpha: u8) -> WeaponModelData {
             indices: vec![0, 1, 2, 0, 2, 3],
         }],
     }
+}
+
+fn mock_tattoo_vertex_alpha_model(normal_alpha: u8, vertex_alpha: f32) -> WeaponModelData {
+    let mut model = mock_tattoo_model(normal_alpha);
+    for vertex in &mut model.meshes[0].vertices {
+        vertex.color[3] = vertex_alpha;
+    }
+    model
+}
+
+fn mock_character_normal_blue_model(normal_blue: u8, vertex_alpha: f32) -> WeaponModelData {
+    let mut model = mock_tattoo_vertex_alpha_model(255, vertex_alpha);
+    model.item_name = "Synthetic Character Normal Blue".to_string();
+    model.materials[0].name = "synthetic character normal blue".to_string();
+    model.materials[0].shader_package_name = Some("character.shpk".to_string());
+    model.materials[0].draw_depth_mode = xiv_companion_render::MaterialDrawDepthMode::None;
+    model.textures[0].path = "synthetic/character_normal_blue.tex".to_string();
+    model.textures[0].rgba = vec![128, 128, normal_blue, 255];
+    model.meshes[0].material_name = "synthetic character normal blue".to_string();
+    model
 }
 
 fn mock_tile_matrix_model(repeat: f32) -> WeaponModelData {

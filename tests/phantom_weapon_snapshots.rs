@@ -511,6 +511,20 @@ fn render_case(
             .with_context(|| format!("failed to render {name} for {}", case.case_id))?;
         }
     }
+    if phantom_alpha_debug_enabled() {
+        render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new("debug-alpha")
+                .with_output_dir(&case_dir)
+                .with_viewport(1024, 1024)
+                .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                .with_render_options(ModelRenderOptions {
+                    debug_mode: ModelDebugMode::Alpha,
+                    ..ModelRenderOptions::default()
+                }),
+            &model,
+        )
+        .with_context(|| format!("failed to render debug-alpha for {}", case.case_id))?;
+    }
 
     let raw_files = dump_raw_files(resource, &model, &case_dir)?;
     let (model_debug_files, model_metadata_by_path) =
@@ -644,6 +658,10 @@ fn phantom_array_debug_enabled() -> bool {
     std::env::var("XIV_PHANTOM_ARRAY_DEBUG")
         .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn phantom_alpha_debug_enabled() -> bool {
+    parse_phantom_toggle(&std::env::var("XIV_PHANTOM_ALPHA_DEBUG").unwrap_or_default())
 }
 
 fn phantom_glass_blend_mode() -> ModelGlassBlendMode {
