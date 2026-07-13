@@ -533,6 +533,45 @@ fn render_mock_tile_array_minification_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic tile-array floor-selection snapshots with native wgpu"]
+fn render_mock_tile_array_floor_selection_snapshot() {
+    let ramp_fractional = mock_tile_array_floor_selection_model(Some(86), 0.0);
+    let ramp_layer_21 = mock_tile_array_floor_selection_model(Some(84), 0.0);
+    let fallback_fractional = mock_tile_array_floor_selection_model(None, 21.75);
+    let fallback_layer_21 = mock_tile_array_floor_selection_model(None, 21.0);
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(320, 320)
+                .with_render_options(ModelRenderOptions {
+                    debug_mode: ModelDebugMode::TileNormalArray,
+                    ..ModelRenderOptions::default()
+                }),
+            model,
+        )
+        .expect("render synthetic tile-array floor-selection snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic tile-array floor-selection PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+
+    assert_eq!(
+        render("native-tile-floor-ramp-fractional", &ramp_fractional),
+        render("native-tile-floor-ramp-layer-21", &ramp_layer_21),
+        "RGBA8 TileProperties value 86 decodes to 21.58 and must floor to layer 21"
+    );
+    assert_eq!(
+        render(
+            "native-tile-floor-fallback-fractional",
+            &fallback_fractional,
+        ),
+        render("native-tile-floor-fallback-layer-21", &fallback_layer_21),
+        "fractional g_TileIndex fallback must floor to layer 21"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic ColorTable extra ramp snapshots with native wgpu"]
 fn render_mock_color_table_extra_ramp_snapshot() {
     let sheen_normal = [-0.231, 0.405, 0.884];
@@ -1109,6 +1148,41 @@ fn mock_tile_array_minification_model(uniform_average: bool) -> WeaponModelData 
         ]
     };
     normal.rgba = layer.repeat(2);
+    model
+}
+
+fn mock_tile_array_floor_selection_model(
+    tile_properties_red: Option<u8>,
+    tile_index: f32,
+) -> WeaponModelData {
+    let mut model = mock_uniform_tile_matrix_model(1.0);
+    model.materials[0].tile_index = tile_index;
+    if let Some(red) = tile_properties_red {
+        let tile_properties = model
+            .textures
+            .iter_mut()
+            .find(|texture| texture.kind == ModelTextureKind::TileProperties)
+            .expect("synthetic model has TileProperties");
+        tile_properties.rgba = vec![red, 255, 255, 255];
+    } else {
+        model.materials[0].tile_properties_texture = None;
+    }
+
+    for texture in &mut model.textures {
+        let pixel = match texture.kind {
+            ModelTextureKind::TileNormalArray => [128, 128, 255, 255],
+            ModelTextureKind::TileOrbArray => [255, 128, 255, 255],
+            _ => continue,
+        };
+        texture.width = 1;
+        texture.height = 64;
+        texture.array_size = 64;
+        texture.array_layer_height = 1;
+        texture.rgba = pixel.repeat(64);
+        if texture.kind == ModelTextureKind::TileNormalArray {
+            texture.rgba[22 * 4..23 * 4].copy_from_slice(&[255, 128, 255, 255]);
+        }
+    }
     model
 }
 

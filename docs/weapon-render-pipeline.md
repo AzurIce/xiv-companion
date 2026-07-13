@@ -147,12 +147,12 @@ atlas_height = array_layer_height * array_size
 
 renderer 会把 tile normal/ORB 横向合并成一张 GPU pair atlas，把 detail diffuse/normal 合并成另一张，避免四个独立 binding 使 fragment sampled texture 数超过常见 WebGPU 16 张限制。每级 mip 都按 half、array layer 独立缩小，禁止 normal/ORB、diffuse/normal 或相邻 layer 互相平均；normal half 从 RG 重建 Z、平均并重新编码 RG，B/A 作为独立线性 payload 保留。WGSL 保持 nearest texel 与 nearest mip，并在 `fract` 层内 wrap 前计算 UV 梯度，再按 atlas half/layer 比例缩放后交给 `textureSampleGrad`，避免高频 UV 已混叠后才隐式求导。选层规则如下：
 
-- character tile：优先使用逐像素 `TileProperties.r * 64`，没有 ColorTable tile map 时回退 `g_TileIndex`；结合 TileMatrix 与 `g_TileScale` 生成层内 UV。
+- character tile：优先使用逐像素 `TileProperties.r * 64`，没有 ColorTable tile map 时回退 `g_TileIndex`；两条路径都按 MeddleTools `tile_select` 的 `FLOOR` 离散到 layer，再结合 TileMatrix 与 `g_TileScale` 生成层内 UV。
 - bg detail：`g_DetailID` / `g_MultiDetailID` 取整并 clamp 到数组范围，color/normal 分别使用对应 UV scale；GetMultiValues 按 vertex alpha 在 primary/multi 层之间插值，Single 固定 primary。
 
 tile normal 会与 primary tangent-space normal 组合，贡献权重为采样 normal Alpha × `TileAlpha`。MeddleTools `chara_detail_blend` 只消费 tile ORB Blue，将其作为黑色到 base color 的直接 darkening factor；ORB R/G/Alpha 不参与着色，不再猜测 AO、roughness 或 specular。detail diffuse 以 0.5 为中性值，与 detail color 组合；detail normal 使用 RG 重建 Z，再按 detail/multi-detail normal scale 处理，随后与 diffuse 一样按 MultiBlendWeight 选择 primary/multi，而不是同时叠加。model-level prepared 只有在数组实际验证为 Ready 时才清除 `unsupportedInputs.tileArray/detailArray`；renderer uniform 直接消费 prepared layer count/ready flag，GPU pair atlas 创建仍保留防御性验证并在失败时使用中性纹理。45052 的真实 summary 为 tile Ready/64 layers、detail MissingBindings。
 
-验证边界：CPU focused test 会固定每个 half/layer 的 mip 像素并验证 normal B/A；synthetic native WGPU checker 与预平均 atlas 的最终像素完全一致。45047、45048、45053、45068 已重跑 final/tile-normal，45050 已重跑 packed normal alpha 路径；45052 继续用 final/tile-normal/tile-ORB snapshot 验证逐像素选层。当前没有真实 bg 武器样本，detail 混合权重仍是保守实现，待样本校准。
+验证边界：CPU focused test 会固定每个 half/layer 的 mip 像素并验证 normal B/A；synthetic native WGPU checker 与预平均 atlas 的最终像素完全一致。另一组 native fixture 固定 layer 21/22 差异，验证 RGBA8 TileProperties `86 / 255 * 64 ≈ 21.58` 与 `g_TileIndex=21.75` 均 floor 到 layer 21。45053/45068 已重跑 final/tile-normal，45068 的前景高频分别下降约 53%/94%，45053 tile-normal 下降约 71%；45050 已重跑 packed normal alpha 路径，45052 继续用 final/tile-normal/tile-ORB snapshot 验证逐像素选层。当前没有真实 bg 武器样本，detail 混合权重仍是保守实现，待样本校准。
 
 ## 6. ColorTable + `_id.tex` 烘焙
 

@@ -665,9 +665,9 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
     }
 
     let layer_count = max(round(material.array_params.x), 1.0);
-    let ramp_layer = round(clamp(extra.tile.x, 0.0, 1.0) * 64.0);
-    let shader_layer = round(max(material.tile_params.x, 0.0));
-    let layer = clamp(select(shader_layer, ramp_layer, extra.flags.x > 0.5), 0.0, layer_count - 1.0);
+    let ramp_layer = tile_array_layer(clamp(extra.tile.x, 0.0, 1.0) * 64.0, layer_count);
+    let shader_layer = tile_array_layer(material.tile_params.x, layer_count);
+    let layer = select(shader_layer, ramp_layer, extra.flags.x > 0.5);
     let shader_alpha = clamp(material.tile_params.y, 0.0, 1.0);
     let tile_alpha = select(shader_alpha, clamp(extra.tile.y, 0.0, 1.0), extra.flags.x > 0.5);
     let source_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
@@ -697,6 +697,10 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
     out.normal_weight = clamp(normal_sample.a, 0.0, 1.0) * tile_alpha;
     out.color_multiplier = clamp(orb_sample.b, 0.0, 1.0);
     return out;
+}
+
+fn tile_array_layer(tile_index: f32, layer_count: f32) -> f32 {
+    return clamp(floor(max(tile_index, 0.0)), 0.0, layer_count - 1.0);
 }
 
 fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
