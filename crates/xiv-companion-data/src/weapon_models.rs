@@ -2286,7 +2286,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
-        let value_mode = composed_material_value_mode(&semantics);
+        let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let (decal_color_mode, decal_color_mode_raw) =
             composed_material_decal_color_mode(&semantics);
@@ -2386,6 +2386,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             lighting_mode,
             flow_mode,
             value_mode,
+            value_mode_raw,
             sub_color_mode,
             decal_color_mode,
             decal_color_mode_raw,
@@ -2929,7 +2930,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
-        let value_mode = composed_material_value_mode(&semantics);
+        let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let (decal_color_mode, decal_color_mode_raw) =
             composed_material_decal_color_mode(&semantics);
@@ -3030,6 +3031,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             lighting_mode,
             flow_mode,
             value_mode,
+            value_mode_raw,
             sub_color_mode,
             decal_color_mode,
             decal_color_mode_raw,
@@ -3903,8 +3905,11 @@ fn composed_material_flow_mode(semantics: &ComposedMaterialSemantics) -> Materia
 }
 
 #[cfg(feature = "game-data")]
-fn composed_material_value_mode(semantics: &ComposedMaterialSemantics) -> MaterialValueMode {
-    match semantics.material_key_value(GET_VALUES) {
+fn composed_material_value_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialValueMode, Option<u32>) {
+    let raw = semantics.material_key_value(GET_VALUES);
+    let value = match raw {
         None | Some(GET_VALUES_SINGLE) => MaterialValueMode::Single,
         Some(GET_VALUES_MULTI) => MaterialValueMode::Multi,
         Some(GET_ALPHA_MULTI_VALUES) => MaterialValueMode::AlphaMulti,
@@ -3913,7 +3918,8 @@ fn composed_material_value_mode(semantics: &ComposedMaterialSemantics) -> Materi
         Some(GET_VALUES_MULTI_MATERIAL) => MaterialValueMode::MultiMaterial,
         Some(GET_VALUES_COMPATIBILITY) => MaterialValueMode::Compatibility,
         Some(_) => MaterialValueMode::Unknown,
-    }
+    };
+    (value, raw)
 }
 
 #[cfg(feature = "game-data")]
@@ -4607,6 +4613,7 @@ fn fallback_weapon_material(
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
         value_mode: MaterialValueMode::Single,
+        value_mode_raw: None,
         sub_color_mode: MaterialSubColorMode::None,
         decal_color_mode: MaterialDecalColorMode::Off,
         decal_color_mode_raw: None,
@@ -6727,7 +6734,13 @@ mod weapon_material_tests {
         let mut semantics = ComposedMaterialSemantics::default();
         assert_eq!(
             composed_material_value_mode(&semantics),
-            MaterialValueMode::Single
+            (MaterialValueMode::Single, None)
+        );
+
+        semantics.apply_shader_package_key_default(GET_VALUES, GET_ALPHA_MULTI_VALUES);
+        assert_eq!(
+            composed_material_value_mode(&semantics),
+            (MaterialValueMode::AlphaMulti, Some(GET_ALPHA_MULTI_VALUES))
         );
 
         for (value, expected) in [
@@ -6741,7 +6754,10 @@ mod weapon_material_tests {
             (0xDEAD_BEEF, MaterialValueMode::Unknown),
         ] {
             semantics.apply_material_key(GET_VALUES, value);
-            assert_eq!(composed_material_value_mode(&semantics), expected);
+            assert_eq!(
+                composed_material_value_mode(&semantics),
+                (expected, Some(value))
+            );
         }
     }
 

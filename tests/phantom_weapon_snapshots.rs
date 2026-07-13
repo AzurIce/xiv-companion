@@ -24,7 +24,7 @@ use xiv_companion::{
 };
 use xiv_companion_data::{
     MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialLightShaftType,
-    MdlMeshMetadata, MdlMetadata, ModelBoneTable, ModelMaterialTextureArrays,
+    MaterialValueMode, MdlMeshMetadata, MdlMetadata, ModelBoneTable, ModelMaterialTextureArrays,
 };
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +146,8 @@ struct MaterialSummary {
     alpha_threshold: f32,
     draw_depth_mode: String,
     lighting_mode: String,
+    value_mode: MaterialValueMode,
+    value_mode_raw: Option<u32>,
     sub_color_mode: String,
     decal_color_mode: MaterialDecalColorMode,
     decal_color_mode_raw: Option<u32>,
@@ -1160,6 +1162,8 @@ fn material_summary(
         alpha_threshold: material.alpha_threshold,
         draw_depth_mode: format!("{:?}", material.draw_depth_mode),
         lighting_mode: format!("{:?}", material.lighting_mode),
+        value_mode: material.value_mode,
+        value_mode_raw: material.value_mode_raw,
         sub_color_mode: format!("{:?}", material.sub_color_mode),
         decal_color_mode: material.decal_color_mode,
         decal_color_mode_raw: material.decal_color_mode_raw,

@@ -443,6 +443,8 @@ pub struct ModelMaterial {
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
     pub value_mode: MaterialValueMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_mode_raw: Option<u32>,
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
@@ -889,6 +891,8 @@ pub struct PreparedMaterial {
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
     pub value_mode: MaterialValueMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_mode_raw: Option<u32>,
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
@@ -1071,6 +1075,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub lightshaft_clip: bool,
     #[serde(default)]
     pub decal_color_mode: bool,
+    #[serde(default)]
+    pub alpha_multi_values: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1473,6 +1479,7 @@ pub fn prepare_material_for_draw_role(
         value_mode: material
             .map(|material| material.value_mode)
             .unwrap_or_default(),
+        value_mode_raw: material.and_then(|material| material.value_mode_raw),
         sub_color_mode: material
             .map(|material| material.sub_color_mode)
             .unwrap_or_default(),
@@ -1808,6 +1815,14 @@ pub fn prepared_material_unsupported_inputs(
         lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
         decal_color_mode: material.is_some_and(|material| {
             !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+        }),
+        alpha_multi_values: material.is_some_and(|material| {
+            matches!(
+                material.value_mode,
+                MaterialValueMode::AlphaMulti
+                    | MaterialValueMode::AlphaMulti2
+                    | MaterialValueMode::AlphaMulti3
+            )
         }),
     }
 }
@@ -2976,6 +2991,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Character,
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
+                value_mode_raw: None,
                 sub_color_mode: MaterialSubColorMode::None,
                 decal_color_mode: MaterialDecalColorMode::Off,
                 decal_color_mode_raw: None,
@@ -3003,6 +3019,7 @@ mod color_table_bake_tests {
                 shader_family: MaterialShaderFamily::Unknown,
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
+                value_mode_raw: None,
                 sub_color_mode: MaterialSubColorMode::None,
                 decal_color_mode: MaterialDecalColorMode::Off,
                 decal_color_mode_raw: None,
@@ -3251,6 +3268,7 @@ mod color_table_bake_tests {
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
+                alpha_multi_values: false,
             }
         );
         assert_eq!(
@@ -3278,6 +3296,7 @@ mod color_table_bake_tests {
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
+                alpha_multi_values: false,
             }
         );
 
@@ -3605,12 +3624,45 @@ mod color_table_bake_tests {
         assert!(prepared.uv_sources.scroll.secondary_specular);
         assert!(!prepared.unsupported_inputs.secondary_map_blend);
 
-        material.value_mode = MaterialValueMode::AlphaMulti2;
-        let unsupported =
+        for (mode, raw) in [
+            (MaterialValueMode::AlphaMulti, 0x9418_20BE),
+            (MaterialValueMode::AlphaMulti2, 0xE49A_D72B),
+            (MaterialValueMode::AlphaMulti3, 0x939D_E7BD),
+        ] {
+            material.value_mode = mode;
+            material.value_mode_raw = Some(raw);
+            let unsupported =
+                prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+            assert_eq!(unsupported.value_mode, mode);
+            assert_eq!(unsupported.value_mode_raw, Some(raw));
+            assert!(!unsupported.feature_flags.uses_secondary_maps);
+            assert!(!unsupported.feature_flags.uses_scroll);
+            assert!(unsupported.unsupported_inputs.secondary_map_blend);
+            assert!(unsupported.unsupported_inputs.alpha_multi_values);
+        }
+
+        material.value_mode = MaterialValueMode::Single;
+        material.value_mode_raw = Some(0x669A_451B);
+        let single = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!single.unsupported_inputs.alpha_multi_values);
+
+        material.secondary_base_color_texture = None;
+        material.secondary_normal_texture = None;
+        material.secondary_specular_texture = None;
+        material.value_mode = MaterialValueMode::AlphaMulti3;
+        material.value_mode_raw = Some(0x939D_E7BD);
+        let alpha_multi_without_map1 =
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
-        assert!(!unsupported.feature_flags.uses_secondary_maps);
-        assert!(!unsupported.feature_flags.uses_scroll);
-        assert!(unsupported.unsupported_inputs.secondary_map_blend);
+        assert!(
+            alpha_multi_without_map1
+                .unsupported_inputs
+                .alpha_multi_values
+        );
+        assert!(
+            !alpha_multi_without_map1
+                .unsupported_inputs
+                .secondary_map_blend
+        );
     }
 
     #[test]
@@ -4096,6 +4148,7 @@ mod color_table_bake_tests {
             lighting_mode: MaterialLightingMode::Default,
             flow_mode: MaterialFlowMode::Standard,
             value_mode: MaterialValueMode::Single,
+            value_mode_raw: None,
             sub_color_mode: MaterialSubColorMode::None,
             decal_color_mode: MaterialDecalColorMode::Off,
             decal_color_mode_raw: None,
