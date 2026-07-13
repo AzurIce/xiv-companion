@@ -8,8 +8,9 @@ use xiv_companion_render::test_support::{
     WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
 };
 use xiv_companion_render::{
-    ModelDebugMode, ModelRenderOptions, ModelTextureKind, PackedModelId, WeaponModelBounds,
-    WeaponModelData, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelVertex,
+    MaterialAlphaMode, ModelDebugMode, ModelRenderOptions, ModelTextureKind, PackedModelId,
+    WeaponModelBounds, WeaponModelData, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelVertex,
 };
 
 #[test]
@@ -286,6 +287,42 @@ fn render_mock_lightshaft_sampler_blend_snapshot() {
     assert!(
         rgb_difference > 100_000,
         "lightshaft output must use vertex blue to blend Sampler0 with Sampler0*Sampler1"
+    );
+}
+
+#[test]
+#[ignore = "writes synthetic lightshaft alpha-test snapshots with native wgpu"]
+fn render_mock_lightshaft_alpha_test_snapshot() {
+    let visible = mock_lightshaft_alpha_test_model(0.0);
+    let clipped = mock_lightshaft_alpha_test_model(0.9);
+    let render = |name, model| {
+        render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(512, 512),
+            model,
+        )
+        .expect("render synthetic lightshaft alpha-test snapshot")
+    };
+    let pixels = |path| {
+        image::open(path)
+            .expect("decode synthetic lightshaft alpha-test PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let visible_pixels = pixels(render("native-lightshaft-alpha-visible", &visible).png_path);
+    let clipped_pixels = pixels(render("native-lightshaft-alpha-clipped", &clipped).png_path);
+    let rgb_difference: u64 = visible_pixels
+        .chunks_exact(4)
+        .zip(clipped_pixels.chunks_exact(4))
+        .map(|(visible, clipped)| {
+            (0..3)
+                .map(|channel| visible[channel].abs_diff(clipped[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    assert!(
+        rgb_difference > 100_000,
+        "lightshaft ApplyAlphaTest must discard emission below g_AlphaThreshold"
     );
 }
 
@@ -786,6 +823,13 @@ fn mock_lightshaft_model(vertex_blue: f32) -> WeaponModelData {
     for vertex in &mut model.meshes[0].vertices {
         vertex.color = [1.0, 1.0, vertex_blue, 1.0];
     }
+    model
+}
+
+fn mock_lightshaft_alpha_test_model(alpha_threshold: f32) -> WeaponModelData {
+    let mut model = mock_lightshaft_model(0.0);
+    model.materials[0].alpha_mode = MaterialAlphaMode::Mask;
+    model.materials[0].alpha_threshold = alpha_threshold;
     model
 }
 

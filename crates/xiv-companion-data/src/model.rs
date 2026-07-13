@@ -2833,6 +2833,14 @@ mod color_table_bake_tests {
         );
         assert_eq!(
             test_prepared_render_pass(
+                MaterialAlphaMode::Mask,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::LightShaft
+            ),
+            PreparedRenderPass::AdditiveLightShaft
+        );
+        assert_eq!(
+            test_prepared_render_pass(
                 MaterialAlphaMode::Opaque,
                 MaterialRenderMode::Opaque,
                 ModelMeshDrawRole::CrestChange

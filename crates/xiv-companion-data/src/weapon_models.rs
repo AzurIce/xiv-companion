@@ -7716,6 +7716,10 @@ mod weapon_material_tests {
             WeaponMaterialAlphaMode::Mask
         );
         assert_eq!(
+            weapon_material_alpha_mode("lightshaft.shpk", 0, &texture_set, true),
+            WeaponMaterialAlphaMode::Mask
+        );
+        assert_eq!(
             weapon_material_alpha_mode("character.shpk", 0, &texture_set, true),
             WeaponMaterialAlphaMode::Blend
         );
