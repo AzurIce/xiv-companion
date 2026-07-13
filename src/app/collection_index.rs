@@ -187,6 +187,7 @@ fn effective_equipment_set_name(item: &CollectionItem) -> String {
 
 fn expansion_order(name: &str) -> u8 {
     match name {
+        "旧版遗留" => 0,
         "重生之境" => 1,
         "苍穹之禁城" => 2,
         "红莲之狂潮" => 3,

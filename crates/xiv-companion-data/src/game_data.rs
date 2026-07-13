@@ -315,6 +315,9 @@ impl<R: Resource> GameExcel<R> {
             if name.is_empty() {
                 return;
             }
+            if is_obsolete_legacy_item_name(name) {
+                return;
+            }
 
             let item_search_category = number_value(row, 16);
             let equip_slot_category = number_value(row, 17);
@@ -667,6 +670,10 @@ fn collection_kind(
     }
 }
 
+fn is_obsolete_legacy_item_name(name: &str) -> bool {
+    name.starts_with("过期")
+}
+
 fn equipment_slot(equip_slot_category: u32) -> (&'static str, u8) {
     match equip_slot_category {
         1 | 13 | 14 => ("武器", 0),
@@ -911,6 +918,12 @@ mod collection_tests {
         assert_eq!(collection_kind(0, 2_633, 0), Some(CollectionKind::Emote));
         assert_eq!(collection_kind(4, 0, 0), Some(CollectionKind::Equipment));
         assert_eq!(collection_kind(0, 0, 0), None);
+    }
+
+    #[test]
+    fn excludes_obsolete_legacy_items_from_collection_catalog() {
+        assert!(is_obsolete_legacy_item_name("过期亚麻无檐帽"));
+        assert!(!is_obsolete_legacy_item_name("亚麻无檐帽"));
     }
 
     #[test]

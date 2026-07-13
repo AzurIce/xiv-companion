@@ -401,6 +401,9 @@ fn CollectionKindTab(
             },
             onclick: move |event| onclick.call(event),
             "{kind.label()}"
+            if kind != CollectionKind::Equipment {
+                span { class: "ml-1 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground", "实验" }
+            }
             span { class: "ml-1 text-xs tabular-nums text-muted-foreground", "{collected}/{total}" }
         }
     }
@@ -432,6 +435,7 @@ fn ExpansionTab(
 
 fn expansion_display_label(label: &str) -> String {
     let series = match label {
+        "旧版遗留" => "1.x",
         "重生之境" => "2.x",
         "苍穹之禁城" => "3.x",
         "红莲之狂潮" => "4.x",
@@ -721,6 +725,7 @@ fn EquipmentStandaloneCard(
                 div { class: "min-w-0 flex-1",
                     h3 { class: "break-words text-sm font-semibold", "{item.name}" }
                     div { class: "mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground",
+                        span { class: "tabular-nums", "ID {item.id}" }
                         if !item.slot_name.is_empty() { span { "{item.slot_name}" } }
                         if item.level_equip > 0 { span { "等级 {item.level_equip}" } }
                         if item.level_item > 0 { span { "品级 {item.level_item}" } }
@@ -761,6 +766,7 @@ fn EquipmentPiece(
                 div { class: "min-w-0 flex-1",
                     div { class: "break-words text-sm font-medium", "{item.name}" }
                     div { class: "mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground",
+                        span { class: "tabular-nums", "ID {item.id}" }
                         span { "{item.slot_name}" }
                         if item.level_equip > 0 { span { "等级 {item.level_equip}" } }
                         if item.level_item > 0 { span { "品级 {item.level_item}" } }
@@ -853,6 +859,7 @@ fn CollectionItemLine(
                 div { class: "min-w-0 flex-1",
                     div { class: "break-words text-sm font-medium", "{item.name}" }
                     div { class: "mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground",
+                        span { class: "tabular-nums", "ID {item.id}" }
                         if !item.patch.is_empty() { span { "{item.patch}" } }
                         if item.level_item > 1 { span { "品级 {item.level_item}" } }
                     }

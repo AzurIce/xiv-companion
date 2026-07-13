@@ -94,6 +94,7 @@ UI 不直接调用或识别 `IndexedDbCachedProvider`。
 
 - 后续物品按 `Item.csv` Git 历史标记首次出现的 patch/build。
 - 固定在仓库内的 Garland Tools `Supplemental/patches.json` 仅补充 4.45 以前的精确物品版本，不覆盖较新的 datamining 结果。
+- Garland 中标记为 1.0 的记录视为未细分的旧版 1.x 数据，显示为“旧版遗留 / 1.x（具体版本未知）”，不宣称其精确发布于 1.0。
 - `ExVersion` 的起始 Item ID 用于确定 Garland 未收录条目的资料片，并回退到 2.x、3.x 或 4.45 及以前。
 - Browser local 更新复用 builtin 已知版本；只存在于本地的新条目使用当前本地游戏 build。
 

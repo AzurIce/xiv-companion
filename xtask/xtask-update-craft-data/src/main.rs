@@ -218,6 +218,11 @@ fn apply_garland_item_patches(
         let Some(&patch) = item_patches.get(&item.id) else {
             continue;
         };
+        if patch < 2.0 {
+            item.expansion = "旧版遗留".to_string();
+            item.patch = "1.x（具体版本未知）".to_string();
+            continue;
+        }
         let patch = format_patch_number(patch);
         item.expansion = expansion_label(&patch, "");
         item.patch = patch;
@@ -469,6 +474,49 @@ mod tests {
         assert_eq!(format_patch_number(2.0), "2.0");
         assert_eq!(format_patch_number(2.35), "2.35");
         assert_eq!(format_patch_number(4.4), "4.4");
+    }
+
+    #[test]
+    fn garland_legacy_patch_is_not_presented_as_exact_1_0() {
+        let mut catalog = xiv_companion::CollectionCatalogPackage {
+            schema_version: xiv_companion::COLLECTION_CATALOG_SCHEMA_VERSION,
+            generated_at: String::new(),
+            game_version: String::new(),
+            source: String::new(),
+            counts: xiv_companion::CollectionCatalogCounts::default(),
+            items: vec![xiv_companion::CollectionItem {
+                id: 1,
+                kind: xiv_companion::CollectionKind::Equipment,
+                name: "旧版物品".to_string(),
+                description: String::new(),
+                icon: 0,
+                item_ui_category: 0,
+                item_search_category: 0,
+                item_action: 0,
+                equip_slot_category: 1,
+                slot_name: String::new(),
+                slot_order: 0,
+                level_item: 0,
+                level_equip: 0,
+                rarity: 0,
+                class_job_category: 0,
+                class_job_category_name: String::new(),
+                item_series: 0,
+                set_id: "item:1".to_string(),
+                set_name: "旧版物品".to_string(),
+                expansion: String::new(),
+                patch: String::new(),
+                model_main: 0,
+                model_sub: 0,
+                appearance_key: String::new(),
+            }],
+        };
+        let path = std::env::temp_dir().join("xiv-companion-garland-legacy-test.json");
+        fs::write(&path, "[{\"type\":\"item\",\"id\":\"1\",\"patch\":1.0}]").unwrap();
+        apply_garland_item_patches(&mut catalog, &path).unwrap();
+        let _ = fs::remove_file(path);
+        assert_eq!(catalog.items[0].expansion, "旧版遗留");
+        assert_eq!(catalog.items[0].patch, "1.x（具体版本未知）");
     }
 
     #[test]
