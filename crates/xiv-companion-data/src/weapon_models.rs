@@ -1,8 +1,8 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
-    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType, MaterialLightingMode,
-    MaterialRenderMode, MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode,
-    ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
+    MaterialDecalColorMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType,
+    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSubColorMode,
+    MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
     ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
     ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
     ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
@@ -89,6 +89,14 @@ const GET_SUB_COLOR: u32 = 0x2482_6489;
 const GET_SUB_COLOR_FACE: u32 = 0x6E5B_8F10;
 #[cfg(feature = "game-data")]
 const GET_SUB_COLOR_HAIR: u32 = 0xF7B8_956E;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR: u32 = 0xD277_7173;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_OFF: u32 = 0x4242_B842;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_ALPHA: u32 = 0x5842_65DD;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_RGBA: u32 = 0xF35F_5131;
 #[cfg(feature = "game-data")]
 const GET_MATERIAL_VALUE: u32 = 0x380C_AED0;
 #[cfg(feature = "game-data")]
@@ -2278,6 +2286,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let flow_mode = composed_material_flow_mode(&semantics);
         let value_mode = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
+        let (decal_color_mode, decal_color_mode_raw) =
+            composed_material_decal_color_mode(&semantics);
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
         let (character_scroll_variant, character_scroll_variant_raw) =
             composed_material_character_scroll_variant(&semantics);
@@ -2375,6 +2385,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             flow_mode,
             value_mode,
             sub_color_mode,
+            decal_color_mode,
+            decal_color_mode_raw,
             skin_value_mode,
             character_scroll_variant,
             character_scroll_variant_raw,
@@ -2917,6 +2929,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let flow_mode = composed_material_flow_mode(&semantics);
         let value_mode = composed_material_value_mode(&semantics);
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
+        let (decal_color_mode, decal_color_mode_raw) =
+            composed_material_decal_color_mode(&semantics);
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
         let (character_scroll_variant, character_scroll_variant_raw) =
             composed_material_character_scroll_variant(&semantics);
@@ -3015,6 +3029,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             flow_mode,
             value_mode,
             sub_color_mode,
+            decal_color_mode,
+            decal_color_mode_raw,
             skin_value_mode,
             character_scroll_variant,
             character_scroll_variant_raw,
@@ -3909,6 +3925,20 @@ fn composed_material_sub_color_mode(semantics: &ComposedMaterialSemantics) -> Ma
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_decal_color_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialDecalColorMode, Option<u32>) {
+    let raw = semantics.material_key_value(GET_DECAL_COLOR);
+    let value = match raw {
+        None | Some(GET_DECAL_COLOR_OFF) => MaterialDecalColorMode::Off,
+        Some(GET_DECAL_COLOR_ALPHA) => MaterialDecalColorMode::Alpha,
+        Some(GET_DECAL_COLOR_RGBA) => MaterialDecalColorMode::Rgba,
+        Some(_) => MaterialDecalColorMode::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_skin_value_mode(
     semantics: &ComposedMaterialSemantics,
 ) -> MaterialSkinValueMode {
@@ -4576,6 +4606,8 @@ fn fallback_weapon_material(
         flow_mode: MaterialFlowMode::Standard,
         value_mode: MaterialValueMode::Single,
         sub_color_mode: MaterialSubColorMode::None,
+        decal_color_mode: MaterialDecalColorMode::Off,
+        decal_color_mode_raw: None,
         skin_value_mode: MaterialSkinValueMode::None,
         character_scroll_variant: MaterialCharacterScrollVariant::None,
         character_scroll_variant_raw: None,
@@ -6723,6 +6755,46 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_sub_color_mode(&semantics),
             MaterialSubColorMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_decal_color_mode_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, None)
+        );
+
+        semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_OFF);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, Some(GET_DECAL_COLOR_OFF))
+        );
+
+        semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_ALPHA);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, Some(GET_DECAL_COLOR_OFF))
+        );
+
+        semantics.apply_material_key(GET_DECAL_COLOR, GET_DECAL_COLOR_RGBA);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Rgba, Some(GET_DECAL_COLOR_RGBA))
+        );
+
+        semantics.apply_material_key(GET_DECAL_COLOR, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Unknown, Some(0xDEAD_BEEF))
+        );
+
+        let mut alpha_semantics = ComposedMaterialSemantics::default();
+        alpha_semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_ALPHA);
+        assert_eq!(
+            composed_material_decal_color_mode(&alpha_semantics),
+            (MaterialDecalColorMode::Alpha, Some(GET_DECAL_COLOR_ALPHA))
         );
     }
 

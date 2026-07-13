@@ -446,6 +446,10 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
+    pub decal_color_mode: MaterialDecalColorMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal_color_mode_raw: Option<u32>,
+    #[serde(default)]
     pub skin_value_mode: MaterialSkinValueMode,
     #[serde(default)]
     pub character_scroll_variant: MaterialCharacterScrollVariant,
@@ -707,6 +711,16 @@ pub enum MaterialSubColorMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialDecalColorMode {
+    #[default]
+    Off,
+    Alpha,
+    Rgba,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialSkinValueMode {
     #[default]
     None,
@@ -878,6 +892,10 @@ pub struct PreparedMaterial {
     #[serde(default)]
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
+    pub decal_color_mode: MaterialDecalColorMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal_color_mode_raw: Option<u32>,
+    #[serde(default)]
     pub skin_value_mode: MaterialSkinValueMode,
     #[serde(default)]
     pub lightshaft_type: MaterialLightShaftType,
@@ -1033,6 +1051,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub runtime_option_color: bool,
     pub runtime_decal_color: bool,
     #[serde(default)]
+    pub runtime_decal_texture: bool,
+    #[serde(default)]
     pub runtime_skin_color: bool,
     pub runtime_skin_material: bool,
     pub runtime_sub_color: bool,
@@ -1049,6 +1069,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub ambient_occlusion_mask: bool,
     #[serde(default)]
     pub lightshaft_clip: bool,
+    #[serde(default)]
+    pub decal_color_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1454,6 +1476,10 @@ pub fn prepare_material_for_draw_role(
         sub_color_mode: material
             .map(|material| material.sub_color_mode)
             .unwrap_or_default(),
+        decal_color_mode: material
+            .map(|material| material.decal_color_mode)
+            .unwrap_or_default(),
+        decal_color_mode_raw: material.and_then(|material| material.decal_color_mode_raw),
         skin_value_mode: material
             .map(|material| material.skin_value_mode)
             .unwrap_or_default(),
@@ -1742,7 +1768,15 @@ pub fn prepared_material_unsupported_inputs(
         decal_or_crest: matches!(draw_role, ModelMeshDrawRole::CrestChange),
         runtime_material_change: false,
         runtime_option_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
-        runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
+        runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo)
+            || (matches!(shader_family, MaterialShaderFamily::Skin)
+                && material.is_some_and(|material| {
+                    !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+                })),
+        runtime_decal_texture: matches!(shader_family, MaterialShaderFamily::Skin)
+            && material.is_some_and(|material| {
+                !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+            }),
         runtime_skin_color: matches!(shader_family, MaterialShaderFamily::Skin),
         runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
         runtime_sub_color: matches!(shader_family, MaterialShaderFamily::CharacterOcclusion)
@@ -1772,6 +1806,9 @@ pub fn prepared_material_unsupported_inputs(
         ambient_occlusion_mask: material
             .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
         lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
+        decal_color_mode: material.is_some_and(|material| {
+            !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+        }),
     }
 }
 
@@ -2940,6 +2977,8 @@ mod color_table_bake_tests {
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
+                decal_color_mode: MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
                 skin_value_mode: MaterialSkinValueMode::None,
                 lightshaft_type: MaterialLightShaftType::None,
                 lightshaft_type_raw: None,
@@ -2965,6 +3004,8 @@ mod color_table_bake_tests {
                 flow_mode: MaterialFlowMode::Standard,
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
+                decal_color_mode: MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
                 skin_value_mode: MaterialSkinValueMode::None,
                 lightshaft_type: MaterialLightShaftType::None,
                 lightshaft_type_raw: None,
@@ -3195,6 +3236,7 @@ mod color_table_bake_tests {
                 runtime_material_change: false,
                 runtime_option_color: false,
                 runtime_decal_color: false,
+                runtime_decal_texture: false,
                 runtime_skin_color: false,
                 runtime_skin_material: false,
                 runtime_sub_color: false,
@@ -3208,6 +3250,7 @@ mod color_table_bake_tests {
                 character_scroll_variant: false,
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
+                decal_color_mode: false,
             }
         );
         assert_eq!(
@@ -3220,6 +3263,7 @@ mod color_table_bake_tests {
                 runtime_material_change: false,
                 runtime_option_color: false,
                 runtime_decal_color: false,
+                runtime_decal_texture: false,
                 runtime_skin_color: false,
                 runtime_skin_material: false,
                 runtime_sub_color: false,
@@ -3233,6 +3277,7 @@ mod color_table_bake_tests {
                 character_scroll_variant: false,
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
+                decal_color_mode: false,
             }
         );
 
@@ -3241,6 +3286,8 @@ mod color_table_bake_tests {
         let tattoo = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(tattoo.unsupported_inputs.runtime_option_color);
         assert!(tattoo.unsupported_inputs.runtime_decal_color);
+        assert!(!tattoo.unsupported_inputs.runtime_decal_texture);
+        assert!(!tattoo.unsupported_inputs.decal_color_mode);
         assert!(!tattoo.unsupported_inputs.runtime_skin_material);
 
         material.shader_package_name = Some("characterstockings.shpk".to_string());
@@ -3253,8 +3300,20 @@ mod color_table_bake_tests {
         let skin = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert_eq!(skin.shader_family, MaterialShaderFamily::Skin);
         assert!(skin.unsupported_inputs.runtime_skin_color);
+        assert!(!skin.unsupported_inputs.runtime_decal_color);
+        assert!(!skin.unsupported_inputs.runtime_decal_texture);
+        assert!(!skin.unsupported_inputs.decal_color_mode);
         assert!(!skin.unsupported_inputs.runtime_skin_material);
         assert!(skin.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.decal_color_mode = MaterialDecalColorMode::Alpha;
+        material.decal_color_mode_raw = Some(0x5842_65DD);
+        let skin_decal = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(skin_decal.decal_color_mode, MaterialDecalColorMode::Alpha);
+        assert_eq!(skin_decal.decal_color_mode_raw, Some(0x5842_65DD));
+        assert!(skin_decal.unsupported_inputs.runtime_decal_color);
+        assert!(skin_decal.unsupported_inputs.runtime_decal_texture);
+        assert!(skin_decal.unsupported_inputs.decal_color_mode);
 
         material.shader_package_name = Some("crystal.shpk".to_string());
         material.environment_texture = Some(9);
@@ -4038,6 +4097,8 @@ mod color_table_bake_tests {
             flow_mode: MaterialFlowMode::Standard,
             value_mode: MaterialValueMode::Single,
             sub_color_mode: MaterialSubColorMode::None,
+            decal_color_mode: MaterialDecalColorMode::Off,
+            decal_color_mode_raw: None,
             skin_value_mode: MaterialSkinValueMode::None,
             character_scroll_variant: MaterialCharacterScrollVariant::None,
             character_scroll_variant_raw: None,
