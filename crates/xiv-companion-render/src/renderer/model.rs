@@ -83,6 +83,10 @@ impl ModelDebugMode {
     }
 }
 
+fn lightshaft_uses_dedicated_pipeline(debug_mode: ModelDebugMode) -> bool {
+    matches!(debug_mode, ModelDebugMode::Final)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelGlassBlendMode {
     #[default]
@@ -158,6 +162,8 @@ pub struct ModelRenderer {
     glass_culled_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     additive_culled_pipeline: wgpu::RenderPipeline,
+    lightshaft_pipeline: wgpu::RenderPipeline,
+    lightshaft_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -704,6 +710,24 @@ impl ModelRenderer {
             ModelPipelineBlend::Additive,
             true,
         );
+        let lightshaft_pipeline = create_model_pipeline_with_fragment_entry(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon lightshaft pipeline",
+            ModelPipelineBlend::Additive,
+            "fs_lightshaft",
+            false,
+        );
+        let lightshaft_culled_pipeline = create_model_pipeline_with_fragment_entry(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon lightshaft culled pipeline",
+            ModelPipelineBlend::Additive,
+            "fs_lightshaft",
+            true,
+        );
 
         let blur_pipeline = create_post_pipeline(
             &device,
@@ -778,6 +802,8 @@ impl ModelRenderer {
             glass_culled_pipeline,
             additive_pipeline,
             additive_culled_pipeline,
+            lightshaft_pipeline,
+            lightshaft_culled_pipeline,
             blur_pipeline,
             compose_pipeline,
             vertex_buffer,
@@ -962,7 +988,12 @@ impl ModelRenderer {
                 .iter()
                 .filter(|batch| batch.pass().uses_additive_pipeline())
             {
-                render_pass.set_pipeline(if batch.render_backfaces() {
+                let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
+                render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
+                    &self.lightshaft_pipeline
+                } else if dedicated {
+                    &self.lightshaft_culled_pipeline
+                } else if batch.render_backfaces() {
                     &self.additive_pipeline
                 } else {
                     &self.additive_culled_pipeline
@@ -1312,6 +1343,26 @@ fn create_model_pipeline(
     blend_mode: ModelPipelineBlend,
     cull_backfaces: bool,
 ) -> wgpu::RenderPipeline {
+    create_model_pipeline_with_fragment_entry(
+        device,
+        shader,
+        layout,
+        label,
+        blend_mode,
+        blend_mode.fragment_entry(),
+        cull_backfaces,
+    )
+}
+
+fn create_model_pipeline_with_fragment_entry(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+    blend_mode: ModelPipelineBlend,
+    fragment_entry: &str,
+    cull_backfaces: bool,
+) -> wgpu::RenderPipeline {
     let blend = blend_mode.blend_state();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -1324,7 +1375,7 @@ fn create_model_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(blend_mode.fragment_entry()),
+            entry_point: Some(fragment_entry),
             targets: &[
                 Some(wgpu::ColorTargetState {
                     format: POST_FORMAT,
@@ -4150,6 +4201,17 @@ mod tests {
         assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 26.0);
         assert_eq!(ModelDebugMode::Flow0.shader_value(), 27.0);
         assert_eq!(ModelDebugMode::Flow1.shader_value(), 28.0);
+    }
+
+    #[test]
+    fn lightshaft_dedicated_pipeline_is_only_used_for_final_rendering() {
+        assert!(lightshaft_uses_dedicated_pipeline(ModelDebugMode::Final));
+        assert!(!lightshaft_uses_dedicated_pipeline(
+            ModelDebugMode::BaseColor
+        ));
+        assert!(!lightshaft_uses_dedicated_pipeline(
+            ModelDebugMode::MeshRole
+        ));
     }
 
     #[test]

@@ -493,6 +493,30 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     return out;
 }
 
+@fragment
+fn fs_lightshaft(input: VertexOutput) -> FragmentOutput {
+    let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
+    let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
+    let mip_bias = resolve_texture_mip_bias();
+    let primary = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias).rgb;
+    let secondary = textureSampleBias(
+        tile_properties_texture,
+        tile_sampler,
+        secondary_base_uv,
+        mip_bias,
+    ).rgb;
+    let lightshaft = resolve_lightshaft_color(primary, secondary, input.color);
+    let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
+    if lightshaft.a < 0.01 || (is_mask && lightshaft.a < material.render.w) {
+        discard;
+    }
+
+    var out: FragmentOutput;
+    out.color = lightshaft;
+    out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
+    return out;
+}
+
 fn debug_fragment_output(
     input: VertexOutput,
     mode: f32,
