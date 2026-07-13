@@ -676,15 +676,21 @@ fn resolve_tile_array(input: VertexOutput, extra: ExtraProperties) -> TileArrayS
         dot(extra.tile_matrix.zw, source_uv),
     );
     let tiled_uv = transformed_uv * max(abs(material.tile_params.zw), vec2<f32>(0.001));
-    let normal_sample = textureSample(
+    let normal_coordinates = pair_atlas_coordinates(tiled_uv, layer, layer_count, 0.0);
+    let normal_sample = textureSampleGrad(
         tile_array_pair_texture,
         tile_array_sampler,
-        pair_atlas_uv(tiled_uv, layer, layer_count, 0.0),
+        normal_coordinates.uv,
+        normal_coordinates.ddx,
+        normal_coordinates.ddy,
     );
-    let orb_sample = textureSample(
+    let orb_coordinates = pair_atlas_coordinates(tiled_uv, layer, layer_count, 1.0);
+    let orb_sample = textureSampleGrad(
         tile_array_pair_texture,
         tile_array_sampler,
-        pair_atlas_uv(tiled_uv, layer, layer_count, 1.0),
+        orb_coordinates.uv,
+        orb_coordinates.ddx,
+        orb_coordinates.ddy,
     );
     out.normal = decode_normal(normal_sample);
     out.orb = orb_sample.rgb;
@@ -707,25 +713,57 @@ fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
     let layer_count = max(round(material.array_params.y), 1.0);
     let detail_layer = clamp(round(max(material.detail_params.x, 0.0)), 0.0, layer_count - 1.0);
     let multi_layer = clamp(round(max(material.detail_params.y, 0.0)), 0.0, layer_count - 1.0);
-    let detail_diffuse = textureSample(
+    let detail_diffuse_coordinates = pair_atlas_coordinates(
+        input.uv0 * max(abs(material.detail_color_uv_scale.xy), vec2<f32>(0.001)),
+        detail_layer,
+        layer_count,
+        0.0,
+    );
+    let detail_diffuse = textureSampleGrad(
         detail_array_pair_texture,
         detail_array_sampler,
-        pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 0.0),
+        detail_diffuse_coordinates.uv,
+        detail_diffuse_coordinates.ddx,
+        detail_diffuse_coordinates.ddy,
     ).rgb;
-    let multi_diffuse = textureSample(
+    let multi_diffuse_coordinates = pair_atlas_coordinates(
+        input.uv0 * max(abs(material.detail_color_uv_scale.zw), vec2<f32>(0.001)),
+        multi_layer,
+        layer_count,
+        0.0,
+    );
+    let multi_diffuse = textureSampleGrad(
         detail_array_pair_texture,
         detail_array_sampler,
-        pair_atlas_uv(input.uv0 * max(abs(material.detail_color_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 0.0),
+        multi_diffuse_coordinates.uv,
+        multi_diffuse_coordinates.ddx,
+        multi_diffuse_coordinates.ddy,
     ).rgb;
-    let detail_normal = decode_normal(textureSample(
+    let detail_normal_coordinates = pair_atlas_coordinates(
+        input.uv0 * max(abs(material.detail_normal_uv_scale.xy), vec2<f32>(0.001)),
+        detail_layer,
+        layer_count,
+        1.0,
+    );
+    let detail_normal = decode_normal(textureSampleGrad(
         detail_array_pair_texture,
         detail_array_sampler,
-        pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.xy), vec2<f32>(0.001)), detail_layer, layer_count, 1.0),
+        detail_normal_coordinates.uv,
+        detail_normal_coordinates.ddx,
+        detail_normal_coordinates.ddy,
     ));
-    let multi_normal = decode_normal(textureSample(
+    let multi_normal_coordinates = pair_atlas_coordinates(
+        input.uv0 * max(abs(material.detail_normal_uv_scale.zw), vec2<f32>(0.001)),
+        multi_layer,
+        layer_count,
+        1.0,
+    );
+    let multi_normal = decode_normal(textureSampleGrad(
         detail_array_pair_texture,
         detail_array_sampler,
-        pair_atlas_uv(input.uv0 * max(abs(material.detail_normal_uv_scale.zw), vec2<f32>(0.001)), multi_layer, layer_count, 1.0),
+        multi_normal_coordinates.uv,
+        multi_normal_coordinates.ddx,
+        multi_normal_coordinates.ddy,
     ));
     let detail_tint = clamp(detail_diffuse * 2.0 * material.detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
     let multi_tint = clamp(multi_diffuse * 2.0 * material.multi_detail_color.rgb * 2.0, vec3<f32>(0.25), vec3<f32>(1.75));
@@ -750,11 +788,22 @@ fn resolve_detail_array(input: VertexOutput) -> DetailArraySample {
     return out;
 }
 
-fn pair_atlas_uv(uv: vec2<f32>, layer: f32, layer_count: f32, side: f32) -> vec2<f32> {
-    return vec2<f32>(
+struct PairAtlasCoordinates {
+    uv: vec2<f32>,
+    ddx: vec2<f32>,
+    ddy: vec2<f32>,
+};
+
+fn pair_atlas_coordinates(uv: vec2<f32>, layer: f32, layer_count: f32, side: f32) -> PairAtlasCoordinates {
+    let atlas_scale = vec2<f32>(0.5, 1.0 / layer_count);
+    var out: PairAtlasCoordinates;
+    out.uv = vec2<f32>(
         (fract(uv.x) + side) * 0.5,
         (fract(uv.y) + layer) / layer_count,
     );
+    out.ddx = dpdx(uv) * atlas_scale;
+    out.ddy = dpdy(uv) * atlas_scale;
+    return out;
 }
 
 fn decode_normal(sampled: vec4<f32>) -> vec3<f32> {

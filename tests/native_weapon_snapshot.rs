@@ -504,6 +504,35 @@ fn render_mock_character_texture_mip_bias_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic tile-array minification snapshots with native wgpu"]
+fn render_mock_tile_array_minification_snapshot() {
+    let checker = mock_tile_array_minification_model(false);
+    let averaged = mock_tile_array_minification_model(true);
+    let render = |name, model| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(512, 512)
+                .with_render_options(ModelRenderOptions {
+                    debug_mode: ModelDebugMode::TileNormalArray,
+                    ..ModelRenderOptions::default()
+                }),
+            model,
+        )
+        .expect("render synthetic tile-array minification snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic tile-array minification PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let checker_pixels = render("native-tile-array-minification-checker", &checker);
+    let averaged_pixels = render("native-tile-array-minification-average", &averaged);
+    assert_eq!(
+        checker_pixels, averaged_pixels,
+        "minified checker must select the independently generated per-layer average"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic ColorTable extra ramp snapshots with native wgpu"]
 fn render_mock_color_table_extra_ramp_snapshot() {
     let sheen_normal = [-0.231, 0.405, 0.884];
@@ -1062,6 +1091,24 @@ fn mock_uniform_tile_matrix_model(repeat: f32) -> WeaponModelData {
         .find(|texture| texture.kind == ModelTextureKind::TileMatrixProperties)
         .expect("synthetic model has a TileMatrix texture");
     tile_matrix.rgba_f32 = Some(vec![[repeat, 0.0, 0.0, repeat]]);
+    model
+}
+
+fn mock_tile_array_minification_model(uniform_average: bool) -> WeaponModelData {
+    let mut model = mock_uniform_tile_matrix_model(512.0);
+    let normal = model
+        .textures
+        .iter_mut()
+        .find(|texture| texture.kind == ModelTextureKind::TileNormalArray)
+        .expect("synthetic model has a tile normal array");
+    let layer = if uniform_average {
+        [218, 218, 128, 128].repeat(4)
+    } else {
+        vec![
+            255, 128, 0, 0, 128, 255, 64, 64, 255, 128, 192, 192, 128, 255, 255, 255,
+        ]
+    };
+    normal.rgba = layer.repeat(2);
     model
 }
 

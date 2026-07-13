@@ -57,7 +57,7 @@
 ### Renderer
 
 - GPU 顶点格式和 WGSL 已接收所有已解析顶点通道；flow0 和 secondary tangent frame 已在有证据的路径消费。
-- 15 个现有 texture bindings 使用逐 role sampler；base/emissive、data maps、index 和 extra ramps 不再共用错误采样策略。共享 tile/detail pair atlas 的层选择已接通，但当前只有 mip 0，缩小时仍存在严重走样。
+- 15 个现有 texture bindings 使用逐 role sampler；base/emissive、data maps、index 和 extra ramps 不再共用错误采样策略。共享 tile/detail pair atlas 会逐 half、逐 layer 生成互不污染的 mip，并在 `fract` 前计算显式梯度做 nearest mip selection。
 - ColorTable diffuse/specular/material/tile/sheen/sphere/tile-matrix，以及 tile/detail pair atlas 已进入 renderer 和 debug views。
 - character normal-B alpha、tattoo normal-A alpha、stockings opaque、water direct alpha/primary wave、bguvscroll Map0/Map1、lightshaft 双纹理与 alpha test 已实现第一版。
 - TileMatrix 使用 float texture；Sheen/Sphere 保留 HDR；Dawntrail TileIndex/SphereIndex 已按 half-float 语义解析。
@@ -68,7 +68,7 @@
 - 数据层和 renderer 有 focused unit tests。
 - synthetic native WGPU 覆盖 Map1、tile/detail、ColorTable ramps、tattoo、water、lightshaft、secondary vertex debug 等最终像素差异。
 - 45052 覆盖 baseline、第一染色通道和第二通道 metallic；45059 覆盖 glass、SphereIndex 与 HDR ramp。
-- 45047、45048、45053、45068 的真实 snapshot 已稳定复现 topology-aligned tile-normal 摩尔纹；45050 也暴露 packed normal B 透明通道会被 normal mip 归一化篡改。二者均为待修回归，不视为可接受近似。
+- 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；45047/45053 的旧 tile-normal 高频指标下降约 98%/99%，45048/45068 保留随正确 mip 可见的稳定层内细节，不再依赖 `fract` 后错误隐式梯度。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
 - WeaponCatalog audit 当前结果：8281 个条目、7365 个唯一模型、8112 个可解析材质、0 load failures；武器范围为 8091 character、15 skin、6 characterGlass。
 
 ## 当前工作队列
@@ -77,66 +77,60 @@
 
 ### P0：减少静默近似
 
-1. **修复共享 array 与 packed normal 的缩小采样回归**
-   - 当前 tile/detail pair atlas 只有 mip 0；`TileMatrix × g_TileScale` 的高频重复在 45047、45048、45053、45068 上产生沿三角形 UV 梯度分布的强烈摩尔纹。
-   - MeddleTools 对 vertical array 使用 `Closest`，可证明层内 nearest 语义，但不能替代 GPU minification LOD。为 atlas 的每个 half、每个 layer 独立生成 mip，禁止跨 half/layer 污染，并保留 nearest mip selection。
-   - character normal 只用 RG 重建法线，B/A 仍是 alpha 等 packed 数据；当前 normal mip 把 RGB 当 XYZ 归一化，会篡改 45050 的 normal-B 透明度。mip 必须只从 RG 重建/平均法线，并独立线性保留 B/A。
-   - 增加 CPU mip focused tests、synthetic native WGPU minification fixture，并重跑上述五个真实 phantom snapshot。
-
-2. **审计剩余 material keys/constants**
+1. **审计剩余 material keys/constants**
    - 对 WeaponCatalog 和代表性 SHPK/MTRL 统计仍只存在于 raw debug 的 key/constant。
    - 有可靠名称和默认值时提升为结构化字段；未知值保留 raw。
    - 只有存在节点或真实 shader/样本证据时才进入 WGSL，否则增加独立 unsupported 字段。
 
-3. **补齐 shader-family-specific texture/UV 决策**
+2. **补齐 shader-family-specific texture/UV 决策**
    - 继续确认 character、skin、glass、reflection、scroll、occlusion 的实际 texture role 和 UV source。
    - 处理仍依赖通用 UV0/repeat fallback 的角色。
    - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入。
 
-4. **拆分主 WGSL 的 family 逻辑**
+3. **拆分主 WGSL 的 family 逻辑**
    - 将 base/normal/material/alpha/emissive/glass/tile-detail resolve 拆为明确函数块。
    - 保持现有输出和 snapshot 稳定，避免继续扩大 `fs_main` 的交叉分支。
    - family-specific 行为应能单独测试和审计。
 
 ### P1：有证据时补视觉语义
 
-5. **MultiMap、AlphaMulti 和 detail influence**
+4. **MultiMap、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
    - AlphaMulti/2/3 当前保留 mode/raw 并报告 `alphaMultiValues`；MeddleTools 对应输入未连接，暂不实现公式。
    - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
    - detail A/B 层混合已完成，但 detail 对 base 的最终 influence 在 MeddleTools 中仍标为 borked。
 
-6. **特殊 character families**
+5. **特殊 character families**
    - reflection：当前为 generic character approximation，等待可靠 reflection/environment/sphere 输入证据。
    - occlusion：保留 runtime sub-color 诊断，尚无完整 family 公式。
    - skin：Face clamp 已完成；SkinColor、body/face decal 和完整 skin 节点需要显式 runtime 输入。
    - characterScroll：variant/raw 已保留，MeddleTools 未提供专用 scroll 公式。
    - stockings/tattoo：静态可证明的 alpha/pipeline 已完成，运行时颜色/skin material 仍缺失。
 
-7. **Glass、cutout 与透明合成**
+6. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - transparent/glass 当前为 mesh-level sorting；复杂模型后续评估 per-triangle sorting 或 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
-8. **Water 和 environment 扩展**
+7. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
    - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
    - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
 
 ### P2：运行时输入与几何能力
 
-9. **显式 runtime material inputs**
+8. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-10. **runtime geometry state**
+9. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-11. **验证覆盖扩展**
+10. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -165,6 +159,7 @@
 - prepared model/material/pass、resource validation、runtime fallback 和 unsupported summary。
 - GPU 扩展顶点格式、逐 role UV/scroll/flow、secondary tangent frame 和 debug views。
 - 独立 sampler policy、ColorTable extra maps 和 float/HDR payload。
+- 逐 half/layer pair-atlas mip、`fract` 前显式 LOD 梯度，以及 RG 法线与 B/A packed payload 分离的 mip 语义。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和透明排序第一版。
 - character/tattoo/stockings/water/bguvscroll/lightshaft 的证据可支持部分。

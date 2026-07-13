@@ -1633,6 +1633,8 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
             ModelTextureKind::TileNormalArray,
             ModelTextureKind::TileOrbArray,
         ),
+        RgbaMipSemantic::PackedNormalRg,
+        RgbaMipSemantic::LinearData,
         [128, 128, 255, 255],
         [255, 128, 255, 255],
     );
@@ -1647,6 +1649,8 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
             ModelTextureKind::DetailDiffuseArray,
             ModelTextureKind::DetailNormalArray,
         ),
+        RgbaMipSemantic::LinearData,
+        RgbaMipSemantic::PackedNormalRg,
         [128, 128, 128, 255],
         [128, 128, 255, 255],
     );
@@ -1891,7 +1895,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                RgbaMipSemantic::Normal,
+                RgbaMipSemantic::PackedNormalRg,
             )
         })
         .unwrap_or_else(|| {
@@ -1902,7 +1906,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 1,
                 1,
                 &[128, 128, 255, 255],
-                RgbaMipSemantic::Normal,
+                RgbaMipSemantic::PackedNormalRg,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -2515,6 +2519,8 @@ fn create_array_pair_texture(
     queue: &wgpu::Queue,
     label: &str,
     pair: Option<(&ModelTexture, &ModelTexture)>,
+    first_semantic: RgbaMipSemantic,
+    second_semantic: RgbaMipSemantic,
     fallback_first: [u8; 4],
     fallback_second: [u8; 4],
 ) -> wgpu::Texture {
@@ -2540,47 +2546,51 @@ fn create_array_pair_texture(
         );
     };
 
-    let width = u32::from(first.width);
-    let height = u32::from(first.height);
+    let levels = array_pair_mip_chain(first, second, first_semantic, second_semantic);
+    let base = levels
+        .first()
+        .expect("array pair mip chain has a base level");
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
-            width: width * 2,
-            height,
+            width: base.width,
+            height: base.height,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count: levels.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let copy_layout = wgpu::TexelCopyBufferLayout {
-        offset: 0,
-        bytes_per_row: Some(width * 4),
-        rows_per_image: Some(height),
-    };
-    let copy_size = wgpu::Extent3d {
-        width,
-        height,
-        depth_or_array_layers: 1,
-    };
-    for (origin_x, rgba) in [(0, first.rgba.as_slice()), (width, second.rgba.as_slice())] {
+    for (mip_level, level) in levels.iter().enumerate() {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin_x,
-                    y: 0,
-                    z: 0,
-                },
+                mip_level: mip_level as u32,
+                origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
-            copy_layout,
-            copy_size,
+            &level.rgba,
+            if level.height == 1 {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }
+            } else {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.width * 4),
+                    rows_per_image: Some(level.height),
+                }
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
         );
     }
     texture
@@ -2590,7 +2600,8 @@ fn create_array_pair_texture(
 enum RgbaMipSemantic {
     SrgbColor,
     LinearData,
-    Normal,
+    /// Normal XY are packed in RG; B/A remain independent scalar payloads such as alpha masks.
+    PackedNormalRg,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2598,6 +2609,90 @@ struct RgbaMipLevel {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+}
+
+fn array_pair_mip_chain(
+    first: &ModelTexture,
+    second: &ModelTexture,
+    first_semantic: RgbaMipSemantic,
+    second_semantic: RgbaMipSemantic,
+) -> Vec<RgbaMipLevel> {
+    debug_assert!(texture_array_pair_is_compatible(first, second));
+    let layer_count = u32::from(first.array_size).max(1);
+    let mut layer_width = u32::from(first.width).max(1);
+    let mut layer_height = u32::from(first.array_layer_height).max(1);
+    let width = layer_width * 2;
+    let height = layer_height * layer_count;
+    let mut base = vec![0; width as usize * height as usize * 4];
+    for y in 0..height as usize {
+        let source_offset = y * layer_width as usize * 4;
+        let target_offset = y * width as usize * 4;
+        let row_bytes = layer_width as usize * 4;
+        base[target_offset..target_offset + row_bytes]
+            .copy_from_slice(&first.rgba[source_offset..source_offset + row_bytes]);
+        base[target_offset + row_bytes..target_offset + row_bytes * 2]
+            .copy_from_slice(&second.rgba[source_offset..source_offset + row_bytes]);
+    }
+
+    let mut levels = vec![RgbaMipLevel {
+        width,
+        height,
+        rgba: base,
+    }];
+    while layer_width > 1 && layer_height > 1 && layer_width % 2 == 0 && layer_height % 2 == 0 {
+        let source = levels
+            .last()
+            .expect("array pair mip chain has a base level");
+        let target_layer_width = layer_width / 2;
+        let target_layer_height = layer_height / 2;
+        let target_width = target_layer_width * 2;
+        let target_height = target_layer_height * layer_count;
+        let mut target = vec![0; target_width as usize * target_height as usize * 4];
+
+        for (side, semantic) in [first_semantic, second_semantic].into_iter().enumerate() {
+            let source_side_x = side as u32 * layer_width;
+            let target_side_x = side as u32 * target_layer_width;
+            for layer in 0..layer_count {
+                let source_layer_y = layer * layer_height;
+                let target_layer_y = layer * target_layer_height;
+                for target_y in 0..target_layer_height {
+                    let source_y_start =
+                        source_layer_y + target_y * layer_height / target_layer_height;
+                    let source_y_end = source_layer_y
+                        + ((target_y + 1) * layer_height / target_layer_height)
+                            .max(target_y * layer_height / target_layer_height + 1);
+                    for target_x in 0..target_layer_width {
+                        let source_x_start =
+                            source_side_x + target_x * layer_width / target_layer_width;
+                        let source_x_end = source_side_x
+                            + ((target_x + 1) * layer_width / target_layer_width)
+                                .max(target_x * layer_width / target_layer_width + 1);
+                        let output_x = target_side_x + target_x;
+                        let output_y = target_layer_y + target_y;
+                        let target_offset = ((output_y * target_width + output_x) * 4) as usize;
+                        downsample_rgba_texel(
+                            source,
+                            source_x_start,
+                            source_x_end,
+                            source_y_start,
+                            source_y_end,
+                            semantic,
+                            &mut target[target_offset..target_offset + 4],
+                        );
+                    }
+                }
+            }
+        }
+
+        levels.push(RgbaMipLevel {
+            width: target_width,
+            height: target_height,
+            rgba: target,
+        });
+        layer_width = target_layer_width;
+        layer_height = target_layer_height;
+    }
+    levels
 }
 
 fn create_mipped_rgba_texture(
@@ -2612,7 +2707,9 @@ fn create_mipped_rgba_texture(
     let levels = rgba_mip_chain(width, height, rgba, semantic);
     let format = match semantic {
         RgbaMipSemantic::SrgbColor => wgpu::TextureFormat::Rgba8UnormSrgb,
-        RgbaMipSemantic::LinearData | RgbaMipSemantic::Normal => wgpu::TextureFormat::Rgba8Unorm,
+        RgbaMipSemantic::LinearData | RgbaMipSemantic::PackedNormalRg => {
+            wgpu::TextureFormat::Rgba8Unorm
+        }
     };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -2725,7 +2822,7 @@ fn downsample_rgba_texel(
     target: &mut [u8],
 ) {
     let sample_count = ((x_end - x_start) * (y_end - y_start)) as f32;
-    let mut sums = [0.0; 4];
+    let mut sums = [0.0; 5];
     for y in y_start..y_end {
         for x in x_start..x_end {
             let offset = ((y * source.width + x) * 4) as usize;
@@ -2742,11 +2839,14 @@ fn downsample_rgba_texel(
                         sums[channel] += f32::from(pixel[channel]) / 255.0;
                     }
                 }
-                RgbaMipSemantic::Normal => {
-                    for channel in 0..3 {
-                        sums[channel] += f32::from(pixel[channel]) / 127.5 - 1.0;
-                    }
-                    sums[3] += f32::from(pixel[3]) / 255.0;
+                RgbaMipSemantic::PackedNormalRg => {
+                    let x = f32::from(pixel[0]) / 127.5 - 1.0;
+                    let y = f32::from(pixel[1]) / 127.5 - 1.0;
+                    sums[0] += x;
+                    sums[1] += y;
+                    sums[2] += (1.0 - x * x - y * y).max(0.0).sqrt();
+                    sums[3] += f32::from(pixel[2]) / 255.0;
+                    sums[4] += f32::from(pixel[3]) / 255.0;
                 }
             }
         }
@@ -2763,7 +2863,7 @@ fn downsample_rgba_texel(
                 target[channel] = unorm_byte(sums[channel] / sample_count);
             }
         }
-        RgbaMipSemantic::Normal => {
+        RgbaMipSemantic::PackedNormalRg => {
             let averaged = [
                 sums[0] / sample_count,
                 sums[1] / sample_count,
@@ -2772,21 +2872,20 @@ fn downsample_rgba_texel(
             let length =
                 (averaged[0] * averaged[0] + averaged[1] * averaged[1] + averaged[2] * averaged[2])
                     .sqrt();
-            let normal = if length > 1.0e-6 {
-                [
-                    averaged[0] / length,
-                    averaged[1] / length,
-                    averaged[2] / length,
-                ]
+            let xy = if length > 1.0e-6 {
+                [averaged[0] / length, averaged[1] / length]
             } else {
-                [0.0, 0.0, 1.0]
+                [0.0, 0.0]
             };
-            for channel in 0..3 {
-                target[channel] = unorm_byte(normal[channel] * 0.5 + 0.5);
-            }
+            target[0] = unorm_byte(xy[0] * 0.5 + 0.5);
+            target[1] = unorm_byte(xy[1] * 0.5 + 0.5);
+            target[2] = unorm_byte(sums[3] / sample_count);
+            target[3] = unorm_byte(sums[4] / sample_count);
         }
     }
-    target[3] = unorm_byte(sums[3] / sample_count);
+    if semantic != RgbaMipSemantic::PackedNormalRg {
+        target[3] = unorm_byte(sums[3] / sample_count);
+    }
 }
 
 fn srgb_to_linear(value: u8) -> f32 {
@@ -4436,8 +4535,63 @@ mod tests {
         let normals = [
             255, 128, 128, 0, 128, 255, 128, 255, 255, 128, 128, 0, 128, 255, 128, 255,
         ];
-        let normal = rgba_mip_chain(2, 2, &normals, RgbaMipSemantic::Normal);
+        let normal = rgba_mip_chain(2, 2, &normals, RgbaMipSemantic::PackedNormalRg);
         assert_eq!(normal[1].rgba, [218, 218, 128, 128]);
+    }
+
+    #[test]
+    fn array_pair_mips_preserve_halves_layers_and_packed_normal_payloads() {
+        let texture = |kind, rgba| crate::ModelTexture {
+            path: format!("synthetic/{kind:?}.tex"),
+            kind,
+            width: 2,
+            height: 4,
+            array_size: 2,
+            array_layer_height: 2,
+            rgba,
+            rgba_f32: None,
+        };
+        let first = texture(
+            crate::ModelTextureKind::TileNormalArray,
+            vec![
+                128, 128, 0, 0, 128, 128, 64, 0, 128, 128, 128, 255, 128, 128, 255, 255, 128, 128,
+                200, 64, 128, 128, 200, 64, 128, 128, 200, 64, 128, 128, 200, 64,
+            ],
+        );
+        let second = texture(
+            crate::ModelTextureKind::TileOrbArray,
+            vec![
+                10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255, 50, 0, 0, 255, 60, 0,
+                0, 255, 70, 0, 0, 255, 80, 0, 0, 255,
+            ],
+        );
+
+        let levels = array_pair_mip_chain(
+            &first,
+            &second,
+            RgbaMipSemantic::PackedNormalRg,
+            RgbaMipSemantic::LinearData,
+        );
+        assert_eq!(
+            levels
+                .iter()
+                .map(|level| (level.width, level.height))
+                .collect::<Vec<_>>(),
+            [(4, 4), (2, 2)]
+        );
+        assert_eq!(
+            levels[1]
+                .rgba
+                .chunks_exact(4)
+                .map(|pixel| pixel.to_vec())
+                .collect::<Vec<_>>(),
+            [
+                vec![128, 128, 112, 128],
+                vec![25, 0, 0, 255],
+                vec![128, 128, 200, 64],
+                vec![65, 0, 0, 255],
+            ]
+        );
     }
 
     #[test]
