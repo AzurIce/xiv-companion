@@ -112,7 +112,8 @@
 6. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
-   - transparent/glass 当前为 mesh-level sorting；复杂模型后续评估 per-triangle sorting 或 weighted blended OIT。
+   - transparent/glass 当前为 mesh-level sorting。45050 的毛发 mesh 在一个透明 draw batch 中包含 848 个三角形和 25 个断开组件，固定 MDL 索引顺序随视角产生约 41%-53% 的深度逆序；仅按组件中心排序仍会在组件内部留下明显错误。
+   - 下一步保留静态索引用于 opaque/depth/outline pass，并为 transparent/glass 建立逐帧动态索引缓冲，按三角形中心全局 back-to-front 排序后合并相邻同 batch draw run。该材质明确使用 Blend 且 `DrawDepthMode=None`，不以强制 depth write 或 cutout 替代透明合成；更复杂的相交透明面后续再评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
 7. **Water 和 environment 扩展**
