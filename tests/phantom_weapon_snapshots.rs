@@ -23,8 +23,8 @@ use xiv_companion::{
     },
 };
 use xiv_companion_data::{
-    MaterialCharacterScrollVariant, MdlMeshMetadata, MdlMetadata, ModelBoneTable,
-    ModelMaterialTextureArrays,
+    MaterialCharacterScrollVariant, MaterialLightShaftType, MdlMeshMetadata, MdlMetadata,
+    ModelBoneTable, ModelMaterialTextureArrays,
 };
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +150,10 @@ struct MaterialSummary {
     skin_value_mode: String,
     character_scroll_variant: MaterialCharacterScrollVariant,
     character_scroll_variant_raw: Option<u32>,
+    lightshaft_type: MaterialLightShaftType,
+    lightshaft_type_raw: Option<u32>,
+    lightshaft_angle_clip: f32,
+    lightshaft_near_clip: f32,
     transparency: f32,
     alpha_aperture: f32,
     alpha_offset: f32,
@@ -1158,6 +1162,10 @@ fn material_summary(
         skin_value_mode: format!("{:?}", material.skin_value_mode),
         character_scroll_variant: material.character_scroll_variant,
         character_scroll_variant_raw: material.character_scroll_variant_raw,
+        lightshaft_type: material.lightshaft_type,
+        lightshaft_type_raw: material.lightshaft_type_raw,
+        lightshaft_angle_clip: material.lightshaft_angle_clip,
+        lightshaft_near_clip: material.lightshaft_near_clip,
         transparency: material.transparency,
         alpha_aperture: material.alpha_aperture,
         alpha_offset: material.alpha_offset,

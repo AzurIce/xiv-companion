@@ -6,12 +6,12 @@ pub mod test_support;
 
 pub use model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialCharacterScrollVariant,
-    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode, MaterialRenderMode,
-    MaterialShaderFamily, MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode,
-    ModelBounds, ModelData, ModelMaterial, ModelMaterialTextureArrays, ModelMesh,
-    ModelMeshDrawRole, ModelRenderData, ModelShapeInfo, ModelShapeTarget, ModelShapeVertexDelta,
-    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
-    PreparedAlphaSource, PreparedMaterial, PreparedMaterialAlphaPolicy,
+    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType, MaterialLightingMode,
+    MaterialRenderMode, MaterialShaderFamily, MaterialSkinValueMode, MaterialSubColorMode,
+    MaterialValueMode, ModelBounds, ModelData, ModelMaterial, ModelMaterialTextureArrays,
+    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeInfo, ModelShapeTarget,
+    ModelShapeVertexDelta, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
+    PackedModelId, PreparedAlphaSource, PreparedMaterial, PreparedMaterialAlphaPolicy,
     PreparedMaterialFeatureFlags, PreparedMaterialResourceAvailability,
     PreparedMaterialRuntimeFallbacks, PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources,
     PreparedMesh, PreparedMeshShapeInfluences, PreparedMeshVisibility, PreparedModel,

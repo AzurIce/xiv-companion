@@ -1,7 +1,7 @@
 pub use xiv_companion_data::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialCharacterScrollVariant,
-    MaterialRenderMode, MaterialShaderFamily, MaterialSkinValueMode, MaterialSubColorMode,
-    ModelBounds, ModelData, ModelMaterial, ModelMaterialReferenceFallback,
+    MaterialLightShaftType, MaterialRenderMode, MaterialShaderFamily, MaterialSkinValueMode,
+    MaterialSubColorMode, ModelBounds, ModelData, ModelMaterial, ModelMaterialReferenceFallback,
     ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
     ModelRenderData, ModelShapeInfo, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
     ModelTextureKind, ModelVertex, PackedModelId, PreparedMaterial, PreparedMaterialFeatureFlags,

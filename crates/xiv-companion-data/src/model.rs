@@ -547,6 +547,14 @@ pub struct ModelMaterial {
     pub lightshaft_tex_v: [f32; 4],
     #[serde(default)]
     pub lightshaft_ray: [f32; 4],
+    #[serde(default)]
+    pub lightshaft_type: MaterialLightShaftType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightshaft_type_raw: Option<u32>,
+    #[serde(default)]
+    pub lightshaft_angle_clip: f32,
+    #[serde(default = "default_material_lightshaft_near_clip")]
+    pub lightshaft_near_clip: f32,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
@@ -721,6 +729,16 @@ pub enum MaterialCharacterScrollVariant {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialLightShaftType {
+    #[default]
+    None,
+    Type0,
+    Type1,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
     Skin,
@@ -861,6 +879,10 @@ pub struct PreparedMaterial {
     pub sub_color_mode: MaterialSubColorMode,
     #[serde(default)]
     pub skin_value_mode: MaterialSkinValueMode,
+    #[serde(default)]
+    pub lightshaft_type: MaterialLightShaftType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightshaft_type_raw: Option<u32>,
     #[serde(default)]
     pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
@@ -1025,6 +1047,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub character_scroll_variant: bool,
     #[serde(default)]
     pub ambient_occlusion_mask: bool,
+    #[serde(default)]
+    pub lightshaft_clip: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1433,6 +1457,10 @@ pub fn prepare_material_for_draw_role(
         skin_value_mode: material
             .map(|material| material.skin_value_mode)
             .unwrap_or_default(),
+        lightshaft_type: material
+            .map(|material| material.lightshaft_type)
+            .unwrap_or_default(),
+        lightshaft_type_raw: material.and_then(|material| material.lightshaft_type_raw),
         alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
         texture_sampling,
@@ -1743,6 +1771,7 @@ pub fn prepared_material_unsupported_inputs(
         character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
         ambient_occlusion_mask: material
             .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
+        lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
     }
 }
 
@@ -2123,6 +2152,10 @@ fn default_material_lightshaft_tex_u() -> [f32; 4] {
 
 fn default_material_lightshaft_tex_v() -> [f32; 4] {
     [0.0, 1.0, 0.0, 0.0]
+}
+
+fn default_material_lightshaft_near_clip() -> f32 {
+    0.25
 }
 
 fn default_render_backfaces() -> bool {
@@ -2900,6 +2933,8 @@ mod color_table_bake_tests {
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
                 skin_value_mode: MaterialSkinValueMode::None,
+                lightshaft_type: MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -2923,6 +2958,8 @@ mod color_table_bake_tests {
                 value_mode: MaterialValueMode::Single,
                 sub_color_mode: MaterialSubColorMode::None,
                 skin_value_mode: MaterialSkinValueMode::None,
+                lightshaft_type: MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
                 alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
@@ -3162,6 +3199,7 @@ mod color_table_bake_tests {
                 character_reflection: true,
                 character_scroll_variant: false,
                 ambient_occlusion_mask: false,
+                lightshaft_clip: false,
             }
         );
         assert_eq!(
@@ -3186,6 +3224,7 @@ mod color_table_bake_tests {
                 character_reflection: true,
                 character_scroll_variant: false,
                 ambient_occlusion_mask: false,
+                lightshaft_clip: false,
             }
         );
 
@@ -3238,6 +3277,18 @@ mod color_table_bake_tests {
         let scroll = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(scroll.unsupported_inputs.character_scroll_variant);
         assert!(scroll.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
+        material.lightshaft_type = MaterialLightShaftType::Type1;
+        material.lightshaft_type_raw = Some(0xC601_7195);
+        material.lightshaft_angle_clip = 0.4;
+        material.lightshaft_near_clip = 1.25;
+        let lightshaft =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft);
+        assert_eq!(lightshaft.lightshaft_type, MaterialLightShaftType::Type1);
+        assert_eq!(lightshaft.lightshaft_type_raw, Some(0xC601_7195));
+        assert!(lightshaft.unsupported_inputs.lightshaft_clip);
+        assert!(lightshaft.unsupported_inputs.incomplete_shader_family_logic);
 
         material.ambient_occlusion_mask = Some(0.5);
         assert!(
@@ -3982,6 +4033,8 @@ mod color_table_bake_tests {
             skin_value_mode: MaterialSkinValueMode::None,
             character_scroll_variant: MaterialCharacterScrollVariant::None,
             character_scroll_variant_raw: None,
+            lightshaft_type: MaterialLightShaftType::None,
+            lightshaft_type_raw: None,
             transparency: 0.0,
             water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
             water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -4030,6 +4083,8 @@ mod color_table_bake_tests {
             lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
             lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
             lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
+            lightshaft_angle_clip: 0.0,
+            lightshaft_near_clip: 0.25,
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,

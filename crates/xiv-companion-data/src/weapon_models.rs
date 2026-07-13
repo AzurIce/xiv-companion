@@ -1,17 +1,18 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
-    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode, MaterialRenderMode,
-    MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode, ModelBounds,
-    ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow,
-    ModelMaterial, ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind,
-    ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget,
-    ModelShapeVertexDelta, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
-    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
-    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType, MaterialLightingMode,
+    MaterialRenderMode, MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode,
+    ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
+    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
+    ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
+    ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
+    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
+    PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts,
+    WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode,
+    WeaponModelBounds, WeaponModelData, WeaponModelLoadCandidateDiagnostic,
+    WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic, WeaponModelLoadRole,
+    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
+    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
     weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
@@ -105,6 +106,12 @@ const CHARACTER_SCROLL_VARIANT_69EB4AE0: u32 = 0x69EB_4AE0;
 #[cfg(feature = "game-data")]
 const CHARACTER_SCROLL_VARIANT_9A8A46F5: u32 = 0x9A8A_46F5;
 #[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE: u32 = 0x0DA8_270B;
+#[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE_0: u32 = 0xB106_4103;
+#[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE_1: u32 = 0xC601_7195;
+#[cfg(feature = "game-data")]
 const G_GLASS_IOR: u32 = 0x7801_E004;
 #[cfg(feature = "game-data")]
 const G_GLASS_THICKNESS_MAX: u32 = 0xC464_7F37;
@@ -186,6 +193,10 @@ const G_LIGHTSHAFT_TEX_V: u32 = 0xC02F_F1F9;
 const G_LIGHTSHAFT_RAY: u32 = 0x827B_DD09;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_COLOR: u32 = 0xD27C_58B9;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_ANGLE_CLIP: u32 = 0x71DB_DA81;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_NEAR_CLIP: u32 = 0x17A5_2926;
 #[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
@@ -2270,6 +2281,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
         let (character_scroll_variant, character_scroll_variant_raw) =
             composed_material_character_scroll_variant(&semantics);
+        let (lightshaft_type, lightshaft_type_raw) = composed_material_lightshaft_type(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2318,6 +2330,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
         let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
         let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
+        let lightshaft_angle_clip = composed_material_lightshaft_angle_clip(&semantics);
+        let lightshaft_near_clip = composed_material_lightshaft_near_clip(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
@@ -2364,6 +2378,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             skin_value_mode,
             character_scroll_variant,
             character_scroll_variant_raw,
+            lightshaft_type,
+            lightshaft_type_raw,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -2412,6 +2428,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             lightshaft_tex_u,
             lightshaft_tex_v,
             lightshaft_ray,
+            lightshaft_angle_clip,
+            lightshaft_near_clip,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -2902,6 +2920,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let skin_value_mode = composed_material_skin_value_mode(&semantics);
         let (character_scroll_variant, character_scroll_variant_raw) =
             composed_material_character_scroll_variant(&semantics);
+        let (lightshaft_type, lightshaft_type_raw) = composed_material_lightshaft_type(&semantics);
         let transparency = composed_material_transparency(&semantics, &shader_package_name);
         let water_deep_color = composed_material_water_deep_color(&semantics);
         let water_refraction_color = composed_material_water_refraction_color(&semantics);
@@ -2950,6 +2969,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
         let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
         let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
+        let lightshaft_angle_clip = composed_material_lightshaft_angle_clip(&semantics);
+        let lightshaft_near_clip = composed_material_lightshaft_near_clip(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
@@ -2997,6 +3018,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             skin_value_mode,
             character_scroll_variant,
             character_scroll_variant_raw,
+            lightshaft_type,
+            lightshaft_type_raw,
             transparency,
             water_deep_color,
             water_refraction_color,
@@ -3045,6 +3068,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             lightshaft_tex_u,
             lightshaft_tex_v,
             lightshaft_ray,
+            lightshaft_angle_clip,
+            lightshaft_near_clip,
             opacity,
             render_backfaces,
             apply_vertex_color,
@@ -3912,6 +3937,20 @@ fn composed_material_character_scroll_variant(
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_lightshaft_type(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialLightShaftType, Option<u32>) {
+    let raw = semantics.material_key_value(LIGHTSHAFT_TYPE);
+    let value = match raw {
+        None => MaterialLightShaftType::None,
+        Some(LIGHTSHAFT_TYPE_0) => MaterialLightShaftType::Type0,
+        Some(LIGHTSHAFT_TYPE_1) => MaterialLightShaftType::Type1,
+        Some(_) => MaterialLightShaftType::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
 }
@@ -4156,6 +4195,16 @@ fn composed_material_lightshaft_tex_v(semantics: &ComposedMaterialSemantics) -> 
 #[cfg(feature = "game-data")]
 fn composed_material_lightshaft_ray(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
     composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_RAY, [0.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_angle_clip(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_LIGHTSHAFT_ANGLE_CLIP, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_near_clip(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_LIGHTSHAFT_NEAR_CLIP, 0.25)
 }
 
 #[cfg(feature = "game-data")]
@@ -4530,6 +4579,8 @@ fn fallback_weapon_material(
         skin_value_mode: MaterialSkinValueMode::None,
         character_scroll_variant: MaterialCharacterScrollVariant::None,
         character_scroll_variant_raw: None,
+        lightshaft_type: MaterialLightShaftType::None,
+        lightshaft_type_raw: None,
         transparency: 0.0,
         water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
         water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
@@ -4578,6 +4629,8 @@ fn fallback_weapon_material(
         lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
         lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
         lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_angle_clip: 0.0,
+        lightshaft_near_clip: 0.25,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
@@ -6733,6 +6786,33 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_lightshaft_type_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::None, None)
+        );
+
+        semantics.apply_shader_package_key_default(LIGHTSHAFT_TYPE, LIGHTSHAFT_TYPE_0);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Type0, Some(LIGHTSHAFT_TYPE_0))
+        );
+
+        semantics.apply_material_key(LIGHTSHAFT_TYPE, LIGHTSHAFT_TYPE_1);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Type1, Some(LIGHTSHAFT_TYPE_1))
+        );
+
+        semantics.apply_material_key(LIGHTSHAFT_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Unknown, Some(0xDEAD_BEEF))
+        );
+    }
+
+    #[test]
     fn composed_material_alpha_params_use_resolved_material_constants() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[
@@ -7283,6 +7363,8 @@ mod weapon_material_tests {
             (G_LIGHTSHAFT_TEX_U, &[1.5, 0.5, 0.25]),
             (G_LIGHTSHAFT_TEX_V, &[0.25, 1.75, 0.5]),
             (G_LIGHTSHAFT_RAY, &[2.0, 3.0, 4.0, 5.0]),
+            (G_LIGHTSHAFT_ANGLE_CLIP, &[0.4]),
+            (G_LIGHTSHAFT_NEAR_CLIP, &[1.25]),
         ]);
 
         assert_eq!(composed_material_lightshaft_color(&semantics), [1.0; 4]);
@@ -7296,6 +7378,8 @@ mod weapon_material_tests {
             [0.0, 1.0, 0.0, 0.0]
         );
         assert_eq!(composed_material_lightshaft_ray(&semantics), [0.0; 4]);
+        assert_eq!(composed_material_lightshaft_angle_clip(&semantics), 0.0);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 0.25);
 
         semantics.apply_shader_package_material_constants(&shader_package);
         assert_eq!(
@@ -7318,6 +7402,8 @@ mod weapon_material_tests {
             composed_material_lightshaft_ray(&semantics),
             [2.0, 3.0, 4.0, 5.0]
         );
+        assert_eq!(composed_material_lightshaft_angle_clip(&semantics), 0.4);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 1.25);
 
         let material = test_mtrl_with_constant(G_LIGHTSHAFT_COLOR, &[1.0, 0.5, 0.25], 0);
         semantics.apply_material_constants(&material);
@@ -7332,6 +7418,10 @@ mod weapon_material_tests {
             composed_material_lightshaft_tex_u(&semantics),
             [2.0, 3.0, 0.0, 0.0]
         );
+
+        let material = test_mtrl_with_constant(G_LIGHTSHAFT_NEAR_CLIP, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 0.25);
     }
 
     #[test]
