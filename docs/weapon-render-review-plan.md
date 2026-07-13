@@ -26,7 +26,7 @@
 
 ## 核验依据
 
-最近核验：2026-07-13；最近实现基线：`62d8139`；最近视觉回归诊断基线：`62d8139`。
+最近核验：2026-07-14；最近实现基线：`bdadb77`；最近视觉回归诊断基线：`bdadb77`。
 
 - 本仓数据层：`crates/xiv-companion-data/src/model.rs`、`mdl_geometry.rs`、`mdl_metadata.rs`、`weapon_models.rs`。
 - 本仓渲染层：`crates/xiv-companion-render/src/renderer/model.rs`、`model.wgsl`。
@@ -67,6 +67,7 @@
 
 - 数据层和 renderer 有 focused unit tests。
 - synthetic native WGPU 覆盖 Map1、tile/detail、ColorTable ramps、tattoo、water、lightshaft、secondary vertex debug 等最终像素差异。
+- 透明三角形 synthetic WGPU 会在正背视角翻转同 mesh 红/蓝半透明层的主色，覆盖逐帧动态 index buffer 与实际 blend；45050 已在默认和两个额外视角验证毛片顺序。
 - 45052 覆盖 baseline、第一染色通道和第二通道 metallic；45059 覆盖 glass、SphereIndex 与 HDR ramp。
 - 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；`fract` 后错误隐式梯度已消除。后续放大审查发现的 45053/45068 稳定网纹也已修复：TileIndex 离散化现按 MeddleTools `tile_select` 使用 `FLOOR`，约 21.58 会选择平缓 layer 21 而不是强网纹 layer 22；45068 final/tile-normal 前景高频分别下降约 53%/94%，45053 tile-normal 下降约 71%。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
 - 45050 的毛发透明回归已修复：透明 `_b.mtrl` 为 `GetValuesMultiMaterial + NormalBlue`，807 个顶点中 445 个 A=0，848 个三角形中 400 个全为 A=0；NormalBlue/NormalAlpha 现不再误乘 vertex A。MeddleTools `meddle character.shpk` 的 Alpha 只连接 normal Blue，tattoo Alpha 只连接 normal Alpha，两者都没有 vertex color A 输入。真实 final 前景像素由 29,559 增至 33,358，alpha debug 保留毛束边缘/缝隙透明而主体恢复不透明。
@@ -89,7 +90,7 @@
    - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入。
 
 3. **拆分主 WGSL 的 family 逻辑**
-   - 将 base/normal/material/alpha/emissive/glass/tile-detail resolve 拆为明确函数块。
+   - normal、alpha、emissive、tile、detail 已拆为明确函数；继续拆分 `fs_main` 中的纹理采样编排、base/material/specular、glass lighting 和最终输出组合。
    - 保持现有输出和 snapshot 稳定，避免继续扩大 `fs_main` 的交叉分支。
    - family-specific 行为应能单独测试和审计。
 
@@ -97,6 +98,7 @@
 
 4. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
+   - 当前同步/异步 texture loader 只要原 diffuse 与 baked ColorTable 同时存在就无条件相乘。MeddleTools character 节点明确以 `GetValuesCompatibility` 作为该乘法的唯一 Factor；本轮将只对 character family 修正为 Compatibility 使用 `base × ColorTable`、MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
    - `GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity；准确的材质/ColorTable 分区公式仍待节点或游戏 shader 证据。
    - AlphaMulti/2/3 当前保留 mode/raw 并报告 `alphaMultiValues`；MeddleTools 对应输入未连接，暂不实现公式。
    - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
@@ -112,7 +114,7 @@
 6. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
-   - transparent/glass 已使用逐帧动态索引缓冲，按三角形中心全局 back-to-front 排序并合并相邻同 batch draw run；静态索引继续用于 opaque/depth/outline/additive。45050 的 848 个毛发三角形已在默认及两个额外视角回归。该材质明确使用 Blend 且 `DrawDepthMode=None`，不以强制 depth write 或 cutout 替代透明合成；更复杂的相交透明面后续再评估 weighted blended OIT。
+   - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
 7. **Water 和 environment 扩展**
