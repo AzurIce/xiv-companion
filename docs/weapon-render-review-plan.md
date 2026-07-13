@@ -26,7 +26,7 @@
 
 ## 核验依据
 
-最近核验：2026-07-13；最近实现基线：`f2f897d`；最近视觉回归诊断基线：`11f42df`。
+最近核验：2026-07-13；最近实现基线：`e611b95`；最近视觉回归诊断基线：`e611b95`。
 
 - 本仓数据层：`crates/xiv-companion-data/src/model.rs`、`mdl_geometry.rs`、`mdl_metadata.rs`、`weapon_models.rs`。
 - 本仓渲染层：`crates/xiv-companion-render/src/renderer/model.rs`、`model.wgsl`。
@@ -68,7 +68,7 @@
 - 数据层和 renderer 有 focused unit tests。
 - synthetic native WGPU 覆盖 Map1、tile/detail、ColorTable ramps、tattoo、water、lightshaft、secondary vertex debug 等最终像素差异。
 - 45052 覆盖 baseline、第一染色通道和第二通道 metallic；45059 覆盖 glass、SphereIndex 与 HDR ramp。
-- 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；45047/45053 的旧 tile-normal 高频指标下降约 98%/99%，45048/45068 保留随正确 mip 可见的稳定层内细节，不再依赖 `fract` 后错误隐式梯度。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
+- 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；`fract` 后错误隐式梯度已消除。后续放大审查发现 45053/45068 仍有稳定网纹：这不是 mip 摩尔纹，而是 TileIndex 离散化使用 `round`、把约 21.58 错选为强网纹 layer 22；MeddleTools `tile_select` 明确使用 `FLOOR`，正确 layer 21 的法线明显平缓。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
 - WeaponCatalog audit 当前结果：8281 个条目、7365 个唯一模型、8112 个可解析材质、0 load failures；武器范围为 8091 character、15 skin、6 characterGlass。
 
 ## 当前工作队列
@@ -77,60 +77,65 @@
 
 ### P0：减少静默近似
 
-1. **审计剩余 material keys/constants**
+1. **修复 TileIndex 离散选层的 round/floor 回归**
+   - 当前 WGSL 对逐像素 ColorTable TileIndex 和 `g_TileIndex` fallback 都使用 `round`；MeddleTools `tile_select` 的 `Tile Index` Math 节点明确为 `FLOOR`。
+   - 45053/45068 的主要 TileProperties R=86，RGBA8 解码后 `86 / 255 * 64 ≈ 21.58`；`round` 错选 layer 22，其法线平均切向幅度约 0.596 并带强网纹，`floor` 应选平均幅度约 0.031 的 layer 21。
+   - 两条路径统一改为 floor，补离散边界 focused test，并重跑 synthetic tile fixture 与 45053/45068 final/tile-normal snapshot。
+
+2. **审计剩余 material keys/constants**
    - 对 WeaponCatalog 和代表性 SHPK/MTRL 统计仍只存在于 raw debug 的 key/constant。
    - 有可靠名称和默认值时提升为结构化字段；未知值保留 raw。
    - 只有存在节点或真实 shader/样本证据时才进入 WGSL，否则增加独立 unsupported 字段。
 
-2. **补齐 shader-family-specific texture/UV 决策**
+3. **补齐 shader-family-specific texture/UV 决策**
    - 继续确认 character、skin、glass、reflection、scroll、occlusion 的实际 texture role 和 UV source。
    - 处理仍依赖通用 UV0/repeat fallback 的角色。
    - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入。
 
-3. **拆分主 WGSL 的 family 逻辑**
+4. **拆分主 WGSL 的 family 逻辑**
    - 将 base/normal/material/alpha/emissive/glass/tile-detail resolve 拆为明确函数块。
    - 保持现有输出和 snapshot 稳定，避免继续扩大 `fs_main` 的交叉分支。
    - family-specific 行为应能单独测试和审计。
 
 ### P1：有证据时补视觉语义
 
-4. **MultiMap、AlphaMulti 和 detail influence**
+5. **MultiMap、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
    - AlphaMulti/2/3 当前保留 mode/raw 并报告 `alphaMultiValues`；MeddleTools 对应输入未连接，暂不实现公式。
    - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
    - detail A/B 层混合已完成，但 detail 对 base 的最终 influence 在 MeddleTools 中仍标为 borked。
 
-5. **特殊 character families**
+6. **特殊 character families**
    - reflection：当前为 generic character approximation，等待可靠 reflection/environment/sphere 输入证据。
    - occlusion：保留 runtime sub-color 诊断，尚无完整 family 公式。
    - skin：Face clamp 已完成；SkinColor、body/face decal 和完整 skin 节点需要显式 runtime 输入。
    - characterScroll：variant/raw 已保留，MeddleTools 未提供专用 scroll 公式。
    - stockings/tattoo：静态可证明的 alpha/pipeline 已完成，运行时颜色/skin material 仍缺失。
 
-6. **Glass、cutout 与透明合成**
+7. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - transparent/glass 当前为 mesh-level sorting；复杂模型后续评估 per-triangle sorting 或 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
-7. **Water 和 environment 扩展**
+8. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
    - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
    - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
 
 ### P2：运行时输入与几何能力
 
-8. **显式 runtime material inputs**
+9. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-9. **runtime geometry state**
+10. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-10. **验证覆盖扩展**
+11. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
