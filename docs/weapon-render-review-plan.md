@@ -91,11 +91,11 @@
 ### P1：有证据时补视觉语义
 
 1. **特殊 character families**
-   - reflection：当前为 generic character approximation，等待可靠 reflection/environment/sphere 输入证据。
-   - occlusion：保留 runtime sub-color 诊断，尚无完整 family 公式。
-   - skin：Face clamp 已完成；SkinColor、body/face decal 和完整 skin 节点需要显式 runtime 输入。
-   - characterScroll：variant/raw 已保留，MeddleTools 未提供专用 scroll 公式。
-   - stockings/tattoo：静态可证明的 alpha/pipeline 已完成，运行时颜色/skin material 仍缺失。
+   - installed WeaponCatalog 只有 8091 character、6 characterGlass、15 skin；reflection、occlusion、scroll、stockings、tattoo 均为零覆盖，不能用武器快照校准 family 公式。
+   - 唯一 skin 资源为 `mt_c0101b0001_a.mtrl`，35 次目录引用均为 equipment-style 拳套 fallback；它固定 `GetMaterialValue=Body`、`GetDecalColor=Off`，只绑定主 Diffuse/Normal/Mask，没有 Skin* sampler 或静态 decal 输入。
+   - Meddle composer/runtime buffer 提供 SkinColor、OptionColor、DecalColor；on-render material output 另外解析 decal texture，并只为 stockings 从角色 slot skin material 复制 Skin* textures。上述输入都不属于静态 SqPack 武器材质。
+   - MeddleTools 的 skin Body mapping 仍标记 TODO，tattoo 只映射 runtime OptionColor，stockings/scroll 复用 character group，reflection 没有 material/template；因此本轮不新增 WGSL 近似。
+   - 本轮只增加 installed audit 边界断言，固定 special-family 零覆盖和唯一 Skin Body/Off/主 sampler 证据；随后把 reflection/occlusion/scroll 与 skin/stockings/tattoo 的剩余缺口移入 runtime/evidence boundary。
 
 2. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
