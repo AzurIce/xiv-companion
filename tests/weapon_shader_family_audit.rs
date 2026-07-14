@@ -19,8 +19,10 @@ use xiv_companion::{
     weapon_model_candidate_paths,
 };
 use xiv_companion_data::{
-    ShaderPackageKeyDefaultDebug, ShaderPackageMaterialConstantDebug, ShaderPackageSemanticDebug,
-    material_debug_info_from_mtrl_bytes, shader_package_semantic_debug_from_resource,
+    MaterialSamplerLogicalRole, ModelTextureKind, ShaderPackageKeyDefaultDebug,
+    ShaderPackageMaterialConstantDebug, ShaderPackageSamplerResourceDebug,
+    ShaderPackageSemanticDebug, material_debug_info_from_mtrl_bytes,
+    shader_package_semantic_debug_from_resource,
 };
 
 const MAX_SEMANTIC_REPRESENTATIVES: usize = 3;
@@ -36,11 +38,14 @@ struct WeaponShaderFamilyAudit {
     unique_material_resources: usize,
     unique_shader_packages: usize,
     family_counts: BTreeMap<String, usize>,
+    sampler_coverage: Vec<WeaponMaterialSamplerCoverage>,
     material_key_coverage: Vec<WeaponMaterialKeyCoverage>,
     material_constant_coverage: Vec<WeaponMaterialConstantCoverage>,
     unknown_key_category_count: usize,
     unknown_key_value_count: usize,
     unknown_constant_id_count: usize,
+    unknown_sampler_role_count: usize,
+    unresolved_sampler_name_count: usize,
     candidates: Vec<WeaponShaderFamilyCandidate>,
     unclassified_materials: Vec<WeaponShaderFamilyCandidate>,
     resource_collisions: Vec<WeaponMaterialResourceCollision>,
@@ -48,6 +53,22 @@ struct WeaponShaderFamilyAudit {
     shape_models: Vec<WeaponShapeModel>,
     semantic_failures: Vec<String>,
     failures: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WeaponMaterialSamplerCoverage {
+    shader_package_name: String,
+    texture_usage: u32,
+    texture_usage_hex: String,
+    texture_usage_name: Option<String>,
+    logical_role: Option<MaterialSamplerLogicalRole>,
+    texture_kind: Option<ModelTextureKind>,
+    flags: u32,
+    flags_hex: String,
+    material_resource_count: usize,
+    material_reference_count: usize,
+    representatives: Vec<WeaponSemanticRepresentative>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -202,6 +223,22 @@ struct MaterialConstantCoverageId {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialSamplerCoverageId {
+    shader_package_name: String,
+    texture_usage: u32,
+    flags: u32,
+}
+
+#[derive(Debug)]
+struct MaterialSamplerCoverageAccumulator {
+    texture_usage_name: Option<String>,
+    logical_role: Option<MaterialSamplerLogicalRole>,
+    texture_kind: Option<ModelTextureKind>,
+    count: SemanticCount,
+    representatives: Vec<WeaponSemanticRepresentative>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MaterialConstantValueKey(Vec<u32>);
 
 #[derive(Debug)]
@@ -264,11 +301,21 @@ struct ObservedMaterialConstantGroup {
     non_finite: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ObservedMaterialSampler {
+    texture_usage: u32,
+    texture_usage_name: Option<String>,
+    logical_role: Option<MaterialSamplerLogicalRole>,
+    texture_kind: Option<ModelTextureKind>,
+    flags: u32,
+}
+
 #[derive(Default)]
 struct MaterialSemanticCoverageBuilder {
     material_resources: HashSet<String>,
     shader_packages: HashSet<String>,
     shader_package_cache: HashMap<String, Option<ShaderPackageSemanticDebug>>,
+    sampler_coverage: BTreeMap<MaterialSamplerCoverageId, MaterialSamplerCoverageAccumulator>,
     key_coverage: BTreeMap<MaterialKeyCoverageId, MaterialKeyCoverageAccumulator>,
     constant_coverage: BTreeMap<MaterialConstantCoverageId, MaterialConstantCoverageAccumulator>,
     failures: Vec<String>,
@@ -277,11 +324,14 @@ struct MaterialSemanticCoverageBuilder {
 struct MaterialSemanticCoverageResult {
     unique_material_resources: usize,
     unique_shader_packages: usize,
+    sampler_coverage: Vec<WeaponMaterialSamplerCoverage>,
     material_key_coverage: Vec<WeaponMaterialKeyCoverage>,
     material_constant_coverage: Vec<WeaponMaterialConstantCoverage>,
     unknown_key_category_count: usize,
     unknown_key_value_count: usize,
     unknown_constant_id_count: usize,
+    unknown_sampler_role_count: usize,
+    unresolved_sampler_name_count: usize,
     failures: Vec<String>,
 }
 
@@ -366,6 +416,17 @@ impl MaterialSemanticCoverageBuilder {
                 }
             })
             .collect::<Vec<_>>();
+        let samplers = debug
+            .samplers
+            .iter()
+            .map(|sampler| ObservedMaterialSampler {
+                texture_usage: sampler.texture_usage,
+                texture_usage_name: sampler.texture_usage_name.clone(),
+                logical_role: sampler.logical_role,
+                texture_kind: sampler.kind,
+                flags: sampler.flags,
+            })
+            .collect::<Vec<_>>();
         let representative = WeaponSemanticRepresentative {
             item_reference_count: items.len(),
             item_ids: items.iter().take(3).map(|item| item.id).collect(),
@@ -385,6 +446,7 @@ impl MaterialSemanticCoverageBuilder {
             debug.shader_flags,
             &keys,
             &constants,
+            &samplers,
             &representative,
         );
     }
@@ -398,10 +460,47 @@ impl MaterialSemanticCoverageBuilder {
         shader_flags: u32,
         material_keys: &[ObservedMaterialKey],
         material_constants: &[ObservedMaterialConstant],
+        material_samplers: &[ObservedMaterialSampler],
         representative: &WeaponSemanticRepresentative,
     ) {
         let unique_resource = self.material_resources.insert(material_path.to_string());
         self.shader_packages.insert(shader_package_name.to_string());
+        let mut observed_sampler_ids = BTreeSet::new();
+        for sampler in material_samplers {
+            let package_resource = shader_package.and_then(|package| {
+                package
+                    .sampler_resources
+                    .iter()
+                    .find(|resource| resource.crc == sampler.texture_usage)
+            });
+            let id = MaterialSamplerCoverageId {
+                shader_package_name: shader_package_name.to_string(),
+                texture_usage: sampler.texture_usage,
+                flags: sampler.flags,
+            };
+            if !observed_sampler_ids.insert(id.clone()) {
+                continue;
+            }
+            let coverage = self.sampler_coverage.entry(id).or_insert_with(|| {
+                MaterialSamplerCoverageAccumulator {
+                    texture_usage_name: package_resource
+                        .map(|resource| resource.name.clone())
+                        .or_else(|| sampler.texture_usage_name.clone()),
+                    logical_role: package_resource
+                        .and_then(|resource| resource.logical_role)
+                        .or(sampler.logical_role),
+                    texture_kind: package_resource
+                        .and_then(|resource| resource.kind)
+                        .or(sampler.texture_kind),
+                    count: SemanticCount::default(),
+                    representatives: Vec::new(),
+                }
+            });
+            coverage
+                .count
+                .observe(unique_resource, representative.item_reference_count);
+            add_semantic_representative(&mut coverage.representatives, representative);
+        }
         let key_overrides = material_keys
             .iter()
             .map(|key| (key.category, key))
@@ -737,6 +836,23 @@ impl MaterialSemanticCoverageBuilder {
     }
 
     fn finish(self) -> MaterialSemanticCoverageResult {
+        let sampler_coverage = self
+            .sampler_coverage
+            .into_iter()
+            .map(|(id, coverage)| WeaponMaterialSamplerCoverage {
+                shader_package_name: id.shader_package_name,
+                texture_usage: id.texture_usage,
+                texture_usage_hex: hex_u32(id.texture_usage),
+                texture_usage_name: coverage.texture_usage_name,
+                logical_role: coverage.logical_role,
+                texture_kind: coverage.texture_kind,
+                flags: id.flags,
+                flags_hex: hex_u32(id.flags),
+                material_resource_count: coverage.count.resources,
+                material_reference_count: coverage.count.references,
+                representatives: coverage.representatives,
+            })
+            .collect::<Vec<_>>();
         let material_key_coverage = self
             .key_coverage
             .into_iter()
@@ -838,15 +954,26 @@ impl MaterialSemanticCoverageBuilder {
             .iter()
             .filter(|coverage| coverage.name.is_none())
             .count();
+        let unknown_sampler_role_count = sampler_coverage
+            .iter()
+            .filter(|coverage| coverage.logical_role.is_none())
+            .count();
+        let unresolved_sampler_name_count = sampler_coverage
+            .iter()
+            .filter(|coverage| coverage.texture_usage_name.is_none())
+            .count();
 
         MaterialSemanticCoverageResult {
             unique_material_resources: self.material_resources.len(),
             unique_shader_packages: self.shader_packages.len(),
+            sampler_coverage,
             material_key_coverage,
             material_constant_coverage,
             unknown_key_category_count,
             unknown_key_value_count,
             unknown_constant_id_count,
+            unknown_sampler_role_count,
+            unresolved_sampler_name_count,
             failures: self.failures,
         }
     }
@@ -992,11 +1119,14 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         unique_material_resources: 0,
         unique_shader_packages: 0,
         family_counts: BTreeMap::new(),
+        sampler_coverage: Vec::new(),
         material_key_coverage: Vec::new(),
         material_constant_coverage: Vec::new(),
         unknown_key_category_count: 0,
         unknown_key_value_count: 0,
         unknown_constant_id_count: 0,
+        unknown_sampler_role_count: 0,
+        unresolved_sampler_name_count: 0,
         candidates: Vec::new(),
         unclassified_materials: Vec::new(),
         resource_collisions: Vec::new(),
@@ -1030,22 +1160,26 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
     let semantic_coverage = semantic_coverage.finish();
     report.unique_material_resources = semantic_coverage.unique_material_resources;
     report.unique_shader_packages = semantic_coverage.unique_shader_packages;
+    report.sampler_coverage = semantic_coverage.sampler_coverage;
     report.material_key_coverage = semantic_coverage.material_key_coverage;
     report.material_constant_coverage = semantic_coverage.material_constant_coverage;
     report.unknown_key_category_count = semantic_coverage.unknown_key_category_count;
     report.unknown_key_value_count = semantic_coverage.unknown_key_value_count;
     report.unknown_constant_id_count = semantic_coverage.unknown_constant_id_count;
+    report.unknown_sampler_role_count = semantic_coverage.unknown_sampler_role_count;
+    report.unresolved_sampler_name_count = semantic_coverage.unresolved_sampler_name_count;
     report.semantic_failures = semantic_coverage.failures;
 
     let output_path = PathBuf::from("target").join("weapon-shader-family-audit.json");
     fs::write(&output_path, serde_json::to_vec_pretty(&report)?)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
     eprintln!(
-        "weapon shader audit: models={}, material references={}, unique materials={}, shader packages={}, key coverage={}, constant coverage={}, candidates={}, failures={}, semantic failures={}, report={}",
+        "weapon shader audit: models={}, material references={}, unique materials={}, shader packages={}, sampler coverage={}, key coverage={}, constant coverage={}, candidates={}, failures={}, semantic failures={}, report={}",
         report.scanned_models,
         report.scanned_materials,
         report.unique_material_resources,
         report.unique_shader_packages,
+        report.sampler_coverage.len(),
         report.material_key_coverage.len(),
         report.material_constant_coverage.len(),
         report.candidates.len(),
@@ -1058,6 +1192,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
     assert!(report.scanned_materials > 0);
     assert!(report.unique_material_resources > 0);
     assert!(report.unique_shader_packages > 0);
+    assert!(!report.sampler_coverage.is_empty());
     assert!(!report.material_key_coverage.is_empty());
     assert!(!report.material_constant_coverage.is_empty());
     assert!(
@@ -1371,6 +1506,7 @@ mod tests {
         let package = ShaderPackageSemanticDebug {
             path: "shader/sm5/shpk/character.shpk".to_string(),
             name: "character.shpk".to_string(),
+            sampler_resources: Vec::new(),
             material_keys: vec![test_package_key(
                 0x100,
                 Some("MaterialKey"),
@@ -1485,6 +1621,7 @@ mod tests {
                 0x11,
                 &override_keys,
                 &override_constants,
+                &[],
                 &first,
             );
         }
@@ -1493,6 +1630,7 @@ mod tests {
             Some(&package),
             "b.mtrl",
             0x01,
+            &[],
             &[],
             &[],
             &second,
@@ -1614,6 +1752,66 @@ mod tests {
         );
         serde_json::to_vec(&result.material_constant_coverage)
             .expect("non-finite coverage remains JSON serializable");
+    }
+
+    #[test]
+    fn sampler_coverage_preserves_exact_skin_role_and_package_resource_name() {
+        let texture_usage = physis::shpk::ShaderPackage::crc("g_SamplerSkinDiffuse");
+        let package = ShaderPackageSemanticDebug {
+            path: "shader/sm5/shpk/character.shpk".to_string(),
+            name: "character.shpk".to_string(),
+            sampler_resources: vec![ShaderPackageSamplerResourceDebug {
+                name: "g_SamplerSkinDiffuse".to_string(),
+                crc: texture_usage,
+                crc_hex: hex_u32(texture_usage),
+                slot: 2,
+                size: 1,
+                logical_role: Some(MaterialSamplerLogicalRole::SkinDiffuse),
+                kind: Some(ModelTextureKind::BaseColor),
+            }],
+            material_keys: Vec::new(),
+            system_keys: Vec::new(),
+            scene_keys: Vec::new(),
+            material_constants: Vec::new(),
+        };
+        let sampler = ObservedMaterialSampler {
+            texture_usage,
+            texture_usage_name: Some("known-crc-alias".to_string()),
+            logical_role: Some(MaterialSamplerLogicalRole::SkinDiffuse),
+            texture_kind: Some(ModelTextureKind::BaseColor),
+            flags: 0x1234_5678,
+        };
+        let representative = test_representative("skin.mtrl", 0x11, 3);
+        let mut builder = MaterialSemanticCoverageBuilder::default();
+
+        builder.observe_material(
+            "character.shpk",
+            Some(&package),
+            "skin.mtrl",
+            0x11,
+            &[],
+            &[],
+            &[sampler.clone(), sampler],
+            &representative,
+        );
+
+        let result = builder.finish();
+        assert_eq!(result.sampler_coverage.len(), 1);
+        let coverage = &result.sampler_coverage[0];
+        assert_eq!(
+            coverage.texture_usage_name.as_deref(),
+            Some("g_SamplerSkinDiffuse")
+        );
+        assert_eq!(
+            coverage.logical_role,
+            Some(MaterialSamplerLogicalRole::SkinDiffuse)
+        );
+        assert_eq!(coverage.texture_kind, Some(ModelTextureKind::BaseColor));
+        assert_eq!(coverage.flags, 0x1234_5678);
+        assert_eq!(coverage.material_resource_count, 1);
+        assert_eq!(coverage.material_reference_count, 3);
+        assert_eq!(result.unknown_sampler_role_count, 0);
+        assert_eq!(result.unresolved_sampler_name_count, 0);
     }
 
     fn test_package_key(

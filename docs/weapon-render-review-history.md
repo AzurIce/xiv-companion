@@ -1,6 +1,6 @@
 # 武器渲染审查历史档案
 
-> 本文是截至 2026-07-13 本轮实现的完整调查与推进记录，不再作为当前待办的权威来源。
+> 本文是截至 2026-07-14 本轮实现的完整调查与推进记录，不再作为当前待办的权威来源。
 > 当前状态、剩余工作和每轮更新要求统一维护在
 > [`weapon-render-review-plan.md`](weapon-render-review-plan.md)。
 
@@ -14,7 +14,7 @@
 
 ## 核验依据
 
-本轮核验时间：2026-07-13。
+本轮核验时间：2026-07-14。
 
 当前结论基于以下代码和参考实现抽查：
 
@@ -28,6 +28,14 @@
 - `E:\repos\Meddle\Meddle\Meddle.Utils\Files\Structs\Material\ColorTableRow.cs`：Dawntrail/Legacy ColorTable 字段语义。
 - `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`、`node_mappings.py`、`bake\bake_utils.py`：texture node config、UV scroll、ColorTable extra ramps、shader package mapping、diffuse/normal/roughness/glossy/transmission/emission bake。
 - Penumbra.GameData `StmFile.cs`、`DyePack.cs`、`LegacyDyePack.cs` 与 ColorTable `ApplyDye`：Legacy/GUD STM 路径、1-based stain ID、column 编码和逐 flag ColorTable 覆盖规则。Meddle 的 `ColorDyeTableRow.cs` 注释直接引用该实现。
+
+## 2026-07-14 sampler/UV 审计
+
+- MeddleTools `shaders.blend` 的实际 vector links 证明主 Diffuse/Normal/Mask/Index 使用 UV0，character SkinDiffuse/SkinNormal/SkinMask 使用 UV2，Decal 使用 UV1；reflection 没有可采信节点。
+- MTRL sampler 解析新增 exact logical role，Skin* 即使与主纹理共享 BaseColor/Normal/Mask 的底层数据语义，也会进入独立材质槽、prepared binding 与 UV2 source，不再被 first-match 合并。renderer 暂不增加 texture binding，并以 `skinSamplerComposition` unsupported 标记缺少的组合公式。
+- SHPK semantic debug 现输出 sampler resource name/CRC/slot/size/logical role；WeaponCatalog audit 按 exact SHPK、resource、logical role、flags 统计唯一 MTRL、catalog 引用和代表样本。
+- installed 全量结果仍为 7365 个模型、8112 个材质引用、6399 个唯一 MTRL、4 个 SHPK、0 failures；新增 sampler coverage 共 53 行，0 unknown role、0 unresolved name。武器范围只出现 BaseColor/Normal/Mask/Index 四类主 sampler，没有任何 Skin* MTRL 使用记录。
+- focused tests 固定 Skin* 与主槽不会合并、prepared UV2/unsupported 传播、SHPK 精确资源名优先级和 sampler coverage 去重。45047/45048/45050/45053/45068 final 快照逐字节保持原基线。
 
 ## 当前状态摘要
 

@@ -325,10 +325,24 @@ pub trait AsyncGameResource {
 pub struct ShaderPackageSemanticDebug {
     pub path: String,
     pub name: String,
+    pub sampler_resources: Vec<ShaderPackageSamplerResourceDebug>,
     pub material_keys: Vec<ShaderPackageKeyDefaultDebug>,
     pub system_keys: Vec<ShaderPackageKeyDefaultDebug>,
     pub scene_keys: Vec<ShaderPackageKeyDefaultDebug>,
     pub material_constants: Vec<ShaderPackageMaterialConstantDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageSamplerResourceDebug {
+    pub name: String,
+    pub crc: u32,
+    pub crc_hex: String,
+    pub slot: u16,
+    pub size: u16,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
+    pub kind: Option<WeaponModelTextureKind>,
 }
 
 #[cfg(feature = "game-data")]
@@ -446,6 +460,7 @@ pub struct MaterialSamplerFlagSummaryDebug {
     pub texture_usage_name: Option<String>,
     pub flags: u32,
     pub flags_hex: String,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
     pub kind: Option<WeaponModelTextureKind>,
     pub kind_source: Option<String>,
 }
@@ -535,8 +550,56 @@ pub struct MaterialSamplerDebug {
     pub texture_usage_name: Option<String>,
     pub flags: u32,
     pub flags_hex: String,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
     pub kind: Option<WeaponModelTextureKind>,
     pub kind_source: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSamplerLogicalRole {
+    BaseColor,
+    SecondaryBaseColor,
+    Normal,
+    SecondaryNormal,
+    Mask,
+    SkinDiffuse,
+    SkinNormal,
+    SkinMask,
+    MaterialMap,
+    MultiMap,
+    Specular,
+    SecondarySpecular,
+    Emissive,
+    Index,
+    Environment,
+    WaterWave,
+    WaterWaveSecondary,
+    WaterWhitecap,
+}
+
+#[cfg(feature = "game-data")]
+impl MaterialSamplerLogicalRole {
+    fn texture_kind(self) -> WeaponModelTextureKind {
+        match self {
+            Self::BaseColor | Self::SkinDiffuse => WeaponModelTextureKind::BaseColor,
+            Self::SecondaryBaseColor => WeaponModelTextureKind::SecondaryBaseColor,
+            Self::Normal | Self::SkinNormal => WeaponModelTextureKind::Normal,
+            Self::SecondaryNormal => WeaponModelTextureKind::SecondaryNormal,
+            Self::Mask | Self::SkinMask => WeaponModelTextureKind::Mask,
+            Self::MaterialMap => WeaponModelTextureKind::MaterialMap,
+            Self::MultiMap => WeaponModelTextureKind::MultiMap,
+            Self::Specular => WeaponModelTextureKind::Specular,
+            Self::SecondarySpecular => WeaponModelTextureKind::SecondarySpecular,
+            Self::Emissive => WeaponModelTextureKind::Emissive,
+            Self::Index => WeaponModelTextureKind::Index,
+            Self::Environment => WeaponModelTextureKind::Environment,
+            Self::WaterWave => WeaponModelTextureKind::WaterWave,
+            Self::WaterWaveSecondary => WeaponModelTextureKind::WaterWaveSecondary,
+            Self::WaterWhitecap => WeaponModelTextureKind::WaterWhitecap,
+        }
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -1519,6 +1582,23 @@ fn shader_package_semantic_debug_from_bytes_for_platform(
     Ok(ShaderPackageSemanticDebug {
         path,
         name,
+        sampler_resources: shader_package
+            .sampler_parameters
+            .iter()
+            .map(|parameter| {
+                let crc = physis::shpk::ShaderPackage::crc(&parameter.name);
+                let logical_role = classify_sampler_logical_role_name(&parameter.name);
+                ShaderPackageSamplerResourceDebug {
+                    name: parameter.name.clone(),
+                    crc,
+                    crc_hex: hex_u32(crc),
+                    slot: parameter.slot,
+                    size: parameter.size,
+                    logical_role,
+                    kind: logical_role.map(MaterialSamplerLogicalRole::texture_kind),
+                }
+            })
+            .collect(),
         material_keys: shader_package_key_defaults_debug(&shader_package.material_keys),
         system_keys: shader_package_key_defaults_debug(&shader_package.system_keys),
         scene_keys: shader_package_key_defaults_debug(&shader_package.scene_keys),
@@ -1629,6 +1709,7 @@ fn material_debug_info_from_parsed_material(
             texture_usage_name: record.texture_usage_name,
             flags: record.flags,
             flags_hex: hex_u32(record.flags),
+            logical_role: record.logical_role,
             kind: record.kind,
             kind_source: record.kind_source.map(ToString::to_string),
         })
@@ -1751,6 +1832,7 @@ fn material_semantic_summary(
             texture_usage_name: sampler.texture_usage_name.clone(),
             flags: sampler.flags,
             flags_hex: sampler.flags_hex.clone(),
+            logical_role: sampler.logical_role,
             kind: sampler.kind,
             kind_source: sampler.kind_source.clone(),
         })
@@ -2642,6 +2724,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             normal_texture: texture_set.normal,
             secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
+            skin_diffuse_texture: texture_set.skin_diffuse,
+            skin_normal_texture: texture_set.skin_normal,
+            skin_mask_texture: texture_set.skin_mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
@@ -2676,7 +2761,8 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
     for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+        let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
+        let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_resource(
             resource,
@@ -2692,79 +2778,12 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
-        match textures[texture_index].kind {
-            WeaponModelTextureKind::BaseColor => {
-                set.base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::SecondaryBaseColor => {
-                set.secondary_base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::Normal => {
-                set.normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SecondaryNormal => {
-                set.secondary_normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Mask => {
-                set.mask.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialMap => {
-                set.material_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MultiMap => {
-                set.multi_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Specular => {
-                set.specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SecondarySpecular => {
-                set.secondary_specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Emissive => {
-                set.emissive.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Environment => {
-                set.environment.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialProperties => {
-                set.material_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileProperties => {
-                set.tile_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SheenProperties => {
-                set.sheen_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SphereProperties => {
-                set.sphere_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileMatrixProperties => {
-                set.tile_matrix.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Index => {
-                set.index.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWave => {
-                set.water_wave.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWaveSecondary => {
-                set.water_wave1.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWhitecap => {
-                set.water_whitecap.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileNormalArray
-            | WeaponModelTextureKind::TileOrbArray
-            | WeaponModelTextureKind::DetailDiffuseArray
-            | WeaponModelTextureKind::DetailNormalArray
-            | WeaponModelTextureKind::Other => {}
-        }
+        assign_weapon_texture_slot(
+            &mut set,
+            texture_index,
+            &textures[texture_index],
+            sampler_role.map(|role| role.logical_role),
+        );
     }
 
     if let Some(baked) = bake_weapon_color_table_textures(
@@ -3298,6 +3317,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             normal_texture: texture_set.normal,
             secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
+            skin_diffuse_texture: texture_set.skin_diffuse,
+            skin_normal_texture: texture_set.skin_normal,
+            skin_mask_texture: texture_set.skin_mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
@@ -3332,7 +3354,8 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
     for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+        let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
+        let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_async_resource(
             resource,
@@ -3350,79 +3373,12 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
-        match textures[texture_index].kind {
-            WeaponModelTextureKind::BaseColor => {
-                set.base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::SecondaryBaseColor => {
-                set.secondary_base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::Normal => {
-                set.normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SecondaryNormal => {
-                set.secondary_normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Mask => {
-                set.mask.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialMap => {
-                set.material_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MultiMap => {
-                set.multi_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Specular => {
-                set.specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SecondarySpecular => {
-                set.secondary_specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Emissive => {
-                set.emissive.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Environment => {
-                set.environment.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialProperties => {
-                set.material_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileProperties => {
-                set.tile_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SheenProperties => {
-                set.sheen_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SphereProperties => {
-                set.sphere_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileMatrixProperties => {
-                set.tile_matrix.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Index => {
-                set.index.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWave => {
-                set.water_wave.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWaveSecondary => {
-                set.water_wave1.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::WaterWhitecap => {
-                set.water_whitecap.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileNormalArray
-            | WeaponModelTextureKind::TileOrbArray
-            | WeaponModelTextureKind::DetailDiffuseArray
-            | WeaponModelTextureKind::DetailNormalArray
-            | WeaponModelTextureKind::Other => {}
-        }
+        assign_weapon_texture_slot(
+            &mut set,
+            texture_index,
+            &textures[texture_index],
+            sampler_role.map(|role| role.logical_role),
+        );
     }
 
     if let Some(baked) = bake_weapon_color_table_textures(
@@ -3531,6 +3487,9 @@ struct WeaponTextureSet {
     normal: Option<usize>,
     secondary_normal: Option<usize>,
     mask: Option<usize>,
+    skin_diffuse: Option<usize>,
+    skin_normal: Option<usize>,
+    skin_mask: Option<usize>,
     material_map: Option<usize>,
     multi_map: Option<usize>,
     specular: Option<usize>,
@@ -3547,6 +3506,157 @@ struct WeaponTextureSet {
     water_wave1: Option<usize>,
     water_whitecap: Option<usize>,
     has_alpha: bool,
+}
+
+#[cfg(feature = "game-data")]
+fn assign_weapon_texture_slot(
+    set: &mut WeaponTextureSet,
+    texture_index: usize,
+    texture: &WeaponModelTexture,
+    logical_role: Option<MaterialSamplerLogicalRole>,
+) {
+    use MaterialSamplerLogicalRole as Role;
+
+    match logical_role {
+        Some(Role::BaseColor) => {
+            set.base_color.get_or_insert(texture_index);
+            set.has_alpha |= texture_has_alpha(texture);
+        }
+        Some(Role::SecondaryBaseColor) => {
+            set.secondary_base_color.get_or_insert(texture_index);
+            set.has_alpha |= texture_has_alpha(texture);
+        }
+        Some(Role::Normal) => {
+            set.normal.get_or_insert(texture_index);
+        }
+        Some(Role::SecondaryNormal) => {
+            set.secondary_normal.get_or_insert(texture_index);
+        }
+        Some(Role::Mask) => {
+            set.mask.get_or_insert(texture_index);
+        }
+        Some(Role::SkinDiffuse) => {
+            set.skin_diffuse.get_or_insert(texture_index);
+        }
+        Some(Role::SkinNormal) => {
+            set.skin_normal.get_or_insert(texture_index);
+        }
+        Some(Role::SkinMask) => {
+            set.skin_mask.get_or_insert(texture_index);
+        }
+        Some(Role::MaterialMap) => {
+            set.material_map.get_or_insert(texture_index);
+        }
+        Some(Role::MultiMap) => {
+            set.multi_map.get_or_insert(texture_index);
+        }
+        Some(Role::Specular) => {
+            set.specular.get_or_insert(texture_index);
+        }
+        Some(Role::SecondarySpecular) => {
+            set.secondary_specular.get_or_insert(texture_index);
+        }
+        Some(Role::Emissive) => {
+            set.emissive.get_or_insert(texture_index);
+        }
+        Some(Role::Index) => {
+            set.index.get_or_insert(texture_index);
+        }
+        Some(Role::Environment) => {
+            set.environment.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWave) => {
+            set.water_wave.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWaveSecondary) => {
+            set.water_wave1.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWhitecap) => {
+            set.water_whitecap.get_or_insert(texture_index);
+        }
+        None => assign_weapon_texture_slot_from_kind(set, texture_index, texture),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn assign_weapon_texture_slot_from_kind(
+    set: &mut WeaponTextureSet,
+    texture_index: usize,
+    texture: &WeaponModelTexture,
+) {
+    match texture.kind {
+        WeaponModelTextureKind::BaseColor => {
+            set.base_color.get_or_insert(texture_index);
+            if texture_alpha_affects_material_transparency(texture) {
+                set.has_alpha = true;
+            }
+        }
+        WeaponModelTextureKind::SecondaryBaseColor => {
+            set.secondary_base_color.get_or_insert(texture_index);
+            if texture_alpha_affects_material_transparency(texture) {
+                set.has_alpha = true;
+            }
+        }
+        WeaponModelTextureKind::Normal => {
+            set.normal.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SecondaryNormal => {
+            set.secondary_normal.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Mask => {
+            set.mask.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MaterialMap => {
+            set.material_map.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MultiMap => {
+            set.multi_map.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Specular => {
+            set.specular.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SecondarySpecular => {
+            set.secondary_specular.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Emissive => {
+            set.emissive.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Environment => {
+            set.environment.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MaterialProperties => {
+            set.material_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileProperties => {
+            set.tile_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SheenProperties => {
+            set.sheen_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SphereProperties => {
+            set.sphere_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileMatrixProperties => {
+            set.tile_matrix.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Index => {
+            set.index.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWave => {
+            set.water_wave.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWaveSecondary => {
+            set.water_wave1.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWhitecap => {
+            set.water_whitecap.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileNormalArray
+        | WeaponModelTextureKind::TileOrbArray
+        | WeaponModelTextureKind::DetailDiffuseArray
+        | WeaponModelTextureKind::DetailNormalArray
+        | WeaponModelTextureKind::Other => {}
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -3620,6 +3730,7 @@ fn refresh_texture_set_alpha(set: &mut WeaponTextureSet, textures: &[WeaponModel
 #[derive(Clone, Copy, Debug)]
 struct MaterialSamplerRole {
     texture_index: usize,
+    logical_role: MaterialSamplerLogicalRole,
     kind: WeaponModelTextureKind,
 }
 
@@ -3630,6 +3741,7 @@ struct MaterialSamplerRecord {
     texture_usage: u32,
     texture_usage_name: Option<String>,
     flags: u32,
+    logical_role: Option<MaterialSamplerLogicalRole>,
     kind: Option<WeaponModelTextureKind>,
     kind_source: Option<&'static str>,
 }
@@ -3661,27 +3773,30 @@ impl ComposedMaterialSemantics {
 
     fn sampler_kind_resolution(&self, texture_usage: u32) -> MaterialSamplerKindResolution {
         if let Some(name) = self.resource_names.get(&texture_usage) {
-            let kind = classify_sampler_name(name);
+            let logical_role = classify_sampler_logical_role_name(name);
             return MaterialSamplerKindResolution {
                 texture_usage_name: Some(name.clone()),
-                kind,
-                kind_source: kind.map(|_| "shpkResourceName"),
+                logical_role,
+                kind: logical_role.map(MaterialSamplerLogicalRole::texture_kind),
+                kind_source: logical_role.map(|_| "shpkResourceName"),
             };
         }
 
-        if let Some((name, kind)) = known_sampler_names()
+        if let Some((name, logical_role)) = known_sampler_names()
             .iter()
             .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
         {
             return MaterialSamplerKindResolution {
                 texture_usage_name: Some((*name).to_string()),
-                kind: Some(*kind),
+                logical_role: Some(*logical_role),
+                kind: Some(logical_role.texture_kind()),
                 kind_source: Some("knownCrc"),
             };
         }
 
         MaterialSamplerKindResolution {
             texture_usage_name: None,
+            logical_role: None,
             kind: None,
             kind_source: None,
         }
@@ -3785,6 +3900,7 @@ impl ComposedMaterialSemantics {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MaterialSamplerKindResolution {
     texture_usage_name: Option<String>,
+    logical_role: Option<MaterialSamplerLogicalRole>,
     kind: Option<WeaponModelTextureKind>,
     kind_source: Option<&'static str>,
 }
@@ -4962,6 +5078,9 @@ fn fallback_weapon_material(
         normal_texture: None,
         secondary_normal_texture: None,
         mask_texture: None,
+        skin_diffuse_texture: None,
+        skin_normal_texture: None,
+        skin_mask_texture: None,
         material_map_texture: None,
         multi_map_texture: None,
         specular_texture: None,
@@ -5030,11 +5149,13 @@ fn parse_material_sampler_roles(
 ) -> Vec<MaterialSamplerRole> {
     parse_material_sampler_records(bytes, semantics)
         .into_iter()
-        .filter_map(|record| {
-            record.kind.map(|kind| MaterialSamplerRole {
+        .filter_map(|record| match (record.logical_role, record.kind) {
+            (Some(logical_role), Some(kind)) => Some(MaterialSamplerRole {
                 texture_index: record.texture_index,
+                logical_role,
                 kind,
-            })
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -5067,6 +5188,7 @@ fn parse_material_sampler_records(
                 texture_usage,
                 texture_usage_name: resolution.texture_usage_name,
                 flags,
+                logical_role: resolution.logical_role,
                 kind: resolution.kind,
                 kind_source: resolution.kind_source,
             });
@@ -5459,14 +5581,14 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
 }
 
 #[cfg(feature = "game-data")]
-fn sampler_kind_for_texture(
+fn sampler_role_for_texture(
     sampler_roles: &[MaterialSamplerRole],
     texture_index: usize,
-) -> Option<WeaponModelTextureKind> {
+) -> Option<MaterialSamplerRole> {
     sampler_roles
         .iter()
         .find(|role| role.texture_index == texture_index)
-        .map(|role| role.kind)
+        .copied()
 }
 
 #[cfg(feature = "game-data")]
@@ -5475,84 +5597,77 @@ fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> 
     known_sampler_names()
         .iter()
         .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
-        .map(|(_, kind)| *kind)
+        .map(|(_, logical_role)| logical_role.texture_kind())
 }
 
 #[cfg(feature = "game-data")]
+#[cfg(test)]
 fn classify_sampler_name(name: &str) -> Option<WeaponModelTextureKind> {
+    classify_sampler_logical_role_name(name).map(MaterialSamplerLogicalRole::texture_kind)
+}
+
+#[cfg(feature = "game-data")]
+fn classify_sampler_logical_role_name(name: &str) -> Option<MaterialSamplerLogicalRole> {
     known_sampler_names()
         .iter()
         .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-        .map(|(_, kind)| *kind)
+        .map(|(_, logical_role)| *logical_role)
 }
 
 #[cfg(feature = "game-data")]
-fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
+fn known_sampler_names() -> &'static [(&'static str, MaterialSamplerLogicalRole)] {
+    use MaterialSamplerLogicalRole as Role;
+
     &[
-        ("g_SamplerNormal", WeaponModelTextureKind::Normal),
-        ("g_NormalSampler", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap", WeaponModelTextureKind::Normal),
-        ("g_NormalMapSampler", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap0", WeaponModelTextureKind::Normal),
-        (
-            "g_SamplerNormalMap1",
-            WeaponModelTextureKind::SecondaryNormal,
-        ),
-        ("g_SamplerSkinNormal", WeaponModelTextureKind::Normal),
-        ("g_SamplerEmissive", WeaponModelTextureKind::Emissive),
-        ("g_EmissiveSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerEmission", WeaponModelTextureKind::Emissive),
-        ("g_EmissionSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerLight", WeaponModelTextureKind::Emissive),
-        ("g_LightSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerIndex", WeaponModelTextureKind::Index),
-        ("g_IndexSampler", WeaponModelTextureKind::Index),
-        ("g_SamplerMask", WeaponModelTextureKind::Mask),
-        ("g_MaskSampler", WeaponModelTextureKind::Mask),
-        ("g_SamplerSkinMask", WeaponModelTextureKind::Mask),
-        ("g_SamplerMaterial", WeaponModelTextureKind::MaterialMap),
-        ("g_MaterialSampler", WeaponModelTextureKind::MaterialMap),
-        ("g_SamplerMulti", WeaponModelTextureKind::MultiMap),
-        ("g_MultiSampler", WeaponModelTextureKind::MultiMap),
-        ("g_SamplerSpecular", WeaponModelTextureKind::Specular),
-        ("g_SpecularSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerSpecularMap", WeaponModelTextureKind::Specular),
-        ("g_SpecularMapSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerSpecularMap0", WeaponModelTextureKind::Specular),
-        (
-            "g_SamplerSpecularMap1",
-            WeaponModelTextureKind::SecondarySpecular,
-        ),
-        ("g_SamplerReflect", WeaponModelTextureKind::Specular),
-        ("g_ReflectSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerDiffuse", WeaponModelTextureKind::BaseColor),
-        ("g_DiffuseSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColor", WeaponModelTextureKind::BaseColor),
-        ("g_ColorSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap", WeaponModelTextureKind::BaseColor),
-        ("g_ColorMapSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap0", WeaponModelTextureKind::BaseColor),
-        (
-            "g_SamplerColorMap1",
-            WeaponModelTextureKind::SecondaryBaseColor,
-        ),
-        ("g_SamplerSkinDiffuse", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerAlbedo", WeaponModelTextureKind::BaseColor),
-        ("g_AlbedoSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerBaseColor", WeaponModelTextureKind::BaseColor),
-        ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
-        ("g_Sampler0", WeaponModelTextureKind::BaseColor),
-        ("g_Sampler1", WeaponModelTextureKind::SecondaryBaseColor),
-        ("g_SamplerEnvMap", WeaponModelTextureKind::Environment),
-        ("g_SamplerWaveMap", WeaponModelTextureKind::WaterWave),
-        (
-            "g_SamplerWaveMap1",
-            WeaponModelTextureKind::WaterWaveSecondary,
-        ),
-        (
-            "g_SamplerWhitecapMap",
-            WeaponModelTextureKind::WaterWhitecap,
-        ),
+        ("g_SamplerNormal", Role::Normal),
+        ("g_NormalSampler", Role::Normal),
+        ("g_SamplerNormalMap", Role::Normal),
+        ("g_NormalMapSampler", Role::Normal),
+        ("g_SamplerNormalMap0", Role::Normal),
+        ("g_SamplerNormalMap1", Role::SecondaryNormal),
+        ("g_SamplerSkinNormal", Role::SkinNormal),
+        ("g_SamplerEmissive", Role::Emissive),
+        ("g_EmissiveSampler", Role::Emissive),
+        ("g_SamplerEmission", Role::Emissive),
+        ("g_EmissionSampler", Role::Emissive),
+        ("g_SamplerLight", Role::Emissive),
+        ("g_LightSampler", Role::Emissive),
+        ("g_SamplerIndex", Role::Index),
+        ("g_IndexSampler", Role::Index),
+        ("g_SamplerMask", Role::Mask),
+        ("g_MaskSampler", Role::Mask),
+        ("g_SamplerSkinMask", Role::SkinMask),
+        ("g_SamplerMaterial", Role::MaterialMap),
+        ("g_MaterialSampler", Role::MaterialMap),
+        ("g_SamplerMulti", Role::MultiMap),
+        ("g_MultiSampler", Role::MultiMap),
+        ("g_SamplerSpecular", Role::Specular),
+        ("g_SpecularSampler", Role::Specular),
+        ("g_SamplerSpecularMap", Role::Specular),
+        ("g_SpecularMapSampler", Role::Specular),
+        ("g_SamplerSpecularMap0", Role::Specular),
+        ("g_SamplerSpecularMap1", Role::SecondarySpecular),
+        ("g_SamplerReflect", Role::Specular),
+        ("g_ReflectSampler", Role::Specular),
+        ("g_SamplerDiffuse", Role::BaseColor),
+        ("g_DiffuseSampler", Role::BaseColor),
+        ("g_SamplerColor", Role::BaseColor),
+        ("g_ColorSampler", Role::BaseColor),
+        ("g_SamplerColorMap", Role::BaseColor),
+        ("g_ColorMapSampler", Role::BaseColor),
+        ("g_SamplerColorMap0", Role::BaseColor),
+        ("g_SamplerColorMap1", Role::SecondaryBaseColor),
+        ("g_SamplerSkinDiffuse", Role::SkinDiffuse),
+        ("g_SamplerAlbedo", Role::BaseColor),
+        ("g_AlbedoSampler", Role::BaseColor),
+        ("g_SamplerBaseColor", Role::BaseColor),
+        ("g_BaseColorSampler", Role::BaseColor),
+        ("g_Sampler0", Role::BaseColor),
+        ("g_Sampler1", Role::SecondaryBaseColor),
+        ("g_SamplerEnvMap", Role::Environment),
+        ("g_SamplerWaveMap", Role::WaterWave),
+        ("g_SamplerWaveMap1", Role::WaterWaveSecondary),
+        ("g_SamplerWhitecapMap", Role::WaterWhitecap),
     ]
 }
 
@@ -6137,6 +6252,7 @@ mod weapon_material_tests {
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 1);
+        assert_eq!(roles[0].logical_role, MaterialSamplerLogicalRole::Normal);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
     }
 
@@ -6217,11 +6333,16 @@ mod weapon_material_tests {
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 0);
+        assert_eq!(roles[0].logical_role, MaterialSamplerLogicalRole::Index);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Index);
 
         let records = parse_material_sampler_records(&bytes, &semantics);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].texture_usage_name.as_deref(), Some(sampler_name));
+        assert_eq!(
+            records[0].logical_role,
+            Some(MaterialSamplerLogicalRole::Index)
+        );
         assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Index));
         assert_eq!(records[0].kind_source, Some("shpkResourceName"));
     }
@@ -6252,6 +6373,10 @@ mod weapon_material_tests {
         );
         assert_eq!(records[0].flags, 0x1234_5678);
         assert_eq!(records[0].texture_index, 0);
+        assert_eq!(
+            records[0].logical_role,
+            Some(MaterialSamplerLogicalRole::Normal)
+        );
         assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Normal));
         assert_eq!(records[0].kind_source, Some("knownCrc"));
     }
@@ -6277,6 +6402,7 @@ mod weapon_material_tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].texture_usage, texture_usage);
         assert_eq!(records[0].texture_usage_name, None);
+        assert_eq!(records[0].logical_role, None);
         assert_eq!(records[0].kind, None);
         assert_eq!(records[0].kind_source, None);
     }
@@ -6346,6 +6472,7 @@ mod weapon_material_tests {
                 texture_usage_name: record.texture_usage_name,
                 flags: record.flags,
                 flags_hex: hex_u32(record.flags),
+                logical_role: record.logical_role,
                 kind: record.kind,
                 kind_source: record.kind_source.map(ToString::to_string),
             })
@@ -8326,12 +8453,24 @@ mod weapon_material_tests {
             Some(WeaponModelTextureKind::BaseColor)
         );
         assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinDiffuse"),
+            Some(MaterialSamplerLogicalRole::SkinDiffuse)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerSkinNormal"),
             Some(WeaponModelTextureKind::Normal)
         );
         assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinNormal"),
+            Some(MaterialSamplerLogicalRole::SkinNormal)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerSkinMask"),
             Some(WeaponModelTextureKind::Mask)
+        );
+        assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinMask"),
+            Some(MaterialSamplerLogicalRole::SkinMask)
         );
         assert_eq!(
             classify_sampler_name("g_SamplerEnvMap"),
@@ -8349,6 +8488,40 @@ mod weapon_material_tests {
             classify_sampler_usage(physis::shpk::ShaderPackage::crc("g_SamplerWhitecapMap")),
             Some(WeaponModelTextureKind::WaterWhitecap)
         );
+    }
+
+    #[test]
+    fn skin_sampler_slots_do_not_collapse_into_primary_texture_slots() {
+        let textures = vec![
+            test_texture("skin-diffuse.tex", WeaponModelTextureKind::BaseColor),
+            test_texture("primary-diffuse.tex", WeaponModelTextureKind::BaseColor),
+            test_texture("skin-normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("primary-normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("skin-mask.tex", WeaponModelTextureKind::Mask),
+            test_texture("primary-mask.tex", WeaponModelTextureKind::Mask),
+        ];
+        let mut set = WeaponTextureSet::default();
+
+        for (index, role) in [
+            MaterialSamplerLogicalRole::SkinDiffuse,
+            MaterialSamplerLogicalRole::BaseColor,
+            MaterialSamplerLogicalRole::SkinNormal,
+            MaterialSamplerLogicalRole::Normal,
+            MaterialSamplerLogicalRole::SkinMask,
+            MaterialSamplerLogicalRole::Mask,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assign_weapon_texture_slot(&mut set, index, &textures[index], Some(role));
+        }
+
+        assert_eq!(set.skin_diffuse, Some(0));
+        assert_eq!(set.base_color, Some(1));
+        assert_eq!(set.skin_normal, Some(2));
+        assert_eq!(set.normal, Some(3));
+        assert_eq!(set.skin_mask, Some(4));
+        assert_eq!(set.mask, Some(5));
     }
 
     #[test]

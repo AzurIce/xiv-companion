@@ -41,7 +41,7 @@
 
 - raw LOD0 与 extra LOD mesh ranges 已覆盖 normal、water、shadow、terrainShadow、verticalFog、lightShaft、glass、materialChange、crestChange。
 - 顶点数据保留 UV0-UV3、color0/color1、primary/secondary normal 与 bitangent、flow0/flow1、blend weights/indices。
-- sampler role 优先使用 SHPK resource name，再使用 known CRC 和路径后缀；shader package default 与 MTRL override 可审计。
+- sampler role 优先使用 SHPK resource name，再使用 known CRC 和路径后缀；exact logical role 会独立保留 SkinDiffuse/SkinNormal/SkinMask，不再折叠为主 Base/Normal/Mask。
 - Legacy/Dawntrail ColorTable、ColorDyeTable、Legacy/GUD STM 和 stain0/stain1 已贯通同步/异步 loader。
 - `GetValues`、flow、specular type、sub color、skin value、decal color、character scroll、lightshaft type 等 material key，以及 tile mip bias/vertex-movement constants 已结构化；需要审计未知值的 key 会保留 raw。
 - equipment-style 拳套、PAP hash collision 和 stale material reference 已有确定的 candidate/fallback 规则与来源诊断。
@@ -52,7 +52,7 @@
 - draw role、render pass、culling、alpha source、texture binding、sampler policy、UV source、feature flags、resource availability 和 runtime fallback 已结构化。
 - Opaque、Cutout、Transparent、Glass、AdditiveLightShaft、dither depth 和 outline 路径已有明确分派。
 - shadow、terrainShadow、verticalFog 默认不进入 surface pass；crest 使用透明 fallback，materialChange 使用基础材质 fallback。
-- unsupported 输入已区分 runtime ColorTable、Option/Decal/Skin/Sub color、decal texture、tile/detail arrays、tile mip bias、vertex movement、AlphaMulti、MultiMap、reflection、environment、lightshaft clip 等原因。
+- unsupported 输入已区分 runtime ColorTable、Option/Decal/Skin/Sub color、decal texture、Skin sampler composition、tile/detail arrays、tile mip bias、vertex movement、AlphaMulti、MultiMap、reflection、environment、lightshaft clip 等原因。
 
 ### Renderer
 
@@ -79,7 +79,8 @@
 - `CategorySpecularType=Mask` 仅有 4 个 legacy 资源/5 次 catalog 引用。installed SHPK/FXC 证明 Compatibility Mask 使用 `mask.r²` 调制 specular，Default 不使用 mask 调制；WGSL 已按 exact package/value mode 实现，30520 Mask/Default 原生快照 RGB difference 为 24048。
 - 未知 constant `0xAD94E254` 在 character 只有 3 个非默认资源/4 次引用，其中 45050 透明毛 `_b.mtrl` 为 1；未知 key `0xF52CCF05` 广泛覆盖 character family。两者继续保留 raw/value histogram，不进入 WGSL。当前全量报告无 malformed、non-finite 或 unresolved constant value。
 - MeddleTools `shaders.blend` 的 texture-vector links 已核验：character/skin/glass/legacy/scroll/occlusion/tattoo 的主 Diffuse/Normal/Mask/Index 都使用 active `UVMap`，即 TEXCOORD0；bguvscroll Map0/Map1 分别使用 UV0Scroll/UV1Scroll，当前 prepared 规则正确。character 模板的 `g_SamplerSkinDiffuse/Normal/Mask` 明确使用 `UVMap.002`（TEXCOORD2），Decal 使用 `UVMap.001`（TEXCOORD1）；reflection 没有 MeddleTools material/template，不能推断。
-- installed 49100 代表 equipment-style 武器中，`skin.shpk` body 材质实际只有主 Diffuse/Normal/Mask，character glove 材质只有 Normal/Mask/Index，均为 UV0。当前尚无武器实样触发 Skin* sampler；因此下一轮先做全量 sampler-role coverage，再把潜在 Skin* 输入结构化为 UV2 + unsupported，不为未出现的输入抢占 renderer binding。runtime Decal 的 UV1 与 texture 继续留在显式 runtime input 阶段。
+- sampler-role coverage 已完成全量审计：53 个 `exact SHPK + resource CRC/name + logical role + flags` coverage 行，0 unknown role、0 unresolved name、0 failures。6399 个唯一 MTRL 只出现主 BaseColor/Normal/Mask/Index，全部是已证实的 UV0 角色；没有任何武器 MTRL 使用 `g_SamplerSkinDiffuse/Normal/Mask`。loader 仍将潜在 Skin* 独立保存到三个材质/prepared binding，UV source 固定 UV2，并以 `skinSamplerComposition` unsupported 表示尚无混合公式/GPU binding；runtime Decal 继续留在显式 runtime input 阶段。
+- 45047/45048/45050/45053/45068 已在本轮重跑 final、tile/detail 与 alpha debug；五张 final PNG 与既有基线逐字节一致。
 
 ## 当前工作队列
 
@@ -87,21 +88,14 @@
 
 ### P0：减少静默近似
 
-1. **补齐 shader-family-specific texture/UV 决策**
-   - 扩展 WeaponCatalog audit，按 exact SHPK、sampler resource name、logical role、flags、唯一 MTRL 与 catalog 引用统计实际覆盖；先证明哪些非 UV0 角色在武器范围真实存在。
-   - 保留 sampler semantic role，不再把 `g_SamplerSkinDiffuse/Normal/Mask` 静默折叠为主 Base/Normal/Mask；对应 prepared UV source 固定为 UV2，并在缺少已证明的混合公式/GPU binding 时报告独立 unsupported。
-   - 主 character/skin/glass/legacy/scroll/occlusion/tattoo texture role 保持 UV0；bguvscroll Map0/Map1 保持 UV0Scroll/UV1Scroll。Decal 固定记录 UV1，但等显式 runtime texture 接口一起消费。
-   - reflection 没有节点或实样证据，继续保持 environment/reflection unsupported，不猜 sphere/environment 坐标。
-   - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入；增加 focused tests，防止 exact sampler identity 再次被 texture kind 合并丢失。
-
-2. **拆分主 WGSL 的 family 逻辑**
+1. **拆分主 WGSL 的 family 逻辑**
    - normal、alpha、emissive、tile、detail 已拆为明确函数；继续拆分 `fs_main` 中的纹理采样编排、base/material/specular、glass lighting 和最终输出组合。
    - 保持现有输出和 snapshot 稳定，避免继续扩大 `fs_main` 的交叉分支。
    - family-specific 行为应能单独测试和审计。
 
 ### P1：有证据时补视觉语义
 
-3. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
+2. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
    - character Compatibility diffuse 组合已修正：MeddleTools character 节点明确以当前 `GetValues=GetValuesCompatibility` 或旧式 `GetValuesTextureType=Compatibility` 驱动原 diffuse 与 baked ColorTable 相乘的唯一 Factor；同步/异步 loader 只在该 gate 命中时使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
    - `GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity；准确的材质/ColorTable 分区公式仍待节点或游戏 shader 证据。
@@ -173,6 +167,7 @@
 - character NormalBlue 与 tattoo NormalAlpha 透明度不再误乘 vertex A；normal channel 继续控制边缘透明。
 - character 当前/旧式 Compatibility key 使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse；同步/异步 loader 共用同一策略。
 - exact-SHPK material semantic audit：scoped key/default/override、constant/default/override、shader flags、资源/catalog 引用双计数、unknown/malformed/non-finite/unresolved 与代表样本。
+- exact sampler-role audit 与 loader 保真：SHPK resource name/CRC、logical role、flags、资源/catalog 引用双计数可审计；Skin* 独立槽固定 UV2 并报告 composition unsupported，武器实样确认仅存在 UV0 主角色。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

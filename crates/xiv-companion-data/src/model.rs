@@ -604,6 +604,12 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub mask_texture: Option<usize>,
     #[serde(default)]
+    pub skin_diffuse_texture: Option<usize>,
+    #[serde(default)]
+    pub skin_normal_texture: Option<usize>,
+    #[serde(default)]
+    pub skin_mask_texture: Option<usize>,
+    #[serde(default)]
     pub material_map_texture: Option<usize>,
     #[serde(default)]
     pub multi_map_texture: Option<usize>,
@@ -1014,7 +1020,7 @@ pub struct PreparedTextureScrollSet {
     pub other: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureUvSources {
     pub base_color: PreparedUvSource,
@@ -1022,6 +1028,12 @@ pub struct PreparedTextureUvSources {
     pub normal: PreparedUvSource,
     pub secondary_normal: PreparedUvSource,
     pub mask: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_diffuse: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_normal: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_mask: PreparedUvSource,
     pub material_map: PreparedUvSource,
     pub multi_map: PreparedUvSource,
     pub specular: PreparedUvSource,
@@ -1036,6 +1048,38 @@ pub struct PreparedTextureUvSources {
     pub tile_matrix: PreparedUvSource,
     pub index: PreparedUvSource,
     pub other: PreparedUvSource,
+}
+
+impl Default for PreparedTextureUvSources {
+    fn default() -> Self {
+        Self {
+            base_color: PreparedUvSource::Uv0,
+            secondary_base_color: PreparedUvSource::Uv0,
+            normal: PreparedUvSource::Uv0,
+            secondary_normal: PreparedUvSource::Uv0,
+            mask: PreparedUvSource::Uv0,
+            skin_diffuse: PreparedUvSource::Uv2,
+            skin_normal: PreparedUvSource::Uv2,
+            skin_mask: PreparedUvSource::Uv2,
+            material_map: PreparedUvSource::Uv0,
+            multi_map: PreparedUvSource::Uv0,
+            specular: PreparedUvSource::Uv0,
+            secondary_specular: PreparedUvSource::Uv0,
+            emissive: PreparedUvSource::Uv0,
+            environment: PreparedUvSource::Uv0,
+            material_properties: PreparedUvSource::Uv0,
+            tile_properties: PreparedUvSource::Uv0,
+            sheen_properties: PreparedUvSource::Uv0,
+            sphere_properties: PreparedUvSource::Uv0,
+            tile_matrix: PreparedUvSource::Uv0,
+            index: PreparedUvSource::Uv0,
+            other: PreparedUvSource::Uv0,
+        }
+    }
+}
+
+fn default_skin_texture_uv_source() -> PreparedUvSource {
+    PreparedUvSource::Uv2
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1078,6 +1122,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     #[serde(default)]
     pub runtime_skin_color: bool,
     pub runtime_skin_material: bool,
+    #[serde(default)]
+    pub skin_sampler_composition: bool,
     pub runtime_sub_color: bool,
     pub tile_array: bool,
     pub detail_array: bool,
@@ -1161,6 +1207,12 @@ pub struct PreparedTextureBindings {
     pub normal: Option<usize>,
     pub secondary_normal: Option<usize>,
     pub mask: Option<usize>,
+    #[serde(default)]
+    pub skin_diffuse: Option<usize>,
+    #[serde(default)]
+    pub skin_normal: Option<usize>,
+    #[serde(default)]
+    pub skin_mask: Option<usize>,
     pub material_map: Option<usize>,
     pub multi_map: Option<usize>,
     pub specular: Option<usize>,
@@ -1194,6 +1246,12 @@ pub struct PreparedTextureSamplingSet {
     pub normal: PreparedTextureSampling,
     pub secondary_normal: PreparedTextureSampling,
     pub mask: PreparedTextureSampling,
+    #[serde(default = "default_skin_diffuse_texture_sampling")]
+    pub skin_diffuse: PreparedTextureSampling,
+    #[serde(default = "default_skin_normal_texture_sampling")]
+    pub skin_normal: PreparedTextureSampling,
+    #[serde(default = "default_skin_mask_texture_sampling")]
+    pub skin_mask: PreparedTextureSampling,
     pub material_map: PreparedTextureSampling,
     pub multi_map: PreparedTextureSampling,
     pub specular: PreparedTextureSampling,
@@ -1234,6 +1292,9 @@ impl Default for PreparedTextureSamplingSet {
             normal: prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
             secondary_normal: prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryNormal),
             mask: prepared_texture_sampling_for_kind(ModelTextureKind::Mask),
+            skin_diffuse: default_skin_diffuse_texture_sampling(),
+            skin_normal: default_skin_normal_texture_sampling(),
+            skin_mask: default_skin_mask_texture_sampling(),
             material_map: prepared_texture_sampling_for_kind(ModelTextureKind::MaterialMap),
             multi_map: prepared_texture_sampling_for_kind(ModelTextureKind::MultiMap),
             specular: prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
@@ -1268,6 +1329,18 @@ impl Default for PreparedTextureSamplingSet {
             other: prepared_texture_sampling_for_kind(ModelTextureKind::Other),
         }
     }
+}
+
+fn default_skin_diffuse_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor)
+}
+
+fn default_skin_normal_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Normal)
+}
+
+fn default_skin_mask_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Mask)
 }
 
 fn default_texture_array_sampling() -> PreparedTextureSampling {
@@ -1615,6 +1688,9 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
         normal: material.normal_texture,
         secondary_normal: material.secondary_normal_texture,
         mask: material.mask_texture,
+        skin_diffuse: material.skin_diffuse_texture,
+        skin_normal: material.skin_normal_texture,
+        skin_mask: material.skin_mask_texture,
         material_map: material.material_map_texture,
         multi_map: material.multi_map_texture,
         specular: material.specular_texture,
@@ -1811,6 +1887,9 @@ pub fn prepared_material_unsupported_inputs(
             }),
         runtime_skin_color: matches!(shader_family, MaterialShaderFamily::Skin),
         runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
+        skin_sampler_composition: texture_bindings.skin_diffuse.is_some()
+            || texture_bindings.skin_normal.is_some()
+            || texture_bindings.skin_mask.is_some(),
         runtime_sub_color: matches!(shader_family, MaterialShaderFamily::CharacterOcclusion)
             || material.is_some_and(|material| {
                 matches!(
@@ -3119,6 +3198,9 @@ mod color_table_bake_tests {
         material.base_color_texture = Some(1);
         material.normal_texture = Some(2);
         material.mask_texture = Some(3);
+        material.skin_diffuse_texture = Some(22);
+        material.skin_normal_texture = Some(23);
+        material.skin_mask_texture = Some(24);
         material.material_map_texture = Some(4);
         material.multi_map_texture = Some(5);
         material.specular_texture = Some(6);
@@ -3147,6 +3229,9 @@ mod color_table_bake_tests {
                 normal: Some(2),
                 secondary_normal: None,
                 mask: Some(3),
+                skin_diffuse: Some(22),
+                skin_normal: Some(23),
+                skin_mask: Some(24),
                 material_map: Some(4),
                 multi_map: Some(5),
                 specular: Some(6),
@@ -3172,6 +3257,24 @@ mod color_table_bake_tests {
             prepared_texture_bindings(None),
             PreparedTextureBindings::default()
         );
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            prepared.uv_sources.textures.base_color,
+            PreparedUvSource::Uv0
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_diffuse,
+            PreparedUvSource::Uv2
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_normal,
+            PreparedUvSource::Uv2
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_mask,
+            PreparedUvSource::Uv2
+        );
+        assert!(prepared.unsupported_inputs.skin_sampler_composition);
     }
 
     #[test]
@@ -3310,6 +3413,7 @@ mod color_table_bake_tests {
                 runtime_decal_texture: false,
                 runtime_skin_color: false,
                 runtime_skin_material: false,
+                skin_sampler_composition: false,
                 runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
@@ -3341,6 +3445,7 @@ mod color_table_bake_tests {
                 runtime_decal_texture: false,
                 runtime_skin_color: false,
                 runtime_skin_material: false,
+                skin_sampler_composition: false,
                 runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
@@ -3696,6 +3801,9 @@ mod color_table_bake_tests {
                     normal: PreparedUvSource::Uv0,
                     secondary_normal: PreparedUvSource::Uv1,
                     mask: PreparedUvSource::Uv0,
+                    skin_diffuse: PreparedUvSource::Uv2,
+                    skin_normal: PreparedUvSource::Uv2,
+                    skin_mask: PreparedUvSource::Uv2,
                     material_map: PreparedUvSource::Uv0,
                     multi_map: PreparedUvSource::Uv0,
                     specular: PreparedUvSource::Uv0,
@@ -4363,6 +4471,9 @@ mod color_table_bake_tests {
             normal_texture: None,
             secondary_normal_texture: None,
             mask_texture: None,
+            skin_diffuse_texture: None,
+            skin_normal_texture: None,
+            skin_mask_texture: None,
             material_map_texture: None,
             multi_map_texture: None,
             specular_texture: None,
