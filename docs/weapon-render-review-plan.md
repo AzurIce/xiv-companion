@@ -92,10 +92,9 @@
 1. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
    - character Compatibility diffuse 组合已修正：MeddleTools character 节点明确以当前 `GetValues=GetValuesCompatibility` 或旧式 `GetValuesTextureType=Compatibility` 驱动原 diffuse 与 baked ColorTable 相乘的唯一 Factor；同步/异步 loader 只在该 gate 命中时使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
-   - `GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity；准确的材质/ColorTable 分区公式仍待节点或游戏 shader 证据。
-   - AlphaMulti/2/3 当前保留 mode/raw 并报告 `alphaMultiValues`；MeddleTools 对应输入未连接，暂不实现公式。
-   - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
-   - detail A/B 层混合已完成，但 detail 对 base 的最终 influence 在 MeddleTools 中仍标为 borked。
+   - installed WeaponCatalog 的 `GetValues` 覆盖只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。53 个 sampler coverage 行只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`；武器 family 也没有 bg/bguvscroll，因此当前范围不存在可校准 detail influence 实样。
+   - installed character SHPK 成对 node/FXC 审计进一步确认代表 surface permutation：MultiMaterial PS 不绑定 `g_SamplerDiffuse`，Compatibility PS 在相同 ColorTable/normal/mask 管线上新增 Diffuse 采样；当前 Replace/Multiply loader 策略与字节码资源路径一致。`GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity。
+   - 本轮只做证据闭环：不改变已正确的 MultiMaterial/Compatibility 渲染；把 AlphaMulti、MultiMap 和 detail final influence 移入明确延后区，继续保留 mode/raw、binding 和独立 unsupported。只有出现真实 sampler/family 覆盖、已连接节点或可配对游戏 shader 公式时再恢复为活动项。
 
 2. **特殊 character families**
    - reflection：当前为 generic character approximation，等待可靠 reflection/environment/sphere 输入证据。
