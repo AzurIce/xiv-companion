@@ -36,3 +36,4 @@ pub use resources::*;
 pub use solver::*;
 pub use weapon_models::*;
 pub use xiv_companion_data::collection::*;
+pub use xiv_companion_data::collection_classification::*;

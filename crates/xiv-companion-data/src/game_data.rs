@@ -13,9 +13,10 @@ use physis::{
 
 use crate::{
     COLLECTION_CATALOG_SCHEMA_VERSION, CollectionCatalogCounts, CollectionCatalogPackage,
-    CollectionItem, CollectionKind, CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem,
-    CraftRecipe, ItemSource, MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo,
-    SpecialShopCost, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
+    CollectionClassificationAudit, CollectionClassificationInput, CollectionItem, CollectionKind,
+    CraftDataCounts, CraftDataPackage, CraftIngredient, CraftItem, CraftRecipe, ItemSource,
+    MACRO_ACTION_DEFINITIONS, MacroActionNameSource, RecipeLevelInfo, SpecialShopCost,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, classify_collection_item,
     is_weapon_equip_slot_category,
 };
 
@@ -128,7 +129,24 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
     let class_job_categories = game.load_named_rows("ClassJobCategory")?;
     let item_action_types = game.load_item_action_types()?;
     let explicit_equipment_sets = game.load_explicit_equipment_sets()?;
-    let mut items = game.load_collection_items(&class_job_categories, &item_action_types)?;
+    let mut classification_audit = CollectionClassificationAudit::default();
+    let mut items = game.load_collection_items(
+        &class_job_categories,
+        &item_action_types,
+        &mut classification_audit,
+    )?;
+    if !classification_audit.is_conserved() || classification_audit.candidate_count != items.len() {
+        bail!(
+            "collection classification is not conserved: candidates={}, classified={}, items={}",
+            classification_audit.candidate_count,
+            classification_audit.counts_by_kind.values().sum::<usize>(),
+            items.len()
+        );
+    }
+    eprintln!(
+        "collection classification audit: {} candidates; OtherUnlock by ItemAction.Type: {:?}",
+        classification_audit.candidate_count, classification_audit.other_unlocks_by_action_type
+    );
     assign_equipment_sets(&mut items, &explicit_equipment_sets);
     sort_collection_items(&mut items);
     let mut counts = CollectionCatalogCounts::default();
@@ -141,6 +159,18 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
             CollectionKind::Minion => counts.minions += 1,
             CollectionKind::FashionAccessory => counts.fashion_accessories += 1,
             CollectionKind::Emote => counts.emotes += 1,
+            CollectionKind::AestheticianStyle => counts.aesthetician_styles += 1,
+            CollectionKind::RidingMap => counts.riding_maps += 1,
+            CollectionKind::BlueMagicSpell => counts.blue_magic_spells += 1,
+            CollectionKind::MahjongSupport => counts.mahjong_supports += 1,
+            CollectionKind::PortraitDesign => counts.portrait_designs += 1,
+            CollectionKind::LandmarkPermit => counts.landmark_permits += 1,
+            CollectionKind::AchievementUnlock => counts.achievement_unlocks += 1,
+            CollectionKind::TripleTriadCard => counts.triple_triad_cards += 1,
+            CollectionKind::ChocoboBarding => counts.chocobo_bardings += 1,
+            CollectionKind::Facewear => counts.facewear += 1,
+            CollectionKind::MasterRecipe => counts.master_recipes += 1,
+            CollectionKind::OtherUnlock => counts.other_unlocks += 1,
             CollectionKind::FolkloreBook => counts.folklore_books += 1,
         }
     }
@@ -304,6 +334,7 @@ impl<R: Resource> GameExcel<R> {
         &mut self,
         class_job_category_names: &HashMap<u32, String>,
         item_action_types: &HashMap<u32, u32>,
+        classification_audit: &mut CollectionClassificationAudit,
     ) -> Result<Vec<CollectionItem>> {
         let sheet = self.sheet("Item", Language::ChineseSimplified)?;
         let mut items = Vec::new();
@@ -326,14 +357,19 @@ impl<R: Resource> GameExcel<R> {
                 .get(&item_action)
                 .copied()
                 .unwrap_or_default();
-            let Some(kind) =
-                collection_kind(equip_slot_category, action_type, number_value(row, 15))
-            else {
+            let item_ui_category = number_value(row, 15);
+            let Some(kind) = classify_collection_item(CollectionClassificationInput {
+                name,
+                equip_slot_category,
+                item_action_type: action_type,
+                item_ui_category,
+            }) else {
                 return;
             };
             if kind == CollectionKind::Equipment && equip_slot_category == 17 {
                 return;
             }
+            classification_audit.record(kind, action_type);
             let model_main = model_id_value(row, 47);
             let item_series = number_value(row, 45);
             let class_job_category = number_value(row, 43);
@@ -350,7 +386,7 @@ impl<R: Resource> GameExcel<R> {
                 name: name.to_owned(),
                 description: string_value(row, 8).unwrap_or_default().to_owned(),
                 icon: number_value(row, 10),
-                item_ui_category: number_value(row, 15),
+                item_ui_category,
                 item_search_category,
                 item_action,
                 equip_slot_category,
@@ -649,27 +685,6 @@ impl<R: Resource> GameExcel<R> {
     }
 }
 
-fn collection_kind(
-    equip_slot_category: u32,
-    item_action_type: u32,
-    item_ui_category: u32,
-) -> Option<CollectionKind> {
-    if equip_slot_category != 0 {
-        return Some(CollectionKind::Equipment);
-    }
-    match item_action_type {
-        25_183 => Some(CollectionKind::OrchestrionRoll),
-        1_322 => Some(CollectionKind::Mount),
-        853 => Some(CollectionKind::Minion),
-        20_086 => Some(CollectionKind::FashionAccessory),
-        2_633 => Some(CollectionKind::Emote),
-        4_107 => Some(CollectionKind::FolkloreBook),
-        _ if item_ui_category == 94 => Some(CollectionKind::OrchestrionRoll),
-        _ if item_ui_category == 81 => Some(CollectionKind::Minion),
-        _ => None,
-    }
-}
-
 fn is_obsolete_legacy_item_name(name: &str) -> bool {
     name.starts_with("过期")
 }
@@ -911,13 +926,103 @@ fn for_each_row(sheet: &physis::excel::Sheet, mut f: impl FnMut(u32, &Row)) {
 mod collection_tests {
     use super::*;
 
+    fn collection_kind(
+        name: &str,
+        equip_slot_category: u32,
+        item_action_type: u32,
+        item_ui_category: u32,
+    ) -> Option<CollectionKind> {
+        classify_collection_item(CollectionClassificationInput {
+            name,
+            equip_slot_category,
+            item_action_type,
+            item_ui_category,
+        })
+    }
+
+    fn unlock_collection_kind(name: &str) -> CollectionKind {
+        collection_kind(name, 0, 2_633, 0).expect("2633 is a permanent unlock action")
+    }
+
     #[test]
     fn classifies_item_action_collection_types() {
-        assert_eq!(collection_kind(0, 853, 0), Some(CollectionKind::Minion));
-        assert_eq!(collection_kind(0, 1_322, 0), Some(CollectionKind::Mount));
-        assert_eq!(collection_kind(0, 2_633, 0), Some(CollectionKind::Emote));
-        assert_eq!(collection_kind(4, 0, 0), Some(CollectionKind::Equipment));
-        assert_eq!(collection_kind(0, 0, 0), None);
+        assert_eq!(
+            collection_kind("宠物", 0, 853, 0),
+            Some(CollectionKind::Minion)
+        );
+        assert_eq!(
+            collection_kind("坐骑", 0, 1_322, 0),
+            Some(CollectionKind::Mount)
+        );
+        assert_eq!(
+            collection_kind("演技教材·挥手", 0, 2_633, 0),
+            Some(CollectionKind::Emote)
+        );
+        assert_eq!(
+            collection_kind("肖像教材：骑士", 0, 29_459, 61),
+            Some(CollectionKind::PortraitDesign)
+        );
+        assert_eq!(
+            collection_kind("九宫幻卡：渡渡鸟", 0, 3_357, 86),
+            Some(CollectionKind::TripleTriadCard)
+        );
+        assert_eq!(
+            collection_kind("陆行鸟黑魔装甲", 0, 1_013, 63),
+            Some(CollectionKind::ChocoboBarding)
+        );
+        assert_eq!(
+            collection_kind("面部配饰：椭圆眼镜", 0, 37_312, 61),
+            Some(CollectionKind::Facewear)
+        );
+        assert_eq!(
+            collection_kind("木工秘籍第一卷", 0, 2_136, 63),
+            Some(CollectionKind::MasterRecipe)
+        );
+        assert_eq!(
+            collection_kind("第1赛季福者之证", 0, 18_083, 61),
+            Some(CollectionKind::AchievementUnlock)
+        );
+        assert_eq!(
+            collection_kind("装备", 4, 0, 0),
+            Some(CollectionKind::Equipment)
+        );
+        assert_eq!(collection_kind("普通物品", 0, 0, 0), None);
+    }
+
+    #[test]
+    fn classifies_generic_unlock_items_by_collection_semantics() {
+        assert_eq!(
+            unlock_collection_kind("发型样式：马尾辫"),
+            CollectionKind::AestheticianStyle
+        );
+        assert_eq!(
+            unlock_collection_kind("雷克兰德详细地图"),
+            CollectionKind::RidingMap
+        );
+        assert_eq!(
+            unlock_collection_kind("天青图腾·白风"),
+            CollectionKind::BlueMagicSpell
+        );
+        assert_eq!(
+            unlock_collection_kind("方城金句集：阿尔菲诺"),
+            CollectionKind::MahjongSupport
+        );
+        assert_eq!(
+            unlock_collection_kind("肖像教材：随身神典石1"),
+            CollectionKind::PortraitDesign
+        );
+        assert_eq!(
+            unlock_collection_kind("魔法树建造许可证书"),
+            CollectionKind::LandmarkPermit
+        );
+        assert_eq!(
+            unlock_collection_kind("2018年度群狼盛宴区域锦标赛冠军之证"),
+            CollectionKind::AchievementUnlock
+        );
+        assert_eq!(
+            unlock_collection_kind("以太摆锤"),
+            CollectionKind::OtherUnlock
+        );
     }
 
     #[test]

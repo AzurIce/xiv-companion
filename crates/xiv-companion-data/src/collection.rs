@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 8;
+pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 13;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +26,18 @@ pub struct CollectionCatalogCounts {
     pub minions: usize,
     pub fashion_accessories: usize,
     pub emotes: usize,
+    pub aesthetician_styles: usize,
+    pub riding_maps: usize,
+    pub blue_magic_spells: usize,
+    pub mahjong_supports: usize,
+    pub portrait_designs: usize,
+    pub landmark_permits: usize,
+    pub achievement_unlocks: usize,
+    pub triple_triad_cards: usize,
+    pub chocobo_bardings: usize,
+    pub facewear: usize,
+    pub master_recipes: usize,
+    pub other_unlocks: usize,
     pub folklore_books: usize,
 }
 
@@ -38,6 +50,18 @@ impl CollectionCatalogCounts {
             CollectionKind::Minion => self.minions,
             CollectionKind::FashionAccessory => self.fashion_accessories,
             CollectionKind::Emote => self.emotes,
+            CollectionKind::AestheticianStyle => self.aesthetician_styles,
+            CollectionKind::RidingMap => self.riding_maps,
+            CollectionKind::BlueMagicSpell => self.blue_magic_spells,
+            CollectionKind::MahjongSupport => self.mahjong_supports,
+            CollectionKind::PortraitDesign => self.portrait_designs,
+            CollectionKind::LandmarkPermit => self.landmark_permits,
+            CollectionKind::AchievementUnlock => self.achievement_unlocks,
+            CollectionKind::TripleTriadCard => self.triple_triad_cards,
+            CollectionKind::ChocoboBarding => self.chocobo_bardings,
+            CollectionKind::Facewear => self.facewear,
+            CollectionKind::MasterRecipe => self.master_recipes,
+            CollectionKind::OtherUnlock => self.other_unlocks,
             CollectionKind::FolkloreBook => self.folklore_books,
         }
     }
@@ -52,20 +76,22 @@ pub enum CollectionKind {
     Minion,
     FashionAccessory,
     Emote,
+    AestheticianStyle,
+    RidingMap,
+    BlueMagicSpell,
+    MahjongSupport,
+    PortraitDesign,
+    LandmarkPermit,
+    AchievementUnlock,
+    TripleTriadCard,
+    ChocoboBarding,
+    Facewear,
+    MasterRecipe,
+    OtherUnlock,
     FolkloreBook,
 }
 
 impl CollectionKind {
-    pub const ALL: [Self; 7] = [
-        Self::Equipment,
-        Self::OrchestrionRoll,
-        Self::Mount,
-        Self::Minion,
-        Self::FashionAccessory,
-        Self::Emote,
-        Self::FolkloreBook,
-    ];
-
     pub fn id(self) -> &'static str {
         match self {
             Self::Equipment => "equipment",
@@ -74,20 +100,24 @@ impl CollectionKind {
             Self::Minion => "minion",
             Self::FashionAccessory => "fashion-accessory",
             Self::Emote => "emote",
+            Self::AestheticianStyle => "aesthetician-style",
+            Self::RidingMap => "riding-map",
+            Self::BlueMagicSpell => "blue-magic-spell",
+            Self::MahjongSupport => "mahjong-support",
+            Self::PortraitDesign => "portrait-design",
+            Self::LandmarkPermit => "landmark-permit",
+            Self::AchievementUnlock => "achievement-unlock",
+            Self::TripleTriadCard => "triple-triad-card",
+            Self::ChocoboBarding => "chocobo-barding",
+            Self::Facewear => "facewear",
+            Self::MasterRecipe => "master-recipe",
+            Self::OtherUnlock => "other-unlock",
             Self::FolkloreBook => "folklore-book",
         }
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Equipment => "装备",
-            Self::OrchestrionRoll => "乐谱",
-            Self::Mount => "坐骑",
-            Self::Minion => "宠物",
-            Self::FashionAccessory => "时尚配饰",
-            Self::Emote => "情感动作",
-            Self::FolkloreBook => "传习录",
-        }
+        crate::category_definition(self).label
     }
 }
 
@@ -101,43 +131,11 @@ impl FromStr for CollectionKind {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
+        crate::COLLECTION_CATEGORIES
+            .iter()
+            .map(|definition| definition.kind)
             .find(|kind| kind.id() == value)
             .ok_or_else(|| format!("unknown collection kind: {value}"))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CollectionEntryKey {
-    pub kind: CollectionKind,
-    pub row_id: u32,
-}
-
-impl CollectionEntryKey {
-    pub fn new(kind: CollectionKind, row_id: u32) -> Self {
-        Self { kind, row_id }
-    }
-
-    pub fn storage_key(&self) -> String {
-        format!("{}:{}", self.kind.id(), self.row_id)
-    }
-}
-
-impl FromStr for CollectionEntryKey {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (kind, row_id) = value
-            .split_once(':')
-            .ok_or_else(|| format!("invalid collection entry key: {value}"))?;
-        Ok(Self {
-            kind: kind.parse()?,
-            row_id: row_id
-                .parse()
-                .map_err(|error| format!("invalid collection row id {row_id}: {error}"))?,
-        })
     }
 }
 
@@ -171,22 +169,7 @@ pub struct CollectionItem {
 }
 
 impl CollectionItem {
-    pub fn key(&self) -> CollectionEntryKey {
-        CollectionEntryKey::new(self.kind, self.id)
-    }
-
     pub fn is_equipment(&self) -> bool {
         self.kind == CollectionKind::Equipment
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn collection_entry_keys_round_trip() {
-        let key = CollectionEntryKey::new(CollectionKind::FashionAccessory, 33041);
-        assert_eq!(key.storage_key().parse::<CollectionEntryKey>(), Ok(key));
     }
 }

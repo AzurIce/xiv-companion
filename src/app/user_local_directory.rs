@@ -4,8 +4,10 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::app::log;
 
-const LOCAL_DIRECTORY_DB: &str = "xiv-companion-local-source";
-const LOCAL_DIRECTORY_STORE: &str = "directories";
+const APP_STATE_DB_NAME: &str = "xiv-companion-local-source";
+const APP_STATE_STORE: &str = "state";
+const LEGACY_DIRECTORY_STORE: &str = "directories";
+const APP_STATE_DB_VERSION: u32 = 2;
 const LOCAL_DIRECTORY_KEY: &str = "user-local-game";
 const WINDOW_LOCAL_DIRECTORY_KEY: &str = "__xivCompanionUserLocalDirectory";
 
@@ -137,16 +139,38 @@ pub(crate) async fn authorize_user_local_directory() -> Result<AuthorizedUserLoc
     Ok(AuthorizedUserLocalDirectory { name, layout })
 }
 
-async fn local_directory_db() -> Result<indexed_db::Database<String>, String> {
+async fn app_state_db() -> Result<indexed_db::Database<String>, String> {
     log::info("local-dir", "opening IndexedDB for saved directory handle");
     let factory =
         indexed_db::Factory::get().map_err(|error| format!("打开 IndexedDB 失败: {error}"))?;
     factory
-        .open(LOCAL_DIRECTORY_DB, 1, |event| async move {
-            let db = event.database();
-            db.build_object_store(LOCAL_DIRECTORY_STORE).create()?;
-            Ok(())
-        })
+        .open(
+            APP_STATE_DB_NAME,
+            APP_STATE_DB_VERSION,
+            |event| async move {
+                let db = event.database();
+                let names = db.object_store_names();
+                if !names.iter().any(|name| name == APP_STATE_STORE) {
+                    db.build_object_store(APP_STATE_STORE).create()?;
+                }
+                if names.iter().any(|name| name == LEGACY_DIRECTORY_STORE) {
+                    let handle = event
+                        .transaction()
+                        .object_store(LEGACY_DIRECTORY_STORE)?
+                        .get(&JsString::from(LOCAL_DIRECTORY_KEY))
+                        .await?;
+                    if let Some(handle) = handle {
+                        event
+                            .transaction()
+                            .object_store(APP_STATE_STORE)?
+                            .put_kv(&JsString::from(LOCAL_DIRECTORY_KEY), &handle)
+                            .await?;
+                    }
+                    db.delete_object_store(LEGACY_DIRECTORY_STORE)?;
+                }
+                Ok(())
+            },
+        )
         .await
         .map_err(|error| format!("打开本地目录数据库失败: {error}"))
 }
@@ -154,12 +178,12 @@ async fn local_directory_db() -> Result<indexed_db::Database<String>, String> {
 async fn save_user_local_directory_handle(handle: JsValue) -> Result<(), String> {
     let name = directory_handle_name(&handle);
     log::info("local-dir", format!("saving directory handle: {name}"));
-    let db = local_directory_db().await?;
-    db.transaction(&[LOCAL_DIRECTORY_STORE])
+    let db = app_state_db().await?;
+    db.transaction(&[APP_STATE_STORE])
         .rw()
         .run(move |transaction| async move {
             transaction
-                .object_store(LOCAL_DIRECTORY_STORE)?
+                .object_store(APP_STATE_STORE)?
                 .put_kv(&JsString::from(LOCAL_DIRECTORY_KEY), &handle)
                 .await?;
             Ok(())
@@ -171,12 +195,12 @@ async fn save_user_local_directory_handle(handle: JsValue) -> Result<(), String>
 }
 
 async fn load_user_local_directory_handle() -> Result<Option<JsValue>, String> {
-    let db = local_directory_db().await?;
+    let db = app_state_db().await?;
     let handle = db
-        .transaction(&[LOCAL_DIRECTORY_STORE])
+        .transaction(&[APP_STATE_STORE])
         .run(|transaction| async move {
             transaction
-                .object_store(LOCAL_DIRECTORY_STORE)?
+                .object_store(APP_STATE_STORE)?
                 .get(&JsString::from(LOCAL_DIRECTORY_KEY))
                 .await
         })

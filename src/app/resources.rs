@@ -952,7 +952,7 @@ mod local_release_tests {
             fingerprint: "local:old:3".to_string(),
             source_tag: "local".to_string(),
             game_version: "2026.06.18.0000.0000".to_string(),
-            schema_revision: 7,
+            schema_revision: 11,
             record_count: 30_000,
             saved_at: String::new(),
             bytes: Vec::new(),
@@ -960,7 +960,7 @@ mod local_release_tests {
         let bundled = BundledResourceManifestEntry {
             game_version: "game-2025.10.23.0000.0000".to_string(),
             revision: "2026-07-11T18:26:09Z".to_string(),
-            schema_revision: 8,
+            schema_revision: 12,
             record_count: 29_985,
         };
         assert!(should_replace_builtin_cache(&cached, &bundled));
