@@ -91,9 +91,10 @@
 ### P1：有证据时补视觉语义
 
 1. **Water 和 environment 扩展**
-   - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
-   - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
-   - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
+   - installed 武器的 family、LOD0 mesh range、sampler 与 material constant coverage 中均没有 water、river、crystal 或 Environment；当前真实目录不能提供新增公式的校准样本。
+   - Blender headless 复核 MeddleTools `meddle water.shpk`：只连接 `WaterDeepColor -> Base Color`、主 `WaveMap -> Normal`、`Transparency -> Alpha`；`RefractionColor`、`WaveMap1`、`WhitecapMap` 均无输出连接，现有节点接口甚至不包含 `WhitecapColor`。
+   - `meddle crystal.shpk` 只连接 ColorMap0 与 NormalMap0，`EnvMap` 输入无任何连线；Meddle 的名称/default 表只证明 water/crystal 参数存在，不能提供采样坐标或混合公式。
+   - 本轮把上述 installed 零覆盖加入全量审计断言，保留现有 structured inputs、unsupported diagnostics 和已有 water 三条可信连接；不新增 refraction/whitecap/WaveMap1/environment WGSL 近似，也不继续调整 sphere/reflection rim 近似。
 
 ### P2：运行时输入与几何能力
 
