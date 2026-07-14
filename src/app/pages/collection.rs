@@ -114,6 +114,7 @@ pub fn CollectionPage() -> Element {
     let equipment_slot_snapshot = equipment_slot_filter();
     let storage_message_snapshot = storage_message();
     let has_pending_writes = !pending_writes.read().is_empty();
+    let collection_transfer_ready = hydrated_snapshot && !has_pending_writes;
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
@@ -125,16 +126,16 @@ pub fn CollectionPage() -> Element {
                     }
                     div { class: "flex flex-wrap items-center justify-end gap-2",
                         label {
-                            class: if hydrated_snapshot && !has_pending_writes { "inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground" } else { "inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium" },
-                            style: if hydrated_snapshot && !has_pending_writes { "" } else { "cursor: not-allowed; opacity: 0.5;" },
-                            Icon { kind: IconKind::Upload, class: "h-4 w-4" }
+                            class: if collection_transfer_ready { "inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground" } else { "inline-flex h-8 shrink-0 cursor-not-allowed items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground opacity-50" },
+                            title: if collection_transfer_ready { "导入图鉴解锁状态" } else { "正在加载或保存图鉴解锁状态" },
+                            Icon { kind: IconKind::Download, class: "h-4 w-4" }
                             "导入"
                             input {
                                 key: "{import_input_version}",
                                 r#type: "file",
                                 accept: "application/json,.json",
                                 class: "hidden",
-                                disabled: !hydrated_snapshot || has_pending_writes,
+                                disabled: !collection_transfer_ready,
                                 onchange: move |event| {
                                     let Some(file) = event.files().into_iter().next() else { return; };
                                     spawn(async move {
@@ -155,14 +156,14 @@ pub fn CollectionPage() -> Element {
                         Button {
                             variant: ButtonVariant::Outline,
                             size: ButtonSize::Sm,
-                            disabled: !hydrated_snapshot || has_pending_writes,
+                            disabled: !collection_transfer_ready,
                             onclick: move |_| {
                                 let result = crate::app::collection_state::export_collection_json(&obtained.read())
                                     .and_then(|json| download_collection_json(&json))
                                     .map(|_| format!("已导出 {} 项解锁状态", obtained.read().len()));
                                 storage_message.set(Some(result));
                             },
-                            Icon { kind: IconKind::Download, class: "h-4 w-4" }
+                            Icon { kind: IconKind::Upload, class: "h-4 w-4" }
                             "导出"
                         }
                         if let Some(Ok(loaded)) = &catalog_snapshot {

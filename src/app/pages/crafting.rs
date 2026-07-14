@@ -792,6 +792,13 @@ fn BuiltinItemIconView(urls: Vec<String>, size_class: &'static str) -> Element {
 
 #[component]
 pub(super) fn ItemIcon(icon: u32, #[props(default = "md")] size: &'static str) -> Element {
+    rsx! {
+        ItemIconResource { key: "{icon}", icon, size }
+    }
+}
+
+#[component]
+fn ItemIconResource(icon: u32, size: &'static str) -> Element {
     let icon_info = use_resource(move || load_item_icon(icon));
     let size_class = match size {
         "sm" => "h-5 w-5",
