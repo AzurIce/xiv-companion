@@ -10,10 +10,10 @@ use anyhow::{Context, Result, anyhow};
 use physis::resource::{Resource, SqPackResource};
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial, ModelMaterialReferenceFallback,
-    ModelMesh, ModelShapeInfo, ModelStainingApplication, ModelSubmeshInfo, ModelTexture,
-    PreparedMaterial, PreparedMesh, PreparedMeshShapeInfluences, WeaponCatalogItem,
-    WeaponModelData, WeaponModelLoadRequest,
+    MaterialAlphaMode, MaterialSemanticSummaryDebug, ModelBounds, ModelMaterial,
+    ModelMaterialReferenceFallback, ModelMesh, ModelShapeInfo, ModelStainingApplication,
+    ModelSubmeshInfo, ModelTexture, PreparedMaterial, PreparedMesh, PreparedMeshShapeInfluences,
+    WeaponCatalogItem, WeaponModelData, WeaponModelLoadRequest,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
     load_weapon_model_from_resource_request, material_debug_info_from_mtrl_bytes,
     material_debug_info_from_resource, mdl_metadata_from_mdl_bytes, prepare_model_for_render,
@@ -487,6 +487,7 @@ fn render_case(
             material.toon_spec_index = 4.0;
         }
     }
+    validate_transparency_geometry(case, &model)?;
     let snapshot = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("snapshot")
             .with_output_dir(&case_dir)
@@ -640,6 +641,141 @@ fn snapshot_rgb_difference(left_path: &Path, right_path: &Path) -> Result<u64> {
                 .sum::<u64>()
         })
         .sum())
+}
+
+fn validate_transparency_geometry(case: &PhantomWeaponCase, model: &WeaponModelData) -> Result<()> {
+    let expected_triangles = match case.item_id {
+        45050 => 848,
+        45059 => 320,
+        _ => return Ok(()),
+    };
+    let mut triangles = Vec::new();
+    for (mesh_index, mesh) in model.meshes.iter().enumerate() {
+        let Some(material) = model.materials.get(mesh.material_slot) else {
+            continue;
+        };
+        if !matches!(
+            material.alpha_mode,
+            MaterialAlphaMode::Blend | MaterialAlphaMode::Glass
+        ) {
+            continue;
+        }
+        for indices in mesh.indices.chunks_exact(3) {
+            let vertex_indices = [
+                indices[0] as usize,
+                indices[1] as usize,
+                indices[2] as usize,
+            ];
+            let Some(vertices) = vertex_indices
+                .map(|index| mesh.vertices.get(index).map(|vertex| vertex.position))
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            triangles.push(TransparencyTriangle {
+                mesh_index,
+                vertex_indices,
+                vertices: [vertices[0], vertices[1], vertices[2]],
+            });
+        }
+    }
+    anyhow::ensure!(
+        triangles.len() == expected_triangles,
+        "{} has {} transparent triangles, expected {}",
+        case.case_id,
+        triangles.len(),
+        expected_triangles
+    );
+
+    let mut proper_intersections = 0usize;
+    for left in 0..triangles.len() {
+        for right in left + 1..triangles.len() {
+            proper_intersections +=
+                usize::from(triangles[left].properly_intersects(triangles[right]));
+        }
+    }
+    anyhow::ensure!(
+        proper_intersections == 0,
+        "{} has {} proper transparent triangle intersections; re-evaluate weighted OIT",
+        case.case_id,
+        proper_intersections
+    );
+    eprintln!(
+        "{} transparency geometry: triangles={}, proper intersections=0",
+        case.case_id,
+        triangles.len()
+    );
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct TransparencyTriangle {
+    mesh_index: usize,
+    vertex_indices: [usize; 3],
+    vertices: [[f32; 3]; 3],
+}
+
+impl TransparencyTriangle {
+    fn properly_intersects(self, other: Self) -> bool {
+        if self.mesh_index == other.mesh_index
+            && self
+                .vertex_indices
+                .iter()
+                .any(|index| other.vertex_indices.contains(index))
+        {
+            return false;
+        }
+        triangle_edges(self.vertices)
+            .into_iter()
+            .any(|edge| segment_hits_triangle(edge, other.vertices))
+            || triangle_edges(other.vertices)
+                .into_iter()
+                .any(|edge| segment_hits_triangle(edge, self.vertices))
+    }
+}
+
+fn triangle_edges(vertices: [[f32; 3]; 3]) -> [[[f32; 3]; 2]; 3] {
+    [
+        [vertices[0], vertices[1]],
+        [vertices[1], vertices[2]],
+        [vertices[2], vertices[0]],
+    ]
+}
+
+fn segment_hits_triangle(segment: [[f32; 3]; 2], triangle: [[f32; 3]; 3]) -> bool {
+    const EPSILON: f32 = 1.0e-5;
+    let direction = subtract3(segment[1], segment[0]);
+    let edge1 = subtract3(triangle[1], triangle[0]);
+    let edge2 = subtract3(triangle[2], triangle[0]);
+    let h = cross3(direction, edge2);
+    let determinant = dot3(edge1, h);
+    if determinant.abs() < EPSILON {
+        return false;
+    }
+    let inverse = determinant.recip();
+    let s = subtract3(segment[0], triangle[0]);
+    let u = inverse * dot3(s, h);
+    let q = cross3(s, edge1);
+    let v = inverse * dot3(direction, q);
+    let t = inverse * dot3(edge2, q);
+    u > EPSILON && v > EPSILON && u + v < 1.0 - EPSILON && t > EPSILON && t < 1.0 - EPSILON
+}
+
+fn subtract3(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn cross3(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn dot3(left: [f32; 3], right: [f32; 3]) -> f32 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
 }
 
 fn snapshot_name(case: &PhantomWeaponCase) -> String {

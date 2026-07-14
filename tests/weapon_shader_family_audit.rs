@@ -38,6 +38,8 @@ struct WeaponShaderFamilyAudit {
     unique_material_resources: usize,
     unique_shader_packages: usize,
     family_counts: BTreeMap<String, usize>,
+    lod0_mesh_range_model_counts: BTreeMap<String, usize>,
+    lod0_mesh_range_mesh_counts: BTreeMap<String, usize>,
     sampler_coverage: Vec<WeaponMaterialSamplerCoverage>,
     material_key_coverage: Vec<WeaponMaterialKeyCoverage>,
     material_constant_coverage: Vec<WeaponMaterialConstantCoverage>,
@@ -1119,6 +1121,8 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         unique_material_resources: 0,
         unique_shader_packages: 0,
         family_counts: BTreeMap::new(),
+        lod0_mesh_range_model_counts: BTreeMap::new(),
+        lod0_mesh_range_mesh_counts: BTreeMap::new(),
         sampler_coverage: Vec::new(),
         material_key_coverage: Vec::new(),
         material_constant_coverage: Vec::new(),
@@ -1209,6 +1213,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         assert_installed_special_character_boundary(&report);
         assert_installed_character_glass_shader_boundary(&mut resource);
         assert_installed_cutout_boundary(&report);
+        assert_installed_shadow_mesh_boundary(&report);
     }
     Ok(())
 }
@@ -1315,6 +1320,18 @@ fn assert_installed_cutout_boundary(report: &WeaponShaderFamilyAudit) {
     }));
 }
 
+fn assert_installed_shadow_mesh_boundary(report: &WeaponShaderFamilyAudit) {
+    assert_eq!(
+        report.lod0_mesh_range_model_counts,
+        BTreeMap::from([("normal".to_string(), 7365)]),
+        "installed weapon models gained a new LOD0 range category; re-audit draw-role semantics"
+    );
+    assert_eq!(
+        report.lod0_mesh_range_mesh_counts,
+        BTreeMap::from([("normal".to_string(), 8114)])
+    );
+}
+
 fn catalog_models(items: &[WeaponCatalogItem]) -> Vec<(PackedModelId, Vec<&WeaponCatalogItem>)> {
     let mut by_model = HashMap::<u64, Vec<&WeaponCatalogItem>>::new();
     for item in items {
@@ -1363,6 +1380,18 @@ fn scan_model<R: Resource>(
             return;
         }
     };
+    if let Some(lod) = metadata.lods.first() {
+        for range in lod.mesh_ranges.iter().filter(|range| range.mesh_count != 0) {
+            *report
+                .lod0_mesh_range_model_counts
+                .entry(range.category.clone())
+                .or_default() += 1;
+            *report
+                .lod0_mesh_range_mesh_counts
+                .entry(range.category.clone())
+                .or_default() += usize::from(range.mesh_count);
+        }
+    }
     if !metadata.shapes.is_empty() {
         report.shape_models.push(WeaponShapeModel {
             item_ids: items.iter().map(|item| item.id).collect(),

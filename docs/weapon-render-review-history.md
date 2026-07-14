@@ -51,6 +51,13 @@
 - character 系列另有 scene-level `ApplyAlphaClip`。known CRC label 已补齐，full audit 断言四个 installed SHPK 均为 Off、0 non-default override，并继续断言不存在 `ApplyAlphaTest` coverage。
 - 因此保留现有独立 Cutout pipeline、depth write、prepared alpha source 与 `g_AlphaThreshold` discard，不新增无真实样本的行为；后续只有出现 bg/crystal 等非武器 fixture 时重新打开。
 
+## 2026-07-14 Transparency/OIT/shadow evidence boundary
+
+- WeaponCatalog audit 新增 LOD0 mesh-range model/mesh 双计数。7365 个唯一 installed 武器模型只有 normal category，共 8114 个 mesh；shadow 与 terrainShadow 均为零。24 组 phantom 的 47 个 mesh 同样全部为 normal。
+- 四个实际 SHPK 的 `g_ShadowAlphaThreshold` 全部固定默认 0.5；`g_ShadowPosOffset` 仅 character 3 个、characterglass 1 个、skin 1 个非零资源。Meddle 只证明字段与通用 MDL range 的存在，没有离线 light matrix、bias、shadow sampling 或 alpha 公式。
+- snapshot harness 会在渲染前检查真实透明 geometry：45050 为 848 个透明三角形，45059 为 320 个，均无非相邻三角形 edge 穿过另一三角形内部的 proper intersection。两者不存在必须靠 OIT 解除的循环遮挡，逐三角形 back-to-front 仍是更精确的 alpha composition。
+- 因此不增加 weighted blended OIT 的权重近似，也不以 normal mesh 自创 shadow map。全量 audit 固定唯一 normal range 计数，phantom regression 固定两组 transparency geometry；真实覆盖或相交样本变化时测试会要求重新评估。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。

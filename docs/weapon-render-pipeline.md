@@ -297,7 +297,9 @@ Meddle `OnRenderMaterialUtil` 表明 weapon decal 与 FC crest 来自运行时 `
 
 renderer final 模式会让 `CrestChange` 进入 transparent pass 并 discard，避免透明 fallback 写 depth；mesh-role debug 模式仍显示该几何。`MaterialChange` 继续使用基础材质。真实运行时 crest/decal 内容仍不可用，因此 `decalOrCrest` 保持 unsupported。
 
-透明排序已做到逐三角形：静态 index buffer 继续供 opaque、dither depth、outline 和 additive pass 使用；Transparent/Glass 每帧生成按三角形中心全局 back-to-front 排序的动态 index buffer。该方法能修正 45050 这类同一 mesh 内的毛片顺序，但互相穿插或循环遮挡的透明面仍不存在唯一正确顺序，尚未实现 weighted blended OIT。
+透明排序已做到逐三角形：静态 index buffer 继续供 opaque、dither depth、outline 和 additive pass 使用；Transparent/Glass 每帧生成按三角形中心全局 back-to-front 排序的动态 index buffer。45050 的 848 个透明三角形和 45059 的 320 个透明三角形已在 snapshot harness 中验证没有共享顶点之外的 proper intersection，因此当前真实样本不存在循环遮挡，排序可保持精确 alpha composition；weighted blended OIT 会引入权重近似，等待真实相交样本再评估。
+
+WeaponCatalog audit 同时统计 LOD0 mesh ranges：7365 个唯一模型只有 normal category，共 8114 个 mesh；shadow/terrainShadow model 与 mesh 均为 0。`g_ShadowAlphaThreshold` 在四个实际 SHPK 中全部为默认 0.5，`g_ShadowPosOffset` 只有 5 个非零资源。Meddle 证明这些字段和通用 MDL range 存在，但没有提供离线 light matrix、bias、shadow sampling 或 alpha 公式；当前不以 normal geometry 自创 shadow map，参数继续保留 parsed/raw/uniform 诊断。
 
 ## 9. Meddle 调研结论
 

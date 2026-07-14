@@ -90,30 +90,24 @@
 
 ### P1：有证据时补视觉语义
 
-1. **透明合成**
-   - 全量 7365 个 installed 武器模型的 LOD0 metadata 中 shadow/terrainShadow model 与 mesh 均为 0；24 组 phantom 的 47 个 mesh 也全部为 normal，没有 shadow proxy geometry。
-   - 四个实际 SHPK 的 `g_ShadowAlphaThreshold` 全部固定默认 0.5；`g_ShadowPosOffset` 仅 5 个非零资源。Meddle 只证明字段/range 存在，没有离线 light matrix、bias、shadow sampling 或 alpha 公式。
-   - 45050 的 848 个透明三角形与 45059 的 320 个透明三角形均无非相邻三角形内部相交，不存在当前真实样本必须用 weighted OIT 才能解除的循环遮挡；逐三角形排序保持精确 alpha composition。
-   - 本轮把 LOD0 mesh-range coverage 加入 installed audit并固定 shadow/terrainShadow 零覆盖；phantom regression 固定两组透明 geometry 无内部相交。无样本时不引入 weighted OIT 权重近似或自创 shadow map。
-
-2. **Water 和 environment 扩展**
+1. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
    - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
    - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
 
 ### P2：运行时输入与几何能力
 
-3. **显式 runtime material inputs**
+2. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-4. **runtime geometry state**
+3. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-5. **验证覆盖扩展**
+4. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -135,6 +129,8 @@
 - family-specific surface cutout：installed 武器无 `ApplyAlphaTest` 或 Mask/Cutout 样本，四个实际 SHPK 的 scene-level `ApplyAlphaClip` 全部为 Off；现有 synthetic pipeline 保留等待非武器样本。
 - `g_GlassIOR` / `g_GlassThicknessMax` 的真实用途；installed characterglass 的全部 38 个 PS 均不绑定它们，现仅保留 parsed/raw 与 `glassShaderParameters` unsupported。
 - `color1`、`flow1` 及其它 UV1-UV3 的 family-specific 最终用途。
+- weighted blended OIT：45050/45059 的 848/320 个透明三角形均无 proper intersection，当前逐三角形排序是更精确的 alpha composition；出现真实循环遮挡样本前不引入权重近似。
+- weapon shadow pass：7365 个 installed 模型的 8114 个 LOD0 mesh 全部为 normal，shadow/terrainShadow 零覆盖；缺少 light matrix、bias 与采样公式时不自创 shadow map。
 
 这些输入应继续保留 raw/structured data、debug view 或 unsupported 标记，不以视觉近似冒充完成。
 
@@ -157,6 +153,7 @@
 - 特殊 character family 边界已闭环：installed 武器只有 character/characterGlass/skin；唯一 Skin Body/DecalOff 资源只使用主 Diffuse/Normal/Mask，reflection/occlusion/scroll/stockings/tattoo 零覆盖与 runtime-only 输入由全量审计断言固定，不新增无证据 WGSL 近似。
 - glass surface 已收紧到证据边界：移除无 SHPK/MeddleTools 依据的蓝色专用 lighting 与 IOR/thickness 消费，复用 character surface + NormalBlue alpha + Dither depth；原 `Mul` 预览实际为 alpha blend，现准确命名为 Alpha，Add 保持显式近似。
 - cutout 证据边界已固定：`ApplyAlphaClip` known label、installed 无 `ApplyAlphaTest`、四个 SHPK AlphaClip 全 Off 由 audit 断言覆盖；独立 Cutout pipeline 与真实 `g_AlphaThreshold` 保留，但不猜无样本的 family 行为。
+- 透明/OIT/shadow 边界已闭环：全量 audit 固定 LOD0 只有 7365 个 normal model/8114 个 normal mesh；45050/45059 regression 固定 848/320 个透明三角形无 proper intersection，继续使用精确逐三角形排序，不引入无样本 weighted OIT 或 shadow map。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。
