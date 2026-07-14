@@ -216,11 +216,26 @@ pub fn CollectionPage() -> Element {
                         .or_else(|| index.collection_expansions.first())
                         .cloned()
                         .unwrap_or_default();
-                    let search_placeholder = if kind_snapshot == CollectionKind::Equipment {
-                        "搜索装备或套装".to_string()
-                    } else {
-                        format!("搜索{}", kind_snapshot.label())
-                    };
+                    let normalized_global_query = query_snapshot.trim().to_lowercase();
+                    let mut search_match_kinds = HashSet::<CollectionKind>::new();
+                    let mut search_match_kind_expansions =
+                        HashSet::<(CollectionKind, String)>::new();
+                    if !normalized_global_query.is_empty() {
+                        for item in &index.catalog.items {
+                            if collection_item_matches_query(item, &normalized_global_query) {
+                                search_match_kinds.insert(item.kind);
+                                search_match_kind_expansions
+                                    .insert((item.kind, item.expansion.clone()));
+                            }
+                        }
+                        for set in &index.equipment_sets {
+                            if set.search_text.contains(&normalized_global_query) {
+                                search_match_kinds.insert(CollectionKind::Equipment);
+                                search_match_kind_expansions
+                                    .insert((CollectionKind::Equipment, set.expansion.clone()));
+                            }
+                        }
+                    }
                     let mut collected_by_kind = HashMap::<CollectionKind, usize>::new();
                     let mut collected_by_kind_expansion =
                         HashMap::<(CollectionKind, String), usize>::new();
@@ -240,13 +255,28 @@ pub fn CollectionPage() -> Element {
                                 div { class: "relative w-full max-w-xl",
                                     Icon { kind: IconKind::Search, class: "pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" }
                                     input {
-                                        r#type: "search",
-                                        placeholder: "{search_placeholder}",
+                                        r#type: "text",
+                                        role: "searchbox",
+                                        placeholder: "搜索全部图鉴",
                                         value: "{query_snapshot}",
-                                        class: input_class("pl-9"),
+                                        class: input_class(if query_snapshot.is_empty() { "pl-9" } else { "pl-9 pr-9" }),
                                         oninput: move |event| {
                                             query.set(event.value());
                                         },
+                                        onchange: move |event| {
+                                            query.set(event.value());
+                                        },
+                                    }
+                                    if !query_snapshot.is_empty() {
+                                        button {
+                                            r#type: "button",
+                                            title: "清空搜索",
+                                            aria_label: "清空搜索",
+                                            class: "absolute flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
+                                            style: "right: 4px; top: 4px;",
+                                            onclick: move |_| query.set(String::new()),
+                                            Icon { kind: IconKind::X, class: "h-4 w-4" }
+                                        }
                                     }
                                 }
                             }
@@ -259,9 +289,9 @@ pub fn CollectionPage() -> Element {
                                             collected: collected_by_kind.get(&kind).copied().unwrap_or_default(),
                                             total: loaded.data.counts.count_for(kind),
                                             active: kind == kind_snapshot,
+                                            search_match: search_match_kinds.contains(&kind),
                                             onclick: move |_| {
                                                 active_kind.set(kind);
-                                                query.set(String::new());
                                                 obtained_filter.set(ObtainedFilter::All);
                                                 equipment_job_filter.set(String::new());
                                                 equipment_slot_filter.set(String::new());
@@ -283,6 +313,8 @@ pub fn CollectionPage() -> Element {
                                                 .unwrap_or_default(),
                                             total: index.count_for_kind_expansion(kind_snapshot, expansion),
                                             active: expansion == &selected_expansion,
+                                            search_match: search_match_kind_expansions
+                                                .contains(&(kind_snapshot, expansion.clone())),
                                             onclick: {
                                                 let expansion = expansion.clone();
                                                 move |_| active_expansion.set(expansion.clone())
@@ -465,6 +497,7 @@ fn CollectionKindTab(
     collected: usize,
     total: usize,
     active: bool,
+    search_match: bool,
     onclick: EventHandler<MouseEvent>,
 ) -> Element {
     let progress = if total == 0 {
@@ -473,23 +506,50 @@ fn CollectionKindTab(
         (collected as f64 / total as f64 * 100.0).clamp(0.0, 100.0)
     };
     let complete = total > 0 && collected == total;
+    let progress_label = format!("{}：{collected}/{total}（{progress:.1}%）", kind.label());
+    let interaction_style = match (active, search_match, complete) {
+        (true, true, _) => "border-color: #f59e0b; box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.22);",
+        (true, false, _) => {
+            "border-color: #a3a3a3; box-shadow: 0 0 0 1px rgba(115, 115, 115, 0.10);"
+        }
+        (false, true, _) => {
+            "border-color: #f59e0b; box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.20);"
+        }
+        (false, false, true) => "border-color: #a7f3d0; box-shadow: none;",
+        (false, false, false) => "border-color: #e5e5e5; box-shadow: none;",
+    };
     rsx! {
         button {
             r#type: "button",
             class: if complete {
-                "relative isolate overflow-hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 shadow-sm"
+                "relative isolate cursor-pointer overflow-hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-accent"
             } else if active {
-                "relative isolate overflow-hidden rounded-full border border-primary bg-primary/5 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm"
+                "relative isolate cursor-pointer overflow-hidden rounded-full border bg-primary/5 px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
             } else {
-                "relative isolate overflow-hidden rounded-full border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+                "relative isolate cursor-pointer overflow-hidden rounded-full border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             },
             aria_pressed: active,
+            aria_label: "{progress_label}",
+            title: "{progress_label}",
+            style: "{interaction_style}",
             onclick: move |event| onclick.call(event),
+            if total == 0 {
+                span {
+                    aria_hidden: "true",
+                    class: "pointer-events-none absolute inset-0 z-0",
+                    style: "background-color: rgba(115, 115, 115, 0.08); background-image: repeating-linear-gradient(135deg, rgba(115, 115, 115, 0.13) 0 5px, rgba(115, 115, 115, 0.03) 5px 10px);",
+                }
+            }
             if !complete && progress > 0.0 {
                 span {
                     aria_hidden: "true",
                     class: "pointer-events-none absolute inset-y-0 left-0 z-0",
-                    style: "width: {progress:.2}%; background-color: color-mix(in oklab, var(--primary) 14%, transparent); background-image: repeating-linear-gradient(135deg, color-mix(in oklab, var(--primary) 18%, transparent) 0 4px, transparent 4px 8px);",
+                    style: "width: max({progress:.2}%, 4px); background-color: rgba(16, 185, 129, 0.14); background-image: repeating-linear-gradient(135deg, rgba(16, 185, 129, 0.17) 0 5px, rgba(16, 185, 129, 0.04) 5px 10px); box-shadow: inset -1px 0 rgba(5, 150, 105, 0.24);",
+                }
+                span {
+                    aria_hidden: "true",
+                    class: "pointer-events-none absolute left-0 z-0",
+                    style: "bottom: 0; height: 2px; width: max({progress:.2}%, 4px); background-color: #059669;",
                 }
             }
             span { class: "relative z-10 inline-flex items-center",
@@ -497,7 +557,7 @@ fn CollectionKindTab(
                 if category_definition(kind).experimental {
                     span { class: "ml-1 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground", "实验" }
                 }
-                span { class: "ml-1 text-xs tabular-nums text-muted-foreground", "{collected}/{total}" }
+                span { class: if complete { "ml-1 text-xs tabular-nums text-emerald-700" } else { "ml-1 text-xs tabular-nums text-muted-foreground" }, "{collected}/{total}" }
             }
         }
     }
@@ -509,6 +569,7 @@ fn ExpansionTab(
     collected: usize,
     total: usize,
     active: bool,
+    search_match: bool,
     onclick: EventHandler<MouseEvent>,
 ) -> Element {
     let display_label = expansion_display_label(&label);
@@ -518,28 +579,61 @@ fn ExpansionTab(
         (collected as f64 / total as f64 * 100.0).clamp(0.0, 100.0)
     };
     let complete = total > 0 && collected == total;
+    let progress_label = format!("{display_label}：{collected}/{total}（{progress:.1}%）");
+    let interaction_style = match (active, search_match, complete) {
+        (true, true, _) => {
+            "border-bottom-color: #737373; border-bottom-width: 2px; box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.48);"
+        }
+        (true, false, _) => {
+            "border-bottom-color: #737373; border-bottom-width: 2px; box-shadow: none;"
+        }
+        (false, true, _) => {
+            "border-bottom-color: #f59e0b; border-bottom-width: 2px; box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.38);"
+        }
+        (false, false, true) => {
+            "border-bottom-color: #10b981; border-bottom-width: 2px; box-shadow: none;"
+        }
+        (false, false, false) => {
+            "border-bottom-color: transparent; border-bottom-width: 2px; box-shadow: none;"
+        }
+    };
     rsx! {
         button {
             r#type: "button",
             class: if complete {
-                "relative isolate shrink-0 overflow-hidden border-b-2 border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700"
+                "relative isolate shrink-0 cursor-pointer overflow-hidden border-b-2 border-emerald-500 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-accent"
             } else if active {
-                "relative isolate shrink-0 overflow-hidden border-b-2 border-primary px-3 py-2 text-sm font-medium text-foreground"
+                "relative isolate shrink-0 cursor-pointer overflow-hidden border-b-2 bg-primary/5 px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
             } else {
-                "relative isolate shrink-0 overflow-hidden border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+                "relative isolate shrink-0 cursor-pointer overflow-hidden border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             },
             aria_pressed: active,
+            aria_label: "{progress_label}",
+            title: "{progress_label}",
+            style: "{interaction_style}",
             onclick: move |event| onclick.call(event),
+            if total == 0 {
+                span {
+                    aria_hidden: "true",
+                    class: "pointer-events-none absolute inset-0 z-0",
+                    style: "background-color: rgba(115, 115, 115, 0.08); background-image: repeating-linear-gradient(135deg, rgba(115, 115, 115, 0.13) 0 5px, rgba(115, 115, 115, 0.03) 5px 10px);",
+                }
+            }
             if !complete && progress > 0.0 {
                 span {
                     aria_hidden: "true",
                     class: "pointer-events-none absolute inset-y-0 left-0 z-0",
-                    style: "width: {progress:.2}%; background-color: color-mix(in oklab, var(--primary) 12%, transparent); background-image: repeating-linear-gradient(135deg, color-mix(in oklab, var(--primary) 16%, transparent) 0 4px, transparent 4px 8px);",
+                    style: "width: max({progress:.2}%, 4px); background-color: rgba(16, 185, 129, 0.12); background-image: repeating-linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0 5px, rgba(16, 185, 129, 0.03) 5px 10px); box-shadow: inset -1px 0 rgba(5, 150, 105, 0.22);",
+                }
+                span {
+                    aria_hidden: "true",
+                    class: "pointer-events-none absolute left-0 z-0",
+                    style: "top: 0; height: 2px; width: max({progress:.2}%, 4px); background-color: #059669;",
                 }
             }
             span { class: "relative z-10",
                 "{display_label}"
-                span { class: "ml-1 text-xs tabular-nums text-muted-foreground", "{collected}/{total}" }
+                span { class: if complete { "ml-1 text-xs tabular-nums text-emerald-700" } else { "ml-1 text-xs tabular-nums text-muted-foreground" }, "{collected}/{total}" }
             }
         }
     }
@@ -716,6 +810,14 @@ fn numeric_patch(label: &str) -> Option<Vec<u32>> {
     (!parts.is_empty()).then_some(parts)
 }
 
+fn collection_item_matches_query(item: &CollectionItem, query: &str) -> bool {
+    query.is_empty()
+        || item.name.to_lowercase().contains(query)
+        || item.description.to_lowercase().contains(query)
+        || item.class_job_category_name.to_lowercase().contains(query)
+        || item.id.to_string().contains(query)
+}
+
 fn equipment_set_matches(
     index: &CollectionIndex,
     set: &EquipmentSetGroup,
@@ -726,7 +828,12 @@ fn equipment_set_matches(
     obtained: ObtainedStore,
 ) -> bool {
     let query = query.trim();
-    if !query.is_empty() && !set.search_text.contains(query) {
+    if !query.is_empty()
+        && !set.search_text.contains(query)
+        && !set.item_indices.iter().any(|&item_index| {
+            collection_item_matches_query(&index.catalog.items[item_index], query)
+        })
+    {
         return false;
     }
     set.item_indices.iter().any(|&item_index| {
@@ -748,9 +855,7 @@ fn equipment_item_matches(
     slot_filter: &str,
     obtained: ObtainedStore,
 ) -> bool {
-    (query.is_empty()
-        || item.name.to_lowercase().contains(query)
-        || item.class_job_category_name.to_lowercase().contains(query))
+    collection_item_matches_query(item, query)
         && (job_filter.is_empty() || item.class_job_category_name == job_filter)
         && (slot_filter.is_empty() || item.slot_name == slot_filter)
         && (filter == ObtainedFilter::All
@@ -927,7 +1032,7 @@ fn FlatCollectionView(
     let items = index
         .items_for_kind_expansion(kind, &expansion)
         .filter(|item| {
-            (query.is_empty() || item.name.to_lowercase().contains(&query))
+            collection_item_matches_query(item, &query)
                 && (filter == ObtainedFilter::All
                     || obtained_filter_matches(filter, is_obtained(obtained, item.id)))
         })
