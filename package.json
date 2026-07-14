@@ -1,9 +1,0 @@
-{
-  "name": "xiv-companion",
-  "private": true,
-  "version": "0.1.0",
-  "scripts": {
-    "dev": "dx serve --web --features web --addr 127.0.0.1 --port 5174 --open false",
-    "build": "dx build --web --release --features web --package xiv-companion --bin xiv-companion"
-  }
-}

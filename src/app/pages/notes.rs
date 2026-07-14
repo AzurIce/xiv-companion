@@ -24,7 +24,20 @@ use xiv_companion::{CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummar
 
 const NOTES_STORAGE_KEY: &str = "xiv-companion-notes-v1";
 const MARKET_WORLD_DC_REGION: &str = "中国";
+
+#[derive(Clone)]
+struct SourceChoicesContext(HashMap<u32, SourceChoice>);
 const GRAPH_EDGE_COLOR: &str = "#94a3b8";
+const CRYSTAL_ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
+const CRYSTAL_TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
+const CRYSTAL_ELEMENT_STYLES: [(&str, &str, &str); 6] = [
+    ("#c84a32", "#fff4ef", "#f2b7a8"),
+    ("#1598b7", "#eefbff", "#9bddeb"),
+    ("#2f9d55", "#effaf1", "#a8ddb7"),
+    ("#b98118", "#fff8e6", "#e8c46a"),
+    ("#a13ac1", "#fbf0ff", "#dda3ec"),
+    ("#1f8ecb", "#eff8ff", "#a6d8f5"),
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,6 +207,23 @@ struct CraftGraphLayout {
 struct GraphLayoutRelation {
     item_id: u32,
     order: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CrystalSummaryRow {
+    tier: &'static str,
+    amounts: [u32; 6],
+    total: u32,
+}
+
+fn crystal_element_style(index: usize) -> String {
+    let (text, background, border) = CRYSTAL_ELEMENT_STYLES[index];
+    format!("color: {text}; background-color: {background}; border-left: 1px solid {border}; padding-right: 0.5rem;")
+}
+
+fn crystal_element_dot_style(index: usize) -> String {
+    let (text, _, _) = CRYSTAL_ELEMENT_STYLES[index];
+    format!("background-color: {text};")
 }
 
 fn id() -> String {
@@ -665,10 +695,8 @@ fn target_with_collapsed_item(
 }
 
 fn parse_crystal_resource_name(name: &str) -> Option<(&'static str, &'static str)> {
-    const ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
-    const TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
-    for tier in TIERS {
-        for element in ELEMENTS {
+    for tier in CRYSTAL_TIERS {
+        for element in CRYSTAL_ELEMENTS {
             if name == format!("{element}之{tier}") {
                 return Some((element, tier));
             }
@@ -687,6 +715,48 @@ fn crystal_total(data: &CraftDataPackage, materials: &[MaterialSummary]) -> u32 
         .filter(|material| is_crystal_resource(data, material.item_id))
         .map(|material| material.amount)
         .sum()
+}
+
+fn crystal_summary_rows(
+    data: &CraftDataPackage,
+    materials: &[MaterialSummary],
+) -> Vec<CrystalSummaryRow> {
+    let mut totals = [[0u32; 6]; 3];
+
+    for material in materials {
+        let Some((element, tier)) =
+            parse_crystal_resource_name(&get_item_name(data, material.item_id))
+        else {
+            continue;
+        };
+        let Some(element_index) = CRYSTAL_ELEMENTS
+            .iter()
+            .position(|candidate| *candidate == element)
+        else {
+            continue;
+        };
+        let Some(tier_index) = CRYSTAL_TIERS
+            .iter()
+            .position(|candidate| *candidate == tier)
+        else {
+            continue;
+        };
+        totals[tier_index][element_index] =
+            totals[tier_index][element_index].saturating_add(material.amount);
+    }
+
+    CRYSTAL_TIERS
+        .iter()
+        .enumerate()
+        .map(|(index, tier)| {
+            let amounts = totals[index];
+            CrystalSummaryRow {
+                tier,
+                amounts,
+                total: amounts.iter().sum(),
+            }
+        })
+        .collect()
 }
 
 fn is_crystal_resource_leaf(
@@ -1457,6 +1527,7 @@ fn MaterialSummaryPanel(
             .and_then(|result| result.as_ref().ok()),
     );
     let crystal_amount = crystal_total(&data, &materials);
+    let crystal_rows = crystal_summary_rows(&data, &materials);
 
     rsx! {
         section { class: "overflow-hidden rounded-md border bg-background",
@@ -1532,9 +1603,48 @@ fn MaterialSummaryPanel(
                                     div { class: "flex items-center justify-between gap-2 p-3",
                                         div {
                                             div { class: "text-xs font-semibold text-foreground", "晶石消耗" }
-                                            div { class: "mt-0.5 text-[11px] text-muted-foreground", "碎晶 / 水晶 / 晶簇按元素汇总" }
+                                            div { class: "mt-0.5 text-[11px] text-muted-foreground", "碎晶 / 水晶 / 晶簇按元素汇总，图中不再显示为节点" }
                                         }
                                         Badge { variant: BadgeVariant::Secondary, "总 {format_integer(crystal_amount as f64)}" }
+                                    }
+                                    div { class: "overflow-x-auto border-t",
+                                        div { class: "min-w-[500px]",
+                                            div {
+                                                class: "grid bg-[#f3f2ef] px-3 py-2 text-[11px] font-medium text-muted-foreground",
+                                                style: "grid-template-columns: 7rem repeat(6, minmax(3.5rem, 1fr));",
+                                                div { "类型" }
+                                                for (index, element) in CRYSTAL_ELEMENTS.into_iter().enumerate() {
+                                                    div {
+                                                        class: "flex items-center justify-end gap-1.5",
+                                                        style: "{crystal_element_style(index)}",
+                                                        span {
+                                                            class: "h-2 w-2 rounded-full",
+                                                            style: "{crystal_element_dot_style(index)}",
+                                                        }
+                                                        "{element}"
+                                                    }
+                                                }
+                                            }
+                                            for row in crystal_rows.clone() {
+                                                div {
+                                                    class: "grid border-t border-[#e7e5e4] px-3 py-2 text-xs",
+                                                    style: "grid-template-columns: 7rem repeat(6, minmax(3.5rem, 1fr));",
+                                                    div { class: "flex min-w-0 items-center justify-between gap-2 font-medium text-foreground",
+                                                        span { "{row.tier}" }
+                                                        span { class: "shrink-0 font-semibold tabular-nums",
+                                                            "{format_integer(row.total as f64)}"
+                                                        }
+                                                    }
+                                                    for (index, amount) in row.amounts.into_iter().enumerate() {
+                                                        div {
+                                                            class: "text-right tabular-nums font-medium",
+                                                            style: "{crystal_element_style(index)}",
+                                                            "{format_integer(amount as f64)}"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1694,12 +1804,12 @@ fn MergedCraftGraphNodeCard(
     node: PositionedCraftGraphNode,
     width: f64,
     height: f64,
-    source_choices: HashMap<u32, SourceChoice>,
     on_toggle: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
     let graph_node = node.node.clone();
     let counts_as_leaf = !graph_node.craftable || graph_node.collapsed;
+    let source_choices = use_context::<SourceChoicesContext>().0;
     let tone_class = if counts_as_leaf {
         leaf_tone_class(
             &data,
@@ -1802,7 +1912,6 @@ fn MergedCraftGraphNodeCard(
 fn CraftSummaryGraph(
     data: Rc<CraftDataPackage>,
     roots: Vec<CraftGraphRoot>,
-    source_choices: HashMap<u32, SourceChoice>,
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
@@ -1928,7 +2037,6 @@ fn CraftSummaryGraph(
                                 node,
                                 width: layout.node_width,
                                 height: layout.node_height,
-                                source_choices: source_choices.clone(),
                                 on_toggle: on_toggle_collapsed_item,
                                 on_select,
                             }
@@ -1976,6 +2084,8 @@ fn CraftSummaryCardView(
             }
         })
         .collect::<Vec<_>>();
+
+    provide_context(SourceChoicesContext(source_choices.clone()));
 
     rsx! {
         div {
@@ -2040,7 +2150,6 @@ fn CraftSummaryCardView(
                     CraftSummaryGraph {
                         data: data.clone(),
                         roots,
-                        source_choices: source_choices.clone(),
                         on_toggle_collapsed_item,
                         on_select: on_inspect,
                     }
@@ -2540,7 +2649,7 @@ fn CraftSummaryEditorDialog(
                                             let recipe = data.recipes.iter().find(|recipe| recipe.id == target.recipe_id).cloned();
                                             rsx! {
                                                 div { class: "rounded-md border bg-background p-2",
-                                                    div { class: "grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-2",
+                                                    div { class: "grid grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-2",
                                                         ItemIcon { icon: item.as_ref().map(|item| item.icon).unwrap_or(0), size: "sm" }
                                                         div { class: "min-w-0",
                                                             div { class: "truncate text-sm font-medium", "{get_item_name(&data, target.item_id)}" }
@@ -2550,32 +2659,53 @@ fn CraftSummaryEditorDialog(
                                                                 }
                                                             }
                                                         }
-                                                        button {
-                                                            r#type: "button",
-                                                            class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                                                            title: "移除",
-                                                            aria_label: "移除",
-                                                            onclick: {
-                                                                let target_id = target.id.clone();
-                                                                move |_| remove_target(target_id.clone())
-                                                            },
+                                                        div { class: "flex items-center gap-1",
+                                                            button {
+                                                                r#type: "button",
+                                                                class: "flex h-7 w-7 items-center justify-center rounded border text-muted-foreground hover:bg-accent hover:text-foreground",
+                                                                aria_label: "减少数量",
+                                                                onclick: {
+                                                                    let target_id = target.id.clone();
+                                                                    let amount = target.amount;
+                                                                    move |_| update_target_amount(target_id.clone(), amount.saturating_sub(1).max(1))
+                                                                },
+                                                                "-"
+                                                            }
+                                                            input {
+                                                                r#type: "number",
+                                                                min: "1",
+                                                                value: "{target.amount}",
+                                                                class: input_class("h-7 w-12 px-1 text-center"),
+                                                                oninput: {
+                                                                    let target_id = target.id.clone();
+                                                                    move |event| {
+                                                                        let amount = event.value().parse::<u32>().unwrap_or(1).max(1);
+                                                                        update_target_amount(target_id.clone(), amount);
+                                                                    }
+                                                                },
+                                                            }
+                                                            button {
+                                                                r#type: "button",
+                                                                class: "flex h-7 w-7 items-center justify-center rounded border text-muted-foreground hover:bg-accent hover:text-foreground",
+                                                                aria_label: "增加数量",
+                                                                onclick: {
+                                                                    let target_id = target.id.clone();
+                                                                    let amount = target.amount;
+                                                                    move |_| update_target_amount(target_id.clone(), amount.saturating_add(1))
+                                                                },
+                                                                "+"
+                                                            }
+                                                            button {
+                                                                r#type: "button",
+                                                                class: "ml-1 flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
+                                                                title: "移除",
+                                                                aria_label: "移除",
+                                                                onclick: {
+                                                                    let target_id = target.id.clone();
+                                                                    move |_| remove_target(target_id.clone())
+                                                                },
                                                             Icon { kind: IconKind::X, class: "h-4 w-4" }
-                                                        }
-                                                    }
-                                                    label { class: "mt-2 grid gap-1 text-xs font-medium text-muted-foreground",
-                                                        "数量"
-                                                        input {
-                                                            r#type: "number",
-                                                            min: "1",
-                                                            value: "{target.amount}",
-                                                            class: input_class("h-8"),
-                                                            oninput: {
-                                                                let target_id = target.id.clone();
-                                                                move |event| {
-                                                                    let amount = event.value().parse::<u32>().unwrap_or(1).max(1);
-                                                                    update_target_amount(target_id.clone(), amount);
-                                                                }
-                                                            },
+                                                            }
                                                         }
                                                     }
                                                 }

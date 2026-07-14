@@ -128,19 +128,19 @@ fn NavButton(
             "flex h-10 min-w-36 items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (true, _, false) => {
-            "flex h-10 min-w-36 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-10 min-w-36 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
         (false, true, true) => {
-            "flex h-10 items-center justify-center rounded-md bg-accent px-0 text-sm font-medium text-foreground transition-all duration-300 ease-out"
+            "flex h-10 w-full items-center justify-center rounded-md bg-accent px-0 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (false, true, false) => {
-            "flex h-10 items-center justify-center rounded-md px-0 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-10 w-full items-center justify-center rounded-md px-0 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
         (false, false, true) => {
-            "flex h-9 items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
+            "flex h-9 w-full items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (false, false, false) => {
-            "flex h-9 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
     };
     let label_class = if collapsed {
@@ -191,7 +191,7 @@ pub fn AppShell(route: Signal<Route>) -> Element {
     let shell_class = if collapsed() {
         "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[72px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     } else {
-        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[260px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
+        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     };
 
     rsx! {
@@ -222,7 +222,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
     };
 
     rsx! {
-        aside { class: "hidden min-h-screen min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
+        aside { class: "relative z-50 hidden min-h-screen min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
             div { class: brand_class,
                 div { class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground",
                     Icon { kind: IconKind::LayoutDashboard, class: "h-4 w-4" }
