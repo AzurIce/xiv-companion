@@ -90,11 +90,7 @@
 
 ### P1：有证据时补视觉语义
 
-1. **cutout 与透明合成**
-   - installed 武器只有 character/characterLegacy/characterGlass/skin 四个 exact SHPK，material-key coverage 中没有 `ApplyAlphaTest`；24 组 phantom 当前也没有任何 Mask/Cutout 材质。
-   - Meddle `Names.cs` 将 `ApplyAlphaTest` 限定为 bg/bg variants/bguvscroll/crystal，只有 `ApplyAlphaTestOn` value 额外列出 lightshaft；这些 family 在 installed 武器中均无 surface cutout 样本。
-   - character family 另有 scene-level `ApplyAlphaClip`，installed 四个 SHPK 均为默认 Off 且 0 override；它不是 MTRL cutout 开关，当前不能据此生成 Mask pass。
-   - 本轮为 `ApplyAlphaClip` 增加 known label，并在 installed audit 固定无 `ApplyAlphaTest`、AlphaClip 全部 Off 的边界；现有 synthetic Cutout pipeline/alpha-threshold 保留，不新增无真实样本的 family 公式。
+1. **透明合成**
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
@@ -134,6 +130,7 @@
 - skin 的完整 Body/Face 节点、stockings skin-material composition、tattoo Option/Decal color；这些输入由角色 customize/on-render state 提供，不能从静态武器 SqPack 恢复。
 - water refraction、whitecap、WaveMap1 输出公式。
 - Glass 真正的 blend equation、折射和厚度传输。
+- family-specific surface cutout：installed 武器无 `ApplyAlphaTest` 或 Mask/Cutout 样本，四个实际 SHPK 的 scene-level `ApplyAlphaClip` 全部为 Off；现有 synthetic pipeline 保留等待非武器样本。
 - `g_GlassIOR` / `g_GlassThicknessMax` 的真实用途；installed characterglass 的全部 38 个 PS 均不绑定它们，现仅保留 parsed/raw 与 `glassShaderParameters` unsupported。
 - `color1`、`flow1` 及其它 UV1-UV3 的 family-specific 最终用途。
 
@@ -157,6 +154,7 @@
 - 通用 WGSL surface pipeline 已拆为 `SurfaceSamples -> SurfaceState -> lighting/output`；fragment entry 保留可审计的 debug/discard/draw-role 控制流，结构测试与真实/合成快照固定行为不回退。
 - 特殊 character family 边界已闭环：installed 武器只有 character/characterGlass/skin；唯一 Skin Body/DecalOff 资源只使用主 Diffuse/Normal/Mask，reflection/occlusion/scroll/stockings/tattoo 零覆盖与 runtime-only 输入由全量审计断言固定，不新增无证据 WGSL 近似。
 - glass surface 已收紧到证据边界：移除无 SHPK/MeddleTools 依据的蓝色专用 lighting 与 IOR/thickness 消费，复用 character surface + NormalBlue alpha + Dither depth；原 `Mul` 预览实际为 alpha blend，现准确命名为 Alpha，Add 保持显式近似。
+- cutout 证据边界已固定：`ApplyAlphaClip` known label、installed 无 `ApplyAlphaTest`、四个 SHPK AlphaClip 全 Off 由 audit 断言覆盖；独立 Cutout pipeline 与真实 `g_AlphaThreshold` 保留，但不猜无样本的 family 行为。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

@@ -44,6 +44,13 @@
 - 原 `ModelGlassBlendMode::Multiply` 实际一直使用 WebGPU `ALPHA_BLENDING`，并非 multiply。现更名为 `Alpha`，Web 显示同步修正；旧 `multiply`/`mul` 输入兼容映射到 Alpha，Additive 继续作为显式预览近似。真实 blend equation、折射、scene-color transmission 与厚度用途仍等待运行时证据。
 - 45059 已重跑 Alpha final/alpha debug 与 Additive final。Alpha/Add RGB difference 为 11,936,622、变化像素 56,333；Alpha final SHA-256 为 `B28F8DFE2F48F986370CEDF1FC1001CA1F49164A9DC1E3D9B70EAEB68C164A09`，alpha debug 为 `4F6F8B6F696D55DAF1102E77476D1F6722E6CFB8572C712FBC38A5D0D5665336`，Additive final 为 `95BB336997932B683895737EB9C0583767F35A4C7C8C66B3F3897C599D24AC01`。
 
+## 2026-07-14 Cutout evidence boundary
+
+- installed 武器只有 character/characterLegacy/characterGlass/skin 四个 exact SHPK；全量 material-key coverage 没有 `ApplyAlphaTest`，当前 24 组 phantom summary 也没有 Mask/Cutout 材质。
+- Meddle 将 `ApplyAlphaTest` key 限定为 bg/bg variants/bguvscroll/crystal，只有 On value 额外列出 lightshaft。上述 family 在武器目录中没有 surface cutout 样本，无法校准额外 family 公式。
+- character 系列另有 scene-level `ApplyAlphaClip`。known CRC label 已补齐，full audit 断言四个 installed SHPK 均为 Off、0 non-default override，并继续断言不存在 `ApplyAlphaTest` coverage。
+- 因此保留现有独立 Cutout pipeline、depth write、prepared alpha source 与 `g_AlphaThreshold` discard，不新增无真实样本的行为；后续只有出现 bg/crystal 等非武器 fixture 时重新打开。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。

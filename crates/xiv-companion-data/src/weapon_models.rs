@@ -1936,6 +1936,9 @@ fn known_shader_label(id: u32) -> Option<String> {
             "ApplyAlphaTest",
             "ApplyAlphaTestOn",
             "ApplyAlphaTestOff",
+            "ApplyAlphaClip",
+            "ApplyAlphaClipOn",
+            "ApplyAlphaClipOff",
             "ApplyVertexColor",
             "ApplyVertexColorOn",
             "ApplyVertexColorOff",
@@ -6291,6 +6294,9 @@ mod weapon_material_tests {
             (0x87D8_F48A, "ApplyVertexMovement"),
             (0xF8CA_223F, "ApplyVertexMovementOff"),
             (0xA657_DE89, "ApplyVertexMovementOn"),
+            (0xDCFC_844E, "ApplyAlphaClip"),
+            (0x7D50_81DF, "ApplyAlphaClipOff"),
+            (0x59C4_E6DB, "ApplyAlphaClipOn"),
         ] {
             assert_eq!(known_shader_label(value).as_deref(), Some(expected));
         }

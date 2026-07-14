@@ -1208,6 +1208,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
     if item_ids.is_none() && scan_limit >= unique_models {
         assert_installed_special_character_boundary(&report);
         assert_installed_character_glass_shader_boundary(&mut resource);
+        assert_installed_cutout_boundary(&report);
     }
     Ok(())
 }
@@ -1291,6 +1292,27 @@ fn assert_installed_character_glass_shader_boundary(resource: &mut SqPackResourc
             "characterglass pixel shader {index} started binding a glass parameter; re-audit its surface formula"
         );
     }
+}
+
+fn assert_installed_cutout_boundary(report: &WeaponShaderFamilyAudit) {
+    assert!(
+        report
+            .material_key_coverage
+            .iter()
+            .all(|coverage| { coverage.category_name.as_deref() != Some("ApplyAlphaTest") })
+    );
+
+    let alpha_clip = report
+        .material_key_coverage
+        .iter()
+        .filter(|coverage| coverage.category_name.as_deref() == Some("ApplyAlphaClip"))
+        .collect::<Vec<_>>();
+    assert_eq!(alpha_clip.len(), 4);
+    assert!(alpha_clip.iter().all(|coverage| {
+        coverage.non_default_override_resource_count == 0
+            && coverage.observed_values.len() == 1
+            && coverage.observed_values[0].value_name.as_deref() == Some("ApplyAlphaClipOff")
+    }));
 }
 
 fn catalog_models(items: &[WeaponCatalogItem]) -> Vec<(PackedModelId, Vec<&WeaponCatalogItem>)> {
