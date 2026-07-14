@@ -7,3 +7,4 @@ target/
 assets/version.json
 tmp_*.csv
 .direnv
+.codex-logs
