@@ -1205,7 +1205,71 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         "material semantic audit failure: {:?}",
         report.semantic_failures.first()
     );
+    if item_ids.is_none() && scan_limit >= unique_models {
+        assert_installed_special_character_boundary(&report);
+    }
     Ok(())
+}
+
+fn assert_installed_special_character_boundary(report: &WeaponShaderFamilyAudit) {
+    assert_eq!(
+        report.family_counts,
+        BTreeMap::from([
+            ("Character".to_string(), 8091),
+            ("CharacterGlass".to_string(), 6),
+            ("Skin".to_string(), 15),
+        ]),
+        "installed special-family coverage changed; re-audit family semantics before extending the renderer"
+    );
+
+    let skin_key = |category_name: &str| {
+        report
+            .material_key_coverage
+            .iter()
+            .find(|coverage| {
+                coverage.shader_package_name == "skin.shpk"
+                    && coverage.category_name.as_deref() == Some(category_name)
+            })
+            .unwrap_or_else(|| panic!("skin.shpk is missing {category_name} coverage"))
+    };
+    let material_value = skin_key("GetMaterialValue");
+    assert_eq!(material_value.material_resource_count, 1);
+    assert_eq!(material_value.material_reference_count, 35);
+    assert!(material_value.representatives.iter().any(|representative| {
+        representative.material_path
+            == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+    }));
+    assert_eq!(material_value.observed_values.len(), 1);
+    assert_eq!(
+        material_value.observed_values[0].value_name.as_deref(),
+        Some("GetMaterialValueBody")
+    );
+
+    let decal_color = skin_key("GetDecalColor");
+    assert_eq!(decal_color.material_resource_count, 1);
+    assert_eq!(decal_color.material_reference_count, 35);
+    assert_eq!(decal_color.observed_values.len(), 1);
+    assert_eq!(
+        decal_color.observed_values[0].value_name.as_deref(),
+        Some("GetDecalColorOff")
+    );
+
+    let skin_samplers = report
+        .sampler_coverage
+        .iter()
+        .filter(|coverage| coverage.shader_package_name == "skin.shpk")
+        .collect::<Vec<_>>();
+    assert_eq!(skin_samplers.len(), 3);
+    assert_eq!(
+        skin_samplers
+            .iter()
+            .filter_map(|coverage| coverage.texture_usage_name.as_deref())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["g_SamplerDiffuse", "g_SamplerMask", "g_SamplerNormal"])
+    );
+    assert!(skin_samplers.iter().all(|coverage| {
+        coverage.material_resource_count == 1 && coverage.material_reference_count == 35
+    }));
 }
 
 fn catalog_models(items: &[WeaponCatalogItem]) -> Vec<(PackedModelId, Vec<&WeaponCatalogItem>)> {

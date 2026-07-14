@@ -90,37 +90,30 @@
 
 ### P1：有证据时补视觉语义
 
-1. **特殊 character families**
-   - installed WeaponCatalog 只有 8091 character、6 characterGlass、15 skin；reflection、occlusion、scroll、stockings、tattoo 均为零覆盖，不能用武器快照校准 family 公式。
-   - 唯一 skin 资源为 `mt_c0101b0001_a.mtrl`，35 次目录引用均为 equipment-style 拳套 fallback；它固定 `GetMaterialValue=Body`、`GetDecalColor=Off`，只绑定主 Diffuse/Normal/Mask，没有 Skin* sampler 或静态 decal 输入。
-   - Meddle composer/runtime buffer 提供 SkinColor、OptionColor、DecalColor；on-render material output 另外解析 decal texture，并只为 stockings 从角色 slot skin material 复制 Skin* textures。上述输入都不属于静态 SqPack 武器材质。
-   - MeddleTools 的 skin Body mapping 仍标记 TODO，tattoo 只映射 runtime OptionColor，stockings/scroll 复用 character group，reflection 没有 material/template；因此本轮不新增 WGSL 近似。
-   - 本轮只增加 installed audit 边界断言，固定 special-family 零覆盖和唯一 Skin Body/Off/主 sampler 证据；随后把 reflection/occlusion/scroll 与 skin/stockings/tattoo 的剩余缺口移入 runtime/evidence boundary。
-
-2. **Glass、cutout 与透明合成**
+1. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
-3. **Water 和 environment 扩展**
+2. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
    - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
    - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
 
 ### P2：运行时输入与几何能力
 
-4. **显式 runtime material inputs**
+3. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-5. **runtime geometry state**
+4. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-6. **验证覆盖扩展**
+5. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -135,6 +128,8 @@
 - detail 对 base 的最终 influence：MeddleTools 明确标为 borked，installed 武器无 bg/bguvscroll 校准样本。
 - lightshaft Type/AngleClip/NearClip 游戏裁剪公式。
 - character reflection、crystal environment 和 sphere map 的真实混合公式。
+- character occlusion/scroll 的完整 family 公式；installed 武器为零覆盖，现有 raw mode 与 runtime SubColor 诊断保持不变。
+- skin 的完整 Body/Face 节点、stockings skin-material composition、tattoo Option/Decal color；这些输入由角色 customize/on-render state 提供，不能从静态武器 SqPack 恢复。
 - water refraction、whitecap、WaveMap1 输出公式。
 - Glass 真正的 blend equation、折射和厚度传输。
 - `color1`、`flow1` 及其它 UV1-UV3 的 family-specific 最终用途。
@@ -157,6 +152,7 @@
 - exact-SHPK material semantic audit：scoped key/default/override、constant/default/override、shader flags、资源/catalog 引用双计数、unknown/malformed/non-finite/unresolved 与代表样本。
 - exact sampler-role audit 与 loader 保真：SHPK resource name/CRC、logical role、flags、资源/catalog 引用双计数可审计；Skin* 独立槽固定 UV2 并报告 composition unsupported，武器实样确认仅存在 UV0 主角色。
 - 通用 WGSL surface pipeline 已拆为 `SurfaceSamples -> SurfaceState -> lighting/output`；fragment entry 保留可审计的 debug/discard/draw-role 控制流，结构测试与真实/合成快照固定行为不回退。
+- 特殊 character family 边界已闭环：installed 武器只有 character/characterGlass/skin；唯一 Skin Body/DecalOff 资源只使用主 Diffuse/Normal/Mask，reflection/occlusion/scroll/stockings/tattoo 零覆盖与 runtime-only 输入由全量审计断言固定，不新增无证据 WGSL 近似。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

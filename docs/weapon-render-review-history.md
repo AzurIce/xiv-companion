@@ -29,6 +29,13 @@
 - `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`、`node_mappings.py`、`bake\bake_utils.py`：texture node config、UV scroll、ColorTable extra ramps、shader package mapping、diffuse/normal/roughness/glossy/transmission/emission bake。
 - Penumbra.GameData `StmFile.cs`、`DyePack.cs`、`LegacyDyePack.cs` 与 ColorTable `ApplyDye`：Legacy/GUD STM 路径、1-based stain ID、column 编码和逐 flag ColorTable 覆盖规则。Meddle 的 `ColorDyeTableRow.cs` 注释直接引用该实现。
 
+## 2026-07-14 特殊 character family 证据闭环
+
+- installed WeaponCatalog 的 family coverage 只有 8091 character、6 characterGlass、15 skin；characterReflection、characterOcclusion、characterScroll、characterStockings、characterTattoo 均为零，无法从武器真实快照校准专用公式。
+- 15 个 skin 引用全部指向同一 `chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl`，用于 equipment-style 拳套 fallback。该资源固定 `GetMaterialValueBody`、`GetDecalColorOff`，只绑定 `g_SamplerDiffuse/Normal/Mask`；非默认 diffuse/tile 常量已由现有通用参数与 tile 管线消费，没有额外静态 Skin* 或 decal 输入。
+- Meddle `MaterialComposer`/`ParseMaterialUtil` 从角色 customize/runtime buffer 取得 SkinColor、OptionColor、DecalColor；`OnRenderMaterialUtil` 解析 decal texture/color，并仅在 characterStockings on-render 路径从 slot skin material 复制 Skin* textures。MeddleTools 的 skin Body mapping 仍标为 TODO，tattoo 只映射 runtime OptionColor，stockings/scroll 复用 character group，reflection 没有节点模板。
+- 因此没有新增 WGSL 近似。现有 Face clamp、stockings opaque、tattoo NormalAlpha、scroll raw variant，以及 runtime Skin/Option/Decal/SubColor/skin-material 与 reflection unsupported 均保持；installed audit 新增全量边界断言，family 或唯一 Skin 语义变化时会要求重新审计。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。
