@@ -73,6 +73,7 @@
 - 45050 的毛发透明回归已修复：透明 `_b.mtrl` 为 `GetValuesMultiMaterial + NormalBlue`，807 个顶点中 445 个 A=0，848 个三角形中 400 个全为 A=0；NormalBlue/NormalAlpha 现不再误乘 vertex A。MeddleTools `meddle character.shpk` 的 Alpha 只连接 normal Blue，tattoo Alpha 只连接 normal Alpha，两者都没有 vertex color A 输入。真实 final 前景像素由 29,559 增至 33,358，alpha debug 保留毛束边缘/缝隙透明而主体恢复不透明。
 - character Compatibility diffuse 组合已通过 focused/installed tests 和父提交真实回归：当前 `GetValues=GetValuesCompatibility` 与旧式 `GetValuesTextureType=Compatibility` 共用 multiply gate；45068 固定 Compatibility、`#base-times-colorset` 与原 base index；45047/45048/45050/45053/45068 的 PNG 全部逐字节一致。
 - WeaponCatalog audit 当前结果：8281 个条目、7365 个唯一模型、8112 个可解析材质、0 load failures；武器范围为 8091 character、15 skin、6 characterGlass。
+- material semantic coverage 审计的口径已确定：必须保留 exact SHPK，并分开 material/system/scene key scope；按唯一 MTRL/SHPK 资源和 catalog 引用双计数，避免共享资源放大频率。代表 phantom 数据中，未知 constant `0xAD94E254` 仅在 45050 透明毛 `_b.mtrl` 为 1、同模型不透明材质为 0；未知 material key `0xF52CCF05` 则广泛覆盖 character family。两者都先做全量相关性统计，不猜 WGSL 语义。
 
 ## 当前工作队列
 
@@ -81,9 +82,10 @@
 ### P0：减少静默近似
 
 1. **审计剩余 material keys/constants**
-   - 对 WeaponCatalog 和代表性 SHPK/MTRL 统计仍只存在于 raw debug 的 key/constant。
-   - 有可靠名称和默认值时提升为结构化字段；未知值保留 raw。
-   - 只有存在节点或真实 shader/样本证据时才进入 WGSL，否则增加独立 unsupported 字段。
+   - 扩展现有 WeaponCatalog shader-family audit，一次扫描同时统计 exact SHPK、material/system/scene key defaults、MTRL overrides、resolved constants、shader flags 与代表材质。
+   - 分别报告资源数和引用数，并输出默认值/实际值直方图、non-default override、未知 ID/值及稳定排序的代表样本；不能把 composed summary 中合并的 scene/system keys 误算成 material 输入。
+   - 第一轮重点确认 `0xAD94E254` 与透明/flags 的相关性、`0xF52CCF05` 的 exact-package/value 分布，以及 `CategorySpecularType` legacy 分支、`g_TileMipBiasOffset` 和 vertex-movement constants 是否存在真实非默认覆盖。
+   - 有可靠名称和默认值时提升为结构化字段；未知值保留 raw。只有存在节点或真实 shader/样本证据时才进入 WGSL，否则增加独立 unsupported 字段。
 
 2. **补齐 shader-family-specific texture/UV 决策**
    - 继续确认 character、skin、glass、reflection、scroll、occlusion 的实际 texture role 和 UV source。
