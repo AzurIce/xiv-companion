@@ -24,7 +24,8 @@ use xiv_companion::{
 };
 use xiv_companion_data::{
     MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialLightShaftType,
-    MaterialValueMode, MdlMeshMetadata, MdlMetadata, ModelBoneTable, ModelMaterialTextureArrays,
+    MaterialSpecularType, MaterialValueMode, MdlMeshMetadata, MdlMetadata, ModelBoneTable,
+    ModelMaterialTextureArrays,
 };
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +147,8 @@ struct MaterialSummary {
     alpha_threshold: f32,
     draw_depth_mode: String,
     lighting_mode: String,
+    specular_type: MaterialSpecularType,
+    specular_type_raw: Option<u32>,
     value_mode: MaterialValueMode,
     value_mode_raw: Option<u32>,
     sub_color_mode: String,
@@ -194,7 +197,10 @@ struct MaterialSummary {
     ssao_mask: f32,
     ambient_occlusion_mask: Option<f32>,
     texture_mip_bias: f32,
+    tile_mip_bias_offset: f32,
     shadow_pos_offset: f32,
+    vertex_movement_scale: f32,
+    vertex_movement_max_length: f32,
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
@@ -1180,6 +1186,8 @@ fn material_summary(
         alpha_threshold: material.alpha_threshold,
         draw_depth_mode: format!("{:?}", material.draw_depth_mode),
         lighting_mode: format!("{:?}", material.lighting_mode),
+        specular_type: material.specular_type,
+        specular_type_raw: material.specular_type_raw,
         value_mode: material.value_mode,
         value_mode_raw: material.value_mode_raw,
         sub_color_mode: format!("{:?}", material.sub_color_mode),
@@ -1228,7 +1236,10 @@ fn material_summary(
         ssao_mask: material.ssao_mask,
         ambient_occlusion_mask: material.ambient_occlusion_mask,
         texture_mip_bias: material.texture_mip_bias,
+        tile_mip_bias_offset: material.tile_mip_bias_offset,
         shadow_pos_offset: material.shadow_pos_offset,
+        vertex_movement_scale: material.vertex_movement_scale,
+        vertex_movement_max_length: material.vertex_movement_max_length,
         detail_color_uv_scale: material.detail_color_uv_scale,
         detail_normal_uv_scale: material.detail_normal_uv_scale,
         uv_scroll: material.uv_scroll,

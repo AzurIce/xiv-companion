@@ -1,18 +1,18 @@
 pub use crate::model::{
     BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
     MaterialDecalColorMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType,
-    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSubColorMode,
-    MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
-    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
-    ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
-    ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
-    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex, PackedModelId,
-    PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts,
-    WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode,
-    WeaponModelBounds, WeaponModelData, WeaponModelLoadCandidateDiagnostic,
-    WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic, WeaponModelLoadRole,
-    WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture, WeaponModelTextureKind,
-    WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSpecularType,
+    MaterialSubColorMode, MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData,
+    ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
+    ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays,
+    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta,
+    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
+    PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
+    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
+    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
+    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
     is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
     weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
@@ -70,6 +70,12 @@ const CATEGORY_FLOW_MAP_TYPE: u32 = 0x40D1_481E;
 const FLOW_MAP_STANDARD: u32 = 0x337C_6BC4;
 #[cfg(feature = "game-data")]
 const FLOW_MAP_FLOW: u32 = 0x71AD_A939;
+#[cfg(feature = "game-data")]
+const CATEGORY_SPECULAR_TYPE: u32 = 0xC8BD_1DEF;
+#[cfg(feature = "game-data")]
+const SPECULAR_TYPE_DEFAULT: u32 = 0x198D_11CD;
+#[cfg(feature = "game-data")]
+const SPECULAR_TYPE_MASK: u32 = 0xA02F_4828;
 #[cfg(feature = "game-data")]
 const GET_VALUES: u32 = 0xB616_DC5A;
 #[cfg(feature = "game-data")]
@@ -195,6 +201,12 @@ const G_AMBIENT_OCCLUSION_MASK: u32 = 0x575A_BFB2;
 #[cfg(feature = "game-data")]
 const G_TEXTURE_MIP_BIAS: u32 = 0x3955_1220;
 #[cfg(feature = "game-data")]
+const G_TILE_MIP_BIAS_OFFSET: u32 = 0x6421_DD30;
+#[cfg(feature = "game-data")]
+const G_VERTEX_MOVEMENT_SCALE: u32 = 0x641E_0F22;
+#[cfg(feature = "game-data")]
+const G_VERTEX_MOVEMENT_MAX_LENGTH: u32 = 0xD26F_F0AE;
+#[cfg(feature = "game-data")]
 const G_SHADOW_POS_OFFSET: u32 = 0x5351_646E;
 #[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
@@ -305,6 +317,42 @@ pub trait AsyncGameResource {
 
     fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a>;
     fn platform(&self) -> physis::Platform;
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageSemanticDebug {
+    pub path: String,
+    pub name: String,
+    pub material_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub system_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub scene_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub material_constants: Vec<ShaderPackageMaterialConstantDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageKeyDefaultDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub default_value: u32,
+    pub default_value_hex: String,
+    pub default_value_name: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageMaterialConstantDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub byte_offset: u16,
+    pub byte_size: u16,
+    pub default_values: Option<Vec<f32>>,
 }
 
 #[cfg(feature = "game-data")]
@@ -1424,6 +1472,87 @@ fn subtract_vec3(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
 }
 
 #[cfg(feature = "game-data")]
+pub fn shader_package_semantic_debug_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    shader_package_name: &str,
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    use anyhow::anyhow;
+
+    let name = normalize_game_resource_path(shader_package_name);
+    if name.is_empty() {
+        return Err(anyhow!("shader package name is empty"));
+    }
+    let path = if name.contains('/') {
+        name
+    } else {
+        format!("shader/sm5/shpk/{name}")
+    };
+    let bytes = resource
+        .read(&path)
+        .ok_or_else(|| anyhow!("failed to read shader package {path}"))?;
+
+    shader_package_semantic_debug_from_bytes_for_platform(&path, &bytes, resource.platform())
+}
+
+#[cfg(feature = "game-data")]
+pub fn shader_package_semantic_debug_from_shpk_bytes(
+    path: &str,
+    bytes: &[u8],
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    shader_package_semantic_debug_from_bytes_for_platform(path, bytes, physis::Platform::Win32)
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_semantic_debug_from_bytes_for_platform(
+    path: &str,
+    bytes: &[u8],
+    platform: physis::Platform,
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    use anyhow::anyhow;
+    use physis::ReadableFile;
+
+    let path = normalize_game_resource_path(path);
+    let name = path.rsplit('/').next().unwrap_or_default().to_string();
+    let shader_package = physis::shpk::ShaderPackage::from_existing(platform, bytes)
+        .ok_or_else(|| anyhow!("failed to parse shader package {path}"))?;
+
+    Ok(ShaderPackageSemanticDebug {
+        path,
+        name,
+        material_keys: shader_package_key_defaults_debug(&shader_package.material_keys),
+        system_keys: shader_package_key_defaults_debug(&shader_package.system_keys),
+        scene_keys: shader_package_key_defaults_debug(&shader_package.scene_keys),
+        material_constants: shader_package_material_parameters_for_platform(bytes, platform)
+            .into_iter()
+            .map(|parameter| ShaderPackageMaterialConstantDebug {
+                id: parameter.id,
+                id_hex: hex_u32(parameter.id),
+                name: known_material_constant_name(parameter.id),
+                byte_offset: parameter.byte_offset,
+                byte_size: parameter.byte_size,
+                default_values: parameter.default_values,
+            })
+            .collect(),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_key_defaults_debug(
+    keys: &[physis::shpk::Key],
+) -> Vec<ShaderPackageKeyDefaultDebug> {
+    keys.iter()
+        .map(|key| ShaderPackageKeyDefaultDebug {
+            id: key.id,
+            id_hex: hex_u32(key.id),
+            name: known_shader_label(key.id),
+            default_value: key.default_value,
+            default_value_hex: hex_u32(key.default_value),
+            default_value_name: known_shader_label(key.default_value),
+        })
+        .collect()
+}
+
+#[cfg(feature = "game-data")]
 pub fn material_debug_info_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     path: &str,
@@ -1693,7 +1822,11 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_OutlineWidth",
             "g_SpecularColorMask",
             "g_SSAOMask",
+            "g_AmbientOcclusionMask",
             "g_TextureMipBias",
+            "g_TileMipBiasOffset",
+            "g_VertexMovementScale",
+            "g_VertexMovementMaxLength",
             "g_ShadowPosOffset",
             "g_GlassIOR",
             "g_GlassThicknessMax",
@@ -1703,6 +1836,18 @@ fn known_material_constant_name(id: u32) -> Option<String> {
 
 #[cfg(feature = "game-data")]
 fn known_shader_label(id: u32) -> Option<String> {
+    let fixed_label = match id {
+        CATEGORY_FLOW_MAP_TYPE => Some("CategoryFlowMapType"),
+        FLOW_MAP_STANDARD => Some("Standard"),
+        FLOW_MAP_FLOW => Some("Flow"),
+        CATEGORY_SPECULAR_TYPE => Some("CategorySpecularType"),
+        SPECULAR_TYPE_DEFAULT => Some("Default"),
+        SPECULAR_TYPE_MASK => Some("Mask"),
+        _ => None,
+    };
+    if let Some(label) = fixed_label {
+        return Some(label.to_string());
+    }
     known_crc_label(
         id,
         &[
@@ -1712,9 +1857,18 @@ fn known_shader_label(id: u32) -> Option<String> {
             "ApplyVertexColor",
             "ApplyVertexColorOn",
             "ApplyVertexColorOff",
+            "ApplyVertexMovement",
+            "ApplyVertexMovementOff",
+            "ApplyVertexMovementOn",
+            "DrawDepthMode",
+            "DrawDepthMode_Dither",
+            "EnableLighting",
+            "EnableLightingOff",
+            "EnableLightingOn",
             "GetValues",
             "GetSingleValues",
             "GetMultiValues",
+            "GetValuesMultiMaterial",
             "GetAlphaMultiValues",
             "GetAlphaMultiValues2",
             "GetAlphaMultiValues3",
@@ -1733,6 +1887,9 @@ fn known_shader_label(id: u32) -> Option<String> {
             "GetSubColor",
             "GetSubColorFace",
             "GetSubColorHair",
+            "CategorySpecularType",
+            "Default",
+            "Mask",
             "CategoryFlowMapType",
             "Standard",
             "Flow",
@@ -2293,6 +2450,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
+        let (specular_type, specular_type_raw) = composed_material_specular_type(&semantics);
         let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
         let color_table_diffuse_composition = color_table_diffuse_composition(
             material_shader_family(Some(&shader_package_name)),
@@ -2344,6 +2502,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let ssao_mask = composed_material_ssao_mask(&semantics);
         let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
         let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let tile_mip_bias_offset = composed_material_tile_mip_bias_offset(&semantics);
+        let vertex_movement_scale = composed_material_vertex_movement_scale(&semantics);
+        let vertex_movement_max_length = composed_material_vertex_movement_max_length(&semantics);
         let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
@@ -2397,6 +2558,8 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             draw_depth_mode,
             lighting_mode,
             flow_mode,
+            specular_type,
+            specular_type_raw,
             value_mode,
             value_mode_raw,
             sub_color_mode,
@@ -2446,6 +2609,9 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             ssao_mask,
             ambient_occlusion_mask,
             texture_mip_bias,
+            tile_mip_bias_offset,
+            vertex_movement_scale,
+            vertex_movement_max_length,
             shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
@@ -2939,6 +3105,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
+        let (specular_type, specular_type_raw) = composed_material_specular_type(&semantics);
         let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
         let color_table_diffuse_composition = color_table_diffuse_composition(
             material_shader_family(Some(&shader_package_name)),
@@ -2990,6 +3157,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let ssao_mask = composed_material_ssao_mask(&semantics);
         let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
         let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let tile_mip_bias_offset = composed_material_tile_mip_bias_offset(&semantics);
+        let vertex_movement_scale = composed_material_vertex_movement_scale(&semantics);
+        let vertex_movement_max_length = composed_material_vertex_movement_max_length(&semantics);
         let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
@@ -3044,6 +3214,8 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             draw_depth_mode,
             lighting_mode,
             flow_mode,
+            specular_type,
+            specular_type_raw,
             value_mode,
             value_mode_raw,
             sub_color_mode,
@@ -3093,6 +3265,9 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             ssao_mask,
             ambient_occlusion_mask,
             texture_mip_bias,
+            tile_mip_bias_offset,
+            vertex_movement_scale,
+            vertex_movement_max_length,
             shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
@@ -3946,6 +4121,19 @@ fn composed_material_flow_mode(semantics: &ComposedMaterialSemantics) -> Materia
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_specular_type(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialSpecularType, Option<u32>) {
+    let raw = semantics.material_key_value(CATEGORY_SPECULAR_TYPE);
+    let value = match raw {
+        None | Some(SPECULAR_TYPE_DEFAULT) => MaterialSpecularType::Default,
+        Some(SPECULAR_TYPE_MASK) => MaterialSpecularType::Mask,
+        Some(_) => MaterialSpecularType::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_value_mode(
     semantics: &ComposedMaterialSemantics,
 ) -> (MaterialValueMode, Option<u32>) {
@@ -4235,6 +4423,21 @@ fn composed_material_ambient_occlusion_mask(semantics: &ComposedMaterialSemantic
 #[cfg(feature = "game-data")]
 fn composed_material_texture_mip_bias(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_TEXTURE_MIP_BIAS, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_tile_mip_bias_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TILE_MIP_BIAS_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_movement_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_MOVEMENT_SCALE, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_movement_max_length(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_MOVEMENT_MAX_LENGTH, 1.0)
 }
 
 #[cfg(feature = "game-data")]
@@ -4675,6 +4878,8 @@ fn fallback_weapon_material(
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
         flow_mode: MaterialFlowMode::Standard,
+        specular_type: MaterialSpecularType::Default,
+        specular_type_raw: None,
         value_mode: MaterialValueMode::Single,
         value_mode_raw: None,
         sub_color_mode: MaterialSubColorMode::None,
@@ -4724,6 +4929,9 @@ fn fallback_weapon_material(
         ssao_mask: 1.0,
         ambient_occlusion_mask: None,
         texture_mip_bias: 0.0,
+        tile_mip_bias_offset: 0.0,
+        vertex_movement_scale: 1.0,
+        vertex_movement_max_length: 1.0,
         shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
@@ -4984,40 +5192,74 @@ fn material_constant_debug(bytes: &[u8]) -> Vec<MaterialConstantDebug> {
 
 #[cfg(feature = "game-data")]
 fn shader_package_material_defaults(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
-    let Some(layout) = shader_package_material_defaults_layout(bytes) else {
+    shader_package_material_parameters_for_platform(bytes, physis::Platform::Win32)
+        .into_iter()
+        .filter_map(|parameter| {
+            parameter
+                .default_values
+                .map(|values| (parameter.id, values))
+        })
+        .collect()
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+struct ShaderPackageMaterialParameter {
+    id: u32,
+    byte_offset: u16,
+    byte_size: u16,
+    default_values: Option<Vec<f32>>,
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_material_parameters_for_platform(
+    bytes: &[u8],
+    platform: physis::Platform,
+) -> Vec<ShaderPackageMaterialParameter> {
+    let Some(layout) = shader_package_material_defaults_layout(bytes, platform) else {
         return Vec::new();
     };
 
-    let mut constants = Vec::new();
+    let mut parameters = Vec::new();
     let mut parameter_offset = layout.parameter_offset;
     let defaults_offset = layout.defaults_offset;
 
     for _ in 0..layout.parameter_count {
-        let Some(id) = read_u32_le(bytes, parameter_offset) else {
-            return constants;
+        let Some(id) = read_shpk_u32(bytes, parameter_offset, platform) else {
+            return parameters;
         };
-        let Some(byte_offset) = read_u16_le(bytes, parameter_offset + 4).map(usize::from) else {
-            return constants;
+        let Some(byte_offset) = read_shpk_u16(bytes, parameter_offset + 4, platform) else {
+            return parameters;
         };
-        let Some(byte_size) = read_u16_le(bytes, parameter_offset + 6).map(usize::from) else {
-            return constants;
+        let Some(byte_size) = read_shpk_u16(bytes, parameter_offset + 6, platform) else {
+            return parameters;
         };
-        if byte_size >= 4 && byte_offset.saturating_add(byte_size) <= layout.defaults_size {
-            let value_start = match defaults_offset.checked_add(byte_offset) {
-                Some(value_start) => value_start,
-                None => return constants,
-            };
-            if let Some(values) = read_f32_values(bytes, value_start, byte_size / 4) {
-                constants.push((id, values));
-            }
-        }
+        let byte_offset_usize = usize::from(byte_offset);
+        let byte_size_usize = usize::from(byte_size);
+        let default_values = (layout.has_defaults
+            && byte_size_usize % 4 == 0
+            && byte_offset_usize.saturating_add(byte_size_usize) <= layout.defaults_size)
+            .then(|| {
+                defaults_offset
+                    .checked_add(byte_offset_usize)
+                    .and_then(|value_start| {
+                        read_shpk_f32_values(bytes, value_start, byte_size_usize / 4, platform)
+                    })
+            })
+            .flatten();
+        parameters.push(ShaderPackageMaterialParameter {
+            id,
+            byte_offset,
+            byte_size,
+            default_values,
+        });
         let Some(next) = checked_advance(parameter_offset, 8, bytes.len()) else {
-            return constants;
+            return parameters;
         };
         parameter_offset = next;
     }
 
-    constants
+    parameters
 }
 
 #[cfg(feature = "game-data")]
@@ -5027,23 +5269,25 @@ struct ShaderPackageMaterialDefaultsLayout {
     defaults_offset: usize,
     defaults_size: usize,
     parameter_count: usize,
+    has_defaults: bool,
 }
 
 #[cfg(feature = "game-data")]
 fn shader_package_material_defaults_layout(
     bytes: &[u8],
+    platform: physis::Platform,
 ) -> Option<ShaderPackageMaterialDefaultsLayout> {
     if bytes.get(0..4)? != b"ShPk" {
         return None;
     }
 
-    let version = read_u32_le(bytes, 4)?;
-    let vertex_shader_count = read_u32_usize(bytes, 24)?;
-    let pixel_shader_count = read_u32_usize(bytes, 28)?;
-    let defaults_size = read_u32_usize(bytes, 32)?;
-    let parameter_count = read_u16_le(bytes, 36).map(usize::from)?;
-    let has_defaults = read_u16_le(bytes, 38)? != 0;
-    if !has_defaults || defaults_size == 0 || parameter_count == 0 {
+    let version = read_shpk_u32(bytes, 4, platform)?;
+    let vertex_shader_count = usize::try_from(read_shpk_u32(bytes, 24, platform)?).ok()?;
+    let pixel_shader_count = usize::try_from(read_shpk_u32(bytes, 28, platform)?).ok()?;
+    let defaults_size = usize::try_from(read_shpk_u32(bytes, 32, platform)?).ok()?;
+    let parameter_count = usize::from(read_shpk_u16(bytes, 36, platform)?);
+    let has_defaults = read_shpk_u16(bytes, 38, platform)? != 0;
+    if parameter_count == 0 {
         return None;
     }
 
@@ -5056,7 +5300,7 @@ fn shader_package_material_defaults_layout(
     }
 
     for _ in 0..vertex_shader_count.saturating_add(pixel_shader_count) {
-        offset = shader_package_skip_shader(bytes, offset, version)?;
+        offset = shader_package_skip_shader(bytes, offset, version, platform)?;
     }
 
     let parameter_offset = offset;
@@ -5065,22 +5309,29 @@ fn shader_package_material_defaults_layout(
         parameter_count.saturating_mul(8),
         bytes.len(),
     )?;
-    checked_advance(defaults_offset, defaults_size, bytes.len())?;
+    let stored_defaults_size = if has_defaults { defaults_size } else { 0 };
+    checked_advance(defaults_offset, stored_defaults_size, bytes.len())?;
 
     Some(ShaderPackageMaterialDefaultsLayout {
         parameter_offset,
         defaults_offset,
         defaults_size,
         parameter_count,
+        has_defaults,
     })
 }
 
 #[cfg(feature = "game-data")]
-fn shader_package_skip_shader(bytes: &[u8], offset: usize, version: u32) -> Option<usize> {
-    let scalar_count = read_u16_le(bytes, offset + 8).map(usize::from)?;
-    let resource_count = read_u16_le(bytes, offset + 10).map(usize::from)?;
-    let uav_count = read_u16_le(bytes, offset + 12).map(usize::from)?;
-    let texture_count = read_u16_le(bytes, offset + 14).map(usize::from)?;
+fn shader_package_skip_shader(
+    bytes: &[u8],
+    offset: usize,
+    version: u32,
+    platform: physis::Platform,
+) -> Option<usize> {
+    let scalar_count = usize::from(read_shpk_u16(bytes, offset + 8, platform)?);
+    let resource_count = usize::from(read_shpk_u16(bytes, offset + 10, platform)?);
+    let uav_count = usize::from(read_shpk_u16(bytes, offset + 12, platform)?);
+    let texture_count = usize::from(read_shpk_u16(bytes, offset + 14, platform)?);
     let header_size = if version >= 0x0D01 { 20 } else { 16 };
     let parameter_count = scalar_count
         .saturating_add(resource_count)
@@ -5088,6 +5339,36 @@ fn shader_package_skip_shader(bytes: &[u8], offset: usize, version: u32) -> Opti
         .saturating_add(texture_count);
     let offset = checked_advance(offset, header_size, bytes.len())?;
     checked_advance(offset, parameter_count.saturating_mul(16), bytes.len())
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_u16(bytes: &[u8], offset: usize, platform: physis::Platform) -> Option<u16> {
+    let raw = bytes.get(offset..offset + 2)?.try_into().ok()?;
+    Some(match platform {
+        physis::Platform::PS3 => u16::from_be_bytes(raw),
+        _ => u16::from_le_bytes(raw),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_u32(bytes: &[u8], offset: usize, platform: physis::Platform) -> Option<u32> {
+    let raw = bytes.get(offset..offset + 4)?.try_into().ok()?;
+    Some(match platform {
+        physis::Platform::PS3 => u32::from_be_bytes(raw),
+        _ => u32::from_le_bytes(raw),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_f32_values(
+    bytes: &[u8],
+    offset: usize,
+    count: usize,
+    platform: physis::Platform,
+) -> Option<Vec<f32>> {
+    (0..count)
+        .map(|index| read_shpk_u32(bytes, offset + index * 4, platform).map(f32::from_bits))
+        .collect()
 }
 
 #[cfg(feature = "game-data")]
@@ -5376,11 +5657,6 @@ fn read_string_at(bytes: &[u8], offset: usize) -> Option<String> {
 }
 
 #[cfg(feature = "game-data")]
-fn read_u32_usize(bytes: &[u8], offset: usize) -> Option<usize> {
-    usize::try_from(read_u32_le(bytes, offset)?).ok()
-}
-
-#[cfg(feature = "game-data")]
 fn read_f32_le(bytes: &[u8], offset: usize) -> Option<f32> {
     let bytes = bytes.get(offset..offset + 4)?;
     Some(f32::from_le_bytes(bytes.try_into().ok()?))
@@ -5655,14 +5931,81 @@ mod weapon_material_tests {
             load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
         let material = model.materials.first().expect("45068 material");
         let base = &model.textures[material.base_color_texture.expect("active base texture")];
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
 
         assert_eq!(material.value_mode, MaterialValueMode::Compatibility);
+        assert_eq!(material.vertex_movement_scale, 0.0);
+        assert_eq!(material.vertex_movement_max_length, 0.0);
+        assert!(prepared.unsupported_inputs.vertex_movement_parameters);
         assert!(base.path.ends_with("#base-times-colorset"));
         assert!(material.texture_indices.iter().any(|index| {
             model.textures[*index]
                 .path
                 .ends_with("v01_w0114b0001_base.tex")
         }));
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_audited_tile_mip_bias_offsets_are_preserved() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        for (item_id, item_name, model_main, expected_bias, expected_scale) in [
+            (47320, "改良型护锁刃魔导典", 4_295_034_596, 1.0, 1.010_056),
+            (46462, "女王骑士之典", 8_590_591_710, -1.0, 1.0),
+        ] {
+            let request = WeaponModelLoadRequest {
+                item_id,
+                item_name: item_name.to_string(),
+                model_main,
+                model_sub: 0,
+                stain_ids: [0, 0],
+            };
+            let model = load_weapon_model_from_resource_request(&mut resource, &request)
+                .unwrap_or_else(|error| panic!("{item_id}: {error:#}"));
+            let material = model
+                .materials
+                .iter()
+                .find(|material| material.tile_mip_bias_offset == expected_bias)
+                .unwrap_or_else(|| panic!("{item_id}: audited tile bias material"));
+            let prepared = crate::model::prepare_material_for_draw_role(
+                Some(material),
+                ModelMeshDrawRole::Normal,
+            );
+
+            assert_eq!(material.tile_mip_bias_offset, expected_bias);
+            assert!((material.vertex_movement_scale - expected_scale).abs() < 0.000_01);
+            assert!(prepared.unsupported_inputs.tile_mip_bias_offset);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_legacy_specular_mask_is_structured_and_supported() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 30520,
+            item_name: "改良型伊修加德新型天星盘".to_string(),
+            model_main: 8_593_934_389,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.specular_type == MaterialSpecularType::Mask)
+            .expect("legacy specular mask material");
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        assert_eq!(material.specular_type_raw, Some(SPECULAR_TYPE_MASK));
+        assert!(!prepared.unsupported_inputs.legacy_specular_type);
     }
 
     #[test]
@@ -5818,6 +6161,34 @@ mod weapon_material_tests {
             assert_eq!(known_shader_label(value).as_deref(), Some(expected));
         }
         assert_eq!(known_shader_label(0xDEAD_BEEF), None);
+    }
+
+    #[test]
+    fn known_semantic_labels_cover_audited_material_inputs() {
+        for (value, expected) in [
+            (CATEGORY_SPECULAR_TYPE, "CategorySpecularType"),
+            (SPECULAR_TYPE_DEFAULT, "Default"),
+            (SPECULAR_TYPE_MASK, "Mask"),
+            (GET_VALUES_MULTI_MATERIAL, "GetValuesMultiMaterial"),
+            (DRAW_DEPTH_MODE, "DrawDepthMode"),
+            (ENABLE_LIGHTING, "EnableLighting"),
+            (0x87D8_F48A, "ApplyVertexMovement"),
+            (0xF8CA_223F, "ApplyVertexMovementOff"),
+            (0xA657_DE89, "ApplyVertexMovementOn"),
+        ] {
+            assert_eq!(known_shader_label(value).as_deref(), Some(expected));
+        }
+        for (value, expected) in [
+            (G_TILE_MIP_BIAS_OFFSET, "g_TileMipBiasOffset"),
+            (G_VERTEX_MOVEMENT_SCALE, "g_VertexMovementScale"),
+            (G_VERTEX_MOVEMENT_MAX_LENGTH, "g_VertexMovementMaxLength"),
+            (G_AMBIENT_OCCLUSION_MASK, "g_AmbientOcclusionMask"),
+        ] {
+            assert_eq!(
+                known_material_constant_name(value).as_deref(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -6661,6 +7032,129 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn shader_package_semantic_debug_preserves_zero_width_material_parameters() {
+        let bytes = test_shpk_with_material_defaults(&[
+            (G_ALPHA_THRESHOLD, &[0.35]),
+            (G_AMBIENT_OCCLUSION_MASK, &[]),
+        ]);
+
+        let debug =
+            shader_package_semantic_debug_from_shpk_bytes("shader/sm5/shpk/character.shpk", &bytes)
+                .expect("shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 2);
+        assert_eq!(debug.material_constants[1].id, G_AMBIENT_OCCLUSION_MASK);
+        assert_eq!(debug.material_constants[1].byte_size, 0);
+        assert_eq!(debug.material_constants[1].default_values, Some(Vec::new()));
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_preserves_parameters_without_defaults() {
+        let bytes = test_shpk_without_material_defaults(&[(G_AMBIENT_OCCLUSION_MASK, 4)]);
+
+        let debug =
+            shader_package_semantic_debug_from_shpk_bytes("shader/sm5/shpk/character.shpk", &bytes)
+                .expect("shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 1);
+        assert_eq!(debug.material_constants[0].id, G_AMBIENT_OCCLUSION_MASK);
+        assert_eq!(debug.material_constants[0].byte_size, 4);
+        assert_eq!(debug.material_constants[0].default_values, None);
+        assert!(shader_package_material_defaults(&bytes).is_empty());
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_reads_ps3_material_defaults_as_big_endian() {
+        let bytes = test_shpk_with_semantics_for_platform(
+            &[(G_ALPHA_THRESHOLD, &[0.35])],
+            &[],
+            &[],
+            &[],
+            physis::Platform::PS3,
+        );
+
+        let debug = shader_package_semantic_debug_from_bytes_for_platform(
+            "shader/sm5/shpk/character.shpk",
+            &bytes,
+            physis::Platform::PS3,
+        )
+        .expect("PS3 shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 1);
+        assert_eq!(debug.material_constants[0].id, G_ALPHA_THRESHOLD);
+        assert_eq!(debug.material_constants[0].default_values, Some(vec![0.35]));
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_preserves_key_scopes_and_constant_defaults() {
+        let bytes = test_shpk_with_semantics(
+            &[(G_ALPHA_THRESHOLD, &[0.35, 0.75])],
+            &[(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON)],
+            &[(GET_VALUES, GET_VALUES_COMPATIBILITY)],
+            &[(GET_DECAL_COLOR, GET_DECAL_COLOR_RGBA)],
+        );
+
+        let debug = shader_package_semantic_debug_from_shpk_bytes(
+            r"Shader\SM5\ShPk\Character.ShPk",
+            &bytes,
+        )
+        .expect("shader package debug");
+
+        assert_eq!(debug.path, "shader/sm5/shpk/character.shpk");
+        assert_eq!(debug.name, "character.shpk");
+        assert_eq!(
+            debug.material_keys,
+            vec![ShaderPackageKeyDefaultDebug {
+                id: APPLY_ALPHA_TEST,
+                id_hex: hex_u32(APPLY_ALPHA_TEST),
+                name: Some("ApplyAlphaTest".to_string()),
+                default_value: APPLY_ALPHA_TEST_ON,
+                default_value_hex: hex_u32(APPLY_ALPHA_TEST_ON),
+                default_value_name: Some("ApplyAlphaTestOn".to_string()),
+            }]
+        );
+        assert_eq!(debug.system_keys[0].id, GET_VALUES);
+        assert_eq!(
+            debug.system_keys[0].default_value_name.as_deref(),
+            Some("GetValuesCompatibility")
+        );
+        assert_eq!(debug.scene_keys[0].id, GET_DECAL_COLOR);
+        assert_eq!(
+            debug.scene_keys[0].default_value_name.as_deref(),
+            Some("GetDecalColorRGBA")
+        );
+        assert_eq!(
+            debug.material_constants,
+            vec![ShaderPackageMaterialConstantDebug {
+                id: G_ALPHA_THRESHOLD,
+                id_hex: hex_u32(G_ALPHA_THRESHOLD),
+                name: Some("g_AlphaThreshold".to_string()),
+                byte_offset: 0,
+                byte_size: 8,
+                default_values: Some(vec![0.35, 0.75]),
+            }]
+        );
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_from_resource_resolves_package_name() {
+        let bytes =
+            test_shpk_with_semantics(&[], &[(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON)], &[], &[]);
+        let path = "shader/sm5/shpk/character.shpk";
+        let expected = shader_package_semantic_debug_from_shpk_bytes(path, &bytes)
+            .expect("expected shader package debug");
+        let mut resource = TestShaderPackageResource {
+            path: path.to_string(),
+            bytes,
+        };
+
+        let actual = shader_package_semantic_debug_from_resource(&mut resource, "character.shpk")
+            .expect("resource shader package debug");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn composed_material_semantics_material_constant_overrides_shader_package_default() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[(G_ALPHA_THRESHOLD, &[0.2])]);
@@ -6816,6 +7310,33 @@ mod weapon_material_tests {
         assert_eq!(
             composed_material_flow_mode(&semantics),
             MaterialFlowMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_specular_type_preserves_default_mask_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Default, None)
+        );
+
+        semantics.apply_shader_package_key_default(CATEGORY_SPECULAR_TYPE, SPECULAR_TYPE_DEFAULT);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Default, Some(SPECULAR_TYPE_DEFAULT))
+        );
+
+        semantics.apply_material_key(CATEGORY_SPECULAR_TYPE, SPECULAR_TYPE_MASK);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Mask, Some(SPECULAR_TYPE_MASK))
+        );
+
+        semantics.apply_material_key(CATEGORY_SPECULAR_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Unknown, Some(0xDEAD_BEEF))
         );
     }
 
@@ -7136,6 +7657,60 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_MULTI_DETAIL_NORMAL_SCALE, &[8.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_multi_detail_normal_scale(&semantics), 4.0);
+    }
+
+    #[test]
+    fn composed_material_latent_motion_and_tile_bias_use_resolved_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_TILE_MIP_BIAS_OFFSET, &[0.25]),
+            (G_VERTEX_MOVEMENT_SCALE, &[0.75]),
+            (G_VERTEX_MOVEMENT_MAX_LENGTH, &[3.0]),
+        ]);
+
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.0);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.0);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            1.0
+        );
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.25);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 0.75);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            3.0
+        );
+
+        let material = test_mtrl_with_constant(G_TILE_MIP_BIAS_OFFSET, &[-1.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), -1.0);
+
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_SCALE, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_MAX_LENGTH, &[10.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            10.0
+        );
+
+        let material = test_mtrl_with_constant(G_TILE_MIP_BIAS_OFFSET, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.0);
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_SCALE, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.0);
+        let material =
+            test_mtrl_with_constant(G_VERTEX_MOVEMENT_MAX_LENGTH, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            1.0
+        );
     }
 
     #[test]
@@ -8452,48 +9027,128 @@ mod weapon_material_tests {
         bytes
     }
 
+    #[derive(Clone)]
+    struct TestShaderPackageResource {
+        path: String,
+        bytes: Vec<u8>,
+    }
+
+    impl physis::resource::Resource for TestShaderPackageResource {
+        fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+            (path == self.path).then(|| self.bytes.clone())
+        }
+
+        fn exists(&mut self, path: &str) -> bool {
+            path == self.path
+        }
+    }
+
     fn test_shpk_with_material_defaults(parameters: &[(u32, &[f32])]) -> Vec<u8> {
+        test_shpk_with_semantics(parameters, &[], &[], &[])
+    }
+
+    fn test_shpk_with_semantics(
+        parameters: &[(u32, &[f32])],
+        material_keys: &[(u32, u32)],
+        system_keys: &[(u32, u32)],
+        scene_keys: &[(u32, u32)],
+    ) -> Vec<u8> {
+        test_shpk_with_semantics_for_platform(
+            parameters,
+            material_keys,
+            system_keys,
+            scene_keys,
+            physis::Platform::Win32,
+        )
+    }
+
+    fn test_shpk_with_semantics_for_platform(
+        parameters: &[(u32, &[f32])],
+        material_keys: &[(u32, u32)],
+        system_keys: &[(u32, u32)],
+        scene_keys: &[(u32, u32)],
+        platform: physis::Platform,
+    ) -> Vec<u8> {
         let defaults_size = parameters
             .iter()
             .map(|(_, values)| values.len() * 4)
             .sum::<usize>() as u32;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"ShPk");
-        bytes.extend_from_slice(&0x0C01_u32.to_le_bytes());
+        bytes.extend_from_slice(&test_shpk_u32(0x0C01, platform));
         bytes.extend_from_slice(b"DX11");
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&defaults_size.to_le_bytes());
-        bytes.extend_from_slice(&(parameters.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        for value in [0, 0, 0, 0, 0, defaults_size] {
+            bytes.extend_from_slice(&test_shpk_u32(value, platform));
+        }
+        bytes.extend_from_slice(&test_shpk_u16(parameters.len() as u16, platform));
+        bytes.extend_from_slice(&test_shpk_u16(1, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u16(0, platform));
+        bytes.extend_from_slice(&test_shpk_u16(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(system_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(scene_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(material_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
 
         let mut byte_offset = 0_u16;
         for (id, values) in parameters {
             let byte_size = (values.len() * 4) as u16;
-            bytes.extend_from_slice(&id.to_le_bytes());
-            bytes.extend_from_slice(&byte_offset.to_le_bytes());
-            bytes.extend_from_slice(&byte_size.to_le_bytes());
+            bytes.extend_from_slice(&test_shpk_u32(*id, platform));
+            bytes.extend_from_slice(&test_shpk_u16(byte_offset, platform));
+            bytes.extend_from_slice(&test_shpk_u16(byte_size, platform));
             byte_offset += byte_size;
         }
 
         for (_, values) in parameters {
             for value in *values {
-                bytes.extend_from_slice(&value.to_le_bytes());
+                bytes.extend_from_slice(&test_shpk_u32(value.to_bits(), platform));
             }
         }
 
+        for (id, default_value) in system_keys.iter().chain(scene_keys).chain(material_keys) {
+            bytes.extend_from_slice(&test_shpk_u32(*id, platform));
+            bytes.extend_from_slice(&test_shpk_u32(*default_value, platform));
+        }
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+
         bytes
+    }
+
+    fn test_shpk_without_material_defaults(parameters: &[(u32, u16)]) -> Vec<u8> {
+        let defaults = parameters
+            .iter()
+            .map(|(_, byte_size)| vec![0.0; usize::from(*byte_size) / 4])
+            .collect::<Vec<_>>();
+        let parameter_values = parameters
+            .iter()
+            .zip(&defaults)
+            .map(|((id, _), values)| (*id, values.as_slice()))
+            .collect::<Vec<_>>();
+        let mut bytes = test_shpk_with_semantics(&parameter_values, &[], &[], &[]);
+        let defaults_offset = 72 + parameters.len() * 8;
+        let defaults_size = parameters
+            .iter()
+            .map(|(_, byte_size)| usize::from(*byte_size))
+            .sum::<usize>();
+        bytes.drain(defaults_offset..defaults_offset + defaults_size);
+        bytes[38..40].copy_from_slice(&0_u16.to_le_bytes());
+        bytes
+    }
+
+    fn test_shpk_u16(value: u16, platform: physis::Platform) -> [u8; 2] {
+        match platform {
+            physis::Platform::PS3 => value.to_be_bytes(),
+            _ => value.to_le_bytes(),
+        }
+    }
+
+    fn test_shpk_u32(value: u32, platform: physis::Platform) -> [u8; 4] {
+        match platform {
+            physis::Platform::PS3 => value.to_be_bytes(),
+            _ => value.to_le_bytes(),
+        }
     }
 }

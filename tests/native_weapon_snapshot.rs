@@ -4,6 +4,8 @@
 use physis::resource::SqPackResource;
 #[cfg(feature = "game-data")]
 use xiv_companion::{WeaponModelLoadRequest, load_weapon_model_from_resource_request};
+#[cfg(feature = "game-data")]
+use xiv_companion_data::MaterialSpecularType;
 use xiv_companion_render::test_support::{
     WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
 };
@@ -92,6 +94,59 @@ fn render_installed_equipment_fist_shape_snapshot() {
     assert!(
         rgb_difference > 5_000,
         "enabled shp_arm must produce a stable visible GPU difference"
+    );
+}
+
+#[test]
+#[cfg(feature = "game-data")]
+#[ignore = "renders installed legacy specular-type snapshots to target/weapon-render-snapshots"]
+fn render_installed_legacy_specular_mask_snapshot() {
+    let game_dir = std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+    let request = WeaponModelLoadRequest {
+        item_id: 30_520,
+        item_name: "改良型伊修加德新型天星盘".to_string(),
+        model_main: 8_593_934_389,
+        model_sub: 0,
+        stain_ids: [0, 0],
+    };
+    let mut resource = SqPackResource::from_existing(&game_dir);
+    let mut model = load_weapon_model_from_resource_request(&mut resource, &request)
+        .expect("load legacy specular-mask weapon");
+    let material_index = model
+        .materials
+        .iter()
+        .position(|material| material.specular_type == MaterialSpecularType::Mask)
+        .expect("legacy specular-mask material");
+
+    let render = |name: &str, model: &WeaponModelData| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name).with_viewport(640, 640),
+            model,
+        )
+        .expect("render legacy specular snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode legacy specular PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let masked = render("installed-legacy-specular-mask-30520", &model);
+    model.materials[material_index].specular_type = MaterialSpecularType::Default;
+    model.materials[material_index].specular_type_raw = Some(0x198D_11CD);
+    let default = render("installed-legacy-specular-default-30520", &model);
+    let rgb_difference: u64 = masked
+        .chunks_exact(4)
+        .zip(default.chunks_exact(4))
+        .map(|(masked, default)| {
+            (0..3)
+                .map(|channel| masked[channel].abs_diff(default[channel]) as u64)
+                .sum::<u64>()
+        })
+        .sum();
+
+    eprintln!("legacy specular Mask/Default RGB difference: {rgb_difference}");
+    assert!(
+        rgb_difference > 5_000,
+        "SpecularType Mask must produce a stable visible GPU difference"
     );
 }
 

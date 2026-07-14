@@ -9,7 +9,7 @@ struct Material {
     emissive_color: vec4<f32>, // a: has emissive texture
     specular_color: vec4<f32>,
     params: vec4<f32>, // x: has base, y: metalness, z: has normal, w: has mask
-    properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color
+    properties: vec4<f32>, // x: has ColorTable material properties texture, y: has specular texture, z: apply vertex color, w: legacy Compatibility specular mode
     render: vec4<f32>, // x: render mode, y: opacity, z: alpha mode 0=opaque 1=mask 2=blend 3=glass, w: alpha threshold
     alpha_params: vec4<f32>, // x: aperture, y: offset, z: shadow alpha threshold, w: transparency
     alpha_policy_params: vec4<f32>, // x: source 0=opaque 1=base alpha 2=normal blue 3=material transparency 4=normal alpha, y: lighting, z: dither depth, w: prepared pass
@@ -341,7 +341,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let specular_strength = clamp(properties.w, 0.0, 1.0);
     let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
     let specular_scale = specular_strength
-        * mix(1.0, mask.r * 1.35, material.params.w)
+        * resolve_specular_mask_factor(mask.r)
         * specular_color_mask.a;
     let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
     let normal_half = max(dot(normal, half_dir), 0.0);
@@ -632,11 +632,28 @@ fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>) -> vec4<f32> {
         );
     }
 
+    if material.properties.w > 0.5 {
+        let metalness = clamp(material.params.y, 0.0, 1.0);
+        let roughness = clamp(material.specular_color.a, 0.08, 1.0);
+        let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);
+        return vec4<f32>(metalness, roughness, gloss_strength, 1.0);
+    }
+
     let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
     let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
     let specular_strength = mix(1.0, mask.r * 1.35, material.params.w);
     let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);
     return vec4<f32>(metalness, roughness, gloss_strength, specular_strength);
+}
+
+fn resolve_specular_mask_factor(mask_red: f32) -> f32 {
+    if material.properties.w > 1.5 {
+        return mask_red * mask_red;
+    }
+    if material.properties.w > 0.5 {
+        return 1.0;
+    }
+    return mix(1.0, mask_red * 1.35, material.params.w);
 }
 
 struct TileArraySample {

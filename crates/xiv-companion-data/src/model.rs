@@ -440,6 +440,10 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub lighting_mode: MaterialLightingMode,
     #[serde(default)]
+    pub specular_type: MaterialSpecularType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_type_raw: Option<u32>,
+    #[serde(default)]
     pub flow_mode: MaterialFlowMode,
     #[serde(default)]
     pub value_mode: MaterialValueMode,
@@ -536,7 +540,13 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub texture_mip_bias: f32,
     #[serde(default)]
+    pub tile_mip_bias_offset: f32,
+    #[serde(default)]
     pub shadow_pos_offset: f32,
+    #[serde(default = "default_material_vertex_movement")]
+    pub vertex_movement_scale: f32,
+    #[serde(default = "default_material_vertex_movement")]
+    pub vertex_movement_max_length: f32,
     #[serde(default = "default_material_detail_uv_scale")]
     pub detail_color_uv_scale: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
@@ -675,6 +685,15 @@ pub enum MaterialLightingMode {
     Default,
     Enabled,
     Disabled,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSpecularType {
+    #[default]
+    Default,
+    Mask,
     Unknown,
 }
 
@@ -1077,6 +1096,12 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub decal_color_mode: bool,
     #[serde(default)]
     pub alpha_multi_values: bool,
+    #[serde(default)]
+    pub legacy_specular_type: bool,
+    #[serde(default)]
+    pub tile_mip_bias_offset: bool,
+    #[serde(default)]
+    pub vertex_movement_parameters: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1824,6 +1849,13 @@ pub fn prepared_material_unsupported_inputs(
                     | MaterialValueMode::AlphaMulti3
             )
         }),
+        legacy_specular_type: material.is_some_and(material_has_unsupported_legacy_specular_type),
+        tile_mip_bias_offset: material
+            .is_some_and(|material| material_scalar_differs(material.tile_mip_bias_offset, 0.0)),
+        vertex_movement_parameters: material.is_some_and(|material| {
+            material_scalar_differs(material.vertex_movement_scale, 1.0)
+                || material_scalar_differs(material.vertex_movement_max_length, 1.0)
+        }),
     }
 }
 
@@ -2042,6 +2074,24 @@ fn material_scalar_differs(value: f32, default: f32) -> bool {
     value.is_finite() && (value - default).abs() > 0.000_001
 }
 
+fn material_has_unsupported_legacy_specular_type(material: &ModelMaterial) -> bool {
+    match material.specular_type {
+        MaterialSpecularType::Default => false,
+        MaterialSpecularType::Unknown => true,
+        MaterialSpecularType::Mask => {
+            let is_character_legacy = material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"));
+            !(is_character_legacy
+                && matches!(
+                    material.value_mode,
+                    MaterialValueMode::MultiMaterial | MaterialValueMode::Compatibility
+                ))
+        }
+    }
+}
+
 fn material_vec2_differs(value: [f32; 2], default: [f32; 2]) -> bool {
     value
         .into_iter()
@@ -2119,6 +2169,10 @@ fn default_material_water_whitecap_color() -> [f32; 4] {
 }
 
 fn default_material_normal_scale() -> f32 {
+    1.0
+}
+
+fn default_material_vertex_movement() -> f32 {
     1.0
 }
 
@@ -3269,6 +3323,9 @@ mod color_table_bake_tests {
                 lightshaft_clip: false,
                 decal_color_mode: false,
                 alpha_multi_values: false,
+                legacy_specular_type: false,
+                tile_mip_bias_offset: false,
+                vertex_movement_parameters: false,
             }
         );
         assert_eq!(
@@ -3297,6 +3354,9 @@ mod color_table_bake_tests {
                 lightshaft_clip: false,
                 decal_color_mode: false,
                 alpha_multi_values: false,
+                legacy_specular_type: false,
+                tile_mip_bias_offset: false,
+                vertex_movement_parameters: false,
             }
         );
 
@@ -3386,6 +3446,78 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
             PreparedMaterialUnsupportedInputs::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_latent_legacy_constant_inputs() {
+        let mut material = test_material();
+        let unsupported =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs;
+        assert!(!unsupported.legacy_specular_type);
+        assert!(!unsupported.tile_mip_bias_offset);
+        assert!(!unsupported.vertex_movement_parameters);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        material.specular_type_raw = Some(0xA02F_4828);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        material.value_mode = MaterialValueMode::Compatibility;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+        material.value_mode = MaterialValueMode::MultiMaterial;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+        material.value_mode = MaterialValueMode::Single;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.specular_type = MaterialSpecularType::Unknown;
+        material.specular_type_raw = Some(0xDEAD_BEEF);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.specular_type = MaterialSpecularType::Default;
+        material.specular_type_raw = None;
+        material.tile_mip_bias_offset = 0.25;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .tile_mip_bias_offset
+        );
+
+        material.tile_mip_bias_offset = 0.0;
+        material.vertex_movement_scale = 0.5;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_movement_parameters
+        );
+
+        material.vertex_movement_scale = 1.0;
+        material.vertex_movement_max_length = 2.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_movement_parameters
         );
     }
 
@@ -4146,6 +4278,8 @@ mod color_table_bake_tests {
             alpha_threshold: 0.0,
             draw_depth_mode: MaterialDrawDepthMode::None,
             lighting_mode: MaterialLightingMode::Default,
+            specular_type: MaterialSpecularType::Default,
+            specular_type_raw: None,
             flow_mode: MaterialFlowMode::Standard,
             value_mode: MaterialValueMode::Single,
             value_mode_raw: None,
@@ -4196,7 +4330,10 @@ mod color_table_bake_tests {
             ssao_mask: 1.0,
             ambient_occlusion_mask: None,
             texture_mip_bias: 0.0,
+            tile_mip_bias_offset: 0.0,
             shadow_pos_offset: 0.0,
+            vertex_movement_scale: 1.0,
+            vertex_movement_max_length: 1.0,
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],

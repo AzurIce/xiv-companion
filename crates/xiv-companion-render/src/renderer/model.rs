@@ -1,5 +1,6 @@
 use half::f16;
 use wgpu::util::DeviceExt;
+use xiv_companion_data::MaterialSpecularType;
 
 use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
@@ -1846,7 +1847,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             } else {
                 0.0
             },
-            0.0,
+            material_legacy_specular_mode(material),
         ],
         render: [
             render_mode_value(material.render_mode),
@@ -3257,6 +3258,8 @@ fn fallback_material() -> ModelMaterial {
         alpha_threshold: 0.0,
         draw_depth_mode: MaterialDrawDepthMode::None,
         lighting_mode: MaterialLightingMode::Default,
+        specular_type: MaterialSpecularType::Default,
+        specular_type_raw: None,
         flow_mode: MaterialFlowMode::Standard,
         value_mode: crate::MaterialValueMode::Single,
         value_mode_raw: None,
@@ -3305,7 +3308,10 @@ fn fallback_material() -> ModelMaterial {
         ssao_mask: 1.0,
         ambient_occlusion_mask: None,
         texture_mip_bias: 0.0,
+        tile_mip_bias_offset: 0.0,
         shadow_pos_offset: 0.0,
+        vertex_movement_scale: 1.0,
+        vertex_movement_max_length: 1.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -3563,6 +3569,22 @@ fn material_outline_params(material: &ModelMaterial) -> [f32; 4] {
 
 fn material_specular_color_mask(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.specular_color_mask, [1.0; 4])
+}
+
+fn material_legacy_specular_mode(material: &ModelMaterial) -> f32 {
+    let uses_legacy_compatibility = material
+        .shader_package_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+        && matches!(material.value_mode, crate::MaterialValueMode::Compatibility);
+    if !uses_legacy_compatibility {
+        return 0.0;
+    }
+    match material.specular_type {
+        MaterialSpecularType::Default => 1.0,
+        MaterialSpecularType::Mask => 2.0,
+        MaterialSpecularType::Unknown => 0.0,
+    }
 }
 
 fn material_surface_params(
@@ -5251,6 +5273,26 @@ mod tests {
             material_surface_params(&material, character),
             [1.0, 0.0, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn legacy_compatibility_specular_mode_is_key_aware() {
+        let mut material = fallback_material();
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        material.value_mode = crate::MaterialValueMode::Compatibility;
+        assert_eq!(material_legacy_specular_mode(&material), 1.0);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        assert_eq!(material_legacy_specular_mode(&material), 2.0);
+
+        material.specular_type = MaterialSpecularType::Unknown;
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        material.value_mode = crate::MaterialValueMode::MultiMaterial;
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
     }
 
     #[test]
