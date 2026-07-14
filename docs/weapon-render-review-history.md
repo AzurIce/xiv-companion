@@ -29,6 +29,13 @@
 - `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`、`node_mappings.py`、`bake\bake_utils.py`：texture node config、UV scroll、ColorTable extra ramps、shader package mapping、diffuse/normal/roughness/glossy/transmission/emission bake。
 - Penumbra.GameData `StmFile.cs`、`DyePack.cs`、`LegacyDyePack.cs` 与 ColorTable `ApplyDye`：Legacy/GUD STM 路径、1-based stain ID、column 编码和逐 flag ColorTable 覆盖规则。Meddle 的 `ColorDyeTableRow.cs` 注释直接引用该实现。
 
+## 2026-07-14 MultiMaterial 证据闭环
+
+- WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。
+- 对 installed `character.shpk` 按除 `GetValues` 外完全相同的 system/scene/material/subview keys 成对比较 node passes。代表 surface pair 的 MultiMaterial PS 不声明 `g_SamplerDiffuse`，Compatibility PS 在相同 Normal/Mask/Index/Table/tile/sphere/reflection/occlusion 资源管线上新增 Diffuse texture 并执行采样。
+- 该结果与 MeddleTools character group 的 Compatibility multiply gate 一致，也证明当前 loader 的 MultiMaterial=`ColorTable diffuse`、Compatibility=`base × ColorTable` 不需要继续修改。`GetValuesMultiMaterial` 的 vertex alpha 仍不能作为 opacity。
+- AlphaMulti 接口未连接、MultiMap 无 socket/config、detail influence 明确标为 borked；结合武器零覆盖，这三项移入证据不足区，保留 mode/raw、binding 与独立 unsupported，避免无样本调参。
+
 ## 2026-07-14 WGSL surface composition 重构
 
 - MeddleTools 的 legacy/stockings/glass/scroll/transparency 都复用 character surface group，skin/water/bg 也最终输出共同的 base/normal/material/alpha/emission channels；因此没有为每个 package 复制 fragment shader。
