@@ -1207,6 +1207,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
     );
     if item_ids.is_none() && scan_limit >= unique_models {
         assert_installed_special_character_boundary(&report);
+        assert_installed_character_glass_shader_boundary(&mut resource);
     }
     Ok(())
 }
@@ -1270,6 +1271,26 @@ fn assert_installed_special_character_boundary(report: &WeaponShaderFamilyAudit)
     assert!(skin_samplers.iter().all(|coverage| {
         coverage.material_resource_count == 1 && coverage.material_reference_count == 35
     }));
+}
+
+fn assert_installed_character_glass_shader_boundary(resource: &mut SqPackResource) {
+    let bytes = resource
+        .read("shader/sm5/shpk/characterglass.shpk")
+        .expect("installed characterglass.shpk");
+    let package = physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
+        .expect("parse installed characterglass.shpk");
+    assert_eq!(package.pixel_shaders.len(), 38);
+    for (index, shader) in package.pixel_shaders.iter().enumerate() {
+        assert!(
+            shader.scalar_parameters.iter().all(|parameter| {
+                !matches!(
+                    parameter.name.as_str(),
+                    "g_GlassIOR" | "g_GlassThicknessMax"
+                )
+            }),
+            "characterglass pixel shader {index} started binding a glass parameter; re-audit its surface formula"
+        );
+    }
 }
 
 fn catalog_models(items: &[WeaponCatalogItem]) -> Vec<(PackedModelId, Vec<&WeaponCatalogItem>)> {

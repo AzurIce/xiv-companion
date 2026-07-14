@@ -1135,6 +1135,8 @@ pub struct PreparedMaterialUnsupportedInputs {
     #[serde(default)]
     pub character_scroll_variant: bool,
     #[serde(default)]
+    pub glass_shader_parameters: bool,
+    #[serde(default)]
     pub ambient_occlusion_mask: bool,
     #[serde(default)]
     pub lightshaft_clip: bool,
@@ -1914,6 +1916,7 @@ pub fn prepared_material_unsupported_inputs(
         multi_map_interpretation: texture_bindings.multi_map.is_some(),
         character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
         character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
+        glass_shader_parameters: matches!(shader_family, MaterialShaderFamily::CharacterGlass),
         ambient_occlusion_mask: material
             .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
         lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
@@ -3423,6 +3426,7 @@ mod color_table_bake_tests {
                 multi_map_interpretation: true,
                 character_reflection: true,
                 character_scroll_variant: false,
+                glass_shader_parameters: false,
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
@@ -3455,6 +3459,7 @@ mod color_table_bake_tests {
                 multi_map_interpretation: true,
                 character_reflection: true,
                 character_scroll_variant: false,
+                glass_shader_parameters: false,
                 ambient_occlusion_mask: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
@@ -3523,6 +3528,11 @@ mod color_table_bake_tests {
         let reflection = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(reflection.unsupported_inputs.character_reflection);
         assert!(reflection.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("characterglass.shpk".to_string());
+        let glass = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(glass.unsupported_inputs.glass_shader_parameters);
+        assert!(glass.unsupported_inputs.incomplete_shader_family_logic);
 
         material.shader_package_name = Some("characterscroll.shpk".to_string());
         let scroll = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);

@@ -16,7 +16,6 @@ struct Material {
     water_deep_color: vec4<f32>,
     water_refraction_color: vec4<f32>,
     water_whitecap_color: vec4<f32>,
-    glass_params: vec4<f32>, // x: IOR, y: max thickness
     extra_properties: vec4<f32>, // x: tile, y: sheen, z: sphere, w: tile matrix
     shader_params: vec4<f32>, // x: normal, y: multi normal, z: detail normal, w: multi detail normal
     tile_params: vec4<f32>, // x: tile index, y: tile alpha, zw: tile repeat uv
@@ -323,7 +322,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         out.bright = vec4<f32>(surface.lightshaft.rgb * 1.15, 1.0);
         return out;
     }
-    return resolve_surface_output(surface, extra, pass_flags.is_glass);
+    return resolve_surface_output(surface, extra);
 }
 
 struct SurfacePassFlags {
@@ -535,7 +534,6 @@ fn resolve_surface_state(
 fn resolve_surface_output(
     surface: SurfaceState,
     extra: ExtraProperties,
-    is_glass: bool,
 ) -> FragmentOutput {
     let light = normalize(camera.light_dir.xyz);
     let diffuse = max(dot(surface.normal, light), 0.0);
@@ -551,28 +549,15 @@ fn resolve_surface_output(
     let normal_half = max(dot(surface.normal, half_dir), 0.0);
     let specular = pow(normal_half, specular_power);
     let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
-    let rim = pow(1.0 - max(surface.normal.z, 0.0), 2.0)
-        * select(0.16, 0.58, is_glass)
-        * toon_lighting.z;
+    let rim = pow(1.0 - max(surface.normal.z, 0.0), 2.0) * 0.16 * toon_lighting.z;
     let specular_tint = mix(surface.material_specular, surface.base, metalness * 0.35);
-    let glass_factors = resolve_glass_factors();
-    let glass_tint = mix(
-        vec3<f32>(0.82, 0.94, 1.0),
-        clamp(surface.base, vec3<f32>(0.0), vec3<f32>(2.0)),
-        0.18 + glass_factors.y * 0.22,
-    );
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
     let ambient = mix(0.08, 0.22, ssao_mask);
-    let glass_ambient = mix(0.52, 0.62, ssao_mask);
     let opaque_lit = surface.base * (ambient + toon_lighting.x * 0.74)
         + specular_tint * toon_lighting.y * specular_scale * 0.24
         + vec3<f32>(rim);
-    let glass_lit = glass_tint * (glass_ambient + toon_lighting.x * 0.12)
-        + surface.material_specular * toon_lighting.y * (0.65 + glass_factors.z * 0.25)
-        + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
     let lighting_enabled = material.alpha_policy_params.y > 0.5;
-    let surface_lit = select(surface.base, opaque_lit, lighting_enabled);
-    let lit = select(surface_lit, glass_lit, is_glass);
+    let lit = select(surface.base, opaque_lit, lighting_enabled);
     let extra_lit = select(
         vec3<f32>(0.0),
         resolve_extra_lighting(
@@ -582,7 +567,6 @@ fn resolve_surface_output(
             rim,
             surface.material_specular,
             surface.base,
-            is_glass,
         ),
         lighting_enabled,
     );
@@ -982,7 +966,6 @@ fn resolve_extra_lighting(
     rim: f32,
     material_specular: vec3<f32>,
     base: vec3<f32>,
-    is_glass: bool,
 ) -> vec3<f32> {
     let ramp_sheen_rate = clamp(extra.sheen.x, 0.0, 1.0) * extra.flags.y;
     let shader_sheen_rate = clamp(material.toon_sheen_params.z, 0.0, 1.0);
@@ -1007,7 +990,7 @@ fn resolve_extra_lighting(
     );
     let sphere_mask = clamp(extra.sphere.y, 0.0, 1.0) * extra.flags.z;
     let sphere_tint = mix(vec3<f32>(0.55, 0.68, 0.82), material_specular, sphere_index);
-    let sphere_term = rim * sphere_mask * select(0.18, 0.10, is_glass);
+    let sphere_term = rim * sphere_mask * 0.18;
 
     return sheen_color + sphere_tint * sphere_term;
 }
@@ -1088,12 +1071,6 @@ fn ordered_dither_threshold(position: vec2<f32>) -> f32 {
     let pixel = vec2<u32>(max(position, vec2<f32>(0.0)));
     let index = (pixel.y & 3u) * 4u + (pixel.x & 3u);
     return (BAYER_4X4[index] + 0.5) / 16.0;
-}
-
-fn resolve_glass_factors() -> vec3<f32> {
-    let ior_delta = clamp((clamp(material.glass_params.x, 1.0, 2.5) - 1.0) / 1.5, 0.0, 1.0);
-    let thickness_delta = clamp((max(material.glass_params.y, 0.0) - 0.01) * 8.0, 0.0, 1.0);
-    return vec3<f32>(ior_delta, thickness_delta, max(ior_delta, thickness_delta * 0.35));
 }
 
 fn resolve_toon_lighting(raw_diffuse: f32, normal_half: f32, raw_specular: f32) -> vec3<f32> {

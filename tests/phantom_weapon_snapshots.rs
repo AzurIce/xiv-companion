@@ -680,7 +680,8 @@ fn phantom_glass_blend_mode() -> ModelGlassBlendMode {
 fn parse_phantom_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
     match value.to_ascii_lowercase().as_str() {
         "add" | "additive" => ModelGlassBlendMode::Additive,
-        _ => ModelGlassBlendMode::Multiply,
+        "alpha" | "mul" | "multiply" => ModelGlassBlendMode::Alpha,
+        _ => ModelGlassBlendMode::Alpha,
     }
 }
 
@@ -719,7 +720,7 @@ fn phantom_glass_blend_mode_parser_preserves_scene_choice() {
     );
     assert_eq!(
         parse_phantom_glass_blend_mode("unknown"),
-        ModelGlassBlendMode::Multiply
+        ModelGlassBlendMode::Alpha
     );
 }
 

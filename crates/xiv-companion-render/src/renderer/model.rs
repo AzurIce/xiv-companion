@@ -91,7 +91,7 @@ fn lightshaft_uses_dedicated_pipeline(debug_mode: ModelDebugMode) -> bool {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelGlassBlendMode {
     #[default]
-    Multiply,
+    Alpha,
     Additive,
 }
 
@@ -115,7 +115,7 @@ impl Default for ModelRenderOptions {
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
             debug_mode: ModelDebugMode::Final,
-            glass_blend_mode: ModelGlassBlendMode::Multiply,
+            glass_blend_mode: ModelGlassBlendMode::Alpha,
         }
     }
 }
@@ -1860,7 +1860,6 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         water_deep_color: material_water_deep_color(material),
         water_refraction_color: material_water_refraction_color(material),
         water_whitecap_color: material_water_whitecap_color(material),
-        glass_params: material_glass_params(material),
         extra_properties: material_extra_texture_flags(material, model, prepared_material),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
@@ -3405,15 +3404,6 @@ fn texture_presence_flag<M: ModelRenderData + ?Sized>(
         .unwrap_or(0.0)
 }
 
-fn material_glass_params(material: &ModelMaterial) -> [f32; 4] {
-    [
-        finite_or(material.glass_ior, 1.0),
-        finite_or(material.glass_thickness_max, 0.01),
-        0.0,
-        0.0,
-    ]
-}
-
 fn material_water_deep_color(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.water_deep_color, [0.3529, 0.372_549, 0.3921, 1.0])
 }
@@ -3929,7 +3919,6 @@ struct MaterialUniform {
     water_deep_color: [f32; 4],
     water_refraction_color: [f32; 4],
     water_whitecap_color: [f32; 4],
-    glass_params: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
     tile_params: [f32; 4],
@@ -4183,7 +4172,7 @@ mod tests {
         ] {
             assert!(fs_main.contains(stage), "fs_main must dispatch {stage}");
         }
-        for implementation_detail in ["textureSample", "glass_tint", "smoothstep"] {
+        for implementation_detail in ["textureSample", "smoothstep"] {
             assert!(
                 !fs_main.contains(implementation_detail),
                 "fs_main must not inline {implementation_detail}"
@@ -4193,6 +4182,12 @@ mod tests {
             fs_main.lines().count() < 70,
             "fs_main grew back into a monolith"
         );
+        for unsupported_glass_formula in ["glass_params", "glass_tint", "resolve_glass_factors"] {
+            assert!(
+                !shader.contains(unsupported_glass_formula),
+                "shader reintroduced unsupported glass formula {unsupported_glass_formula}"
+            );
+        }
     }
 
     #[test]
@@ -4485,11 +4480,11 @@ mod tests {
     fn glass_blend_mode_only_switches_glass_batches_to_additive() {
         assert_eq!(
             ModelRenderOptions::default().glass_blend_mode,
-            ModelGlassBlendMode::Multiply
+            ModelGlassBlendMode::Alpha
         );
 
         let glass = test_batch(0, PreparedRenderPass::Glass, [0.0; 3]);
-        assert!(!glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Multiply));
+        assert!(!glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Alpha));
         assert!(glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
 
         let transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
@@ -5130,20 +5125,6 @@ mod tests {
             material_water_deep_color(&material),
             [0.3529, 0.2, 0.3921, 0.4]
         );
-    }
-
-    #[test]
-    fn material_glass_params_preserve_shader_inputs() {
-        let mut material = fallback_material();
-        assert_eq!(material_glass_params(&material), [1.0, 0.01, 0.0, 0.0]);
-
-        material.glass_ior = 1.52;
-        material.glass_thickness_max = 0.125;
-        assert_eq!(material_glass_params(&material), [1.52, 0.125, 0.0, 0.0]);
-
-        material.glass_ior = f32::NAN;
-        material.glass_thickness_max = f32::INFINITY;
-        assert_eq!(material_glass_params(&material), [1.0, 0.01, 0.0, 0.0]);
     }
 
     #[test]

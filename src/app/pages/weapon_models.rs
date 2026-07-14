@@ -706,7 +706,7 @@ fn WeaponRenderControls(
                             next.glass_blend_mode = parse_glass_blend_mode(&event.value());
                             options.set(next);
                         },
-                        option { value: "multiply", "Mul" }
+                        option { value: "alpha", "Alpha" }
                         option { value: "additive", "Add" }
                     }
                 }
@@ -922,7 +922,7 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
 
 fn glass_blend_mode_value(mode: ModelGlassBlendMode) -> &'static str {
     match mode {
-        ModelGlassBlendMode::Multiply => "multiply",
+        ModelGlassBlendMode::Alpha => "alpha",
         ModelGlassBlendMode::Additive => "additive",
     }
 }
@@ -930,7 +930,8 @@ fn glass_blend_mode_value(mode: ModelGlassBlendMode) -> &'static str {
 fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
     match value {
         "additive" => ModelGlassBlendMode::Additive,
-        _ => ModelGlassBlendMode::Multiply,
+        "alpha" | "multiply" => ModelGlassBlendMode::Alpha,
+        _ => ModelGlassBlendMode::Alpha,
     }
 }
 
@@ -1325,12 +1326,12 @@ mod weapon_url_tests {
 
     #[test]
     fn glass_blend_mode_values_round_trip() {
-        for mode in [ModelGlassBlendMode::Multiply, ModelGlassBlendMode::Additive] {
+        for mode in [ModelGlassBlendMode::Alpha, ModelGlassBlendMode::Additive] {
             assert_eq!(parse_glass_blend_mode(glass_blend_mode_value(mode)), mode);
         }
         assert_eq!(
             parse_glass_blend_mode("unknown"),
-            ModelGlassBlendMode::Multiply
+            ModelGlassBlendMode::Alpha
         );
     }
 

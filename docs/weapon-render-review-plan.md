@@ -90,12 +90,7 @@
 
 ### P1：有证据时补视觉语义
 
-1. **Glass、cutout 与透明合成**
-   - installed `characterglass.shpk` 有 5 个唯一 MTRL/12 次引用，全部使用 Dither depth，只绑定 Normal/Mask/Index 与 ColorTable；没有 Diffuse。`g_GlassIOR` 为 1/1.5，Thickness 为 0/0.01。
-   - installed SHPK 的全部 38 个 pixel shader 均不绑定 `g_GlassIOR` 或 `g_GlassThicknessMax`；MeddleTools 也只把 characterglass 映射到通用 character surface，IOR 来自 mask roughness 近似，没有 glass tint/Transmission 专用节点。
-   - 当前 WGSL 用这两个常量增强蓝色 tint/specular/rim 没有依据；本轮删除该消费与专用 glass lighting，使 glass 复用已审计的 character surface 输出，仅由 NormalBlue alpha、Dither depth 和独立透明 pass 区分。
-   - 当前 UI `Mul` 实际使用 WebGPU `ALPHA_BLENDING`，并非 multiply；本轮改名为 `Alpha`，Add 保持显式预览选项。真实游戏 blend equation、折射、厚度和 scene-color transmission 继续标为 evidence-insufficient。
-   - 增加 installed SHPK focused assertion，固定 glass PS 不绑定两个常量；重跑 45059 final/alpha 与 Alpha/Add 对比回归。
+1. **cutout 与透明合成**
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
@@ -136,6 +131,7 @@
 - skin 的完整 Body/Face 节点、stockings skin-material composition、tattoo Option/Decal color；这些输入由角色 customize/on-render state 提供，不能从静态武器 SqPack 恢复。
 - water refraction、whitecap、WaveMap1 输出公式。
 - Glass 真正的 blend equation、折射和厚度传输。
+- `g_GlassIOR` / `g_GlassThicknessMax` 的真实用途；installed characterglass 的全部 38 个 PS 均不绑定它们，现仅保留 parsed/raw 与 `glassShaderParameters` unsupported。
 - `color1`、`flow1` 及其它 UV1-UV3 的 family-specific 最终用途。
 
 这些输入应继续保留 raw/structured data、debug view 或 unsupported 标记，不以视觉近似冒充完成。
@@ -157,6 +153,7 @@
 - exact sampler-role audit 与 loader 保真：SHPK resource name/CRC、logical role、flags、资源/catalog 引用双计数可审计；Skin* 独立槽固定 UV2 并报告 composition unsupported，武器实样确认仅存在 UV0 主角色。
 - 通用 WGSL surface pipeline 已拆为 `SurfaceSamples -> SurfaceState -> lighting/output`；fragment entry 保留可审计的 debug/discard/draw-role 控制流，结构测试与真实/合成快照固定行为不回退。
 - 特殊 character family 边界已闭环：installed 武器只有 character/characterGlass/skin；唯一 Skin Body/DecalOff 资源只使用主 Diffuse/Normal/Mask，reflection/occlusion/scroll/stockings/tattoo 零覆盖与 runtime-only 输入由全量审计断言固定，不新增无证据 WGSL 近似。
+- glass surface 已收紧到证据边界：移除无 SHPK/MeddleTools 依据的蓝色专用 lighting 与 IOR/thickness 消费，复用 character surface + NormalBlue alpha + Dither depth；原 `Mul` 预览实际为 alpha blend，现准确命名为 Alpha，Add 保持显式近似。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。
