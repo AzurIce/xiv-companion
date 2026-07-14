@@ -91,7 +91,10 @@
 ### P1：有证据时补视觉语义
 
 1. **cutout 与透明合成**
-   - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
+   - installed 武器只有 character/characterLegacy/characterGlass/skin 四个 exact SHPK，material-key coverage 中没有 `ApplyAlphaTest`；24 组 phantom 当前也没有任何 Mask/Cutout 材质。
+   - Meddle `Names.cs` 将 `ApplyAlphaTest` 限定为 bg/bg variants/bguvscroll/crystal，只有 `ApplyAlphaTestOn` value 额外列出 lightshaft；这些 family 在 installed 武器中均无 surface cutout 样本。
+   - character family 另有 scene-level `ApplyAlphaClip`，installed 四个 SHPK 均为默认 Off 且 0 override；它不是 MTRL cutout 开关，当前不能据此生成 Mask pass。
+   - 本轮为 `ApplyAlphaClip` 增加 known label，并在 installed audit 固定无 `ApplyAlphaTest`、AlphaClip 全部 Off 的边界；现有 synthetic Cutout pipeline/alpha-threshold 保留，不新增无真实样本的 family 公式。
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
