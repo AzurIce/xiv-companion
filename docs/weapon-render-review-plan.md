@@ -91,8 +91,10 @@
 ### P1：有证据时补视觉语义
 
 1. **透明合成**
-   - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
-   - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
+   - 全量 7365 个 installed 武器模型的 LOD0 metadata 中 shadow/terrainShadow model 与 mesh 均为 0；24 组 phantom 的 47 个 mesh 也全部为 normal，没有 shadow proxy geometry。
+   - 四个实际 SHPK 的 `g_ShadowAlphaThreshold` 全部固定默认 0.5；`g_ShadowPosOffset` 仅 5 个非零资源。Meddle 只证明字段/range 存在，没有离线 light matrix、bias、shadow sampling 或 alpha 公式。
+   - 45050 的 848 个透明三角形与 45059 的 320 个透明三角形均无非相邻三角形内部相交，不存在当前真实样本必须用 weighted OIT 才能解除的循环遮挡；逐三角形排序保持精确 alpha composition。
+   - 本轮把 LOD0 mesh-range coverage 加入 installed audit并固定 shadow/terrainShadow 零覆盖；phantom regression 固定两组透明 geometry 无内部相交。无样本时不引入 weighted OIT 权重近似或自创 shadow map。
 
 2. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
