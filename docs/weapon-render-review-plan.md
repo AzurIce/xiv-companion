@@ -89,9 +89,10 @@
 ### P0：减少静默近似
 
 1. **拆分主 WGSL 的 family 逻辑**
-   - normal、alpha、emissive、tile、detail 已拆为明确函数；继续拆分 `fs_main` 中的纹理采样编排、base/material/specular、glass lighting 和最终输出组合。
-   - 保持现有输出和 snapshot 稳定，避免继续扩大 `fs_main` 的交叉分支。
-   - family-specific 行为应能单独测试和审计。
+   - 当前 `fs_main` 约 212 行，仍同时承担 primary/secondary texture sampling、normal/tile/detail composition、material/specular 解析、family base/alpha、opaque/glass lighting、discard 与 bloom 输出；normal、alpha、emissive、tile、detail 虽已有 helper，但主函数仍把所有阶段交叉编排。
+   - MeddleTools 将 legacy/stockings/glass/scroll/transparency 复用 character surface group，skin/water/bg 也最终汇入共同 surface channels；本轮按 `SurfaceSamples -> SurfaceState -> lighting/output` 拆层，不复制无证据的 package-specific fragment shader。
+   - `SurfaceSamples` 只负责逐 role UV 与 texture sampling；`SurfaceState` 负责 base/alpha/normal/material/specular/emissive 和 debug 所需中间值；opaque/glass lighting 与 final/bloom 输出进入独立 helper。draw-role discard 与 debug dispatch 保留在 fragment entry，便于审计控制流。
+   - 本轮是行为保持重构：不改 uniform/binding ABI、不改公式、采样策略、浮点常量或 pass 分派。focused test 至少验证 WGSL 可创建 pipeline，45047/45048/45050/45053/45068 final 必须逐字节保持当前基线，现有 synthetic native WGPU 回归全部继续通过。
 
 ### P1：有证据时补视觉语义
 
