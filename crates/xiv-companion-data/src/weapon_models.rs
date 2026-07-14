@@ -21,6 +21,9 @@ pub use crate::model::{
 use std::collections::HashMap;
 
 #[cfg(feature = "game-data")]
+use crate::model::{MaterialShaderFamily, material_shader_family};
+
+#[cfg(feature = "game-data")]
 use crate::staining::{
     DAWNTRAIL_STAINING_TEMPLATE_PATH, LEGACY_STAINING_TEMPLATE_PATH, MAX_STAIN_ID,
     StainingTemplate, apply_staining_template_to_rows,
@@ -69,6 +72,10 @@ const FLOW_MAP_STANDARD: u32 = 0x337C_6BC4;
 const FLOW_MAP_FLOW: u32 = 0x71AD_A939;
 #[cfg(feature = "game-data")]
 const GET_VALUES: u32 = 0xB616_DC5A;
+#[cfg(feature = "game-data")]
+const GET_VALUES_TEXTURE_TYPE: u32 = 0x2877_1DF9;
+#[cfg(feature = "game-data")]
+const GET_VALUES_TEXTURE_TYPE_COMPATIBILITY: u32 = 0xCFC6_2513;
 #[cfg(feature = "game-data")]
 const GET_VALUES_MULTI: u32 = 0x1DF2_985C;
 #[cfg(feature = "game-data")]
@@ -2287,6 +2294,10 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
+        let color_table_diffuse_composition = color_table_diffuse_composition(
+            material_shader_family(Some(&shader_package_name)),
+            composed_material_uses_compatibility_values(&semantics),
+        );
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let (decal_color_mode, decal_color_mode_raw) =
             composed_material_decal_color_mode(&semantics);
@@ -2350,6 +2361,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             &material,
             color_table_rows.as_deref(),
             &sampler_roles,
+            color_table_diffuse_composition,
             textures,
             loaded_paths,
         );
@@ -2492,6 +2504,7 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
     material: &physis::mtrl::Material,
     color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
+    color_table_diffuse_composition: ColorTableDiffuseComposition,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
@@ -2595,19 +2608,15 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         set.emissive.is_none(),
         textures,
     ) {
-        if let Some(base_color) = set.base_color {
-            if let Some(combined) = combine_base_with_colorset_texture(
-                material_path,
-                base_color,
-                baked.base_color,
-                textures,
-            ) {
-                set.base_color = Some(combined);
-                add_unique_index(&mut set.indices, combined);
-            }
-        } else {
-            set.base_color = Some(baked.base_color);
-            add_unique_index(&mut set.indices, baked.base_color);
+        if let Some(base_color) = resolve_color_table_base_texture(
+            material_path,
+            set.base_color,
+            baked.base_color,
+            color_table_diffuse_composition,
+            textures,
+        ) {
+            set.base_color = Some(base_color);
+            add_unique_index(&mut set.indices, base_color);
         }
 
         if set.emissive.is_none() {
@@ -2931,6 +2940,10 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let lighting_mode = composed_material_lighting_mode(&semantics);
         let flow_mode = composed_material_flow_mode(&semantics);
         let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
+        let color_table_diffuse_composition = color_table_diffuse_composition(
+            material_shader_family(Some(&shader_package_name)),
+            composed_material_uses_compatibility_values(&semantics),
+        );
         let sub_color_mode = composed_material_sub_color_mode(&semantics);
         let (decal_color_mode, decal_color_mode_raw) =
             composed_material_decal_color_mode(&semantics);
@@ -2994,6 +3007,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             &material,
             color_table_rows.as_deref(),
             &sampler_roles,
+            color_table_diffuse_composition,
             textures,
             loaded_paths,
         )
@@ -3137,6 +3151,7 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
     material: &physis::mtrl::Material,
     color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
+    color_table_diffuse_composition: ColorTableDiffuseComposition,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
@@ -3242,19 +3257,15 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         set.emissive.is_none(),
         textures,
     ) {
-        if let Some(base_color) = set.base_color {
-            if let Some(combined) = combine_base_with_colorset_texture(
-                material_path,
-                base_color,
-                baked.base_color,
-                textures,
-            ) {
-                set.base_color = Some(combined);
-                add_unique_index(&mut set.indices, combined);
-            }
-        } else {
-            set.base_color = Some(baked.base_color);
-            add_unique_index(&mut set.indices, baked.base_color);
+        if let Some(base_color) = resolve_color_table_base_texture(
+            material_path,
+            set.base_color,
+            baked.base_color,
+            color_table_diffuse_composition,
+            textures,
+        ) {
+            set.base_color = Some(base_color);
+            add_unique_index(&mut set.indices, base_color);
         }
 
         if set.emissive.is_none() {
@@ -3373,6 +3384,36 @@ struct BakedWeaponTextureIndices {
     sphere_properties: usize,
     tile_matrix: usize,
     emissive: Option<usize>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorTableDiffuseComposition {
+    Replace,
+    Multiply,
+}
+
+#[cfg(feature = "game-data")]
+fn color_table_diffuse_composition(
+    shader_family: MaterialShaderFamily,
+    uses_compatibility_values: bool,
+) -> ColorTableDiffuseComposition {
+    // These are the packages MeddleTools maps to its character.shpk node group.
+    let uses_character_compatibility_gate = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+    );
+    if uses_character_compatibility_gate && uses_compatibility_values {
+        ColorTableDiffuseComposition::Multiply
+    } else if uses_character_compatibility_gate {
+        ColorTableDiffuseComposition::Replace
+    } else {
+        ColorTableDiffuseComposition::Multiply
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -3923,6 +3964,13 @@ fn composed_material_value_mode(
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_uses_compatibility_values(semantics: &ComposedMaterialSemantics) -> bool {
+    semantics.material_key_value(GET_VALUES) == Some(GET_VALUES_COMPATIBILITY)
+        || semantics.material_key_value(GET_VALUES_TEXTURE_TYPE)
+            == Some(GET_VALUES_TEXTURE_TYPE_COMPATIBILITY)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_sub_color_mode(semantics: &ComposedMaterialSemantics) -> MaterialSubColorMode {
     match semantics.material_key_value(GET_SUB_COLOR) {
         None => MaterialSubColorMode::None,
@@ -4275,7 +4323,6 @@ fn composed_material_finite_constant(
 }
 
 #[cfg(feature = "game-data")]
-#[cfg(feature = "game-data")]
 fn combine_base_with_colorset_texture(
     material_path: &str,
     base_index: usize,
@@ -4313,6 +4360,22 @@ fn combine_base_with_colorset_texture(
         colorset.height,
         rgba,
     ))
+}
+
+#[cfg(feature = "game-data")]
+fn resolve_color_table_base_texture(
+    material_path: &str,
+    base_index: Option<usize>,
+    colorset_index: usize,
+    composition: ColorTableDiffuseComposition,
+    textures: &mut Vec<WeaponModelTexture>,
+) -> Option<usize> {
+    match (base_index, composition) {
+        (Some(base_index), ColorTableDiffuseComposition::Multiply) => {
+            combine_base_with_colorset_texture(material_path, base_index, colorset_index, textures)
+        }
+        _ => Some(colorset_index),
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -5577,6 +5640,33 @@ mod weapon_material_tests {
 
     #[test]
     #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45068_compatibility_multiplies_colorset_diffuse() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45068,
+            item_name: "菜蔬之幻梦".to_string(),
+            model_main: 4_295_032_946,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model.materials.first().expect("45068 material");
+        let base = &model.textures[material.base_color_texture.expect("active base texture")];
+
+        assert_eq!(material.value_mode, MaterialValueMode::Compatibility);
+        assert!(base.path.ends_with("#base-times-colorset"));
+        assert!(material.texture_indices.iter().any(|index| {
+            model.textures[*index]
+                .path
+                .ends_with("v01_w0114b0001_base.tex")
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
     fn installed_weapon_stain_changes_baked_color_table() {
         let game_dir =
             std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
@@ -6762,6 +6852,24 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_character_compatibility_gate_accepts_current_and_legacy_keys() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert!(!composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(GET_VALUES, GET_VALUES_COMPATIBILITY);
+        assert!(composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(GET_VALUES, GET_VALUES_MULTI_MATERIAL);
+        assert!(!composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(
+            GET_VALUES_TEXTURE_TYPE,
+            GET_VALUES_TEXTURE_TYPE_COMPATIBILITY,
+        );
+        assert!(composed_material_uses_compatibility_values(&semantics));
+    }
+
+    #[test]
     fn composed_sub_color_mode_preserves_known_and_unknown_values() {
         let mut semantics = ComposedMaterialSemantics::default();
         assert_eq!(
@@ -7840,6 +7948,87 @@ mod weapon_material_tests {
     fn srgb_multiply_uses_linear_space() {
         assert_eq!(multiply_srgb_channels(255, 128), 128);
         assert_ne!(multiply_srgb_channels(128, 128), 64);
+    }
+
+    #[test]
+    fn character_colorset_diffuse_multiply_is_compatibility_gated() {
+        for family in [
+            MaterialShaderFamily::Character,
+            MaterialShaderFamily::CharacterStockings,
+            MaterialShaderFamily::CharacterGlass,
+            MaterialShaderFamily::CharacterTransparency,
+            MaterialShaderFamily::CharacterScroll,
+        ] {
+            assert_eq!(
+                color_table_diffuse_composition(family, true),
+                ColorTableDiffuseComposition::Multiply
+            );
+            assert_eq!(
+                color_table_diffuse_composition(family, false),
+                ColorTableDiffuseComposition::Replace
+            );
+        }
+
+        for family in [
+            MaterialShaderFamily::Skin,
+            MaterialShaderFamily::CharacterReflection,
+            MaterialShaderFamily::CharacterTattoo,
+            MaterialShaderFamily::CharacterOcclusion,
+            MaterialShaderFamily::Bg,
+        ] {
+            assert_eq!(
+                color_table_diffuse_composition(family, false),
+                ColorTableDiffuseComposition::Multiply
+            );
+        }
+    }
+
+    #[test]
+    fn colorset_base_selection_replaces_multi_material_diffuse() {
+        let mut textures = vec![
+            WeaponModelTexture {
+                path: "base.tex".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![128, 64, 32, 77],
+                rgba_f32: None,
+            },
+            WeaponModelTexture {
+                path: "baked://material#colorset-diffuse".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![64, 128, 192, 255],
+                rgba_f32: None,
+            },
+        ];
+
+        let replaced = resolve_color_table_base_texture(
+            "material.mtrl",
+            Some(0),
+            1,
+            ColorTableDiffuseComposition::Replace,
+            &mut textures,
+        )
+        .expect("replace colorset diffuse");
+        assert_eq!(replaced, 1);
+        assert_eq!(textures.len(), 2);
+
+        let multiplied = resolve_color_table_base_texture(
+            "material.mtrl",
+            Some(0),
+            1,
+            ColorTableDiffuseComposition::Multiply,
+            &mut textures,
+        )
+        .expect("multiply compatibility diffuse");
+        assert_eq!(textures[multiplied].rgba[3], 77);
+        assert!(textures[multiplied].path.ends_with("#base-times-colorset"));
     }
 
     #[test]

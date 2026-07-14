@@ -71,6 +71,7 @@
 - 45052 覆盖 baseline、第一染色通道和第二通道 metallic；45059 覆盖 glass、SphereIndex 与 HDR ramp。
 - 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；`fract` 后错误隐式梯度已消除。后续放大审查发现的 45053/45068 稳定网纹也已修复：TileIndex 离散化现按 MeddleTools `tile_select` 使用 `FLOOR`，约 21.58 会选择平缓 layer 21 而不是强网纹 layer 22；45068 final/tile-normal 前景高频分别下降约 53%/94%，45053 tile-normal 下降约 71%。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
 - 45050 的毛发透明回归已修复：透明 `_b.mtrl` 为 `GetValuesMultiMaterial + NormalBlue`，807 个顶点中 445 个 A=0，848 个三角形中 400 个全为 A=0；NormalBlue/NormalAlpha 现不再误乘 vertex A。MeddleTools `meddle character.shpk` 的 Alpha 只连接 normal Blue，tattoo Alpha 只连接 normal Alpha，两者都没有 vertex color A 输入。真实 final 前景像素由 29,559 增至 33,358，alpha debug 保留毛束边缘/缝隙透明而主体恢复不透明。
+- character Compatibility diffuse 组合已通过 focused/installed tests 和父提交真实回归：当前 `GetValues=GetValuesCompatibility` 与旧式 `GetValuesTextureType=Compatibility` 共用 multiply gate；45068 固定 Compatibility、`#base-times-colorset` 与原 base index；45047/45048/45050/45053/45068 的 PNG 全部逐字节一致。
 - WeaponCatalog audit 当前结果：8281 个条目、7365 个唯一模型、8112 个可解析材质、0 load failures；武器范围为 8091 character、15 skin、6 characterGlass。
 
 ## 当前工作队列
@@ -98,7 +99,7 @@
 
 4. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
-   - 当前同步/异步 texture loader 只要原 diffuse 与 baked ColorTable 同时存在就无条件相乘。MeddleTools character 节点明确以 `GetValuesCompatibility` 作为该乘法的唯一 Factor；本轮将只对 character family 修正为 Compatibility 使用 `base × ColorTable`、MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
+   - character Compatibility diffuse 组合已修正：MeddleTools character 节点明确以当前 `GetValues=GetValuesCompatibility` 或旧式 `GetValuesTextureType=Compatibility` 驱动原 diffuse 与 baked ColorTable 相乘的唯一 Factor；同步/异步 loader 只在该 gate 命中时使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
    - `GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity；准确的材质/ColorTable 分区公式仍待节点或游戏 shader 证据。
    - AlphaMulti/2/3 当前保留 mode/raw 并报告 `alphaMultiValues`；MeddleTools 对应输入未连接，暂不实现公式。
    - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
@@ -166,6 +167,7 @@
 - 逐 half/layer pair-atlas mip、`fract` 前显式 LOD 梯度，以及 RG 法线与 B/A packed payload 分离的 mip 语义。
 - ColorTable TileIndex 与 `g_TileIndex` fallback 按 MeddleTools `FLOOR` 语义离散选层。
 - character NormalBlue 与 tattoo NormalAlpha 透明度不再误乘 vertex A；normal channel 继续控制边缘透明。
+- character 当前/旧式 Compatibility key 使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse；同步/异步 loader 共用同一策略。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。
 - character/tattoo/stockings/water/bguvscroll/lightshaft 的证据可支持部分。
