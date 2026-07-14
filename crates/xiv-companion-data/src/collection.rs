@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 13;
+pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 14;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,11 +28,8 @@ pub struct CollectionCatalogCounts {
     pub emotes: usize,
     pub aesthetician_styles: usize,
     pub riding_maps: usize,
-    pub blue_magic_spells: usize,
     pub mahjong_supports: usize,
     pub portrait_designs: usize,
-    pub landmark_permits: usize,
-    pub achievement_unlocks: usize,
     pub triple_triad_cards: usize,
     pub chocobo_bardings: usize,
     pub facewear: usize,
@@ -52,11 +49,8 @@ impl CollectionCatalogCounts {
             CollectionKind::Emote => self.emotes,
             CollectionKind::AestheticianStyle => self.aesthetician_styles,
             CollectionKind::RidingMap => self.riding_maps,
-            CollectionKind::BlueMagicSpell => self.blue_magic_spells,
             CollectionKind::MahjongSupport => self.mahjong_supports,
             CollectionKind::PortraitDesign => self.portrait_designs,
-            CollectionKind::LandmarkPermit => self.landmark_permits,
-            CollectionKind::AchievementUnlock => self.achievement_unlocks,
             CollectionKind::TripleTriadCard => self.triple_triad_cards,
             CollectionKind::ChocoboBarding => self.chocobo_bardings,
             CollectionKind::Facewear => self.facewear,
@@ -78,11 +72,8 @@ pub enum CollectionKind {
     Emote,
     AestheticianStyle,
     RidingMap,
-    BlueMagicSpell,
     MahjongSupport,
     PortraitDesign,
-    LandmarkPermit,
-    AchievementUnlock,
     TripleTriadCard,
     ChocoboBarding,
     Facewear,
@@ -102,11 +93,8 @@ impl CollectionKind {
             Self::Emote => "emote",
             Self::AestheticianStyle => "aesthetician-style",
             Self::RidingMap => "riding-map",
-            Self::BlueMagicSpell => "blue-magic-spell",
             Self::MahjongSupport => "mahjong-support",
             Self::PortraitDesign => "portrait-design",
-            Self::LandmarkPermit => "landmark-permit",
-            Self::AchievementUnlock => "achievement-unlock",
             Self::TripleTriadCard => "triple-triad-card",
             Self::ChocoboBarding => "chocobo-barding",
             Self::Facewear => "facewear",

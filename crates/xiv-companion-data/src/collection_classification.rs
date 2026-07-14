@@ -10,26 +10,23 @@ pub struct CollectionCategoryDefinition {
     pub group_by_patch: bool,
 }
 
-pub const COLLECTION_CATEGORIES: [CollectionCategoryDefinition; 19] = [
+pub const COLLECTION_CATEGORIES: [CollectionCategoryDefinition; 16] = [
     category(CollectionKind::Equipment, "装备", false, false),
-    category(CollectionKind::OrchestrionRoll, "乐谱", false, true),
     category(CollectionKind::Mount, "坐骑", false, true),
     category(CollectionKind::Minion, "宠物", false, true),
+    category(CollectionKind::OrchestrionRoll, "乐谱", false, true),
+    category(CollectionKind::Emote, "情感动作", false, true),
+    category(CollectionKind::AestheticianStyle, "发型与面妆", false, true),
     category(CollectionKind::FashionAccessory, "时尚配饰", false, true),
-    category(CollectionKind::Emote, "情感动作", true, true),
-    category(CollectionKind::AestheticianStyle, "发型与面妆", true, true),
-    category(CollectionKind::RidingMap, "详细地图", true, true),
-    category(CollectionKind::BlueMagicSpell, "青魔法", true, true),
-    category(CollectionKind::MahjongSupport, "方城声援", true, true),
-    category(CollectionKind::PortraitDesign, "肖像教材", true, true),
-    category(CollectionKind::LandmarkPermit, "建造许可", true, true),
-    category(CollectionKind::AchievementUnlock, "成就解锁", true, true),
-    category(CollectionKind::TripleTriadCard, "九宫幻卡", true, true),
-    category(CollectionKind::ChocoboBarding, "鸟甲", true, true),
-    category(CollectionKind::Facewear, "面部配饰", true, true),
-    category(CollectionKind::MasterRecipe, "生产秘籍", true, true),
-    category(CollectionKind::OtherUnlock, "其他解锁", true, true),
-    category(CollectionKind::FolkloreBook, "传习录", true, true),
+    category(CollectionKind::Facewear, "面部配饰", false, true),
+    category(CollectionKind::MasterRecipe, "生产秘籍", false, true),
+    category(CollectionKind::FolkloreBook, "传习录", false, true),
+    category(CollectionKind::RidingMap, "详细地图", false, true),
+    category(CollectionKind::PortraitDesign, "肖像教材", false, true),
+    category(CollectionKind::ChocoboBarding, "鸟甲", false, true),
+    category(CollectionKind::TripleTriadCard, "九宫幻卡", false, true),
+    category(CollectionKind::MahjongSupport, "方城声援", false, true),
+    category(CollectionKind::OtherUnlock, "其他解锁", false, true),
 ];
 
 const fn category(
@@ -125,23 +122,13 @@ const CLASSIFICATION_RULES: &[ClassificationRule] = &[
         name.starts_with("发型样式") || name.starts_with("面妆样式")
     }),
     named_unlock(CollectionKind::RidingMap, |name| name.ends_with("详细地图")),
-    named_unlock(CollectionKind::BlueMagicSpell, |name| {
-        name.starts_with("天青图腾")
-    }),
     named_unlock(CollectionKind::MahjongSupport, |name| {
         name.starts_with("方城金句集")
     }),
     named_unlock(CollectionKind::PortraitDesign, |name| {
         name.starts_with("肖像教材")
     }),
-    named_unlock(CollectionKind::LandmarkPermit, |name| {
-        name.ends_with("建造许可证书")
-    }),
-    named_unlock(CollectionKind::AchievementUnlock, |name| {
-        name.contains("群狼盛宴") && name.ends_with('证')
-    }),
     action(CollectionKind::PortraitDesign, 29_459),
-    action(CollectionKind::AchievementUnlock, 18_083),
     action(CollectionKind::ChocoboBarding, 1_013),
     action(CollectionKind::MasterRecipe, 2_136),
     action(CollectionKind::TripleTriadCard, 3_357),
@@ -237,7 +224,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_exactly_one_definition() {
-        assert_eq!(COLLECTION_CATEGORIES.len(), 19);
+        assert_eq!(COLLECTION_CATEGORIES.len(), 16);
         for kind in COLLECTION_CATEGORIES.iter().map(|entry| entry.kind) {
             assert_eq!(
                 COLLECTION_CATEGORIES

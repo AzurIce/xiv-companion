@@ -50,7 +50,7 @@ pub const APP_MODULES: &[AppModule] = &[
         label: "图鉴",
         href: "/collection",
         group: ModuleGroup::Data,
-        status: ModuleStatus::Experimental,
+        status: ModuleStatus::Ready,
     },
 ];
 

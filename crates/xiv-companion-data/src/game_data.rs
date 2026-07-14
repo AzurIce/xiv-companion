@@ -161,11 +161,8 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
             CollectionKind::Emote => counts.emotes += 1,
             CollectionKind::AestheticianStyle => counts.aesthetician_styles += 1,
             CollectionKind::RidingMap => counts.riding_maps += 1,
-            CollectionKind::BlueMagicSpell => counts.blue_magic_spells += 1,
             CollectionKind::MahjongSupport => counts.mahjong_supports += 1,
             CollectionKind::PortraitDesign => counts.portrait_designs += 1,
-            CollectionKind::LandmarkPermit => counts.landmark_permits += 1,
-            CollectionKind::AchievementUnlock => counts.achievement_unlocks += 1,
             CollectionKind::TripleTriadCard => counts.triple_triad_cards += 1,
             CollectionKind::ChocoboBarding => counts.chocobo_bardings += 1,
             CollectionKind::Facewear => counts.facewear += 1,
@@ -980,7 +977,7 @@ mod collection_tests {
         );
         assert_eq!(
             collection_kind("第1赛季福者之证", 0, 18_083, 61),
-            Some(CollectionKind::AchievementUnlock)
+            Some(CollectionKind::OtherUnlock)
         );
         assert_eq!(
             collection_kind("装备", 4, 0, 0),
@@ -1001,7 +998,7 @@ mod collection_tests {
         );
         assert_eq!(
             unlock_collection_kind("天青图腾·白风"),
-            CollectionKind::BlueMagicSpell
+            CollectionKind::OtherUnlock
         );
         assert_eq!(
             unlock_collection_kind("方城金句集：阿尔菲诺"),
@@ -1013,11 +1010,11 @@ mod collection_tests {
         );
         assert_eq!(
             unlock_collection_kind("魔法树建造许可证书"),
-            CollectionKind::LandmarkPermit
+            CollectionKind::OtherUnlock
         );
         assert_eq!(
             unlock_collection_kind("2018年度群狼盛宴区域锦标赛冠军之证"),
-            CollectionKind::AchievementUnlock
+            CollectionKind::OtherUnlock
         );
         assert_eq!(
             unlock_collection_kind("以太摆锤"),
