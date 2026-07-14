@@ -78,6 +78,8 @@
 - `ApplyVertexMovement` 对 6399 个资源全部为 scene default Off，0 MTRL overrides；movement scale/max-length 虽有非默认静态值，仍只作为潜在参数诊断。`g_TileMipBiasOffset` 只有 47320=`+1`、46461/46462=`-1` 三个非零样本，尚无 tile-array LOD 公式证据。
 - `CategorySpecularType=Mask` 仅有 4 个 legacy 资源/5 次 catalog 引用。installed SHPK/FXC 证明 Compatibility Mask 使用 `mask.r²` 调制 specular，Default 不使用 mask 调制；WGSL 已按 exact package/value mode 实现，30520 Mask/Default 原生快照 RGB difference 为 24048。
 - 未知 constant `0xAD94E254` 在 character 只有 3 个非默认资源/4 次引用，其中 45050 透明毛 `_b.mtrl` 为 1；未知 key `0xF52CCF05` 广泛覆盖 character family。两者继续保留 raw/value histogram，不进入 WGSL。当前全量报告无 malformed、non-finite 或 unresolved constant value。
+- MeddleTools `shaders.blend` 的 texture-vector links 已核验：character/skin/glass/legacy/scroll/occlusion/tattoo 的主 Diffuse/Normal/Mask/Index 都使用 active `UVMap`，即 TEXCOORD0；bguvscroll Map0/Map1 分别使用 UV0Scroll/UV1Scroll，当前 prepared 规则正确。character 模板的 `g_SamplerSkinDiffuse/Normal/Mask` 明确使用 `UVMap.002`（TEXCOORD2），Decal 使用 `UVMap.001`（TEXCOORD1）；reflection 没有 MeddleTools material/template，不能推断。
+- installed 49100 代表 equipment-style 武器中，`skin.shpk` body 材质实际只有主 Diffuse/Normal/Mask，character glove 材质只有 Normal/Mask/Index，均为 UV0。当前尚无武器实样触发 Skin* sampler；因此下一轮先做全量 sampler-role coverage，再把潜在 Skin* 输入结构化为 UV2 + unsupported，不为未出现的输入抢占 renderer binding。runtime Decal 的 UV1 与 texture 继续留在显式 runtime input 阶段。
 
 ## 当前工作队列
 
@@ -86,9 +88,11 @@
 ### P0：减少静默近似
 
 1. **补齐 shader-family-specific texture/UV 决策**
-   - 继续确认 character、skin、glass、reflection、scroll、occlusion 的实际 texture role 和 UV source。
-   - 处理仍依赖通用 UV0/repeat fallback 的角色。
-   - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入。
+   - 扩展 WeaponCatalog audit，按 exact SHPK、sampler resource name、logical role、flags、唯一 MTRL 与 catalog 引用统计实际覆盖；先证明哪些非 UV0 角色在武器范围真实存在。
+   - 保留 sampler semantic role，不再把 `g_SamplerSkinDiffuse/Normal/Mask` 静默折叠为主 Base/Normal/Mask；对应 prepared UV source 固定为 UV2，并在缺少已证明的混合公式/GPU binding 时报告独立 unsupported。
+   - 主 character/skin/glass/legacy/scroll/occlusion/tattoo texture role 保持 UV0；bguvscroll Map0/Map1 保持 UV0Scroll/UV1Scroll。Decal 固定记录 UV1，但等显式 runtime texture 接口一起消费。
+   - reflection 没有节点或实样证据，继续保持 environment/reflection unsupported，不猜 sphere/environment 坐标。
+   - 保持 per-role sampler 与 prepared UV source 为唯一 renderer 输入；增加 focused tests，防止 exact sampler identity 再次被 texture kind 合并丢失。
 
 2. **拆分主 WGSL 的 family 逻辑**
    - normal、alpha、emissive、tile、detail 已拆为明确函数；继续拆分 `fs_main` 中的纹理采样编排、base/material/specular、glass lighting 和最终输出组合。
