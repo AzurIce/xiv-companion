@@ -91,7 +91,11 @@
 ### P1：有证据时补视觉语义
 
 1. **Glass、cutout 与透明合成**
-   - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
+   - installed `characterglass.shpk` 有 5 个唯一 MTRL/12 次引用，全部使用 Dither depth，只绑定 Normal/Mask/Index 与 ColorTable；没有 Diffuse。`g_GlassIOR` 为 1/1.5，Thickness 为 0/0.01。
+   - installed SHPK 的全部 38 个 pixel shader 均不绑定 `g_GlassIOR` 或 `g_GlassThicknessMax`；MeddleTools 也只把 characterglass 映射到通用 character surface，IOR 来自 mask roughness 近似，没有 glass tint/Transmission 专用节点。
+   - 当前 WGSL 用这两个常量增强蓝色 tint/specular/rim 没有依据；本轮删除该消费与专用 glass lighting，使 glass 复用已审计的 character surface 输出，仅由 NormalBlue alpha、Dither depth 和独立透明 pass 区分。
+   - 当前 UI `Mul` 实际使用 WebGPU `ALPHA_BLENDING`，并非 multiply；本轮改名为 `Alpha`，Add 保持显式预览选项。真实游戏 blend equation、折射、厚度和 scene-color transmission 继续标为 evidence-insufficient。
+   - 增加 installed SHPK focused assertion，固定 glass PS 不绑定两个常量；重跑 45059 final/alpha 与 Alpha/Add 对比回归。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
