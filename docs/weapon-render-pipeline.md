@@ -251,6 +251,8 @@ base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write�
 
 当前 WebGPU/WGSL 渲染流程：
 
+通用 surface fragment 采用显式三阶段数据流：`resolve_surface_samples` 解析逐 role UV 并采样 primary/secondary base、normal、specular、emissive、mask/material-properties；`resolve_surface_state` 合成 normal、base、alpha、material/specular、emissive 和 debug 中间值；`resolve_surface_output` 只负责 opaque/glass lighting、extra lighting 与 bright attachment。`fs_main` 仅调度这三个阶段，并保留 debug dispatch、crest/cutout/alpha discard 和 lightshaft fallback，避免 family 条件重新与采样/lighting 交叉。MeddleTools 的 character variants 复用共同 surface group也是该边界的依据；这不是新增 shader 语义，uniform/binding ABI 与公式保持不变。
+
 1. CPU flatten meshes，合并 vertex/index buffer。
 2. 每个 material 建 bind group：
    - material uniform

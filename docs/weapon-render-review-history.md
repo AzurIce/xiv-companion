@@ -29,6 +29,13 @@
 - `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`、`node_mappings.py`、`bake\bake_utils.py`：texture node config、UV scroll、ColorTable extra ramps、shader package mapping、diffuse/normal/roughness/glossy/transmission/emission bake。
 - Penumbra.GameData `StmFile.cs`、`DyePack.cs`、`LegacyDyePack.cs` 与 ColorTable `ApplyDye`：Legacy/GUD STM 路径、1-based stain ID、column 编码和逐 flag ColorTable 覆盖规则。Meddle 的 `ColorDyeTableRow.cs` 注释直接引用该实现。
 
+## 2026-07-14 WGSL surface composition 重构
+
+- MeddleTools 的 legacy/stockings/glass/scroll/transparency 都复用 character surface group，skin/water/bg 也最终输出共同的 base/normal/material/alpha/emission channels；因此没有为每个 package 复制 fragment shader。
+- 原 `fs_main` 约 212 行，同时编排 texture sampling、normal/tile/detail、material/specular、family base/alpha、opaque/glass lighting、discard 和 bloom。现拆为 `SurfacePassFlags`、`SurfaceSamples`、`SurfaceState` 与 `resolve_surface_output`，入口缩减到 55 行，只保留阶段调度、debug、discard 和 lightshaft 分派。
+- uniform/binding ABI、公式、浮点常量、采样策略与 pass 分派均未改变。结构 focused test 会拒绝在 `fs_main` 重新内联 texture sampling、glass lighting 或 bloom 公式。
+- workspace 与 wasm32 通过；完整 native WGPU 19/19 通过。45047/45048/45050/45053/45068 的 final SHA-256 均与重构前精确一致。
+
 ## 2026-07-14 sampler/UV 审计
 
 - MeddleTools `shaders.blend` 的实际 vector links 证明主 Diffuse/Normal/Mask/Index 使用 UV0，character SkinDiffuse/SkinNormal/SkinMask 使用 UV2，Decal 使用 UV1；reflection 没有可采信节点。

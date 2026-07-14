@@ -4168,6 +4168,34 @@ mod tests {
     };
 
     #[test]
+    fn model_shader_keeps_surface_pipeline_stages_separate() {
+        let shader = include_str!("model.wgsl");
+        let fs_main = shader
+            .split_once("fn fs_main")
+            .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
+            .map(|(entry, _)| entry)
+            .expect("fs_main surface entry section");
+
+        for stage in [
+            "resolve_surface_samples(input)",
+            "resolve_surface_state(",
+            "resolve_surface_output(",
+        ] {
+            assert!(fs_main.contains(stage), "fs_main must dispatch {stage}");
+        }
+        for implementation_detail in ["textureSample", "glass_tint", "smoothstep"] {
+            assert!(
+                !fs_main.contains(implementation_detail),
+                "fs_main must not inline {implementation_detail}"
+            );
+        }
+        assert!(
+            fs_main.lines().count() < 70,
+            "fs_main grew back into a monolith"
+        );
+    }
+
+    #[test]
     fn transparent_triangles_sort_back_to_front_without_moving_opaque() {
         let batches = vec![
             test_batch(0, PreparedRenderPass::Opaque, [0.0, 0.0, 100.0]),

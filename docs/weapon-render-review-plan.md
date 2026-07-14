@@ -81,22 +81,15 @@
 - MeddleTools `shaders.blend` 的 texture-vector links 已核验：character/skin/glass/legacy/scroll/occlusion/tattoo 的主 Diffuse/Normal/Mask/Index 都使用 active `UVMap`，即 TEXCOORD0；bguvscroll Map0/Map1 分别使用 UV0Scroll/UV1Scroll，当前 prepared 规则正确。character 模板的 `g_SamplerSkinDiffuse/Normal/Mask` 明确使用 `UVMap.002`（TEXCOORD2），Decal 使用 `UVMap.001`（TEXCOORD1）；reflection 没有 MeddleTools material/template，不能推断。
 - sampler-role coverage 已完成全量审计：53 个 `exact SHPK + resource CRC/name + logical role + flags` coverage 行，0 unknown role、0 unresolved name、0 failures。6399 个唯一 MTRL 只出现主 BaseColor/Normal/Mask/Index，全部是已证实的 UV0 角色；没有任何武器 MTRL 使用 `g_SamplerSkinDiffuse/Normal/Mask`。loader 仍将潜在 Skin* 独立保存到三个材质/prepared binding，UV source 固定 UV2，并以 `skinSamplerComposition` unsupported 表示尚无混合公式/GPU binding；runtime Decal 继续留在显式 runtime input 阶段。
 - 45047/45048/45050/45053/45068 已在本轮重跑 final、tile/detail 与 alpha debug；五张 final PNG 与既有基线逐字节一致。
+- 通用 fragment surface 已分层：`fs_main` 从约 212 行缩减到 55 行，只保留阶段调度、debug、discard 与 lightshaft 分派；逐 role 输入进入 `SurfaceSamples`，base/alpha/normal/material/specular/emissive 进入 `SurfaceState`，opaque/glass lighting 与 bloom 输出进入独立 helper。结构测试防止采样、glass 或 bloom 公式重新内联；完整 native WGPU 19/19 通过，五个真实 final 哈希保持不变。
 
 ## 当前工作队列
 
 队列只记录尚未完成且能实际推进的工作。完成后从本节移除，并在“完成能力摘要”增加一条简述；详细证据写入历史档案或提交记录。
 
-### P0：减少静默近似
-
-1. **拆分主 WGSL 的 family 逻辑**
-   - 当前 `fs_main` 约 212 行，仍同时承担 primary/secondary texture sampling、normal/tile/detail composition、material/specular 解析、family base/alpha、opaque/glass lighting、discard 与 bloom 输出；normal、alpha、emissive、tile、detail 虽已有 helper，但主函数仍把所有阶段交叉编排。
-   - MeddleTools 将 legacy/stockings/glass/scroll/transparency 复用 character surface group，skin/water/bg 也最终汇入共同 surface channels；本轮按 `SurfaceSamples -> SurfaceState -> lighting/output` 拆层，不复制无证据的 package-specific fragment shader。
-   - `SurfaceSamples` 只负责逐 role UV 与 texture sampling；`SurfaceState` 负责 base/alpha/normal/material/specular/emissive 和 debug 所需中间值；opaque/glass lighting 与 final/bloom 输出进入独立 helper。draw-role discard 与 debug dispatch 保留在 fragment entry，便于审计控制流。
-   - 本轮是行为保持重构：不改 uniform/binding ABI、不改公式、采样策略、浮点常量或 pass 分派。focused test 至少验证 WGSL 可创建 pipeline，45047/45048/45050/45053/45068 final 必须逐字节保持当前基线，现有 synthetic native WGPU 回归全部继续通过。
-
 ### P1：有证据时补视觉语义
 
-2. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
+1. **MultiMap、MultiMaterial、AlphaMulti 和 detail influence**
    - `GetMultiValues` 的 vertex-alpha Map0/Map1 混合已完成。
    - character Compatibility diffuse 组合已修正：MeddleTools character 节点明确以当前 `GetValues=GetValuesCompatibility` 或旧式 `GetValuesTextureType=Compatibility` 驱动原 diffuse 与 baked ColorTable 相乘的唯一 Factor；同步/异步 loader 只在该 gate 命中时使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse。原 diffuse 仍保留在 raw texture indices；其它 family 不改变。
    - `GetValuesMultiMaterial` 的 vertex alpha 已确认不能作为 opacity；准确的材质/ColorTable 分区公式仍待节点或游戏 shader 证据。
@@ -104,37 +97,37 @@
    - `g_SamplerMulti` 当前只报告 `multiMapInterpretation`；等待通道证据。
    - detail A/B 层混合已完成，但 detail 对 base 的最终 influence 在 MeddleTools 中仍标为 borked。
 
-4. **特殊 character families**
+2. **特殊 character families**
    - reflection：当前为 generic character approximation，等待可靠 reflection/environment/sphere 输入证据。
    - occlusion：保留 runtime sub-color 诊断，尚无完整 family 公式。
    - skin：Face clamp 已完成；SkinColor、body/face decal 和完整 skin 节点需要显式 runtime 输入。
    - characterScroll：variant/raw 已保留，MeddleTools 未提供专用 scroll 公式。
    - stockings/tattoo：静态可证明的 alpha/pipeline 已完成，运行时颜色/skin material 仍缺失。
 
-5. **Glass、cutout 与透明合成**
+3. **Glass、cutout 与透明合成**
    - Glass Mul/Add 目前是显式近似；仍缺真实乘法、折射、厚度和 scene-color transmission。
    - cutout 已有独立 pipeline 和 alpha test，但缺少更多 family-specific cutout 行为。
    - 逐三角形透明排序已完成；互相穿插或循环遮挡的透明面仍需后续评估 weighted blended OIT。
    - `g_ShadowAlphaThreshold` 与 `g_ShadowPosOffset` 等 shadow-only 语义等待 shadow pass 方案。
 
-6. **Water 和 environment 扩展**
+4. **Water 和 environment 扩展**
    - water refraction、whitecap、WaveMap1 已解析但未消费；MeddleTools 当前输出未连接。
    - crystal/environment binding 已结构化并报告 unsupported，尚无可信坐标和混合公式。
    - sphere/reflection 目前仅为明确标注的 rim 近似，不继续无证据调参。
 
 ### P2：运行时输入与几何能力
 
-7. **显式 runtime material inputs**
+5. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-8. **runtime geometry state**
+6. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-9. **验证覆盖扩展**
+7. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -169,6 +162,7 @@
 - character 当前/旧式 Compatibility key 使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse；同步/异步 loader 共用同一策略。
 - exact-SHPK material semantic audit：scoped key/default/override、constant/default/override、shader flags、资源/catalog 引用双计数、unknown/malformed/non-finite/unresolved 与代表样本。
 - exact sampler-role audit 与 loader 保真：SHPK resource name/CRC、logical role、flags、资源/catalog 引用双计数可审计；Skin* 独立槽固定 UV2 并报告 composition unsupported，武器实样确认仅存在 UV0 主角色。
+- 通用 WGSL surface pipeline 已拆为 `SurfaceSamples -> SurfaceState -> lighting/output`；fragment entry 保留可审计的 debug/discard/draw-role 控制流，结构测试与真实/合成快照固定行为不回退。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

@@ -280,8 +280,90 @@ fn fs_dither_depth(input: VertexOutput) -> FragmentOutput {
 
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
-    let is_lightshaft = material.draw_role_params.x > 0.5;
-    let is_crest_fallback = material.draw_role_params.y > 0.5;
+    let pass_flags = resolve_surface_pass_flags();
+    let extra = resolve_extra_properties(input);
+    let tile_array = resolve_tile_array(input, extra);
+    let detail_array = resolve_detail_array(input);
+    let samples = resolve_surface_samples(input);
+    let surface = resolve_surface_state(
+        input,
+        front_facing,
+        pass_flags,
+        samples,
+        tile_array,
+        detail_array,
+    );
+    if camera.options.w > 0.5 {
+        return debug_fragment_output(
+            input,
+            camera.options.w,
+            surface.base,
+            surface.normal,
+            surface.mask,
+            surface.properties,
+            surface.material_specular,
+            surface.emissive,
+            surface.alpha,
+            tile_array,
+            detail_array,
+        );
+    }
+    if pass_flags.is_crest_fallback {
+        discard;
+    }
+    if pass_flags.is_mask && surface.alpha < material.render.w {
+        discard;
+    }
+    if pass_flags.uses_alpha && surface.alpha < 0.01 {
+        discard;
+    }
+    if pass_flags.is_lightshaft {
+        var out: FragmentOutput;
+        out.color = surface.lightshaft;
+        out.bright = vec4<f32>(surface.lightshaft.rgb * 1.15, 1.0);
+        return out;
+    }
+    return resolve_surface_output(surface, extra, pass_flags.is_glass);
+}
+
+struct SurfacePassFlags {
+    is_lightshaft: bool,
+    is_crest_fallback: bool,
+    is_mask: bool,
+    is_glass: bool,
+    uses_alpha: bool,
+};
+
+fn resolve_surface_pass_flags() -> SurfacePassFlags {
+    var out: SurfacePassFlags;
+    out.is_lightshaft = material.draw_role_params.x > 0.5;
+    out.is_crest_fallback = material.draw_role_params.y > 0.5;
+    out.is_mask = material.render.z > 0.5 && material.render.z < 1.5;
+    let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
+    out.is_glass = material.alpha_policy_params.w > 1.5;
+    out.uses_alpha = out.is_mask
+        || is_blend
+        || out.is_glass
+        || out.is_lightshaft
+        || out.is_crest_fallback
+        || material.render.x > 0.5;
+    return out;
+}
+
+struct SurfaceSamples {
+    base: vec4<f32>,
+    secondary_base: vec4<f32>,
+    normal: vec4<f32>,
+    secondary_normal: vec4<f32>,
+    specular: vec3<f32>,
+    secondary_specular: vec3<f32>,
+    emissive: vec3<f32>,
+    mask: vec3<f32>,
+    properties: vec4<f32>,
+    secondary_blend: f32,
+};
+
+fn resolve_surface_samples(input: VertexOutput) -> SurfaceSamples {
     let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
     let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
     let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
@@ -293,109 +375,126 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let material_properties_uv = resolve_uv(input, material.uv_sources1.w, material.uv_scroll_masks1.w);
     let mip_bias = resolve_texture_mip_bias();
 
-    let extra = resolve_extra_properties(input);
-    let tile_array = resolve_tile_array(input, extra);
-    let detail_array = resolve_detail_array(input);
-    let sampled_normal = textureSampleBias(normal_texture, normal_sampler, normal_uv, mip_bias);
-    let sampled_secondary_normal = textureSampleBias(
+    var out: SurfaceSamples;
+    out.normal = textureSampleBias(normal_texture, normal_sampler, normal_uv, mip_bias);
+    out.secondary_normal = textureSampleBias(
         sheen_properties_texture,
         sheen_sampler,
         secondary_normal_uv,
         mip_bias,
     );
-    let secondary_blend = clamp(input.color.a, 0.0, 1.0) * material.secondary_map_params.w;
-    let sampled_specular = textureSampleBias(specular_texture, specular_sampler, specular_uv, mip_bias).rgb;
-    let sampled_secondary_specular = textureSampleBias(
+    out.secondary_blend = clamp(input.color.a, 0.0, 1.0) * material.secondary_map_params.w;
+    out.specular = textureSampleBias(specular_texture, specular_sampler, specular_uv, mip_bias).rgb;
+    out.secondary_specular = textureSampleBias(
         sphere_properties_texture,
         sphere_sampler,
         secondary_specular_uv,
         mip_bias,
     ).rgb;
     let effective_specular_sample = mix(
-        sampled_specular,
-        sampled_secondary_specular,
-        secondary_blend * material.secondary_map_params.z,
+        out.specular,
+        out.secondary_specular,
+        out.secondary_blend * material.secondary_map_params.z,
     );
-    let normal = resolve_normal(
-        input,
-        front_facing,
-        sampled_normal,
-        sampled_secondary_normal,
-        secondary_blend,
-        tile_array,
-        detail_array,
-    );
-    let light = normalize(camera.light_dir.xyz);
-    let diffuse = max(dot(normal, light), 0.0);
-    let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
-    let mask = resolve_mask(mask_uv);
-    var properties = resolve_material_properties(material_properties_uv, mask);
+    out.mask = resolve_mask(mask_uv);
+    out.properties = resolve_material_properties(material_properties_uv, out.mask);
     let has_bg_specular = material.properties.y > 0.5 || material.secondary_map_params.z > 0.5;
     if material.feature_params.w > 0.5 && has_bg_specular {
-        properties.x = effective_specular_sample.b;
-        properties.y = effective_specular_sample.g;
+        out.properties.x = effective_specular_sample.b;
+        out.properties.y = effective_specular_sample.g;
     }
-    let metalness = clamp(properties.x, 0.0, 1.0);
-    let roughness = clamp(properties.y, 0.08, 1.0);
-    let gloss_strength = clamp(properties.z, 0.0, 1.0);
-    let specular_strength = clamp(properties.w, 0.0, 1.0);
-    let specular_color_mask = clamp(material.specular_color_mask, vec4<f32>(0.0), vec4<f32>(4.0));
-    let specular_scale = specular_strength
-        * resolve_specular_mask_factor(mask.r)
-        * specular_color_mask.a;
-    let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
-    let normal_half = max(dot(normal, half_dir), 0.0);
-    let specular = pow(normal_half, specular_power);
-    let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
-    let sampled_base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
-    let sampled_secondary_base = textureSampleBias(
+    out.base = textureSampleBias(base_color_texture, base_color_sampler, base_uv, mip_bias);
+    out.secondary_base = textureSampleBias(
         tile_properties_texture,
         tile_sampler,
         secondary_base_uv,
         mip_bias,
     );
-    let emissive_tex = textureSampleBias(
+    out.emissive = textureSampleBias(
         emissive_texture,
         emissive_sampler,
         emissive_uv,
         mip_bias,
     ).rgb;
-    let primary_texture = select(vec3<f32>(1.0), sampled_base.rgb, material.params.x > 0.5);
-    let secondary_color_weight = secondary_blend * material.secondary_map_params.x;
+    return out;
+}
+
+struct SurfaceState {
+    base: vec3<f32>,
+    normal: vec3<f32>,
+    mask: vec3<f32>,
+    properties: vec4<f32>,
+    material_specular: vec3<f32>,
+    specular_color_mask: vec4<f32>,
+    emissive: vec3<f32>,
+    lightshaft: vec4<f32>,
+    alpha: f32,
+};
+
+fn resolve_surface_state(
+    input: VertexOutput,
+    front_facing: bool,
+    pass_flags: SurfacePassFlags,
+    samples: SurfaceSamples,
+    tile_array: TileArraySample,
+    detail_array: DetailArraySample,
+) -> SurfaceState {
+    var out: SurfaceState;
+    out.normal = resolve_normal(
+        input,
+        front_facing,
+        samples.normal,
+        samples.secondary_normal,
+        samples.secondary_blend,
+        tile_array,
+        detail_array,
+    );
+    out.mask = samples.mask;
+    out.properties = samples.properties;
+    out.specular_color_mask = clamp(
+        material.specular_color_mask,
+        vec4<f32>(0.0),
+        vec4<f32>(4.0),
+    );
+
+    let primary_texture = select(vec3<f32>(1.0), samples.base.rgb, material.params.x > 0.5);
+    let secondary_color_weight = samples.secondary_blend * material.secondary_map_params.x;
     let scroll_texture_mix = mix(
         primary_texture * clamp(material.shader_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
-        sampled_secondary_base.rgb * clamp(material.shader_multi_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
+        samples.secondary_base.rgb * clamp(material.shader_multi_diffuse_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
         secondary_color_weight,
     );
-    let texture_mix = select(primary_texture, scroll_texture_mix, material.secondary_map_params.w > 0.5);
-    let primary_alpha = select(1.0, sampled_base.a, material.params.x > 0.5);
-    let base_texture_alpha = mix(primary_alpha, sampled_secondary_base.a, secondary_color_weight);
-    let lightshaft = resolve_lightshaft_color(
-        sampled_base.rgb,
-        sampled_secondary_base.rgb,
+    let texture_mix = select(
+        primary_texture,
+        scroll_texture_mix,
+        material.secondary_map_params.w > 0.5,
+    );
+    let primary_alpha = select(1.0, samples.base.a, material.params.x > 0.5);
+    let base_texture_alpha = mix(primary_alpha, samples.secondary_base.a, secondary_color_weight);
+    out.lightshaft = resolve_lightshaft_color(
+        samples.base.rgb,
+        samples.secondary_base.rgb,
         input.color,
     );
+
     let primary_specular = select(
         material.specular_color.rgb,
-        sampled_specular,
+        samples.specular,
         material.properties.y > 0.5,
     );
     let generic_material_specular = mix(
         primary_specular,
-        sampled_secondary_specular,
-        secondary_blend * material.secondary_map_params.z,
+        samples.secondary_specular,
+        samples.secondary_blend * material.secondary_map_params.z,
     );
-    let material_specular = select(
+    out.material_specular = select(
         generic_material_specular,
         material.specular_color.rgb,
         material.feature_params.w > 0.5,
-    ) * specular_color_mask.rgb;
+    ) * out.specular_color_mask.rgb;
+
     let vertex_tint = select(vec3<f32>(1.0), input.color.rgb, material.properties.z > 0.5);
-    let is_mask = material.render.z > 0.5 && material.render.z < 1.5;
-    let is_blend = material.alpha_policy_params.w > 0.5 && material.alpha_policy_params.w < 1.5;
-    let is_glass = material.alpha_policy_params.w > 1.5;
-    let uses_alpha = is_mask || is_blend || is_glass || is_lightshaft || is_crest_fallback || material.render.x > 0.5;
-    let shader_tint = resolve_shader_diffuse_tint(mask);
+    let shader_tint = resolve_shader_diffuse_tint(out.mask);
     let detail_tint = resolve_detail_tint(input, detail_array);
     let generic_base = material.diffuse_color.rgb
         * texture_mix
@@ -404,13 +503,17 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
         * detail_tint
         * tile_array.color_multiplier;
     let scroll_base = texture_mix * vertex_tint;
-    let family_base = select(generic_base, scroll_base, material.secondary_map_params.w > 0.5);
-    let is_water = material.feature_params.y > 0.5;
-    let base = select(
+    let family_base = select(
+        generic_base,
+        scroll_base,
+        material.secondary_map_params.w > 0.5,
+    );
+    out.base = select(
         family_base,
         clamp(material.water_deep_color.rgb, vec3<f32>(0.0), vec3<f32>(4.0)),
-        is_water,
+        material.feature_params.y > 0.5,
     );
+
     let opacity_vertex_alpha = select(
         input.color.a,
         1.0,
@@ -419,77 +522,78 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fr
     let surface_alpha = resolve_material_alpha(
         opacity_vertex_alpha,
         base_texture_alpha,
-        sampled_normal.b,
-        sampled_normal.a,
-        is_lightshaft,
-        is_crest_fallback,
+        samples.normal.b,
+        samples.normal.a,
+        pass_flags.is_lightshaft,
+        pass_flags.is_crest_fallback,
     );
-    let alpha = select(surface_alpha, lightshaft.a, is_lightshaft);
-    let emissive = resolve_emissive(emissive_tex, input.color.a, mask);
-    if camera.options.w > 0.5 {
-        return debug_fragment_output(
-            input,
-            camera.options.w,
-            base,
-            normal,
-            mask,
-            properties,
-            material_specular,
-            emissive,
-            alpha,
-            tile_array,
-            detail_array,
-        );
-    }
-    if is_crest_fallback {
-        discard;
-    }
-    if is_mask && alpha < material.render.w {
-        discard;
-    }
-    if uses_alpha && alpha < 0.01 {
-        discard;
-    }
-    if is_lightshaft {
-        var out: FragmentOutput;
-        out.color = lightshaft;
-        out.bright = vec4<f32>(lightshaft.rgb * 1.15, 1.0);
-        return out;
-    }
-    let rim = pow(1.0 - max(normal.z, 0.0), 2.0)
+    out.alpha = select(surface_alpha, out.lightshaft.a, pass_flags.is_lightshaft);
+    out.emissive = resolve_emissive(samples.emissive, input.color.a, out.mask);
+    return out;
+}
+
+fn resolve_surface_output(
+    surface: SurfaceState,
+    extra: ExtraProperties,
+    is_glass: bool,
+) -> FragmentOutput {
+    let light = normalize(camera.light_dir.xyz);
+    let diffuse = max(dot(surface.normal, light), 0.0);
+    let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
+    let metalness = clamp(surface.properties.x, 0.0, 1.0);
+    let roughness = clamp(surface.properties.y, 0.08, 1.0);
+    let gloss_strength = clamp(surface.properties.z, 0.0, 1.0);
+    let specular_strength = clamp(surface.properties.w, 0.0, 1.0);
+    let specular_scale = specular_strength
+        * resolve_specular_mask_factor(surface.mask.r)
+        * surface.specular_color_mask.a;
+    let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
+    let normal_half = max(dot(surface.normal, half_dir), 0.0);
+    let specular = pow(normal_half, specular_power);
+    let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
+    let rim = pow(1.0 - max(surface.normal.z, 0.0), 2.0)
         * select(0.16, 0.58, is_glass)
         * toon_lighting.z;
-    let specular_tint = mix(material_specular, base, metalness * 0.35);
+    let specular_tint = mix(surface.material_specular, surface.base, metalness * 0.35);
     let glass_factors = resolve_glass_factors();
     let glass_tint = mix(
         vec3<f32>(0.82, 0.94, 1.0),
-        clamp(base, vec3<f32>(0.0), vec3<f32>(2.0)),
+        clamp(surface.base, vec3<f32>(0.0), vec3<f32>(2.0)),
         0.18 + glass_factors.y * 0.22,
     );
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
     let ambient = mix(0.08, 0.22, ssao_mask);
     let glass_ambient = mix(0.52, 0.62, ssao_mask);
-    let opaque_lit = base * (ambient + toon_lighting.x * 0.74)
+    let opaque_lit = surface.base * (ambient + toon_lighting.x * 0.74)
         + specular_tint * toon_lighting.y * specular_scale * 0.24
         + vec3<f32>(rim);
     let glass_lit = glass_tint * (glass_ambient + toon_lighting.x * 0.12)
-        + material_specular * toon_lighting.y * (0.65 + glass_factors.z * 0.25)
+        + surface.material_specular * toon_lighting.y * (0.65 + glass_factors.z * 0.25)
         + vec3<f32>(rim) * vec3<f32>(0.60, 0.85, 1.0) * (1.0 + glass_factors.x * 0.35);
     let lighting_enabled = material.alpha_policy_params.y > 0.5;
-    let surface_lit = select(base, opaque_lit, lighting_enabled);
+    let surface_lit = select(surface.base, opaque_lit, lighting_enabled);
     let lit = select(surface_lit, glass_lit, is_glass);
     let extra_lit = select(
         vec3<f32>(0.0),
-        resolve_extra_lighting(extra, normal, half_dir, rim, material_specular, base, is_glass),
+        resolve_extra_lighting(
+            extra,
+            surface.normal,
+            half_dir,
+            rim,
+            surface.material_specular,
+            surface.base,
+            is_glass,
+        ),
         lighting_enabled,
     );
-    let color = lit + extra_lit + emissive;
+    let color = lit + extra_lit + surface.emissive;
     let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0)) * smoothstep(0.72, 1.0, luma);
+    let highlight = max(color - vec3<f32>(0.72), vec3<f32>(0.0))
+        * smoothstep(0.72, 1.0, luma);
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(color, alpha);
-    out.bright = vec4<f32>(emissive * 1.15 + highlight * 0.65, 1.0);
+    out.color = vec4<f32>(color, surface.alpha);
+    out.bright = vec4<f32>(surface.emissive * 1.15 + highlight * 0.65, 1.0);
     return out;
 }
 
