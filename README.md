@@ -21,7 +21,7 @@ Install the web toolchain once:
 ```bash
 cargo install cargo-binstall
 cargo binstall dioxus-cli@0.7.9 --force
-cargo binstall wasm-bindgen-cli@0.2.121 --force
+cargo binstall wasm-bindgen-cli@0.2.126 --force
 rustup target add wasm32-unknown-unknown
 ```
 

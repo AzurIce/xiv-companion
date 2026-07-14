@@ -47,6 +47,7 @@
             with pkgs;
             [
               dioxus-cli
+              binaryen
               just
               lld
               tailwindcss_4
