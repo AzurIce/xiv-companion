@@ -91,9 +91,10 @@
 ### P2：运行时输入与几何能力
 
 1. **runtime geometry state**
-   - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
-   - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
-   - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
+   - Meddle 从 live `ModelResourceHandle.Shapes/Attributes` 取得 name/id 表，从 `Model.EnabledShapeKeyIndexMask/EnabledAttributeIndexMask` 取得当前状态；静态 MDL 只保留 shape morph、submesh mask、bone table 与 vertex weights，不能恢复 runtime mask。
+   - skeleton pose/attach 来自 live `CharacterBase.Skeleton`，equipment race deformation 来自 GenderRace + PBD deformer。当前 local/Web 调用链没有这些 provider，也没有 bone matrices；现 renderer 只能应用显式离线 shape/attribute mask，不能执行 skinning 或 race-specific pose。
+   - full audit 有 33 个含 shape 的 installed 模型、34 个静态 shape，主要为 `chara/equipment/...glv.mdl`；table-order bit 仍是 UI 明确标注的离线约定，不等价于 runtime ShapeMasks id。
+   - 本轮增加 model-level runtime geometry requirements，分别报告 shape name/id mapping、缺失 enabled shape/attribute mask、skeleton pose/skinning 与 race deformer；调用方已显式提供 mask 时清除对应缺口。没有 live skeleton/PBD provider 前不上传 identity bone matrices或伪造 race pose。
 
 2. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
