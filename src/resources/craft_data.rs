@@ -41,10 +41,7 @@ impl ResourceSpec for CraftDataResource {
     fn descriptor() -> ResourceDescriptor {
         ResourceDescriptor {
             kind: Self::kind(),
-            default_policy: SourcePolicy::Fallback(vec![
-                ResourceSource::Builtin,
-                ResourceSource::UserLocal,
-            ]),
+            default_policy: SourcePolicy::Fixed(ResourceSource::IndexedDb),
             fallback_policy: FallbackPolicy::default(),
             cache_policy: CachePolicy::ReadWrite,
             pipeline: "craft-data-json-v1",
@@ -164,7 +161,14 @@ impl ResourceProvider for LocalCraftDataProvider {
                     format!("failed to encode local craft data: {error}"),
                 )
             })?;
-            Ok(ResourceBlob { bytes, fingerprint })
+            Ok(ResourceBlob {
+                bytes,
+                fingerprint,
+                metadata: super::ResourceMetadata {
+                    origin: Some(super::ResourceOrigin::UserLocal),
+                    ..Default::default()
+                },
+            })
         })
     }
 }

@@ -7,11 +7,13 @@ use dioxus::prelude::*;
 use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
 };
+use crate::app::resources::load_weapon_model_from_local;
 use xiv_companion::{
-    CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
-    CraftTreeNode, ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
-    ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem, WeaponCatalogPackage,
-    WeaponCatalogResource, WeaponModelData, WeaponModelId, WeaponModelResource, build_craft_tree,
+    CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CraftDataId,
+    CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe, CraftTreeNode,
+    ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
+    ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem,
+    WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId, build_craft_tree,
     craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
@@ -47,7 +49,14 @@ pub struct CraftDataEngine {
 #[derive(Clone, PartialEq)]
 pub struct LoadedCraftData {
     pub source: ResourceSource,
+    pub metadata: ResourceMetadata,
     pub data: Rc<CraftDataPackage>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct LoadedCollectionCatalog {
+    pub metadata: ResourceMetadata,
+    pub data: Rc<CollectionCatalogPackage>,
 }
 
 impl PartialEq for CraftDataEngine {
@@ -65,6 +74,7 @@ pub async fn load_craft_data_with_source(
         .map_err(|error| error.to_string())?;
     Ok(LoadedCraftData {
         source: loaded.source,
+        metadata: loaded.metadata,
         data: Rc::new(loaded.value),
     })
 }
@@ -89,17 +99,38 @@ pub async fn load_weapon_model_with_stains(
     item: WeaponCatalogItem,
     stain_ids: [u8; 2],
 ) -> Result<Rc<WeaponModelData>, String> {
+    let data = load_weapon_model_from_local(WeaponModelId {
+        item_id: item.id,
+        item_name: item.name,
+        model_main: item.model_main,
+        model_sub: item.model_sub,
+        stain_ids,
+    })
+    .await?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_collection_catalog() -> Result<Rc<CollectionCatalogPackage>, String> {
     let data = configured_web_resource_hub()
-        .load::<WeaponModelResource>(WeaponModelId {
-            item_id: item.id,
-            item_name: item.name,
-            model_main: item.model_main,
-            model_sub: item.model_sub,
-            stain_ids,
-        })
+        .load::<CollectionCatalogResource>(CollectionCatalogId::Default)
         .await
         .map_err(|error| error.to_string())?;
     Ok(Rc::new(data))
+}
+
+pub async fn load_collection_catalog_with_metadata() -> Result<LoadedCollectionCatalog, String> {
+    let loaded = configured_web_resource_hub()
+        .load_with_source::<CollectionCatalogResource>(CollectionCatalogId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(LoadedCollectionCatalog {
+        metadata: loaded.metadata,
+        data: Rc::new(loaded.value),
+    })
+}
+
+pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
+    load_weapon_model_with_stains(item, [0, 0]).await
 }
 
 pub fn create_craft_data_engine(data: Rc<CraftDataPackage>) -> CraftDataEngine {

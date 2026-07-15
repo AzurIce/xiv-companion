@@ -43,10 +43,18 @@
       in
       {
         devShells.default = craneLib.devShell {
-          packages = with pkgs; [
-            just
-            lld
-          ];
+          packages =
+            with pkgs;
+            [
+              dioxus-cli
+              binaryen
+              just
+              lld
+              tailwindcss_4
+            ]
+            ++ [
+              (pkgs.callPackage ./wasm-bindgen-cli.nix { })
+            ];
         };
       }
     );

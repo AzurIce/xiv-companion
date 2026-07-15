@@ -1,4 +1,4 @@
-use crate::{WeaponCatalogPackage, WeaponModelData};
+use crate::WeaponCatalogPackage;
 
 use super::{
     CachePolicy, DecodeContext, FallbackPolicy, ProviderRequest, ResourceDescriptor, ResourceError,
@@ -33,7 +33,7 @@ impl ResourceSpec for WeaponCatalogResource {
     fn descriptor() -> ResourceDescriptor {
         ResourceDescriptor {
             kind: Self::kind(),
-            default_policy: SourcePolicy::Fixed(ResourceSource::UserLocal),
+            default_policy: SourcePolicy::Fixed(ResourceSource::IndexedDb),
             fallback_policy: FallbackPolicy::default(),
             cache_policy: CachePolicy::ReadWrite,
             pipeline: "weapon-catalog-json-v2",
@@ -71,53 +71,6 @@ pub struct WeaponModelId {
     pub stain_ids: [u8; 2],
 }
 
-pub struct WeaponModelResource;
-
-impl ResourceSpec for WeaponModelResource {
-    type Id = WeaponModelId;
-    type Output = WeaponModelData;
-
-    fn kind() -> ResourceKindKey {
-        WeaponModelKind.into()
-    }
-
-    fn descriptor() -> ResourceDescriptor {
-        ResourceDescriptor {
-            kind: Self::kind(),
-            default_policy: SourcePolicy::Fixed(ResourceSource::UserLocal),
-            fallback_policy: FallbackPolicy::default(),
-            cache_policy: CachePolicy::None,
-            pipeline: "weapon-model-json-v1",
-        }
-    }
-
-    fn request(id: &Self::Id) -> ProviderRequest {
-        ProviderRequest {
-            kind: Self::kind(),
-            key: format!(
-                "{}|{}|{}|{}|{}|{}",
-                id.item_id,
-                id.model_main,
-                id.model_sub,
-                id.stain_ids[0],
-                id.stain_ids[1],
-                id.item_name.replace('|', " ")
-            ),
-        }
-    }
-
-    fn decode(bytes: Vec<u8>, context: DecodeContext) -> Result<Self::Output, ResourceError> {
-        serde_json::from_slice::<WeaponModelData>(&bytes).map_err(|error| {
-            ResourceError::new(
-                ResourceErrorKind::DecodeFailed,
-                context.resource,
-                Some(context.source),
-                format!("failed to decode weapon model JSON: {error}"),
-            )
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WeaponModelKind;
 
@@ -129,7 +82,6 @@ impl ResourceKindLabel for WeaponModelKind {
 
 pub fn register_weapon_model_resources(hub: &mut ResourceHub) {
     hub.register_resource::<WeaponCatalogResource>();
-    hub.register_resource::<WeaponModelResource>();
 }
 
 pub fn parse_weapon_model_request_key(key: &str) -> Result<WeaponModelId, String> {
@@ -200,9 +152,8 @@ mod tests {
             stain_ids: [17, 93],
         };
 
-        let request = WeaponModelResource::request(&id);
         assert_eq!(
-            parse_weapon_model_request_key(&request.key),
+            parse_weapon_model_request_key("42|100|200|17|93|Test   Weapon"),
             Ok(WeaponModelId {
                 item_name: "Test   Weapon".to_string(),
                 ..id

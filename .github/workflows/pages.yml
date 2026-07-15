@@ -71,7 +71,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           nix develop --command cargo binstall dioxus-cli@0.7.9 --no-confirm --force --disable-strategies compile
-          nix develop --command cargo binstall wasm-bindgen-cli@0.2.121 --no-confirm --force --disable-strategies compile
+          nix develop --command cargo binstall wasm-bindgen-cli@0.2.126 --no-confirm --force --disable-strategies compile
+
+      - name: Verify WASM tools
+        run: |
+          nix develop --command wasm-bindgen --version
+          nix develop --command wasm-opt --version
 
       - name: Build
         run: nix develop --command dx build --web --release --features web --package xiv-companion --bin xiv-companion --base-path "${XIV_COMPANION_BASE_URL}"

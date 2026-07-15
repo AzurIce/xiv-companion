@@ -1,8 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::app::icons::{Icon, IconKind};
-use crate::app::modules::{APP_MODULES, ModuleGroup, module_group_label};
-use crate::app::pages::{CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
+use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
+use crate::app::pages::{CollectionPage, CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
+use crate::app::ui::{Badge, BadgeVariant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -10,6 +11,7 @@ pub enum Route {
     Crafting,
     Notes,
     WeaponModels,
+    Collection,
 }
 
 impl Route {
@@ -30,6 +32,7 @@ impl Route {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
             "/weapon-models" => Route::WeaponModels,
+            "/collection" => Route::Collection,
             _ => Route::Workspace,
         }
     }
@@ -40,6 +43,7 @@ impl Route {
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
             Route::WeaponModels => "/weapon-models",
+            Route::Collection => "/collection",
         }
     }
 
@@ -49,6 +53,7 @@ impl Route {
             Route::Crafting => "合成检索",
             Route::Notes => "笔记",
             Route::WeaponModels => "武器模型",
+            Route::Collection => "图鉴",
         }
     }
 }
@@ -77,6 +82,7 @@ fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
         "weapon-models" => IconKind::Sword,
+        "collection" => IconKind::BookOpen,
         "crafting" => IconKind::Wrench,
         _ => IconKind::Wrench,
     }
@@ -115,25 +121,26 @@ fn NavButton(
     icon: IconKind,
     #[props(default = false)] compact: bool,
     #[props(default = false)] collapsed: bool,
+    #[props(default = false)] experimental: bool,
 ) -> Element {
     let button_class = match (compact, collapsed, active) {
         (true, _, true) => {
             "flex h-10 min-w-36 items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (true, _, false) => {
-            "flex h-10 min-w-36 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-10 min-w-36 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
         (false, true, true) => {
-            "flex h-10 items-center justify-center rounded-md bg-accent px-0 text-sm font-medium text-foreground transition-all duration-300 ease-out"
+            "flex h-10 w-full items-center justify-center rounded-md bg-accent px-0 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (false, true, false) => {
-            "flex h-10 items-center justify-center rounded-md px-0 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-10 w-full items-center justify-center rounded-md px-0 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
         (false, false, true) => {
-            "flex h-9 items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
+            "flex h-9 w-full items-center gap-3 rounded-md bg-accent px-3 text-sm font-medium text-foreground transition-all duration-300 ease-out"
         }
         (false, false, false) => {
-            "flex h-9 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out"
+            "flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-all duration-300 ease-out hover:bg-accent hover:text-foreground"
         }
     };
     let label_class = if collapsed {
@@ -152,6 +159,9 @@ fn NavButton(
             span {
                 class: label_class,
                 "{label}"
+            }
+            if experimental && !collapsed {
+                Badge { variant: BadgeVariant::Warning, "实验" }
             }
         }
     };
@@ -181,7 +191,7 @@ pub fn AppShell(route: Signal<Route>) -> Element {
     let shell_class = if collapsed() {
         "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[72px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     } else {
-        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[260px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
+        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     };
 
     rsx! {
@@ -212,7 +222,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
     };
 
     rsx! {
-        aside { class: "hidden min-h-screen min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
+        aside { class: "relative z-50 hidden min-h-screen min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
             div { class: brand_class,
                 div { class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground",
                     Icon { kind: IconKind::LayoutDashboard, class: "h-4 w-4" }
@@ -243,7 +253,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                     collapsed: collapsed(),
                 }
 
-                for group in [ModuleGroup::Tools, ModuleGroup::Preview] {
+                for group in [ModuleGroup::Tools, ModuleGroup::Preview, ModuleGroup::Data] {
                     section { class: "mb-5 mt-4",
                         if !collapsed() {
                             div { class: "mb-2 px-3 text-xs font-medium text-muted-foreground",
@@ -258,6 +268,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                                     active: current.path() == module.href,
                                     icon: module_icon(module.id),
                                     collapsed: collapsed(),
+                                    experimental: module.status == ModuleStatus::Experimental,
                                 }
                             }
                         }
@@ -303,6 +314,7 @@ fn MobileHeader(current: Route) -> Element {
                             active: current.path() == module.href,
                             icon: module_icon(module.id),
                             compact: true,
+                            experimental: module.status == ModuleStatus::Experimental,
                         }
                     }
                 }
@@ -319,6 +331,7 @@ fn PageContent(current: Route) -> Element {
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
             Route::WeaponModels => rsx! { WeaponModelsPage {} },
+            Route::Collection => rsx! { CollectionPage {} },
         }
     }
 }

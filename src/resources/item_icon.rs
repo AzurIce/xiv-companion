@@ -123,6 +123,10 @@ impl ResourceProvider for BuiltinItemIconProvider {
             Ok(ResourceBlob {
                 bytes,
                 fingerprint: None,
+                metadata: super::ResourceMetadata {
+                    origin: Some(super::ResourceOrigin::Builtin),
+                    ..Default::default()
+                },
             })
         })
     }
@@ -211,6 +215,10 @@ impl ResourceProvider for LocalItemIconProvider {
             Ok(ResourceBlob {
                 bytes,
                 fingerprint: None,
+                metadata: super::ResourceMetadata {
+                    origin: Some(super::ResourceOrigin::UserLocal),
+                    ..Default::default()
+                },
             })
         })
     }
