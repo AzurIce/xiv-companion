@@ -26,7 +26,7 @@
 
 ## 核验依据
 
-最近核验：2026-07-15；最近实现基线：`863bd52`；最近路线基线：`529b16d`；最近视觉回归诊断基线：`a7e98bc`。
+最近核验：2026-07-15；最近实现基线：`8971ba9`；最近路线基线：`cf56c4e`；最近视觉回归诊断基线：`a7e98bc`。
 
 - 本仓数据层：`crates/xiv-companion-data/src/model.rs`、`mdl_geometry.rs`、`mdl_metadata.rs`、`weapon_models.rs`。
 - 本仓渲染层：`crates/xiv-companion-render/src/renderer/model.rs`、`model.wgsl`。
