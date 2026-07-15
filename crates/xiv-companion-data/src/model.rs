@@ -944,6 +944,8 @@ pub struct PreparedMaterial {
     pub resource_availability: PreparedMaterialResourceAvailability,
     #[serde(default)]
     pub runtime_fallbacks: PreparedMaterialRuntimeFallbacks,
+    #[serde(default)]
+    pub runtime_input_requirements: PreparedMaterialRuntimeInputRequirements,
     pub render_backfaces: bool,
 }
 
@@ -1190,6 +1192,15 @@ pub enum PreparedTextureArrayStatus {
 pub struct PreparedMaterialRuntimeFallbacks {
     pub decal_or_crest: PreparedRuntimeFallback,
     pub material_change: PreparedRuntimeFallback,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialRuntimeInputRequirements {
+    pub character_instance_state: bool,
+    pub on_render_material_output: bool,
+    pub gpu_color_table_texture: bool,
+    pub resolved_resource_handles: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1569,6 +1580,8 @@ pub fn prepare_material_for_draw_role(
     let texture_bindings = prepared_texture_bindings(material);
     let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
     let texture_sampling = prepared_material_texture_sampling(material, shader_family);
+    let unsupported_inputs =
+        prepared_material_unsupported_inputs(material, draw_role, shader_family, texture_bindings);
 
     PreparedMaterial {
         render_pass: prepared_render_pass(material, draw_role, shader_family),
@@ -1599,14 +1612,13 @@ pub fn prepare_material_for_draw_role(
         texture_sampling,
         uv_sources,
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
-        unsupported_inputs: prepared_material_unsupported_inputs(
-            material,
-            draw_role,
-            shader_family,
-            texture_bindings,
-        ),
+        unsupported_inputs,
         resource_availability: prepared_material_resource_availability(material),
         runtime_fallbacks: prepared_material_runtime_fallbacks(draw_role),
+        runtime_input_requirements: prepared_material_runtime_input_requirements(
+            shader_family,
+            unsupported_inputs,
+        ),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
@@ -2080,6 +2092,30 @@ pub fn prepared_material_runtime_fallbacks(
         } else {
             PreparedRuntimeFallback::NotRequired
         },
+    }
+}
+
+pub fn prepared_material_runtime_input_requirements(
+    shader_family: MaterialShaderFamily,
+    unsupported: PreparedMaterialUnsupportedInputs,
+) -> PreparedMaterialRuntimeInputRequirements {
+    let tattoo_decal_color = matches!(shader_family, MaterialShaderFamily::CharacterTattoo)
+        && unsupported.runtime_decal_color;
+    let skin_decal_color =
+        matches!(shader_family, MaterialShaderFamily::Skin) && unsupported.runtime_decal_color;
+    let on_render_material_output = unsupported.decal_or_crest
+        || unsupported.runtime_skin_material
+        || unsupported.runtime_decal_texture
+        || skin_decal_color;
+
+    PreparedMaterialRuntimeInputRequirements {
+        character_instance_state: unsupported.runtime_option_color
+            || tattoo_decal_color
+            || unsupported.runtime_skin_color
+            || unsupported.runtime_sub_color,
+        on_render_material_output,
+        gpu_color_table_texture: unsupported.runtime_color_table,
+        resolved_resource_handles: on_render_material_output || unsupported.runtime_material_change,
     }
 }
 
@@ -3145,6 +3181,7 @@ mod color_table_bake_tests {
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: false,
             }
         );
@@ -3170,6 +3207,7 @@ mod color_table_bake_tests {
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             }
         );
@@ -3437,6 +3475,16 @@ mod color_table_bake_tests {
             }
         );
         assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange)
+                .runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                on_render_material_output: true,
+                gpu_color_table_texture: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+        assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::MaterialChange)
                 .unsupported_inputs,
             PreparedMaterialUnsupportedInputs {
@@ -3478,12 +3526,27 @@ mod color_table_bake_tests {
         assert!(!tattoo.unsupported_inputs.runtime_decal_texture);
         assert!(!tattoo.unsupported_inputs.decal_color_mode);
         assert!(!tattoo.unsupported_inputs.runtime_skin_material);
+        assert_eq!(
+            tattoo.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
 
         material.shader_package_name = Some("characterstockings.shpk".to_string());
         let stockings = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
         assert!(!stockings.unsupported_inputs.runtime_option_color);
         assert!(!stockings.unsupported_inputs.runtime_decal_color);
         assert!(stockings.unsupported_inputs.runtime_skin_material);
+        assert_eq!(
+            stockings.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                on_render_material_output: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
 
         material.shader_package_name = Some("skin.shpk".to_string());
         let skin = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
@@ -3494,6 +3557,13 @@ mod color_table_bake_tests {
         assert!(!skin.unsupported_inputs.decal_color_mode);
         assert!(!skin.unsupported_inputs.runtime_skin_material);
         assert!(skin.unsupported_inputs.incomplete_shader_family_logic);
+        assert_eq!(
+            skin.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
 
         material.decal_color_mode = MaterialDecalColorMode::Alpha;
         material.decal_color_mode_raw = Some(0x5842_65DD);
@@ -3503,6 +3573,15 @@ mod color_table_bake_tests {
         assert!(skin_decal.unsupported_inputs.runtime_decal_color);
         assert!(skin_decal.unsupported_inputs.runtime_decal_texture);
         assert!(skin_decal.unsupported_inputs.decal_color_mode);
+        assert_eq!(
+            skin_decal.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                on_render_material_output: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
 
         material.shader_package_name = Some("crystal.shpk".to_string());
         material.environment_texture = Some(9);

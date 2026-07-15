@@ -90,18 +90,12 @@
 
 ### P2：运行时输入与几何能力
 
-1. **显式 runtime material inputs**
-   - 当前产品调用链只由 local/Web resource JSON 提供 item/model/stain，`PreparedModelOptions` 只包含 attribute/shape mask；没有 live character instance、on-render output、GPU texture 或 resolved handle provider。
-   - Meddle 证明 GPU ColorTable 来自 `CharacterBase.ColorTableTexturesSpan`，Skin/Option/Decal/SubColor 来自 customize/instance buffer，DecalTexture/crest/SkinMaterial textures 来自 Weapon/Human/Demihuman on-render resolution 与 `CharacterUtility` handles；这些数据不能由静态 SqPack 推导。
-   - installed 武器没有 crest/materialChange range 或 tattoo/stockings/occlusion family；唯一 Skin fallback 固定 Body + DecalOff。静态 MTRL ColorTable 与用户选择 stain 已由现有 bake 消费，runtime GPU override 仍是独立缺口。
-   - 本轮在 prepared 增加结构化 runtime requirement ownership，区分 character instance state、on-render material output、GPU ColorTable texture 与 resolved resource handles，并补 focused tests；现有 unsupported 细项和 transparent/base fallback 保持。没有真实 provider 前不增加空壳颜色/纹理输入、GPU binding 或第 16 个 sampler，decal Clip/Extend 继续与未来 runtime texture 一起设计。
-
-2. **runtime geometry state**
+1. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-3. **验证覆盖扩展**
+2. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -149,6 +143,7 @@
 - cutout 证据边界已固定：`ApplyAlphaClip` known label、installed 无 `ApplyAlphaTest`、四个 SHPK AlphaClip 全 Off 由 audit 断言覆盖；独立 Cutout pipeline 与真实 `g_AlphaThreshold` 保留，但不猜无样本的 family 行为。
 - 透明/OIT/shadow 边界已闭环：全量 audit 固定 LOD0 只有 7365 个 normal model/8114 个 normal mesh；45050/45059 regression 固定 848/320 个透明三角形无 proper intersection，继续使用精确逐三角形排序，不引入无样本 weighted OIT 或 shadow map。
 - water/environment 边界已闭环：installed 武器没有 water/river/crystal family、water mesh range、相关 sampler 或 package constant；MeddleTools 只连接 deep color、primary wave 与 direct alpha，未连接的 refraction/whitecap/WaveMap1/EnvMap 保持 structured unsupported，不新增无证据公式。
+- runtime material input ownership 已结构化：prepared 明确区分 character instance、on-render output、GPU ColorTable texture 与 resolved handle requirement；当前 local/Web 静态调用方无 live provider，因此保持现有 fallback，不预建空壳颜色/纹理 binding 或 decal 公式。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

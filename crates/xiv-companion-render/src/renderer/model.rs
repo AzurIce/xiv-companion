@@ -4150,10 +4150,11 @@ mod tests {
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
         PreparedMaterialResourceAvailability, PreparedMaterialRuntimeFallbacks,
-        PreparedMaterialUnsupportedInputs, PreparedMaterialUvSources, PreparedTextureAddressMode,
-        PreparedTextureBindings, PreparedTextureColorSpace, PreparedTextureFilter,
-        PreparedTextureSampling, PreparedTextureSamplingSet, PreparedTextureScrollSet,
-        PreparedTextureUvSources, PreparedUvSource, prepare_material_for_draw_role,
+        PreparedMaterialRuntimeInputRequirements, PreparedMaterialUnsupportedInputs,
+        PreparedMaterialUvSources, PreparedTextureAddressMode, PreparedTextureBindings,
+        PreparedTextureColorSpace, PreparedTextureFilter, PreparedTextureSampling,
+        PreparedTextureSamplingSet, PreparedTextureScrollSet, PreparedTextureUvSources,
+        PreparedUvSource, prepare_material_for_draw_role,
     };
 
     #[test]
@@ -4398,6 +4399,7 @@ mod tests {
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             }
         );
@@ -4611,6 +4613,7 @@ mod tests {
             unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
             resource_availability: PreparedMaterialResourceAvailability::default(),
             runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
             render_backfaces: true,
         };
 
@@ -4707,6 +4710,7 @@ mod tests {
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: false,
             }
         );
@@ -5086,6 +5090,7 @@ mod tests {
             unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
             resource_availability: PreparedMaterialResourceAvailability::default(),
             runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
             render_backfaces: true,
         };
         assert_eq!(material_alpha_policy_params(prepared), [2.0, 0.0, 1.0, 1.0]);
@@ -5415,6 +5420,7 @@ mod tests {
             unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
             resource_availability: PreparedMaterialResourceAvailability::default(),
             runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
             render_backfaces: true,
         };
 
@@ -5767,6 +5773,7 @@ mod tests {
                 unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
                 resource_availability: PreparedMaterialResourceAvailability::default(),
                 runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             },
             transparent_triangles: transparent_triangles.into_iter().collect(),

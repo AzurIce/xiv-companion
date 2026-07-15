@@ -65,6 +65,13 @@
 - `meddle crystal.shpk` 只连接 ColorMap0 与 NormalMap0，`g_SamplerEnvMap` 输入未连接。Meddle `Names.cs` 提供 water/crystal 参数名称、CRC、默认值与 package 范围，但没有最终坐标或混合公式。
 - renderer 保持现有三条 water 可信连接；refraction/whitecap/WaveMap1 与 Environment 继续作为 structured raw/unsupported 输入，不新增 WGSL 近似。全量 audit 新增专用边界断言，family、water mesh range、相关 sampler 或 package constant 一旦出现就要求重新审计。
 
+## 2026-07-15 Runtime material input ownership
+
+- 当前应用只通过 local/Web `WeaponModelResource` JSON 取得 item/model/stain，renderer 的 `PreparedModelOptions` 只接受 attribute/shape mask；没有 live character pointer、on-render material output、GPU texture 或 resolved handle provider。
+- Meddle 的 `ParseMaterialUtil` 从 `CharacterBase.ColorTableTexturesSpan` 导出 runtime R16G16B16A16F ColorTable；`MaterialComposer` 从 customize parameter 取得 SkinColor、OptionColor、DecalColor/SubColor；`OnRenderMaterialUtil` 从 Weapon/Human/Demihuman 与 `CharacterUtility` 取得 decal/crest texture/color、slot skin material textures 和透明 fallback。上述输入均依赖游戏进程实例状态，静态 SqPack 无法重建。
+- `PreparedMaterial.runtimeInputRequirements` 现结构化报告四类 provider requirement：character instance state、on-render material output、GPU ColorTable texture、resolved resource handles。它由已有 exact unsupported 细项推导，不接受伪造的默认值，也不改变 transparent/base fallback。
+- focused tests 固定 tattoo、stockings、Skin、Skin decal、crest 与 runtime ColorTable 的 ownership 组合。installed 武器没有 crest/materialChange range 或 tattoo/stockings/occlusion family，唯一 Skin fallback 为 Body + DecalOff；因此当前不新增无人能填充的 GPU binding、第 16 个 sampler 或 decal Clip/Extend 近似。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。
