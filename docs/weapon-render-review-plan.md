@@ -91,10 +91,10 @@
 ### P2：运行时输入与几何能力
 
 1. **验证覆盖扩展**
-    - 为每个新增 family 行为增加最小 synthetic fixture。
-    - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
-    - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
-    - sampler policy debug preview 仅在实际定位需求出现时增加。
+    - 当前每个已实现 family 行为都有 focused 或 synthetic native fixture；本轮新增的 runtime requirement 只改变 prepared JSON，已有 focused tests 足够，不需要伪造像素变化。
+    - full audit 已证明武器目录没有真实 Map1、Flow、water、reflection、occlusion 或 bg/bguvscroll 样本；继续搜索同一 installed scope 不会产生新覆盖，出现新游戏资源/package 时由 audit 边界触发重审。
+    - P0/P1 phantom 当前为 7 个 case，harness 已支持 `XIV_PHANTOM_CASES`。GitHub hosted runner 无法取得 SqPack，仓库也没有带游戏数据的 self-hosted runner label，直接添加 workflow 会成为不可运行门禁。
+    - 本轮增加可供本地或未来 self-hosted CI 调用的 PowerShell 验证入口：动态读取 fixture 的 P0/P1 case、校验游戏目录、运行完整 installed audit、P0/P1 phantom、workspace、wasm32、fmt 与 diff。sampler policy debug preview 没有实际定位需求，继续不增加。
 
 ## 证据不足而明确延后
 
