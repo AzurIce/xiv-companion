@@ -19,3 +19,6 @@ or render data handling:
 When modifying `xiv-companion-data` parsing or texture/material baking, compare field semantics
 against these references before changing assumptions. Keep fixes small and add focused tests for
 each semantic correction.
+
+Do not start local development servers or preview servers for this repository. The user will start
+and manage them when needed. Build and test commands that terminate on completion are still allowed.
