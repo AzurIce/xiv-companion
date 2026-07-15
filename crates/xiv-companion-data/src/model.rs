@@ -837,6 +837,19 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
 #[serde(rename_all = "camelCase")]
 pub struct PreparedModel {
     pub meshes: Vec<PreparedMesh>,
+    #[serde(default)]
+    pub runtime_geometry_requirements: PreparedModelRuntimeGeometryRequirements,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedModelRuntimeGeometryRequirements {
+    pub shape_name_id_mapping: bool,
+    pub enabled_shape_mask: bool,
+    pub enabled_attribute_mask: bool,
+    pub skeleton_pose: bool,
+    pub skinning_matrices: bool,
+    pub race_deformer: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1471,6 +1484,8 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
     model: &M,
     options: PreparedModelOptions,
 ) -> PreparedModel {
+    let runtime_geometry_requirements =
+        prepared_model_runtime_geometry_requirements(model, options);
     PreparedModel {
         meshes: model
             .meshes()
@@ -1522,7 +1537,44 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 }
             })
             .collect(),
+        runtime_geometry_requirements,
     }
+}
+
+pub fn prepared_model_runtime_geometry_requirements<M: ModelRenderData + ?Sized>(
+    model: &M,
+    options: PreparedModelOptions,
+) -> PreparedModelRuntimeGeometryRequirements {
+    let has_shapes = model
+        .meshes()
+        .iter()
+        .any(|mesh| !mesh.shape_influences.is_empty() || !mesh.shape_targets.is_empty());
+    let has_attributes = model.meshes().iter().any(|mesh| {
+        mesh.submesh
+            .as_ref()
+            .is_some_and(|submesh| submesh.attribute_index_mask != 0)
+    });
+    let has_skinning = model.meshes().iter().any(model_mesh_has_skinning_payload);
+    let has_equipment_skinning = model.meshes().iter().any(|mesh| {
+        mesh.path.starts_with("chara/equipment/") && model_mesh_has_skinning_payload(mesh)
+    });
+
+    PreparedModelRuntimeGeometryRequirements {
+        shape_name_id_mapping: has_shapes,
+        enabled_shape_mask: has_shapes && options.enabled_shape_mask.is_none(),
+        enabled_attribute_mask: has_attributes && options.enabled_attribute_mask.is_none(),
+        skeleton_pose: has_skinning,
+        skinning_matrices: has_skinning,
+        race_deformer: has_equipment_skinning,
+    }
+}
+
+fn model_mesh_has_skinning_payload(mesh: &ModelMesh) -> bool {
+    mesh.bone_table.is_some()
+        && mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.blend_weights.is_some() && vertex.blend_indices.is_some())
 }
 
 fn prepared_mesh_shape_influences(
@@ -4013,6 +4065,13 @@ mod color_table_bake_tests {
 
         let prepared = prepare_model_for_render(&model);
         assert_eq!(prepared.meshes.len(), 3);
+        assert_eq!(
+            prepared.runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                enabled_attribute_mask: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
         assert_eq!(prepared.meshes[0].mesh_index, 0);
         assert_eq!(prepared.meshes[0].material_slot, 0);
         assert_eq!(prepared.meshes[0].draw_role, ModelMeshDrawRole::Normal);
@@ -4077,6 +4136,11 @@ mod color_table_bake_tests {
             &model,
             PreparedModelOptions::default().with_enabled_attribute_mask(0x0000_0005),
         );
+        assert!(
+            !prepared
+                .runtime_geometry_requirements
+                .enabled_attribute_mask
+        );
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
             prepared.meshes[0].visibility,
@@ -4117,6 +4181,15 @@ mod color_table_bake_tests {
 
         let prepared = prepare_model_for_render(&model);
 
+        assert_eq!(
+            prepared.runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                shape_name_id_mapping: true,
+                enabled_shape_mask: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
+
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
             prepared.meshes[0].shape_influences,
@@ -4136,6 +4209,8 @@ mod color_table_bake_tests {
             &model,
             PreparedModelOptions::default().with_enabled_shape_mask(0x0000_0001),
         );
+        assert!(prepared.runtime_geometry_requirements.shape_name_id_mapping);
+        assert!(!prepared.runtime_geometry_requirements.enabled_shape_mask);
 
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
@@ -4183,6 +4258,44 @@ mod color_table_bake_tests {
         let both = model_mesh_vertices_with_shape_mask(&mesh, Some(0x3));
         assert_eq!(both[0].position, [1.0, 2.0, 0.0]);
         assert_eq!(both[0].normal, [1.0, 2.0, -1.0]);
+    }
+
+    #[test]
+    fn prepared_model_reports_skinning_pose_and_equipment_deformer_requirements() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.path = "chara/equipment/e0001/model/c0101e0001_glv.mdl".to_string();
+        mesh.bone_table = Some(ModelBoneTable {
+            index: 0,
+            bone_count: 1,
+            bone_indices: vec![0],
+            bone_names: vec![Some("n_hara".to_string())],
+        });
+        let mut vertex = test_model_vertex();
+        vertex.blend_weights = Some(ModelBlendWeights {
+            count: 1,
+            values: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        vertex.blend_indices = Some(ModelBlendIndices {
+            count: 1,
+            values: [0; 8],
+        });
+        mesh.vertices = vec![vertex];
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        assert_eq!(
+            prepare_model_for_render(&model).runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                skeleton_pose: true,
+                skinning_matrices: true,
+                race_deformer: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
     }
 
     #[test]

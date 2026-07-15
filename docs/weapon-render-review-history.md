@@ -72,6 +72,13 @@
 - `PreparedMaterial.runtimeInputRequirements` 现结构化报告四类 provider requirement：character instance state、on-render material output、GPU ColorTable texture、resolved resource handles。它由已有 exact unsupported 细项推导，不接受伪造的默认值，也不改变 transparent/base fallback。
 - focused tests 固定 tattoo、stockings、Skin、Skin decal、crest 与 runtime ColorTable 的 ownership 组合。installed 武器没有 crest/materialChange range 或 tattoo/stockings/occlusion family，唯一 Skin fallback 为 Body + DecalOff；因此当前不新增无人能填充的 GPU binding、第 16 个 sampler 或 decal Clip/Extend 近似。
 
+## 2026-07-15 Runtime geometry requirements
+
+- Meddle 从 live `ModelResourceHandle.Shapes/Attributes` 取得 name/id 表，并读取 `EnabledShapeKeyIndexMask` / `EnabledAttributeIndexMask`；pose/attach 来自 `CharacterBase.Skeleton`，equipment race deformation 来自 GenderRace 与 PBD。静态 MDL 只有 morph、submesh mask、bone table 和 vertex weights，不能恢复这些实例状态。
+- `PreparedModel.runtimeGeometryRequirements` 现报告 `shapeNameIdMapping`、缺失的 enabled shape/attribute mask、`skeletonPose`、`skinningMatrices` 与 `raceDeformer`。显式 `PreparedModelOptions` mask 会清除对应 mask requirement，但 shape name/id mapping 仍保持，因为当前 Web table-order bit 不是 live id。
+- requirement 从 mesh 静态 payload 推导：bone table 与 blend weights/indices 同时存在才视为 skinning；`chara/equipment/` skinned mesh 额外要求 race deformer。没有 live skeleton/PBD provider 时不上传 identity matrices，也不把 c0101 equipment fallback 冒充实际种族 pose。
+- focused tests 覆盖 attribute/shape option fulfillment、shape mapping 保留以及 equipment skinning/race requirement。full audit 的 33 个 shape 模型/34 个静态 shape 继续作为真实覆盖边界；现有 42697 显式离线 shape 快照行为不变。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。

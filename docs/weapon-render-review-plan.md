@@ -90,13 +90,7 @@
 
 ### P2：运行时输入与几何能力
 
-1. **runtime geometry state**
-   - Meddle 从 live `ModelResourceHandle.Shapes/Attributes` 取得 name/id 表，从 `Model.EnabledShapeKeyIndexMask/EnabledAttributeIndexMask` 取得当前状态；静态 MDL 只保留 shape morph、submesh mask、bone table 与 vertex weights，不能恢复 runtime mask。
-   - skeleton pose/attach 来自 live `CharacterBase.Skeleton`，equipment race deformation 来自 GenderRace + PBD deformer。当前 local/Web 调用链没有这些 provider，也没有 bone matrices；现 renderer 只能应用显式离线 shape/attribute mask，不能执行 skinning 或 race-specific pose。
-   - full audit 有 33 个含 shape 的 installed 模型、34 个静态 shape，主要为 `chara/equipment/...glv.mdl`；table-order bit 仍是 UI 明确标注的离线约定，不等价于 runtime ShapeMasks id。
-   - 本轮增加 model-level runtime geometry requirements，分别报告 shape name/id mapping、缺失 enabled shape/attribute mask、skeleton pose/skinning 与 race deformer；调用方已显式提供 mask 时清除对应缺口。没有 live skeleton/PBD provider 前不上传 identity bone matrices或伪造 race pose。
-
-2. **验证覆盖扩展**
+1. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -145,6 +139,7 @@
 - 透明/OIT/shadow 边界已闭环：全量 audit 固定 LOD0 只有 7365 个 normal model/8114 个 normal mesh；45050/45059 regression 固定 848/320 个透明三角形无 proper intersection，继续使用精确逐三角形排序，不引入无样本 weighted OIT 或 shadow map。
 - water/environment 边界已闭环：installed 武器没有 water/river/crystal family、water mesh range、相关 sampler 或 package constant；MeddleTools 只连接 deep color、primary wave 与 direct alpha，未连接的 refraction/whitecap/WaveMap1/EnvMap 保持 structured unsupported，不新增无证据公式。
 - runtime material input ownership 已结构化：prepared 明确区分 character instance、on-render output、GPU ColorTable texture 与 resolved handle requirement；当前 local/Web 静态调用方无 live provider，因此保持现有 fallback，不预建空壳颜色/纹理 binding 或 decal 公式。
+- runtime geometry requirement 已结构化：model-level prepared 区分 shape name/id、enabled mask、skeleton pose/skinning matrix 与 equipment race deformer；显式离线 mask 只满足对应状态，不冒充 live mapping/pose，也不注入 identity skinning。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。
