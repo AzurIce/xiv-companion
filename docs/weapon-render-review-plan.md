@@ -88,13 +88,7 @@
 
 队列只记录尚未完成且能实际推进的工作。完成后从本节移除，并在“完成能力摘要”增加一条简述；详细证据写入历史档案或提交记录。
 
-### P2：运行时输入与几何能力
-
-1. **验证覆盖扩展**
-    - 当前每个已实现 family 行为都有 focused 或 synthetic native fixture；本轮新增的 runtime requirement 只改变 prepared JSON，已有 focused tests 足够，不需要伪造像素变化。
-    - full audit 已证明武器目录没有真实 Map1、Flow、water、reflection、occlusion 或 bg/bguvscroll 样本；继续搜索同一 installed scope 不会产生新覆盖，出现新游戏资源/package 时由 audit 边界触发重审。
-    - P0/P1 phantom 当前为 7 个 case，harness 已支持 `XIV_PHANTOM_CASES`。GitHub hosted runner 无法取得 SqPack，仓库也没有带游戏数据的 self-hosted runner label，直接添加 workflow 会成为不可运行门禁。
-    - 本轮增加可供本地或未来 self-hosted CI 调用的 PowerShell 验证入口：动态读取 fixture 的 P0/P1 case、校验游戏目录、运行完整 installed audit、P0/P1 phantom、workspace、wasm32、fmt 与 diff。sampler policy debug preview 没有实际定位需求，继续不增加。
+当前工作队列为空。后续只有 installed audit、参考仓或调用方新增真实输入/覆盖时重新建立任务；证据不足项继续按下节边界保留。
 
 ## 证据不足而明确延后
 
@@ -140,6 +134,7 @@
 - water/environment 边界已闭环：installed 武器没有 water/river/crystal family、water mesh range、相关 sampler 或 package constant；MeddleTools 只连接 deep color、primary wave 与 direct alpha，未连接的 refraction/whitecap/WaveMap1/EnvMap 保持 structured unsupported，不新增无证据公式。
 - runtime material input ownership 已结构化：prepared 明确区分 character instance、on-render output、GPU ColorTable texture 与 resolved handle requirement；当前 local/Web 静态调用方无 live provider，因此保持现有 fallback，不预建空壳颜色/纹理 binding 或 decal 公式。
 - runtime geometry requirement 已结构化：model-level prepared 区分 shape name/id、enabled mask、skeleton pose/skinning matrix 与 equipment race deformer；显式离线 mask 只满足对应状态，不冒充 live mapping/pose，也不注入 identity skinning。
+- 可选真实资源验证入口已完成：脚本动态运行 7 个 P0/P1 phantom、full installed audit 与全部标准门禁，并以单 job 控制 Windows 链接内存；hosted CI 无 SqPack 时不建立不可运行的假 workflow。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

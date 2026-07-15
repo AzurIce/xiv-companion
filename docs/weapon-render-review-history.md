@@ -79,6 +79,13 @@
 - requirement 从 mesh 静态 payload 推导：bone table 与 blend weights/indices 同时存在才视为 skinning；`chara/equipment/` skinned mesh 额外要求 race deformer。没有 live skeleton/PBD provider 时不上传 identity matrices，也不把 c0101 equipment fallback 冒充实际种族 pose。
 - focused tests 覆盖 attribute/shape option fulfillment、shape mapping 保留以及 equipment skinning/race requirement。full audit 的 33 个 shape 模型/34 个静态 shape 继续作为真实覆盖边界；现有 42697 显式离线 shape 快照行为不变。
 
+## 2026-07-15 Render verification entrypoint
+
+- GitHub hosted runner 无法取得 FFXIV SqPack，仓库也没有已配置的 game-data self-hosted runner；因此没有添加会永久排队或跳过真实输入的假 workflow。phantom harness 已支持 `XIV_PHANTOM_CASES`，fixture 当前动态选出 7 个 P0/P1 case。
+- 新增 `scripts/verify-weapon-render.ps1`：校验 `XIV_GAME_DIR`/`-GameDir`，从 fixture 动态生成 P0/P1 filter，依次运行 full installed shader audit、P0/P1 phantom、workspace all-features、wasm32、fmt 与 diff。Cargo 使用 `--jobs 1`，避免 Windows 在连续 WGPU/Web 链接时触发 `LNK1102`/pagefile 峰值，不缩减测试范围。
+- 入口已端到端通过。full audit 保持 7365 models、8112 material references、6399 MTRL、4 SHPK、0 failures；7 个 phantom 全部完成，45050/45059 proper intersections 仍为 0，45052 baseline/stain0/stain1 metallic RGB differences 为 203495 / 2773725 / 2955242。
+- 当前每个已实现 family 行为已有 focused 或 synthetic native fixture；installed audit 明确证明 Map1、Flow、water、reflection、occlusion、bg/bguvscroll 真实武器样本为零。sampler-policy debug 没有实际定位需求，不新增常驻 UI；新资源或 package 出现时由审计边界触发下一轮。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。

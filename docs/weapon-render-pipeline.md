@@ -158,6 +158,8 @@ tile normal 会与 primary tangent-space normal 组合，贡献权重为采样 n
 
 验证边界：CPU focused test 会固定每个 half/layer 的 mip 像素并验证 normal B/A；synthetic native WGPU checker 与预平均 atlas 的最终像素完全一致。另一组 native fixture 固定 layer 21/22 差异，验证 RGBA8 TileProperties `86 / 255 * 64 ≈ 21.58` 与 `g_TileIndex=21.75` 均 floor 到 layer 21。45053/45068 已重跑 final/tile-normal，45068 的前景高频分别下降约 53%/94%，45053 tile-normal 下降约 71%；45050 已重跑 packed normal alpha 路径，45052 继续用 final/tile-normal/tile-ORB snapshot 验证逐像素选层。当前没有真实 bg 武器样本，detail 混合权重仍是保守实现，待样本校准。
 
+本地或带 SqPack 的 self-hosted runner 可执行 `pwsh -NoProfile -File scripts/verify-weapon-render.ps1 -GameDir <path>`，统一运行 full installed audit、fixture 中动态选择的 P0/P1 phantom、workspace、wasm32、fmt 与 diff。脚本限制 Cargo 为单 job 以控制 Windows WGPU/Web 链接内存峰值；普通 hosted CI 没有游戏数据时不伪造或静默跳过真实资源门禁。
+
 ## 6. ColorTable + `_id.tex` 烘焙
 
 许多当前武器没有传统 diffuse/base 贴图，颜色来自：
