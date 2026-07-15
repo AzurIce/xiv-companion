@@ -91,9 +91,10 @@
 ### P2：运行时输入与几何能力
 
 1. **显式 runtime material inputs**
-   - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
-   - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
-   - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
+   - 当前产品调用链只由 local/Web resource JSON 提供 item/model/stain，`PreparedModelOptions` 只包含 attribute/shape mask；没有 live character instance、on-render output、GPU texture 或 resolved handle provider。
+   - Meddle 证明 GPU ColorTable 来自 `CharacterBase.ColorTableTexturesSpan`，Skin/Option/Decal/SubColor 来自 customize/instance buffer，DecalTexture/crest/SkinMaterial textures 来自 Weapon/Human/Demihuman on-render resolution 与 `CharacterUtility` handles；这些数据不能由静态 SqPack 推导。
+   - installed 武器没有 crest/materialChange range 或 tattoo/stockings/occlusion family；唯一 Skin fallback 固定 Body + DecalOff。静态 MTRL ColorTable 与用户选择 stain 已由现有 bake 消费，runtime GPU override 仍是独立缺口。
+   - 本轮在 prepared 增加结构化 runtime requirement ownership，区分 character instance state、on-render material output、GPU ColorTable texture 与 resolved resource handles，并补 focused tests；现有 unsupported 细项和 transparent/base fallback 保持。没有真实 provider 前不增加空壳颜色/纹理输入、GPU binding 或第 16 个 sampler，decal Clip/Extend 继续与未来 runtime texture 一起设计。
 
 2. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
