@@ -88,27 +88,19 @@
 
 队列只记录尚未完成且能实际推进的工作。完成后从本节移除，并在“完成能力摘要”增加一条简述；详细证据写入历史档案或提交记录。
 
-### P1：有证据时补视觉语义
-
-1. **Water 和 environment 扩展**
-   - installed 武器的 family、LOD0 mesh range、sampler 与 material constant coverage 中均没有 water、river、crystal 或 Environment；当前真实目录不能提供新增公式的校准样本。
-   - Blender headless 复核 MeddleTools `meddle water.shpk`：只连接 `WaterDeepColor -> Base Color`、主 `WaveMap -> Normal`、`Transparency -> Alpha`；`RefractionColor`、`WaveMap1`、`WhitecapMap` 均无输出连接，现有节点接口甚至不包含 `WhitecapColor`。
-   - `meddle crystal.shpk` 只连接 ColorMap0 与 NormalMap0，`EnvMap` 输入无任何连线；Meddle 的名称/default 表只证明 water/crystal 参数存在，不能提供采样坐标或混合公式。
-   - 本轮把上述 installed 零覆盖加入全量审计断言，保留现有 structured inputs、unsupported diagnostics 和已有 water 三条可信连接；不新增 refraction/whitecap/WaveMap1/environment WGSL 近似，也不继续调整 sphere/reflection rim 近似。
-
 ### P2：运行时输入与几何能力
 
-2. **显式 runtime material inputs**
+1. **显式 runtime material inputs**
    - GPU ColorTable、resolved material/texture handles、SkinColor、OptionColor、DecalColor、DecalTexture、crest 仍不能由静态 SqPack 还原。
    - 默认 fallback 已存在；只有调用方能提供真实资源时才设计显式输入和 GPU binding。
    - decal 的 shader-level Clip/Extend 需要与显式 runtime texture 一起设计；当前不预占第 16 个 sampler。
 
-3. **runtime geometry state**
+2. **runtime geometry state**
    - 静态 MDL 不包含 runtime shape name 到 bit 的映射；当前 table-order mask 必须保持显式离线约定。
    - 后续在调用方可提供 `ShapeMasks`、enabled attribute mask、skeleton/pose 时接入真实状态。
    - skinning、runtime submesh visibility 和 race-specific equipment pose 尚未实现。
 
-4. **验证覆盖扩展**
+3. **验证覆盖扩展**
     - 为每个新增 family 行为增加最小 synthetic fixture。
     - 继续寻找真实 Map1、Flow、water、reflection、occlusion 样本；武器目录没有 bg/bguvscroll 真实校准样本。
     - 评估把 P0/P1 phantom 子集作为可选 CI 任务。
@@ -155,6 +147,7 @@
 - glass surface 已收紧到证据边界：移除无 SHPK/MeddleTools 依据的蓝色专用 lighting 与 IOR/thickness 消费，复用 character surface + NormalBlue alpha + Dither depth；原 `Mul` 预览实际为 alpha blend，现准确命名为 Alpha，Add 保持显式近似。
 - cutout 证据边界已固定：`ApplyAlphaClip` known label、installed 无 `ApplyAlphaTest`、四个 SHPK AlphaClip 全 Off 由 audit 断言覆盖；独立 Cutout pipeline 与真实 `g_AlphaThreshold` 保留，但不猜无样本的 family 行为。
 - 透明/OIT/shadow 边界已闭环：全量 audit 固定 LOD0 只有 7365 个 normal model/8114 个 normal mesh；45050/45059 regression 固定 848/320 个透明三角形无 proper intersection，继续使用精确逐三角形排序，不引入无样本 weighted OIT 或 shadow map。
+- water/environment 边界已闭环：installed 武器没有 water/river/crystal family、water mesh range、相关 sampler 或 package constant；MeddleTools 只连接 deep color、primary wave 与 direct alpha，未连接的 refraction/whitecap/WaveMap1/EnvMap 保持 structured unsupported，不新增无证据公式。
 - `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。

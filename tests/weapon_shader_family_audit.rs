@@ -1214,6 +1214,7 @@ fn audit_installed_weapon_shader_families() -> Result<()> {
         assert_installed_character_glass_shader_boundary(&mut resource);
         assert_installed_cutout_boundary(&report);
         assert_installed_shadow_mesh_boundary(&report);
+        assert_installed_water_environment_boundary(&report);
     }
     Ok(())
 }
@@ -1330,6 +1331,39 @@ fn assert_installed_shadow_mesh_boundary(report: &WeaponShaderFamilyAudit) {
         report.lod0_mesh_range_mesh_counts,
         BTreeMap::from([("normal".to_string(), 8114)])
     );
+}
+
+fn assert_installed_water_environment_boundary(report: &WeaponShaderFamilyAudit) {
+    assert!(
+        report
+            .family_counts
+            .keys()
+            .all(|family| !matches!(family.as_str(), "Water" | "Crystal")),
+        "installed weapons gained a water or crystal family; re-audit its shader formula"
+    );
+    assert!(!report.lod0_mesh_range_model_counts.contains_key("water"));
+    assert!(!report.lod0_mesh_range_mesh_counts.contains_key("water"));
+
+    assert!(report.sampler_coverage.iter().all(|coverage| {
+        !matches!(
+            coverage.texture_kind,
+            Some(
+                ModelTextureKind::Environment
+                    | ModelTextureKind::WaterWave
+                    | ModelTextureKind::WaterWaveSecondary
+                    | ModelTextureKind::WaterWhitecap
+            )
+        ) && !matches!(
+            coverage.shader_package_name.as_str(),
+            "water.shpk" | "river.shpk" | "crystal.shpk"
+        )
+    }));
+    assert!(report.material_constant_coverage.iter().all(|coverage| {
+        !matches!(
+            coverage.shader_package_name.as_str(),
+            "water.shpk" | "river.shpk" | "crystal.shpk"
+        )
+    }));
 }
 
 fn catalog_models(items: &[WeaponCatalogItem]) -> Vec<(PackedModelId, Vec<&WeaponCatalogItem>)> {

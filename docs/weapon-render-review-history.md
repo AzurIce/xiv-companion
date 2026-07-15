@@ -58,6 +58,13 @@
 - snapshot harness 会在渲染前检查真实透明 geometry：45050 为 848 个透明三角形，45059 为 320 个，均无非相邻三角形 edge 穿过另一三角形内部的 proper intersection。两者不存在必须靠 OIT 解除的循环遮挡，逐三角形 back-to-front 仍是更精确的 alpha composition。
 - 因此不增加 weighted blended OIT 的权重近似，也不以 normal mesh 自创 shadow map。全量 audit 固定唯一 normal range 计数，phantom regression 固定两组 transparency geometry；真实覆盖或相交样本变化时测试会要求重新评估。
 
+## 2026-07-15 Water/environment evidence boundary
+
+- installed WeaponCatalog 的 family 仍只有 character、characterGlass、skin；7365 个模型的 LOD0 range 也只有 normal。sampler 与 material constant coverage 均没有 water、river、crystal 或 Environment 记录，因此武器目录没有可校准 refraction、whitecap、secondary wave 或 environment mapping 的真实样本。
+- Blender headless 复核 MeddleTools `meddle water.shpk` 节点图：仅连接 `g_WaterDeepColor -> Base Color`、`g_SamplerWaveMap -> Normal`、`g_Transparency -> Alpha`。`g_RefractionColor`、`g_SamplerWaveMap1`、`g_SamplerWhitecapMap` 均未连接，当前节点接口也没有 `g_WhitecapColor` socket。
+- `meddle crystal.shpk` 只连接 ColorMap0 与 NormalMap0，`g_SamplerEnvMap` 输入未连接。Meddle `Names.cs` 提供 water/crystal 参数名称、CRC、默认值与 package 范围，但没有最终坐标或混合公式。
+- renderer 保持现有三条 water 可信连接；refraction/whitecap/WaveMap1 与 Environment 继续作为 structured raw/unsupported 输入，不新增 WGSL 近似。全量 audit 新增专用边界断言，family、water mesh range、相关 sampler 或 package constant 一旦出现就要求重新审计。
+
 ## 2026-07-14 MultiMaterial 证据闭环
 
 - WeaponCatalog material-key coverage 显示 character/characterlegacy 的实际 `GetValues` 只有 MultiMaterial 与 Compatibility；没有 AlphaMulti/2/3。sampler coverage 只有 BaseColor/Normal/Mask/Index，没有 `g_SamplerMulti`，family coverage 也没有 bg/bguvscroll。

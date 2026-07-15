@@ -217,6 +217,8 @@ cutout 只由支持 `ApplyAlphaTest` material key 的 family 进入 Mask pass，
 `lightshaft.shpk` 的 `g_Color`、`g_TexAnim`、`g_TexU`、`g_TexV`、`g_Ray` 已解析进材质数据和 renderer uniform。`g_Sampler0/1` 会分别进入 base/secondary-base sRGB binding；LightShaft draw role 以 vertex color B 计算 `mix(Sampler0, Sampler0 * Sampler1)`，结果乘 `g_Color`，颜色 scalar 作为 emission strength，并与 vertex alpha 相乘得到 additive alpha。`ApplyAlphaTestOn` 会保留 AdditiveLightShaft pass，同时在输出前按 `g_AlphaThreshold` discard；synthetic WGPU 已覆盖 visible/clipped 差异。Final mode 使用独立 `fs_lightshaft` 与双面/剔除 additive pipelines，避免执行通用 PBR；任一 debug mode 会选择原 additive `fs_main` pipeline，以保留 base/UV/vertex/mesh-role 等视图。MeddleTools 节点图未连接 `g_TexAnim/U/V/Ray`，因此这些值不再产生推测的 UV/强度效果，只保留用于审计。`Type0/Type1/Unknown`、raw type、`g_AngleClip` 与 `g_NearClip` 已进入材质/phantom/prepared summary；prepared `lightshaftClip` 会明确标出它们尚未参与 WGSL。
 `g_Transparency` 已解析进材质数据和 phantom summary；MeddleTools water group 证明它直接连接 Alpha。prepared 对 water 使用 `MaterialTransparency` alpha source，小于 1 时选择 Transparent pass；WGSL 直接输出该值，不乘 vertex/base alpha 或 character shaping。`g_WaterDeepColor` 直接作为 water base，primary `g_SamplerWaveMap` 复用 normal binding并按 R/G 解码；refraction/whitecap colors 与 WaveMap1/WhitecapMap 已保留在 model/prepared，但因 MeddleTools 当前没有输出连接而不参与着色。三种 water sampler 已脱离 `Other`，不会再被 fallback 当成 base texture。
 
+installed 武器审计没有 water/river/crystal family、water LOD0 range、water/environment sampler 或对应 package constant coverage。MeddleTools 的 water 节点只证明上述 deep color、primary wave、direct alpha 三条连接，crystal 的 EnvMap 以及 water refraction/whitecap/WaveMap1 均未连接；因此这些 structured inputs 继续报告 unsupported，不进入 WGSL。专用 installed assertion 会在真实覆盖出现时要求重新审计，而不是让零样本边界静默变化。
+
 ### 7.2 Transparent
 
 base texture alpha < 250 的材质。使用 alpha blending，关闭 depth write。
