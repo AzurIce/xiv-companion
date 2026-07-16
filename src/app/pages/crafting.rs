@@ -777,9 +777,15 @@ fn BuiltinItemIconView(urls: Vec<String>, size_class: &'static str) -> Element {
                 loading: "lazy",
                 class: cx([size_class, "shrink-0 rounded border bg-muted object-cover"]),
                 onerror: move |_| {
-                    let mut failed = failed_urls();
-                    failed.insert(current_src.clone());
-                    failed_urls.set(failed);
+                    let current_src = current_src.clone();
+                    spawn(async move {
+                        // Image errors can fire while Dioxus is still committing the DOM.
+                        // Yield once so changing the fallback URL cannot re-enter that commit.
+                        gloo_timers::future::TimeoutFuture::new(0).await;
+                        let mut failed = failed_urls.peek().clone();
+                        failed.insert(current_src);
+                        failed_urls.set(failed);
+                    });
                 },
             }
         }

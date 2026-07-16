@@ -4741,6 +4741,7 @@ dependencies = [
  "flate2",
  "futures-executor",
  "gloo-net",
+ "gloo-timers",
  "image",
  "indexed-db",
  "js-sys",

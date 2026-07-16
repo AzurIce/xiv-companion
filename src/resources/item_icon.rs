@@ -230,7 +230,7 @@ pub fn builtin_icon_urls(icon_id: u32) -> Vec<String> {
     }
     let folder = icon_id / 1000 * 1000;
     vec![
-        format!("https://xivapi.com/i/{folder:06}/{icon_id:06}.png"),
+        format!("https://v2.xivapi.com/api/asset/ui/icon/{folder:06}/{icon_id:06}.tex?format=png"),
         format!("https://www.garlandtools.org/files/icons/item/t/{icon_id}.png"),
         format!("https://garlandtools.org/files/icons/item/t/{icon_id}.png"),
     ]
@@ -239,4 +239,19 @@ pub fn builtin_icon_urls(icon_id: u32) -> Vec<String> {
 pub fn item_icon_tex_path(icon_id: u32) -> String {
     let folder = icon_id / 1000 * 1000;
     format!("ui/icon/{folder:06}/{icon_id:06}.tex")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_icon_urls_use_xivapi_v2_asset_path() {
+        let urls = builtin_icon_urls(56_984);
+
+        assert_eq!(
+            urls.first().map(String::as_str),
+            Some("https://v2.xivapi.com/api/asset/ui/icon/056000/056984.tex?format=png")
+        );
+    }
 }

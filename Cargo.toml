@@ -25,6 +25,7 @@ web = [
     "dep:console_error_panic_hook",
     "dep:dioxus",
     "dep:gloo-net",
+    "dep:gloo-timers",
     "dep:indexed-db",
     "dep:js-sys",
     "dep:raphael-simulator",
@@ -58,6 +59,7 @@ console_error_panic_hook = { version = "0.1.7", optional = true }
 dioxus = { version = "0.7.9", features = ["web", "router"], optional = true }
 dioxus-free-icons = { version = "0.10.0", features = ["lucide"], optional = true }
 gloo-net = { version = "0.6.0", optional = true }
+gloo-timers = { version = "0.3.0", features = ["futures"], optional = true }
 indexed-db = { version = "0.4", optional = true }
 js-sys = { version = "0.3.83", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
