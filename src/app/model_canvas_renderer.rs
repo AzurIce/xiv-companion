@@ -146,6 +146,10 @@ impl WebModelCanvasRenderer {
         output.present();
     }
 
+    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
+        self.renderer.update_materials(model);
+    }
+
     pub fn canvas_connected(&self) -> bool {
         self.canvas.is_connected()
     }

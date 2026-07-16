@@ -5,7 +5,7 @@ use xiv_companion::{
     AsyncGameResource, BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage,
     ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
     ResourceMetadata, ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus,
-    WeaponModelLoadRequest, compare_resource_versions, item_icon_tex_path,
+    WeaponModelLoadRequest, WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
     load_weapon_model_from_async_resource, register_collection_catalog_resource,
     register_craft_data_resource, register_item_icon_resource, register_weapon_model_resources,
     resources::{
@@ -18,6 +18,7 @@ use crate::app::browser_sqpack::BrowserSqPack;
 use crate::app::indexed_db_cache::{
     CachedResourceRecord, load_cached_resource, save_cached_resource,
 };
+use crate::app::load_progress::{WeaponModelLoadProgress, report_weapon_model_progress};
 use crate::app::log;
 
 const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
@@ -72,6 +73,8 @@ impl IndexedDbCachedProvider {
     fn schema_revision(request: &ProviderRequest) -> u32 {
         if request.kind == CollectionCatalogKind.into() {
             xiv_companion::COLLECTION_CATALOG_SCHEMA_VERSION
+        } else if request.kind == WeaponCatalogKind.into() {
+            xiv_companion::WEAPON_CATALOG_SCHEMA_REVISION
         } else {
             1
         }
@@ -981,9 +984,43 @@ mod local_release_tests {
 pub async fn load_weapon_model_from_local(
     id: xiv_companion::WeaponModelId,
 ) -> Result<xiv_companion::WeaponModelData, String> {
-    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let started_at_ms = log::now_ms();
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        stage: "连接本地游戏目录".to_string(),
+        detail: id.item_name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: id.item_id,
+                stain_ids: id.stain_ids,
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
     let mut resource = BrowserSqPackGameResource {
         sqpack: &mut sqpack,
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
     };
     let request = WeaponModelLoadRequest {
         item_id: id.item_id,
@@ -993,13 +1030,57 @@ pub async fn load_weapon_model_from_local(
         stain_ids: id.stain_ids,
     };
 
-    load_weapon_model_from_async_resource(&mut resource, &request)
+    let result = load_weapon_model_from_async_resource(&mut resource, &request)
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| format!("{error:#}"));
+    let (stage, detail) = match &result {
+        Ok(data) => (
+            "模型资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理",
+                data.meshes.len(),
+                data.materials.len(),
+                data.textures.len()
+            ),
+        ),
+        Err(error) => ("模型读取失败", error.clone()),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    result
+}
+
+pub async fn load_weapon_staining_templates_from_local() -> Result<WeaponStainingTemplates, String>
+{
+    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    let legacy = sqpack
+        .try_read_game_file(xiv_companion::LEGACY_STAINING_TEMPLATE_PATH)
+        .await;
+    let dawntrail = sqpack
+        .try_read_game_file(xiv_companion::DAWNTRAIL_STAINING_TEMPLATE_PATH)
+        .await;
+    Ok(WeaponStainingTemplates::from_load_results(
+        legacy, dawntrail,
+    ))
 }
 
 struct BrowserSqPackGameResource<'a> {
     sqpack: &'a mut BrowserSqPack,
+    item_id: u32,
+    stain_ids: [u8; 2],
+    started_at_ms: f64,
+    checked_resources: u32,
+    loaded_resources: u32,
+    loaded_bytes: u64,
 }
 
 impl AsyncGameResource for BrowserSqPackGameResource<'_> {
@@ -1010,12 +1091,62 @@ impl AsyncGameResource for BrowserSqPackGameResource<'_> {
         Self: 'a;
 
     fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
-        Box::pin(async move { self.sqpack.try_read_game_file(path).await })
+        Box::pin(async move {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: self.item_id,
+                stain_ids: self.stain_ids,
+                stage: weapon_model_resource_stage(path).to_string(),
+                detail: compact_weapon_resource_path(path),
+                checked_resources: self.checked_resources,
+                loaded_resources: self.loaded_resources,
+                loaded_bytes: self.loaded_bytes,
+                elapsed_ms: log::elapsed_ms(self.started_at_ms),
+                done: false,
+            }));
+
+            let result = self.sqpack.try_read_game_file(path).await;
+            self.checked_resources = self.checked_resources.saturating_add(1);
+            if let Ok(bytes) = &result {
+                self.loaded_resources = self.loaded_resources.saturating_add(1);
+                self.loaded_bytes = self.loaded_bytes.saturating_add(bytes.len() as u64);
+            }
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: self.item_id,
+                stain_ids: self.stain_ids,
+                stage: weapon_model_resource_stage(path).to_string(),
+                detail: compact_weapon_resource_path(path),
+                checked_resources: self.checked_resources,
+                loaded_resources: self.loaded_resources,
+                loaded_bytes: self.loaded_bytes,
+                elapsed_ms: log::elapsed_ms(self.started_at_ms),
+                done: false,
+            }));
+            result
+        })
     }
 
     fn platform(&self) -> physis::Platform {
         physis::Platform::Win32
     }
+}
+
+fn weapon_model_resource_stage(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or_default() {
+        "mdl" => "读取模型几何",
+        "mtrl" => "解析材质",
+        "tex" | "atex" => "解码纹理",
+        "stm" => "应用染色模板",
+        "shpk" => "读取着色器信息",
+        _ => "读取本地资源",
+    }
+}
+
+fn compact_weapon_resource_path(path: &str) -> String {
+    let parts = path
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    parts[parts.len().saturating_sub(3)..].join("/")
 }
 
 async fn load_item_icon_from_browser_sqpack(icon_id: u32) -> Result<Vec<u8>, String> {

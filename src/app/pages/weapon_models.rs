@@ -29,7 +29,10 @@ use xiv_companion::{
 };
 
 use super::crafting::ItemIcon;
-use crate::app::data::{load_weapon_catalog, load_weapon_model_with_stains};
+use crate::app::data::{
+    load_weapon_catalog, load_weapon_model, load_weapon_staining_templates, stain_weapon_model,
+};
+use crate::app::load_progress::{self, WeaponModelLoadProgress};
 
 const RESULT_LIMIT: usize = 220;
 
@@ -101,6 +104,37 @@ struct WeaponUrlState {
     stain_ids: [u8; 2],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WeaponModelRequestKey {
+    item_id: u32,
+    stain_ids: [u8; 2],
+}
+
+#[derive(Clone)]
+struct WeaponModelResourceResult {
+    item_id: u32,
+    result: Result<Rc<WeaponModelData>, String>,
+}
+
+#[derive(Clone)]
+struct WeaponModelPreviewResult {
+    key: WeaponModelRequestKey,
+    result: Result<Rc<WeaponModelData>, String>,
+}
+
+impl PartialEq for WeaponModelPreviewResult {
+    fn eq(&self, other: &Self) -> bool {
+        if self.key != other.key {
+            return false;
+        }
+        match (&self.result, &other.result) {
+            (Ok(left), Ok(right)) => Rc::ptr_eq(left, right),
+            (Err(left), Err(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
 #[component]
 pub fn WeaponModelsPage() -> Element {
     let initial_url_state = initial_weapon_url_state();
@@ -115,15 +149,51 @@ pub fn WeaponModelsPage() -> Element {
     let mut selected_id = use_signal(move || initial_item_id);
     let mut selected_item = use_signal(|| None::<WeaponCatalogItem>);
     let mut stain_ids = use_signal(move || initial_stain_ids);
+    let mut model_progress = use_signal(|| None::<WeaponModelLoadProgress>);
     let model = use_resource(move || {
         let item = selected_item();
-        let stain_ids = stain_ids();
         async move {
-            match item {
-                Some(item) => load_weapon_model_with_stains(item, stain_ids).await,
-                None => Err("未选择武器".to_string()),
-            }
+            let item = item?;
+            Some(WeaponModelResourceResult {
+                item_id: item.id,
+                result: load_weapon_model(item).await,
+            })
         }
+    });
+    let staining_templates = use_resource(load_weapon_staining_templates);
+    let preview_model = use_memo(move || {
+        let item = selected_item()?;
+        let stain_ids = stain_ids();
+        let key = WeaponModelRequestKey {
+            item_id: item.id,
+            stain_ids,
+        };
+        let loaded = model.read().as_ref().cloned().flatten()?;
+        if loaded.item_id != item.id {
+            return None;
+        }
+        let result = match loaded.result {
+            Err(error) => Err(error),
+            Ok(base) if stain_ids == [0, 0] => Ok(base),
+            Ok(base) => match staining_templates.read().as_ref().cloned() {
+                Some(Ok(templates)) => Ok(stain_weapon_model(&base, stain_ids, &templates)),
+                Some(Err(error)) => Err(error),
+                None => return None,
+            },
+        };
+        Some(WeaponModelPreviewResult { key, result })
+    });
+
+    use_effect(move || {
+        load_progress::set_weapon_model_progress_sink(move |progress| {
+            if let Ok(mut slot) = model_progress.try_write() {
+                *slot = progress;
+            }
+        });
+    });
+
+    use_drop(move || {
+        load_progress::clear_weapon_model_progress();
     });
 
     use_effect(move || {
@@ -156,6 +226,7 @@ pub fn WeaponModelsPage() -> Element {
     let query_snapshot = query();
     let slot_filter_snapshot = slot_filter();
     let stain_ids_snapshot = stain_ids();
+    let model_progress_snapshot = model_progress();
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
@@ -223,7 +294,9 @@ pub fn WeaponModelsPage() -> Element {
                             }
                             WeaponModelPane {
                                 selected: selected_snapshot,
-                                model,
+                                selection_pending: selected_id_snapshot.is_some(),
+                                model: preview_model(),
+                                progress: model_progress_snapshot,
                                 stains: catalog.stains.clone(),
                                 stain_ids: stain_ids_snapshot,
                                 on_stain_change: move |(channel, stain_id): (usize, u8)| {
@@ -349,13 +422,26 @@ fn WeaponListRow(
 #[component]
 fn WeaponModelPane(
     selected: Option<WeaponCatalogItem>,
-    model: Resource<Result<Rc<WeaponModelData>, String>>,
+    selection_pending: bool,
+    model: Option<WeaponModelPreviewResult>,
+    progress: Option<WeaponModelLoadProgress>,
     stains: Vec<WeaponStain>,
     stain_ids: [u8; 2],
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let render_options = use_signal(WeaponRenderOptions::default);
     let mut shape_selection = use_signal(|| (None::<u32>, None::<u32>));
+    let requested_key = selected.as_ref().map(|item| WeaponModelRequestKey {
+        item_id: item.id,
+        stain_ids,
+    });
+    let current_model_result = requested_key.and_then(|key| {
+        model
+            .filter(|snapshot| snapshot.key.item_id == key.item_id)
+            .map(|snapshot| snapshot.result)
+    });
+    let current_progress =
+        requested_key.and_then(|key| progress.filter(|progress| progress.item_id == key.item_id));
 
     rsx! {
         section { class: "flex min-h-0 min-w-0 flex-col overflow-hidden bg-background",
@@ -389,9 +475,8 @@ fn WeaponModelPane(
 
                 div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
                     div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
-                        match model.read().as_ref() {
-                            Some(Ok(data))
-                                if data.item_id == item.id && data.stain_ids == stain_ids => {
+                        match current_model_result.as_ref() {
+                            Some(Ok(data)) => {
                                 let requested_shape = shape_selection();
                                 let shape_mask = (requested_shape.0 == Some(item.id))
                                     .then_some(requested_shape.1)
@@ -427,20 +512,14 @@ fn WeaponModelPane(
                                 }
                             },
                             _ => rsx! {
-                                div { class: "absolute inset-0 flex items-center justify-center",
-                                    div { class: "flex items-center gap-3 text-sm text-muted-foreground",
-                                        Icon { kind: IconKind::LoaderCircle, class: "h-4 w-4 animate-spin" }
-                                        "正在读取模型"
-                                    }
-                                }
+                                WeaponModelLoadingView { progress: current_progress.clone() }
                             },
                         }
                     }
 
                     aside { class: "h-56 shrink-0 overflow-y-auto border-t bg-card p-4 xl:h-auto xl:w-80 xl:border-l xl:border-t-0",
-                        match model.read().as_ref() {
-                            Some(Ok(data))
-                                if data.item_id == item.id && data.stain_ids == stain_ids => rsx! {
+                        match current_model_result.as_ref() {
+                            Some(Ok(data)) => rsx! {
                                 WeaponModelStats { model: data.clone() }
                             },
                             _ => rsx! {
@@ -453,6 +532,13 @@ fn WeaponModelPane(
                         }
                     }
                 }
+            } else if selection_pending {
+                div { class: "relative min-h-0 flex-1 bg-[#0e1117]",
+                    WeaponModelLoadingView {
+                        progress: None,
+                        stage: Some("正在定位武器".to_string()),
+                    }
+                }
             } else {
                 div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
                     EmptyState {
@@ -462,6 +548,86 @@ fn WeaponModelPane(
                 }
             }
         }
+    }
+}
+
+#[component]
+fn WeaponModelLoadingView(
+    progress: Option<WeaponModelLoadProgress>,
+    stage: Option<String>,
+) -> Element {
+    let stage = stage
+        .or_else(|| progress.as_ref().map(|progress| progress.stage.clone()))
+        .unwrap_or_else(|| "准备读取模型".to_string());
+    let detail = progress
+        .as_ref()
+        .map(|progress| progress.detail.clone())
+        .filter(|detail| !detail.is_empty());
+    let stats = progress.as_ref().map(|progress| {
+        format!(
+            "已载入 {} / 已检查 {} 个资源 · {} · {}",
+            progress.loaded_resources,
+            progress.checked_resources,
+            format_byte_size(progress.loaded_bytes),
+            format_elapsed(progress.elapsed_ms),
+        )
+    });
+
+    rsx! {
+        div { class: "absolute inset-0 flex items-center justify-center p-6",
+            div { class: "w-full max-w-md space-y-4 text-center",
+                div {
+                    class: "flex items-center justify-center gap-3 text-sm font-medium",
+                    style: "color: rgba(255, 255, 255, 0.9);",
+                    Icon { kind: IconKind::LoaderCircle, class: "h-5 w-5 animate-spin" }
+                    span { "{stage}" }
+                }
+                if let Some(detail) = detail {
+                    div {
+                        class: "truncate text-xs",
+                        style: "color: rgba(255, 255, 255, 0.55);",
+                        title: "{detail}",
+                        "{detail}"
+                    }
+                }
+                div {
+                    class: "mx-auto h-1.5 w-full max-w-sm overflow-hidden rounded",
+                    style: "background-color: rgba(255, 255, 255, 0.1);",
+                    div {
+                        class: "h-full animate-pulse rounded",
+                        style: "width: 50%; background-color: rgba(255, 255, 255, 0.55);",
+                    }
+                }
+                if let Some(stats) = stats {
+                    div {
+                        class: "text-[11px]",
+                        style: "color: rgba(255, 255, 255, 0.45);",
+                        "{stats}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn format_byte_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    let bytes = bytes as f64;
+    if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.0} KiB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
+    }
+}
+
+fn format_elapsed(elapsed_ms: f64) -> String {
+    if elapsed_ms >= 1_000.0 {
+        format!("{:.1} 秒", elapsed_ms / 1_000.0)
+    } else {
+        format!("{elapsed_ms:.0} 毫秒")
     }
 }
 
@@ -781,6 +947,7 @@ fn WeaponStainControls(
     stain_ids: [u8; 2],
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
+    let stains_available = !stains.is_empty();
     rsx! {
         div { class: "mt-3 flex flex-wrap items-end gap-3 border-t pt-3",
             div { class: "pb-2 text-xs font-medium text-muted-foreground", "染色" }
@@ -795,6 +962,11 @@ fn WeaponStainControls(
                 stains,
                 value: stain_ids[1],
                 onchange: move |value| on_stain_change.call((1, value)),
+            }
+            if !stains_available {
+                div { class: "pb-2 text-xs text-amber-700",
+                    "当前武器目录缺少染剂数据，请在数据来源中更新武器目录"
+                }
             }
         }
     }
@@ -820,6 +992,7 @@ fn WeaponStainControl(
         .map(|stain| stain.name.clone())
         .unwrap_or_else(|| "无染色".to_string());
     let select_class = input_class("h-9 min-w-40 cursor-pointer py-1 text-xs");
+    let disabled = stains.is_empty();
 
     rsx! {
         label { class: "min-w-0 space-y-1",
@@ -833,6 +1006,7 @@ fn WeaponStainControl(
                 select {
                     class: "{select_class}",
                     value: "{value}",
+                    disabled,
                     onchange: move |event| {
                         onchange.call(parse_stain_id(&event.value()));
                     },
@@ -942,27 +1116,41 @@ fn WeaponModelCanvas(
     shape_mask: Option<u32>,
 ) -> Element {
     let canvas_id = format!(
-        "weapon-model-canvas-{}-{}-{}-{}-{}-{}",
+        "weapon-model-canvas-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
-        model.stain_ids[0],
-        model.stain_ids[1],
         shape_mask.unwrap_or(0),
     );
     let init_error = use_signal(|| None::<String>);
+    let ready = use_signal(|| false);
 
     #[cfg(target_arch = "wasm32")]
     {
+        let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
+        let init_generation = use_signal(|| 0_u64);
+        let init_key = (
+            model.item_id,
+            model.model_main.raw,
+            model.model_sub.map(|value| value.raw).unwrap_or(0),
+            shape_mask,
+        );
         let effect_canvas_id = canvas_id.clone();
         let effect_model = model.clone();
         let effect_shape_mask = shape_mask;
         let mut effect_error = init_error;
-        use_effect(move || {
+        let mut effect_ready = ready;
+        let mut effect_renderer = renderer;
+        let mut effect_generation = init_generation;
+        use_effect(use_reactive((&init_key,), move |_| {
             let canvas_id = effect_canvas_id.clone();
             let model = effect_model.clone();
             let options = render_options;
+            let generation = *effect_generation.peek() + 1;
+            effect_generation.set(generation);
+            effect_renderer.set(None);
             effect_error.set(None);
+            effect_ready.set(false);
             wasm_bindgen_futures::spawn_local(async move {
                 let result = async {
                     let window =
@@ -984,12 +1172,30 @@ fn WeaponModelCanvas(
 
                 match result {
                     Ok(renderer) => {
-                        start_weapon_render_loop(WasmRc::new(RefCell::new(renderer)), options)
+                        if *effect_generation.peek() != generation {
+                            return;
+                        }
+                        let renderer = WasmRc::new(RefCell::new(renderer));
+                        effect_renderer.set(Some(renderer.clone()));
+                        effect_ready.set(true);
+                        start_weapon_render_loop(renderer, options, effect_generation, generation)
                     }
-                    Err(error) => effect_error.set(Some(error)),
+                    Err(error) if *effect_generation.peek() == generation => {
+                        effect_error.set(Some(error))
+                    }
+                    Err(_) => {}
                 }
             });
-        });
+        }));
+
+        let update_key = (model.item_id, model.stain_ids, shape_mask);
+        let update_model = model.clone();
+        use_effect(use_reactive((&update_key,), move |_| {
+            let Some(renderer) = renderer() else {
+                return;
+            };
+            renderer.borrow_mut().update_materials(&update_model);
+        }));
     }
 
     rsx! {
@@ -1001,6 +1207,12 @@ fn WeaponModelCanvas(
             if let Some(error) = init_error() {
                 div { class: "absolute inset-x-4 top-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 shadow-sm",
                     "{error}"
+                }
+            }
+            if cfg!(target_arch = "wasm32") && !ready() && init_error().is_none() {
+                WeaponModelLoadingView {
+                    progress: None,
+                    stage: Some("正在初始化 WebGPU 渲染".to_string()),
                 }
             }
             if !cfg!(target_arch = "wasm32") {
@@ -1016,6 +1228,8 @@ fn WeaponModelCanvas(
 fn start_weapon_render_loop(
     renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>,
     render_options: Signal<WeaponRenderOptions>,
+    generation: Signal<u64>,
+    expected_generation: u64,
 ) {
     let callback_slot: WasmRc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
         WasmRc::new(RefCell::new(None));
@@ -1025,7 +1239,7 @@ fn start_weapon_render_loop(
     *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
         let connected = {
             let mut renderer = renderer_for_loop.borrow_mut();
-            if renderer.canvas_connected() {
+            if renderer.canvas_connected() && *generation.peek() == expected_generation {
                 let mut options = render_options();
                 options.uv_scroll_time = (time_ms as f32) / 1000.0;
                 renderer.render_with_options(options);
@@ -1244,12 +1458,10 @@ fn format_vec3(value: [f32; 3]) -> String {
 
 fn model_canvas_key(model: &WeaponModelData, shape_mask: Option<u32>) -> String {
     format!(
-        "{}-{}-{}-{}-{}-{}",
+        "{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
-        model.stain_ids[0],
-        model.stain_ids[1],
         shape_mask.unwrap_or(0),
     )
 }
@@ -1361,6 +1573,18 @@ mod weapon_url_tests {
         assert_ne!(
             model_canvas_key(&model, None),
             model_canvas_key(&model, Some(1))
+        );
+    }
+
+    #[test]
+    fn stain_changes_keep_the_existing_canvas_key() {
+        let base = test_shape_model();
+        let mut stained = base.clone();
+        stained.stain_ids = [17, 93];
+
+        assert_eq!(
+            model_canvas_key(&base, None),
+            model_canvas_key(&stained, None)
         );
     }
 

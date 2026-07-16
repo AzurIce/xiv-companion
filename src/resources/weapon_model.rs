@@ -51,14 +51,27 @@ impl ResourceSpec for WeaponCatalogResource {
     }
 
     fn decode(bytes: Vec<u8>, context: DecodeContext) -> Result<Self::Output, ResourceError> {
-        serde_json::from_slice::<WeaponCatalogPackage>(&bytes).map_err(|error| {
+        let package = serde_json::from_slice::<WeaponCatalogPackage>(&bytes).map_err(|error| {
             ResourceError::new(
                 ResourceErrorKind::DecodeFailed,
-                context.resource,
+                context.resource.clone(),
                 Some(context.source),
                 format!("failed to decode weapon catalog JSON: {error}"),
             )
-        })
+        })?;
+        if package.stains.is_empty() || package.counts.stains != package.stains.len() {
+            return Err(ResourceError::new(
+                ResourceErrorKind::DecodeFailed,
+                context.resource,
+                Some(context.source),
+                format!(
+                    "weapon catalog stain metadata is incomplete: counts.stains={}, stains.len()={}",
+                    package.counts.stains,
+                    package.stains.len()
+                ),
+            ));
+        }
+        Ok(package)
     }
 }
 
@@ -140,6 +153,28 @@ mod tests {
 
         assert_eq!(catalog.counts.stains, 0);
         assert!(catalog.stains.is_empty());
+    }
+
+    #[test]
+    fn weapon_catalog_resource_rejects_missing_stain_metadata() {
+        let error = WeaponCatalogResource::decode(
+            br#"{
+                "generatedAt":"old",
+                "gameVersion":"old",
+                "source":"old",
+                "counts":{"items":0},
+                "items":[]
+            }"#
+            .to_vec(),
+            DecodeContext {
+                resource: WeaponCatalogResource::kind(),
+                source: ResourceSource::Builtin,
+                fingerprint: None,
+            },
+        )
+        .expect_err("legacy catalog without stains must be rejected");
+
+        assert!(error.to_string().contains("stain metadata is incomplete"));
     }
 
     #[test]

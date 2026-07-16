@@ -13,8 +13,8 @@ use xiv_companion::{
 };
 
 use crate::app::data::{
-    LoadedCraftData, clear_item_icon_cache, load_collection_catalog, load_craft_data_with_source,
-    load_weapon_catalog,
+    LoadedCraftData, clear_item_icon_cache, clear_weapon_staining_template_cache,
+    load_collection_catalog, load_craft_data_with_source, load_weapon_catalog,
 };
 use crate::app::icons::{Icon, IconKind};
 use crate::app::load_progress::{self, CraftDataLoadProgress};
@@ -532,6 +532,7 @@ pub fn WorkspacePage() -> Element {
             match restore_user_local_directory().await {
                 Ok(Some(directory)) => {
                     clear_item_icon_cache();
+                    clear_weapon_staining_template_cache();
                     authorized_user_local_directory.set(Some(directory));
                     directory_dirty.set(false);
                     settings_revision.set(settings_revision() + 1);
@@ -627,6 +628,7 @@ pub fn WorkspacePage() -> Element {
                         match restore_user_local_directory().await {
                             Ok(directory) => {
                                 clear_item_icon_cache();
+                                clear_weapon_staining_template_cache();
                                 authorized_user_local_directory.set(directory)
                             }
                             Err(error) => directory_pick_error.set(Some(error)),
@@ -665,6 +667,7 @@ pub fn WorkspacePage() -> Element {
                         match authorize_user_local_directory().await {
                             Ok(directory) => {
                                 clear_item_icon_cache();
+                                clear_weapon_staining_template_cache();
                                 authorized_user_local_directory.set(Some(directory));
                                 craft_test.set(None);
                                 icon_test.set(None);

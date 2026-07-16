@@ -173,6 +173,7 @@ pub struct ModelRenderer {
     draw_batches: Vec<DrawBatch>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    material_bind_group_layout: wgpu::BindGroupLayout,
     material_bind_groups: Vec<wgpu::BindGroup>,
     post_sampler: wgpu::Sampler,
     compose_uniform_buffer: wgpu::Buffer,
@@ -749,9 +750,7 @@ impl ModelRenderer {
         );
 
         let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
-        let (bounds_center, bounds_radius) = prepared_options
-            .enabled_shape_mask
-            .and_then(|_| gpu_vertices_bounds(&vertices))
+        let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
             .unwrap_or((model.bounds().center, model.bounds().radius));
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon vertex buffer"),
@@ -825,6 +824,7 @@ impl ModelRenderer {
             draw_batches,
             camera_buffer,
             camera_bind_group,
+            material_bind_group_layout,
             material_bind_groups,
             post_sampler,
             compose_uniform_buffer,
@@ -835,6 +835,16 @@ impl ModelRenderer {
             bounds_center,
             bounds_radius,
         }
+    }
+
+    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
+        self.material_bind_groups = create_material_bind_groups(
+            &self.device,
+            &self.queue,
+            &self.material_bind_group_layout,
+            model,
+            &self.draw_batches,
+        );
     }
 
     pub fn render_to(
@@ -1238,6 +1248,8 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
     let mut draw_batches = Vec::new();
 
     let prepared_model = prepare_model_for_render_with_options(model, prepared_options);
+    let component_offsets =
+        model_component_preview_offsets(model, &prepared_model, prepared_options);
     for prepared_mesh in &prepared_model.meshes {
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
@@ -1253,8 +1265,18 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
 
         let mesh_vertices =
             model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask);
+        let component_offset = component_offsets
+            .get(prepared_mesh.mesh_index)
+            .copied()
+            .unwrap_or([0.0; 3]);
         let base = vertices.len() as u32;
-        vertices.extend(mesh_vertices.iter().map(GpuVertex::from_model_vertex));
+        vertices.extend(mesh_vertices.iter().map(|vertex| {
+            let mut vertex = GpuVertex::from_model_vertex(vertex);
+            for (position, offset) in vertex.position.iter_mut().zip(component_offset) {
+                *position += offset;
+            }
+            vertex
+        }));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
         let transparent_triangles = if prepared_mesh
@@ -1262,7 +1284,7 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
             .render_pass
             .sorts_back_to_front()
         {
-            transparent_triangles(&mesh_vertices, &mesh.indices, base)
+            transparent_triangles(&mesh_vertices, &mesh.indices, base, component_offset)
         } else {
             Vec::new()
         };
@@ -1278,6 +1300,92 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
     }
 
     (vertices, indices, draw_batches)
+}
+
+fn model_component_preview_offsets<M: ModelRenderData + ?Sized>(
+    model: &M,
+    prepared_model: &crate::PreparedModel,
+    prepared_options: PreparedModelOptions,
+) -> Vec<[f32; 3]> {
+    let mut offsets = vec![[0.0; 3]; model.meshes().len()];
+    let Some(max_component) = prepared_model
+        .meshes
+        .iter()
+        .map(|mesh| model.mesh_component_index(mesh.mesh_index) as usize)
+        .max()
+    else {
+        return offsets;
+    };
+    if max_component == 0 {
+        return offsets;
+    }
+
+    let mut minimums = vec![[f32::INFINITY; 3]; max_component + 1];
+    let mut maximums = vec![[f32::NEG_INFINITY; 3]; max_component + 1];
+    let mut present = vec![false; max_component + 1];
+    for prepared_mesh in &prepared_model.meshes {
+        if !prepared_mesh.renders_in_main_pass
+            && !prepared_mesh
+                .prepared_material
+                .render_pass
+                .uses_additive_pipeline()
+        {
+            continue;
+        }
+        let Some(mesh) = model.meshes().get(prepared_mesh.mesh_index) else {
+            continue;
+        };
+        let component = model.mesh_component_index(prepared_mesh.mesh_index) as usize;
+        for vertex in
+            model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask).iter()
+        {
+            present[component] = true;
+            for axis in 0..3 {
+                minimums[component][axis] = minimums[component][axis].min(vertex.position[axis]);
+                maximums[component][axis] = maximums[component][axis].max(vertex.position[axis]);
+            }
+        }
+    }
+
+    let components = present
+        .iter()
+        .enumerate()
+        .filter_map(|(component, present)| present.then_some(component))
+        .collect::<Vec<_>>();
+    if components.len() < 2 {
+        return offsets;
+    }
+
+    let largest_extent = components
+        .iter()
+        .flat_map(|component| {
+            (0..3).map(|axis| maximums[*component][axis] - minimums[*component][axis])
+        })
+        .fold(0.0_f32, f32::max);
+    let gap = (largest_extent * 0.16).max(0.04);
+    let total_width = components
+        .iter()
+        .map(|component| maximums[*component][0] - minimums[*component][0])
+        .sum::<f32>()
+        + gap * (components.len().saturating_sub(1) as f32);
+    let mut cursor = -total_width * 0.5;
+    let mut component_offsets = vec![0.0_f32; max_component + 1];
+    for component in components {
+        let width = maximums[component][0] - minimums[component][0];
+        let source_center = (minimums[component][0] + maximums[component][0]) * 0.5;
+        let target_center = cursor + width * 0.5;
+        component_offsets[component] = target_center - source_center;
+        cursor += width + gap;
+    }
+
+    for (mesh_index, offset) in offsets.iter_mut().enumerate() {
+        let component = model.mesh_component_index(mesh_index) as usize;
+        offset[0] = component_offsets
+            .get(component)
+            .copied()
+            .unwrap_or_default();
+    }
+    offsets
 }
 
 fn gpu_vertices_bounds(vertices: &[GpuVertex]) -> Option<([f32; 3], f32)> {
@@ -1314,6 +1422,7 @@ fn transparent_triangles(
     vertices: &[crate::ModelVertex],
     indices: &[u32],
     vertex_base: u32,
+    offset: [f32; 3],
 ) -> Vec<TransparentTriangle> {
     indices
         .chunks_exact(3)
@@ -1325,9 +1434,9 @@ fn transparent_triangles(
                     vertices.get(triangle[2] as usize)?.position,
                 ];
                 Some([
-                    (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
-                    (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
-                    (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
+                    (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0 + offset[0],
+                    (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0 + offset[1],
+                    (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0 + offset[2],
                 ])
             })()
             .unwrap_or([0.0; 3]);
@@ -3328,6 +3437,7 @@ fn fallback_material() -> ModelMaterial {
         apply_vertex_color: false,
         has_color_dye_table: false,
         color_dye_table: None,
+        color_table_rows: None,
         staining_application: None,
         texture_arrays: crate::ModelMaterialTextureArrays::default(),
         fallback_color: [0.78, 0.72, 0.64],
@@ -4157,6 +4267,33 @@ mod tests {
         PreparedUvSource, prepare_material_for_draw_role,
     };
 
+    struct ComponentTestModel {
+        data: crate::ModelData,
+        components: Vec<u16>,
+    }
+
+    impl ModelRenderData for ComponentTestModel {
+        fn bounds(&self) -> &crate::ModelBounds {
+            &self.data.bounds
+        }
+
+        fn materials(&self) -> &[crate::ModelMaterial] {
+            &self.data.materials
+        }
+
+        fn textures(&self) -> &[crate::ModelTexture] {
+            &self.data.textures
+        }
+
+        fn meshes(&self) -> &[crate::ModelMesh] {
+            &self.data.meshes
+        }
+
+        fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+            self.components.get(mesh_index).copied().unwrap_or_default()
+        }
+    }
+
     #[test]
     fn model_shader_keeps_surface_pipeline_stages_separate() {
         let shader = include_str!("model.wgsl");
@@ -4291,7 +4428,7 @@ mod tests {
         ];
 
         assert_eq!(
-            transparent_triangles(&vertices, &[0, 1, 2], 10),
+            transparent_triangles(&vertices, &[0, 1, 2], 10, [0.0; 3]),
             vec![TransparentTriangle {
                 indices: [10, 11, 12],
                 center: [1.0, 2.0, 0.0],
@@ -5681,6 +5818,34 @@ mod tests {
         assert_eq!(vertices[1].bitangent1, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(vertices[1].flow0, [0.0; 4]);
         assert_eq!(vertices[1].flow1, [0.0; 4]);
+    }
+
+    #[test]
+    fn flatten_model_separates_independent_preview_components() {
+        let model = std::rc::Rc::new(ComponentTestModel {
+            data: crate::ModelData {
+                bounds: crate::ModelBounds::default(),
+                materials: vec![fallback_material()],
+                textures: Vec::new(),
+                meshes: vec![test_mesh("normal", 0.0), test_mesh("normal", 0.0)],
+            },
+            components: vec![0, 1],
+        });
+
+        let (vertices, _, _) = flatten_model(&model);
+        let primary_max = vertices[..3]
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let secondary_min = vertices[3..]
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::INFINITY, f32::min);
+
+        assert!(
+            secondary_min - primary_max >= 0.04,
+            "components must keep a visible preview gap"
+        );
     }
 
     #[test]

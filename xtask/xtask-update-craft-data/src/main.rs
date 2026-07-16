@@ -117,7 +117,7 @@ fn main() -> Result<()> {
                 "weapon-catalog": {
                     "gameVersion": weapon_catalog.game_version,
                     "revision": weapon_catalog.generated_at,
-                    "schemaRevision": 1,
+                    "schemaRevision": xiv_companion::WEAPON_CATALOG_SCHEMA_REVISION,
                     "recordCount": weapon_catalog.counts.items,
                 },
                 "collection-catalog": {

@@ -277,25 +277,9 @@ impl<R: Resource> GameExcel<R> {
         let mut stains = Vec::new();
 
         for_each_row(&sheet, |row_id, row| {
-            let Ok(id) = u8::try_from(row_id) else {
-                return;
-            };
-            if id == 0 {
-                return;
+            if let Some(stain) = weapon_stain_from_row(row_id, row) {
+                stains.push(stain);
             }
-            let Some(name) = string_value(row, 3).filter(|name| !name.is_empty()) else {
-                return;
-            };
-            let se_color = number_value(row, 0);
-            stains.push(WeaponStain {
-                id,
-                name: name.to_owned(),
-                se_color,
-                ui_color: se_color_to_rgba(se_color),
-                shade: number_value(row, 1) as u8,
-                sub_order: number_value(row, 2) as u8,
-                metallic: bool_value(row, 5),
-            });
         });
 
         stains.sort_by_key(|stain| (stain.shade, stain.sub_order, stain.id));
@@ -717,6 +701,36 @@ impl<R: Resource> GameExcel<R> {
     }
 }
 
+fn weapon_stain_from_row(row_id: u32, row: &Row) -> Option<WeaponStain> {
+    let id = u8::try_from(row_id).ok()?;
+    if id == 0 {
+        return None;
+    }
+    let name = row.columns.iter().skip(3).find_map(|field| match field {
+        Field::String(value) if !value.is_empty() => Some(value.as_str()),
+        _ => None,
+    })?;
+    let metallic = row
+        .columns
+        .iter()
+        .skip(3)
+        .find_map(|field| match field {
+            Field::Bool(value) => Some(*value),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let se_color = number_value(row, 0);
+    Some(WeaponStain {
+        id,
+        name: name.to_owned(),
+        se_color,
+        ui_color: se_color_to_rgba(se_color),
+        shade: number_value(row, 1) as u8,
+        sub_order: number_value(row, 2) as u8,
+        metallic,
+    })
+}
+
 fn is_obsolete_legacy_item_name(name: &str) -> bool {
     name.starts_with("过期")
 }
@@ -957,6 +971,41 @@ fn for_each_row(sheet: &physis::excel::Sheet, mut f: impl FnMut(u32, &Row)) {
 #[cfg(test)]
 mod collection_tests {
     use super::*;
+
+    #[test]
+    fn stain_parser_supports_legacy_and_current_sheet_layouts() {
+        let legacy = Row {
+            columns: vec![
+                Field::UInt32(14_999_504),
+                Field::UInt8(2),
+                Field::UInt8(2),
+                Field::String("素雪白".to_string()),
+                Field::String("素雪白".to_string()),
+                Field::Bool(false),
+                Field::Bool(true),
+            ],
+        };
+        let current = Row {
+            columns: vec![
+                Field::UInt32(14_999_504),
+                Field::UInt8(2),
+                Field::UInt8(2),
+                Field::UInt32(52_254),
+                Field::UInt32(0),
+                Field::String("素雪白".to_string()),
+                Field::String("素雪白".to_string()),
+                Field::Bool(false),
+                Field::Bool(true),
+            ],
+        };
+
+        let legacy = weapon_stain_from_row(1, &legacy).expect("legacy stain");
+        let current = weapon_stain_from_row(1, &current).expect("current stain");
+        assert_eq!(legacy, current);
+        assert_eq!(current.name, "素雪白");
+        assert_eq!(current.ui_color, [208, 223, 228, 255]);
+        assert!(!current.metallic);
+    }
 
     fn collection_kind(
         name: &str,

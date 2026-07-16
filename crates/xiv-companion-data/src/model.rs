@@ -12,6 +12,8 @@ pub struct WeaponCatalogPackage {
     pub items: Vec<WeaponCatalogItem>,
 }
 
+pub const WEAPON_CATALOG_SCHEMA_REVISION: u32 = 2;
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WeaponCatalogCounts {
@@ -417,6 +419,7 @@ pub struct ModelMaterialReferenceFallback {
 #[serde(rename_all = "camelCase")]
 pub enum ModelMaterialReferenceFallbackKind {
     SameIndexLoadedMaterial,
+    SameIndexLoadedColorTable,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -581,6 +584,9 @@ pub struct ModelMaterial {
     pub has_color_dye_table: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_dye_table: Option<ModelColorDyeTable>,
+    /// Unstained ColorTable rows retained for fast runtime dye previews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_table_rows: Option<Vec<ColorTableRowColors>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staining_application: Option<ModelStainingApplication>,
     #[serde(default)]
@@ -2512,6 +2518,10 @@ pub trait ModelRenderData {
     fn materials(&self) -> &[ModelMaterial];
     fn textures(&self) -> &[ModelTexture];
     fn meshes(&self) -> &[ModelMesh];
+
+    fn mesh_component_index(&self, _mesh_index: usize) -> u16 {
+        0
+    }
 }
 
 impl ModelRenderData for ModelData {
@@ -2548,6 +2558,33 @@ impl ModelRenderData for WeaponModelData {
     fn meshes(&self) -> &[ModelMesh] {
         &self.meshes
     }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.meshes
+            .get(mesh_index)
+            .map(|mesh| weapon_model_mesh_component_index(self, mesh))
+            .unwrap_or(0)
+    }
+}
+
+pub fn weapon_model_mesh_component_index(model: &WeaponModelData, mesh: &ModelMesh) -> u16 {
+    let Some(secondary) = model.model_sub else {
+        return 0;
+    };
+    let secondary_match = weapon_model_path_matches(&mesh.path, secondary);
+    let primary_match = weapon_model_path_matches(&mesh.path, model.model_main);
+    u16::from(secondary_match && !primary_match)
+}
+
+fn weapon_model_path_matches(path: &str, model: PackedModelId) -> bool {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    path.contains(&format!(
+        "/w{:04}/obj/body/b{:04}/",
+        model.model_id, model.body_id
+    )) || path.starts_with(&format!(
+        "chara/weapon/w{:04}/obj/body/b{:04}/",
+        model.model_id, model.body_id
+    ))
 }
 
 impl<T: ModelRenderData + ?Sized> ModelRenderData for std::rc::Rc<T> {
@@ -2565,6 +2602,10 @@ impl<T: ModelRenderData + ?Sized> ModelRenderData for std::rc::Rc<T> {
 
     fn meshes(&self) -> &[ModelMesh] {
         self.as_ref().meshes()
+    }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.as_ref().mesh_component_index(mesh_index)
     }
 }
 
@@ -2584,10 +2625,15 @@ impl<T: ModelRenderData + ?Sized> ModelRenderData for std::sync::Arc<T> {
     fn meshes(&self) -> &[ModelMesh] {
         self.as_ref().meshes()
     }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.as_ref().mesh_component_index(mesh_index)
+    }
 }
 
 /// ColorTable 单行中参与烘焙的颜色（线性空间）
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ColorTableRowColors {
     pub diffuse: [f32; 3],
     pub specular: [f32; 3],
@@ -3019,6 +3065,30 @@ fn push_unique_path(paths: &mut Vec<String>, path: String) {
 #[cfg(test)]
 mod color_table_bake_tests {
     use super::*;
+
+    #[test]
+    fn weapon_meshes_are_assigned_to_distinct_main_and_sub_components() {
+        let mut primary = test_model_mesh(Some("normal"), 0);
+        primary.path = "chara/weapon/w1801/obj/body/b0123/model/w1801b0123.mdl".to_string();
+        let mut secondary = test_model_mesh(Some("normal"), 0);
+        secondary.path = "chara/weapon/w1851/obj/body/b0123/model/w1851b0123.mdl".to_string();
+        let model = WeaponModelData {
+            item_id: 45056,
+            item_name: "聚餐之幻梦".to_string(),
+            model_main: PackedModelId::from_raw(0x0000_0001_007B_0709),
+            model_sub: Some(PackedModelId::from_raw(0x0000_0001_007B_073B)),
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: vec![primary, secondary],
+        };
+
+        assert_eq!(model.mesh_component_index(0), 0);
+        assert_eq!(model.mesh_component_index(1), 1);
+    }
 
     #[test]
     fn mesh_draw_role_maps_mdl_categories_to_render_decisions() {
@@ -4659,6 +4729,7 @@ mod color_table_bake_tests {
             apply_vertex_color: false,
             has_color_dye_table: false,
             color_dye_table: None,
+            color_table_rows: None,
             staining_application: None,
             texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: [1.0, 1.0, 1.0],
