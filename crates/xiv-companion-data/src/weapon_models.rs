@@ -1741,7 +1741,8 @@ fn material_debug_info_from_parsed_material(
 ) -> anyhow::Result<MaterialDebugInfo> {
     let sampler_records = parse_material_sampler_records(bytes, semantics);
     let shader_flags = parse_material_shader_flags(bytes);
-    let low_level = material_low_level_debug(bytes, &material.texture_paths);
+    let texture_paths = material_texture_paths_from_offsets(bytes, &material.texture_paths);
+    let low_level = material_low_level_debug(bytes, &texture_paths);
     let texture_offsets = low_level
         .as_ref()
         .map(|debug| debug.texture_offsets.clone())
@@ -1761,7 +1762,7 @@ fn material_debug_info_from_parsed_material(
         .into_iter()
         .map(|record| MaterialSamplerDebug {
             texture_index: record.texture_index,
-            texture_path: material.texture_paths.get(record.texture_index).cloned(),
+            texture_path: texture_paths.get(record.texture_index).cloned(),
             texture_usage: record.texture_usage,
             texture_usage_hex: hex_u32(record.texture_usage),
             texture_usage_name: record.texture_usage_name,
@@ -1790,7 +1791,7 @@ fn material_debug_info_from_parsed_material(
             .and_then(|debug| debug.shader_header.clone()),
         shader_flags,
         shader_flags_hex: hex_u32(shader_flags),
-        texture_paths: material.texture_paths.clone(),
+        texture_paths,
         texture_offsets,
         uv_color_sets: low_level
             .as_ref()
@@ -2070,6 +2071,58 @@ struct MaterialLowLevelDebug {
     data_set_size: usize,
     shader_value_list_size: usize,
     shader_value_count: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn material_texture_paths_from_offsets(bytes: &[u8], fallback: &[String]) -> Vec<String> {
+    let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(uv_set_count) = bytes.get(13).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(color_set_count) = bytes.get(14).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+
+    let mut texture_offsets = Vec::with_capacity(texture_count);
+    let mut offset = 16_usize;
+    for _ in 0..texture_count {
+        let Some(raw) = read_u32_le(bytes, offset) else {
+            return fallback.to_vec();
+        };
+        texture_offsets.push(raw as u16);
+        let Some(next) = checked_advance(offset, 4, bytes.len()) else {
+            return fallback.to_vec();
+        };
+        offset = next;
+    }
+
+    let named_set_bytes = uv_set_count
+        .checked_add(color_set_count)
+        .and_then(|count| count.checked_mul(4));
+    let Some(string_table_offset) =
+        named_set_bytes.and_then(|size| checked_advance(offset, size, bytes.len()))
+    else {
+        return fallback.to_vec();
+    };
+    let Some(string_table) = read_bytes(bytes, string_table_offset, string_table_size) else {
+        return fallback.to_vec();
+    };
+
+    let resolved = texture_offsets
+        .into_iter()
+        .enumerate()
+        .map(|(index, string_offset)| {
+            read_string_at(string_table, usize::from(string_offset))
+                .or_else(|| fallback.get(index).cloned())
+        })
+        .collect::<Option<Vec<_>>>();
+
+    resolved.unwrap_or_else(|| fallback.to_vec())
 }
 
 #[cfg(feature = "game-data")]
@@ -2524,6 +2577,7 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
             material_index,
             material_name,
             slot,
+            materials,
             textures,
             loaded_paths,
             color_table_sources,
@@ -2552,6 +2606,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
     material_index: u16,
     material_name: String,
     slot: usize,
+    loaded_materials: &[WeaponModelMaterial],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
     color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
@@ -2568,6 +2623,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         else {
             continue;
         };
+        let texture_paths = material_texture_paths_from_offsets(&bytes, &material.texture_paths);
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
@@ -2584,6 +2640,10 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             &mut color_table_rows,
             &mut color_dye_table,
             color_table_sources,
+        );
+        let fallback_index_texture = loaded_color_table_reference_index_texture(
+            reference_fallback.as_ref(),
+            loaded_materials,
         );
         let base_color_table_rows = color_table_rows.clone();
         let staining_application = apply_weapon_staining(
@@ -2677,10 +2737,11 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
-            &material,
+            &texture_paths,
             color_table_rows.as_deref(),
             &sampler_roles,
             color_table_diffuse_composition,
+            fallback_index_texture,
             textures,
             loaded_paths,
         );
@@ -2829,15 +2890,16 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
 fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     material_path: &str,
-    material: &physis::mtrl::Material,
+    texture_paths: &[String],
     color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
     color_table_diffuse_composition: ColorTableDiffuseComposition,
+    fallback_index_texture: Option<usize>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
-    for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
+    for (texture_order, raw_texture_path) in texture_paths.iter().enumerate() {
         let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
         let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
@@ -2862,6 +2924,7 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
             sampler_role.map(|role| role.logical_role),
         );
     }
+    apply_color_table_index_fallback(&mut set, fallback_index_texture, textures);
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
@@ -3321,6 +3384,7 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
             material_index,
             material_name,
             slot,
+            materials,
             textures,
             loaded_paths,
             color_table_sources,
@@ -3350,6 +3414,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
     material_index: u16,
     material_name: String,
     slot: usize,
+    loaded_materials: &[WeaponModelMaterial],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
     color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
@@ -3366,6 +3431,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         else {
             continue;
         };
+        let texture_paths = material_texture_paths_from_offsets(&bytes, &material.texture_paths);
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
@@ -3382,6 +3448,10 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             &mut color_table_rows,
             &mut color_dye_table,
             color_table_sources,
+        );
+        let fallback_index_texture = loaded_color_table_reference_index_texture(
+            reference_fallback.as_ref(),
+            loaded_materials,
         );
         let base_color_table_rows = color_table_rows.clone();
         let staining_application = apply_weapon_staining(
@@ -3476,10 +3546,11 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
-            &material,
+            &texture_paths,
             color_table_rows.as_deref(),
             &sampler_roles,
             color_table_diffuse_composition,
+            fallback_index_texture,
             textures,
             loaded_paths,
         )
@@ -3629,15 +3700,16 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
 async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     material_path: &str,
-    material: &physis::mtrl::Material,
+    texture_paths: &[String],
     color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
     color_table_diffuse_composition: ColorTableDiffuseComposition,
+    fallback_index_texture: Option<usize>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
-    for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
+    for (texture_order, raw_texture_path) in texture_paths.iter().enumerate() {
         let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
         let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
@@ -3664,6 +3736,7 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
             sampler_role.map(|role| role.logical_role),
         );
     }
+    apply_color_table_index_fallback(&mut set, fallback_index_texture, textures);
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
@@ -3790,6 +3863,27 @@ struct WeaponTextureSet {
     water_wave1: Option<usize>,
     water_whitecap: Option<usize>,
     has_alpha: bool,
+}
+
+#[cfg(feature = "game-data")]
+fn apply_color_table_index_fallback(
+    set: &mut WeaponTextureSet,
+    fallback_index_texture: Option<usize>,
+    textures: &[WeaponModelTexture],
+) {
+    if set.index.is_some() {
+        return;
+    }
+    let Some(texture_index) = fallback_index_texture.filter(|texture_index| {
+        textures
+            .get(*texture_index)
+            .is_some_and(|texture| texture.kind == WeaponModelTextureKind::Index)
+    }) else {
+        return;
+    };
+
+    set.index = Some(texture_index);
+    add_unique_index(&mut set.indices, texture_index);
 }
 
 #[cfg(feature = "game-data")]
@@ -5463,6 +5557,28 @@ fn resolve_loaded_color_table_reference(
 }
 
 #[cfg(feature = "game-data")]
+fn loaded_color_table_reference_index_texture(
+    reference: Option<&ModelMaterialReferenceFallback>,
+    loaded_materials: &[WeaponModelMaterial],
+) -> Option<usize> {
+    let reference = reference?;
+    if !matches!(
+        reference.kind,
+        ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable
+    ) {
+        return None;
+    }
+
+    loaded_materials
+        .iter()
+        .find(|material| {
+            material.slot == reference.source_slot
+                && material.material_index == reference.source_material_index
+        })
+        .and_then(|material| material.index_texture)
+}
+
+#[cfg(feature = "game-data")]
 fn color_table_rows_are_neutral_placeholder(rows: &[ColorTableRowColors]) -> bool {
     !rows.is_empty()
         && rows.iter().all(|row| {
@@ -6938,6 +7054,24 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn material_texture_paths_follow_duplicate_texture_offsets() {
+        use physis::ReadableFile;
+
+        let bytes = test_mtrl_with_duplicate_texture_offsets();
+        let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, &bytes)
+            .expect("material");
+
+        assert_eq!(
+            material_texture_paths_from_offsets(&bytes, &material.texture_paths),
+            vec![
+                "dummy.tex".to_string(),
+                "dummy.tex".to_string(),
+                "chara/weapon/w2651/obj/body/b0059/texture/v01_w2651b0059_id.tex".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn material_semantic_summary_compacts_keys_constants_and_flags() {
         let bytes = test_mtrl_with_low_level_fields();
         let low_level = material_low_level_debug(&bytes, &[]).expect("debug info");
@@ -7322,6 +7456,60 @@ mod weapon_material_tests {
 
     #[test]
     #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45063_reuses_primary_index_for_missing_duplicate_offset_texture() {
+        const PRIMARY_INDEX_PATH: &str =
+            "chara/weapon/w2601/obj/body/b0059/texture/v01_w2601b0059_id.tex";
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let request = WeaponModelLoadRequest {
+            item_id: 45_063,
+            item_name: "夏火之幻梦".to_string(),
+            model_main: 4_298_836_521,
+            model_sub: 4_298_836_571,
+            stain_ids: [0, 0],
+        };
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let primary = model
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/w2601/"))
+            })
+            .expect("45063 primary material");
+        let secondary = model
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/w2651/"))
+            })
+            .expect("45063 secondary material");
+        let index_texture = secondary.index_texture.expect("secondary index binding");
+
+        assert_eq!(secondary.index_texture, primary.index_texture);
+        assert_eq!(model.textures[index_texture].path, PRIMARY_INDEX_PATH);
+        assert_eq!(
+            model.textures[index_texture].kind,
+            WeaponModelTextureKind::Index
+        );
+        assert!(secondary.base_color_texture.is_some());
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == PRIMARY_INDEX_PATH)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
     fn installed_equipment_style_fist_loads_default_human_glove() {
         let game_dir =
             std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
@@ -7499,6 +7687,56 @@ mod weapon_material_tests {
             fallback.map(|fallback| fallback.kind),
             Some(ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable)
         );
+    }
+
+    #[test]
+    fn inherited_color_table_fills_only_the_missing_index_texture() {
+        let mut source = fallback_weapon_material(0, 0, "/mt_primary.mtrl".to_string(), [1.0; 3]);
+        source.path = Some("primary.mtrl".to_string());
+        source.normal_texture = Some(0);
+        source.index_texture = Some(1);
+        let reference = ModelMaterialReferenceFallback {
+            kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable,
+            requested_name: "/mt_secondary.mtrl".to_string(),
+            source_slot: 0,
+            source_material_index: 0,
+            source_name: source.name.clone(),
+            source_path: source.path.clone().expect("source path"),
+        };
+        let textures = vec![
+            WeaponModelTexture {
+                path: "normal.tex".to_string(),
+                kind: WeaponModelTextureKind::Normal,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![128, 128, 255, 255],
+                rgba_f32: None,
+            },
+            WeaponModelTexture {
+                path: "index.tex".to_string(),
+                kind: WeaponModelTextureKind::Index,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![0, 0, 0, 255],
+                rgba_f32: None,
+            },
+        ];
+        let fallback_index = loaded_color_table_reference_index_texture(
+            Some(&reference),
+            std::slice::from_ref(&source),
+        );
+        let mut set = WeaponTextureSet::default();
+
+        apply_color_table_index_fallback(&mut set, fallback_index, &textures);
+
+        assert_eq!(set.index, Some(1));
+        assert_eq!(set.indices, vec![1]);
+        assert_eq!(set.normal, None);
+        assert_eq!(set.mask, None);
     }
 
     #[test]
@@ -9725,6 +9963,62 @@ mod weapon_material_tests {
         bytes.extend_from_slice(&[0; 3]);
         bytes.extend_from_slice(&0.25_f32.to_le_bytes());
         bytes.extend_from_slice(&0.5_f32.to_le_bytes());
+
+        let file_size = bytes.len() as u16;
+        bytes[4..6].copy_from_slice(&file_size.to_le_bytes());
+        bytes
+    }
+
+    fn test_mtrl_with_duplicate_texture_offsets() -> Vec<u8> {
+        let mut strings = Vec::new();
+        let dummy_offset = strings.len() as u16;
+        strings.extend_from_slice(b"dummy.tex\0");
+        let index_offset = strings.len() as u16;
+        strings.extend_from_slice(
+            b"chara/weapon/w2651/obj/body/b0059/texture/v01_w2651b0059_id.tex\0",
+        );
+        let uv_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"map1\0");
+        let color_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"colorSet1\0");
+        let shader_package_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"characterlegacy.shpk\0");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0103_0000_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&(strings.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&shader_package_name_offset.to_le_bytes());
+        bytes.push(3);
+        bytes.push(1);
+        bytes.push(1);
+        bytes.push(0);
+
+        for texture_offset in [dummy_offset, dummy_offset, index_offset] {
+            bytes.extend_from_slice(&u32::from(texture_offset).to_le_bytes());
+        }
+        bytes.extend_from_slice(&uv_name_offset.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&color_name_offset.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&strings);
+
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0d_u32.to_le_bytes());
+        for (sampler, texture_index) in [
+            ("g_SamplerNormal", 0_u8),
+            ("g_SamplerMask", 1_u8),
+            ("g_SamplerIndex", 2_u8),
+        ] {
+            bytes.extend_from_slice(&physis::shpk::ShaderPackage::crc(sampler).to_le_bytes());
+            bytes.extend_from_slice(&0_u32.to_le_bytes());
+            bytes.push(texture_index);
+            bytes.extend_from_slice(&[0; 3]);
+        }
 
         let file_size = bytes.len() as u16;
         bytes[4..6].copy_from_slice(&file_size.to_le_bytes());
