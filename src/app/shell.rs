@@ -2,7 +2,9 @@ use dioxus::prelude::*;
 
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
-use crate::app::pages::{CollectionPage, CraftingPage, NotesPage, WeaponModelsPage, WorkspacePage};
+use crate::app::pages::{
+    CollectionPage, CraftingPage, NotesPage, SettingsPage, WeaponModelsPage, WorkspacePage,
+};
 use crate::app::ui::{Badge, BadgeVariant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub enum Route {
     Notes,
     WeaponModels,
     Collection,
+    Settings,
 }
 
 impl Route {
@@ -33,6 +36,7 @@ impl Route {
             "/notes" => Route::Notes,
             "/weapon-models" => Route::WeaponModels,
             "/collection" => Route::Collection,
+            "/settings" => Route::Settings,
             _ => Route::Workspace,
         }
     }
@@ -44,6 +48,7 @@ impl Route {
             Route::Notes => "/notes",
             Route::WeaponModels => "/weapon-models",
             Route::Collection => "/collection",
+            Route::Settings => "/settings",
         }
     }
 
@@ -54,6 +59,7 @@ impl Route {
             Route::Notes => "笔记",
             Route::WeaponModels => "武器模型",
             Route::Collection => "图鉴",
+            Route::Settings => "设置",
         }
     }
 }
@@ -275,6 +281,15 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                     }
                 }
             }
+            div { class: "border-t p-3",
+                NavButton {
+                    label: "设置",
+                    route: Route::Settings,
+                    active: current == Route::Settings,
+                    icon: IconKind::Settings,
+                    collapsed: collapsed(),
+                }
+            }
         }
     }
 }
@@ -318,6 +333,15 @@ fn MobileHeader(current: Route) -> Element {
                         }
                     }
                 }
+                div { class: "rounded-md border bg-card",
+                    NavButton {
+                        label: "设置",
+                        route: Route::Settings,
+                        active: current == Route::Settings,
+                        icon: IconKind::Settings,
+                        compact: true,
+                    }
+                }
             }
         }
     }
@@ -332,6 +356,7 @@ fn PageContent(current: Route) -> Element {
             Route::Notes => rsx! { NotesPage {} },
             Route::WeaponModels => rsx! { WeaponModelsPage {} },
             Route::Collection => rsx! { CollectionPage {} },
+            Route::Settings => rsx! { SettingsPage {} },
         }
     }
 }

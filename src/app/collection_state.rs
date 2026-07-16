@@ -72,6 +72,28 @@ pub async fn replace_collection_ids(item_ids: &HashSet<u32>) -> Result<(), Strin
         .map_err(|error| format!("替换图鉴解锁状态失败: {error}"))
 }
 
+pub async fn merge_collection_ids(item_ids: &HashSet<u32>) -> Result<(), String> {
+    if item_ids.is_empty() {
+        return Ok(());
+    }
+    let mut item_ids = item_ids.iter().copied().collect::<Vec<_>>();
+    item_ids.sort_unstable();
+    let db = open_collection_db().await?;
+    db.transaction(&[COLLECTION_STORE_NAME])
+        .rw()
+        .run(move |transaction| async move {
+            let collections = transaction.object_store(COLLECTION_STORE_NAME)?;
+            for item_id in item_ids {
+                collections
+                    .put_kv(&JsString::from(item_id.to_string()), &JsValue::TRUE)
+                    .await?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("合并图鉴解锁状态失败: {error}"))
+}
+
 pub fn export_collection_json(item_ids: &HashSet<u32>) -> Result<String, String> {
     let mut items = item_ids.iter().copied().collect::<Vec<_>>();
     items.sort_unstable();

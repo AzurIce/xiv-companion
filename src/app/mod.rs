@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
 pub(crate) mod browser_sqpack;
+mod collection_bridge;
 mod collection_index;
 #[cfg(target_arch = "wasm32")]
 mod collection_state;
