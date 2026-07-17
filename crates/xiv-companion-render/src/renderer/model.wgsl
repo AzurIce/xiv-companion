@@ -1,6 +1,7 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     light_dir: vec4<f32>,
+    view_dir: vec4<f32>,
     options: vec4<f32>, // x: normal mapping, y: normal y sign, z: uv scroll time, w: debug mode
 };
 
@@ -531,31 +532,132 @@ fn resolve_surface_state(
     return out;
 }
 
+fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    let weight = pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
+    return f0 + (vec3<f32>(1.0) - f0) * weight;
+}
+
+fn ggx_distribution(normal_half: f32, roughness: f32) -> f32 {
+    let alpha = roughness * roughness;
+    let alpha_squared = alpha * alpha;
+    let denominator = normal_half * normal_half * (alpha_squared - 1.0) + 1.0;
+    return alpha_squared / max(3.14159265 * denominator * denominator, 0.0001);
+}
+
+fn ggx_geometry_schlick(normal_dot: f32, roughness: f32) -> f32 {
+    let radius = roughness + 1.0;
+    let k = radius * radius * 0.125;
+    return normal_dot / max(normal_dot * (1.0 - k) + k, 0.0001);
+}
+
+fn studio_environment(direction: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let ray = normalize(direction);
+    let vertical = clamp(ray.y * 0.5 + 0.5, 0.0, 1.0);
+    let ground = vec3<f32>(0.075, 0.065, 0.055);
+    let sky = vec3<f32>(0.34, 0.40, 0.48);
+    var color = mix(ground, sky, vertical) * 0.60;
+
+    let horizon_width = mix(5.0, 1.5, roughness);
+    let horizon = pow(max(1.0 - abs(ray.y), 0.0), horizon_width);
+    color += vec3<f32>(0.34, 0.27, 0.20) * horizon * 0.55;
+
+    let key_direction = normalize(vec3<f32>(-0.55, 0.45, 0.70));
+    let fill_direction = normalize(vec3<f32>(0.72, 0.18, 0.67));
+    let key = pow(
+        max(dot(ray, key_direction), 0.0),
+        mix(44.0, 5.0, roughness),
+    );
+    let fill = pow(
+        max(dot(ray, fill_direction), 0.0),
+        mix(72.0, 7.0, roughness),
+    );
+    color += vec3<f32>(1.0, 0.82, 0.64) * key * 1.25;
+    color += vec3<f32>(0.48, 0.62, 0.86) * fill * 0.55;
+    return color;
+}
+
+fn hemisphere_irradiance(normal: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
+    let vertical = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+    let ground = vec3<f32>(0.12, 0.10, 0.085);
+    let sky = vec3<f32>(0.30, 0.35, 0.42);
+    let view_fill = sqrt(max(dot(normal, view), 0.0));
+    return mix(ground, sky, vertical)
+        + vec3<f32>(0.24, 0.215, 0.19) * view_fill;
+}
+
 fn resolve_surface_output(
     surface: SurfaceState,
     extra: ExtraProperties,
 ) -> FragmentOutput {
+    let normal = normalize(surface.normal);
     let light = normalize(camera.light_dir.xyz);
-    let diffuse = max(dot(surface.normal, light), 0.0);
-    let half_dir = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
+    let view = normalize(camera.view_dir.xyz);
+    let half_dir = normalize(light + view);
+    let normal_light = max(dot(normal, light), 0.0);
+    let normal_view = max(dot(normal, view), 0.001);
+    let normal_half = max(dot(normal, half_dir), 0.0);
+    let view_half = max(dot(view, half_dir), 0.0);
     let metalness = clamp(surface.properties.x, 0.0, 1.0);
-    let roughness = clamp(surface.properties.y, 0.08, 1.0);
     let gloss_strength = clamp(surface.properties.z, 0.0, 1.0);
     let specular_strength = clamp(surface.properties.w, 0.0, 1.0);
-    let specular_scale = specular_strength
-        * resolve_specular_mask_factor(surface.mask.r)
-        * surface.specular_color_mask.a;
-    let specular_power = mix(12.0, 96.0, gloss_strength) * (1.0 - roughness * 0.55);
-    let normal_half = max(dot(surface.normal, half_dir), 0.0);
-    let specular = pow(normal_half, specular_power);
-    let toon_lighting = resolve_toon_lighting(diffuse, normal_half, specular);
-    let rim = pow(1.0 - max(surface.normal.z, 0.0), 2.0) * 0.16 * toon_lighting.z;
-    let specular_tint = mix(surface.material_specular, surface.base, metalness * 0.35);
+    let roughness = clamp(
+        surface.properties.y * mix(1.0, 0.68, gloss_strength),
+        0.06,
+        1.0,
+    );
+    let dielectric_f0 = clamp(
+        surface.material_specular * mix(0.025, 0.10, specular_strength),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    let f0 = mix(dielectric_f0, clamp(surface.base, vec3<f32>(0.0), vec3<f32>(1.0)), metalness);
+    let fresnel = fresnel_schlick(view_half, f0);
+    let distribution = ggx_distribution(normal_half, roughness);
+    let geometry = ggx_geometry_schlick(normal_view, roughness)
+        * ggx_geometry_schlick(normal_light, roughness);
+    let specular_brdf = distribution * geometry * fresnel
+        / max(4.0 * normal_view * normal_light, 0.001);
+    let diffuse_weight = (vec3<f32>(1.0) - fresnel) * (1.0 - metalness);
+    let legacy_specular = pow(normal_half, mix(18.0, 96.0, gloss_strength));
+    let toon_lighting = resolve_toon_lighting(normal_light, normal_half, legacy_specular);
+    let specular_mask = clamp(
+        resolve_specular_mask_factor(surface.mask.r) * surface.specular_color_mask.a,
+        0.0,
+        1.35,
+    );
+    let key_color = vec3<f32>(1.0, 0.95, 0.88);
+    let direct_diffuse = diffuse_weight
+        * surface.base
+        * (toon_lighting.x * 2.20 / 3.14159265)
+        * key_color;
+    let direct_specular = specular_brdf
+        * normal_light
+        * mix(1.15, 1.75, toon_lighting.y)
+        * key_color
+        * specular_mask;
+
     let ssao_mask = clamp(material.surface_params.x, 0.0, 1.0);
-    let ambient = mix(0.08, 0.22, ssao_mask);
-    let opaque_lit = surface.base * (ambient + toon_lighting.x * 0.74)
-        + specular_tint * toon_lighting.y * specular_scale * 0.24
-        + vec3<f32>(rim);
+    let ambient_visibility = mix(0.45, 1.0, ssao_mask);
+    let ambient_diffuse = diffuse_weight
+        * surface.base
+        * hemisphere_irradiance(normal, view)
+        * 0.42
+        * ambient_visibility;
+    let reflection = reflect(-view, normal);
+    let environment_fresnel = fresnel_schlick(normal_view, f0);
+    let environment_visibility = mix(0.82, 0.24, roughness) * ambient_visibility;
+    let environment_specular = studio_environment(reflection, roughness)
+        * environment_fresnel
+        * environment_visibility
+        * toon_lighting.z
+        * specular_mask;
+    let rim = pow(1.0 - normal_view, 2.0) * 0.08 * toon_lighting.z;
+    let rim_tint = mix(vec3<f32>(0.48, 0.58, 0.72), surface.base, metalness * 0.70);
+    let opaque_lit = direct_diffuse
+        + direct_specular
+        + ambient_diffuse
+        + environment_specular
+        + rim_tint * rim;
     let lighting_enabled = material.alpha_policy_params.y > 0.5;
     let lit = select(surface.base, opaque_lit, lighting_enabled);
     let extra_lit = select(

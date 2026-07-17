@@ -3993,11 +3993,12 @@ fn camera_uniform(
         0.01,
         distance + radius * 6.0,
     );
-    let light = glam::Vec3::new(-0.4, 0.7, 0.55).normalize();
+    let light = (-right * 0.45 + up * 0.65 + view_dir * 0.65).normalize();
 
     CameraUniform {
         view_proj: (projection * view).to_cols_array_2d(),
         light_dir: [light.x, light.y, light.z, 0.0],
+        view_dir: [view_dir.x, view_dir.y, view_dir.z, 0.0],
         options: [
             if options.normal_mapping { 1.0 } else { 0.0 },
             options.normal_y_sign,
@@ -4012,6 +4013,7 @@ fn camera_uniform(
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
+    view_dir: [f32; 4],
     options: [f32; 4],
 }
 
@@ -4326,6 +4328,33 @@ mod tests {
                 "shader reintroduced unsupported glass formula {unsupported_glass_formula}"
             );
         }
+    }
+
+    #[test]
+    fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+
+        for required in [
+            "let view = normalize(camera.view_dir.xyz);",
+            "let f0 = mix(dielectric_f0",
+            "* (1.0 - metalness)",
+            "studio_environment(reflection, roughness)",
+            "hemisphere_irradiance(normal, view)",
+        ] {
+            assert!(
+                surface_output.contains(required),
+                "surface lighting must preserve {required}"
+            );
+        }
+        assert!(
+            !surface_output.contains("light + vec3<f32>(0.0, 0.0, 1.0)"),
+            "surface lighting must not use a fixed camera direction"
+        );
     }
 
     #[test]
@@ -4662,6 +4691,40 @@ mod tests {
         let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
         assert_eq!(uniform.options[2], 0.0);
         assert_eq!(uniform.options[3], 3.0);
+    }
+
+    #[test]
+    fn camera_uniform_rotates_view_and_studio_key_light_together() {
+        let front = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let back = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            std::f32::consts::PI,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let light_view_dot = |uniform: &CameraUniform| {
+            uniform.light_dir[0] * uniform.view_dir[0]
+                + uniform.light_dir[1] * uniform.view_dir[1]
+                + uniform.light_dir[2] * uniform.view_dir[2]
+        };
+
+        assert!(front.view_dir[2] > 0.99);
+        assert!(back.view_dir[2] < -0.99);
+        assert!(light_view_dot(&front) > 0.5);
+        assert!(light_view_dot(&back) > 0.5);
     }
 
     #[test]
