@@ -144,7 +144,7 @@ impl InventoryBridgeConnection {
         let on_error = Closure::wrap(Box::new(move |event: ErrorEvent| {
             error_failed.set(true);
             let message = if event.message().is_empty() {
-                "无法连接 XIV Local Bridge".to_string()
+                "无法连接 API Bridge".to_string()
             } else {
                 event.message()
             };

@@ -1850,9 +1850,10 @@ pub fn CraftingPage() -> Element {
         div { class: "flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden",
             div { class: "shrink-0 border-b bg-background px-4 py-4 sm:px-6 lg:px-8",
                 div { class: "mx-auto flex max-w-[1600px] flex-col gap-3 xl:flex-row xl:items-end xl:justify-between",
-                    div {
+                    div { class: "space-y-1.5",
                         div { class: "text-sm text-muted-foreground", "工具 / 合成检索" }
                         h1 { class: "text-2xl font-semibold", "合成检索" }
+                        crate::app::modules::ModuleCapabilityBadges { module_id: "crafting" }
                     }
                     if let Some(data) = data.as_ref() {
                         div { class: "flex flex-wrap gap-2 text-xs text-muted-foreground",

@@ -77,6 +77,7 @@ pub fn Button(
 pub fn Badge(
     #[props(default = BadgeVariant::Secondary)] variant: BadgeVariant,
     #[props(default = String::new())] class: String,
+    #[props(default = None)] title: Option<String>,
     children: Element,
 ) -> Element {
     let variant_class = match variant {
@@ -89,6 +90,7 @@ pub fn Badge(
 
     rsx! {
         span {
+            title,
             class: cx([
                 "inline-flex h-5 items-center rounded px-1.5 text-xs font-medium",
                 variant_class,

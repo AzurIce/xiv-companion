@@ -4,9 +4,12 @@ XIV Companion is a Dioxus web app for Final Fantasy XIV utilities.
 
 The app currently includes:
 
+- a home page with announcements, integration status, usage guidance, and recent changelog entries
 - crafting search with recipe trees, material summaries, source choices, market estimates, and Raphael macro solving
 - notes with local storage, folders/pages, crafting summary cards, material planning, and item details
-- live and cached character inventory browsing through XIV Local Bridge
+- live and cached character inventory browsing through API Bridge
+- collection browsing with equipment progress updates from saved inventory snapshots
+- local game directory, resource cache, and API Bridge management under Settings
 
 ## Stack
 

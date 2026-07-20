@@ -153,13 +153,13 @@ pub fn WeaponModelsPage() -> Element {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
             div { class: "border-b px-4 py-4 sm:px-6 lg:px-8",
                 div { class: "flex flex-wrap items-end justify-between gap-3",
-                    div { class: "min-w-0",
+                    div { class: "min-w-0 space-y-1.5",
                         div { class: "text-sm text-muted-foreground", "预览" }
                         h1 { class: "text-2xl font-semibold", "武器模型" }
+                        crate::app::modules::ModuleCapabilityBadges { module_id: "weapon-models" }
                     }
                     if let Some(Ok(catalog)) = &catalog_snapshot {
                         div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                            Badge { variant: BadgeVariant::Outline, "UserLocal" }
                             span { "{catalog.game_version}" }
                             span { "{format_integer(catalog.counts.items as f64)} 件武器" }
                         }

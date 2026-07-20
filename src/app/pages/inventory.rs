@@ -149,9 +149,10 @@ pub fn InventoryPage() -> Element {
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
             div { class: "flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-6 lg:px-8",
-                div { class: "min-w-0",
+                div { class: "min-w-0 space-y-1.5",
                     div { class: "text-sm text-muted-foreground", "本地角色数据" }
                     h1 { class: "text-2xl font-semibold", "物品" }
+                    crate::app::modules::ModuleCapabilityBadges { module_id: "inventory" }
                 }
                 div { class: "flex flex-wrap items-center justify-end gap-2",
                     InventorySearchInput {
@@ -190,7 +191,7 @@ pub fn InventoryPage() -> Element {
                             div { class: "mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-md border bg-card",
                                 Icon { kind: IconKind::PlugZap, class: "h-5 w-5" }
                             }
-                            div { class: "font-medium", "尚未配置本地桥接" }
+                            div { class: "font-medium", "尚未配置 API Bridge" }
                             a {
                                 href: "#/settings",
                                 class: "mt-4 inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground",
@@ -207,7 +208,7 @@ pub fn InventoryPage() -> Element {
                 },
                 InventoryConnectionState::Disconnected if container_list.is_empty() => rsx! {
                     InventoryUnavailable {
-                        title: "本地桥接已断开",
+                        title: "API Bridge 已断开",
                         detail: "重新连接以获取当前角色的物品状态。".to_string(),
                     }
                 },

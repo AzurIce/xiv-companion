@@ -152,7 +152,7 @@ impl CollectionBridgeConnection {
             }
             error_completed.set(true);
             let message = if event.message().is_empty() {
-                "无法连接 XIV Local Bridge".to_string()
+                "无法连接 API Bridge".to_string()
             } else {
                 event.message()
             };

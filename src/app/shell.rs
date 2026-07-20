@@ -3,14 +3,14 @@ use dioxus::prelude::*;
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{
-    CollectionPage, CraftingPage, InventoryPage, NotesPage, SettingsPage, WeaponModelsPage,
-    WorkspacePage,
+    CollectionPage, CraftingPage, HomePage, InventoryPage, NotesPage, SettingsPage,
+    WeaponModelsPage,
 };
 use crate::app::ui::{Badge, BadgeVariant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {
-    Workspace,
+    Home,
     Crafting,
     Notes,
     WeaponModels,
@@ -40,13 +40,13 @@ impl Route {
             "/inventory" => Route::Inventory,
             "/collection" => Route::Collection,
             "/settings" => Route::Settings,
-            _ => Route::Workspace,
+            _ => Route::Home,
         }
     }
 
     pub fn path(self) -> &'static str {
         match self {
-            Route::Workspace => "/",
+            Route::Home => "/",
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
             Route::WeaponModels => "/weapon-models",
@@ -58,7 +58,7 @@ impl Route {
 
     pub fn label(self) -> &'static str {
         match self {
-            Route::Workspace => "工作台",
+            Route::Home => "首页",
             Route::Crafting => "合成检索",
             Route::Notes => "笔记",
             Route::WeaponModels => "武器模型",
@@ -241,7 +241,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                 }
                 div { class: brand_text_class,
                     div { class: "text-sm font-semibold", "XIV Companion" }
-                    div { class: "text-xs text-muted-foreground", "Eorzea workspace" }
+                    div { class: "text-xs text-muted-foreground", "Eorzea toolkit" }
                 }
                 button {
                     r#type: "button",
@@ -258,9 +258,9 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
 
             div { class: "flex-1 overflow-y-auto px-3 py-4",
                 NavButton {
-                    label: "工作台",
-                    route: Route::Workspace,
-                    active: current == Route::Workspace,
+                    label: "首页",
+                    route: Route::Home,
+                    active: current == Route::Home,
                     icon: IconKind::Home,
                     collapsed: collapsed(),
                 }
@@ -302,7 +302,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
 
 #[component]
 fn MobileHeader(current: Route) -> Element {
-    let home_class = if current == Route::Workspace {
+    let home_class = if current == Route::Home {
         "flex h-10 min-w-28 items-center gap-2 rounded-md border border-foreground/20 bg-card px-3 text-sm font-medium text-foreground"
     } else {
         "flex h-10 min-w-28 items-center gap-2 rounded-md border bg-card px-3 text-sm font-medium text-muted-foreground"
@@ -323,9 +323,9 @@ fn MobileHeader(current: Route) -> Element {
                 button {
                     r#type: "button",
                     class: home_class,
-                    onclick: move |_| navigate(Route::Workspace),
+                    onclick: move |_| navigate(Route::Home),
                     Icon { kind: IconKind::Home, class: "h-4 w-4" }
-                    "工作台"
+                    "首页"
                 }
                 for module in APP_MODULES {
                     div { class: "rounded-md border bg-card",
@@ -357,7 +357,7 @@ fn MobileHeader(current: Route) -> Element {
 fn PageContent(current: Route) -> Element {
     rsx! {
         match current {
-            Route::Workspace => rsx! { WorkspacePage {} },
+            Route::Home => rsx! { HomePage {} },
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
             Route::WeaponModels => rsx! { WeaponModelsPage {} },

@@ -41,7 +41,7 @@ Value 是占位值。record 存在表示已获得；未获得不保存 record，
 - 单项勾选：`put(itemId, true)`。
 - 单项取消：`delete(itemId)`。
 - JSON 导入：在一个读写事务中执行 `clear()` 和逐项 `put()`。
-- XIV Local Bridge 同步：只对新发现的 Item ID 执行逐项 `put()`，不清空现有状态，也不会因为某个游戏容器尚未加载而删除记录。
+- API Bridge 同步：只对新发现的 Item ID 执行逐项 `put()`，不清空现有状态，也不会因为某个游戏容器尚未加载而删除记录。
 
 数据库从 v2 升级到 v3 时，会将 `entries` 中的 `{collection-kind}:{item-id}` key 转换为纯 Item ID，然后删除 `entries`。旧 `state` store 不再参与兼容读取，会在升级时删除。
 

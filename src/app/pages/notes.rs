@@ -218,7 +218,9 @@ struct CrystalSummaryRow {
 
 fn crystal_element_style(index: usize) -> String {
     let (text, background, border) = CRYSTAL_ELEMENT_STYLES[index];
-    format!("color: {text}; background-color: {background}; border-left: 1px solid {border}; padding-right: 0.5rem;")
+    format!(
+        "color: {text}; background-color: {background}; border-left: 1px solid {border}; padding-right: 0.5rem;"
+    )
 }
 
 fn crystal_element_dot_style(index: usize) -> String {
@@ -2901,9 +2903,10 @@ pub fn NotesPage() -> Element {
         div { class: "flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden",
             div { class: "shrink-0 border-b bg-background px-4 py-4 sm:px-6 lg:px-8",
                 div { class: "mx-auto flex max-w-[1720px] flex-col gap-3 xl:flex-row xl:items-end xl:justify-between",
-                    div {
+                    div { class: "space-y-1.5",
                         div { class: "text-sm text-muted-foreground", "工具 / 笔记" }
                         h1 { class: "text-2xl font-semibold", "笔记" }
+                        crate::app::modules::ModuleCapabilityBadges { module_id: "notes" }
                     }
                     if let Some(data) = data.as_ref() {
                         div { class: "flex flex-wrap gap-2 text-xs text-muted-foreground",

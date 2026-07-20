@@ -26,3 +26,18 @@ Do not start a local development server unless the user explicitly asks for one.
 `dx serve`, HTTP preview servers, and background server processes. For normal implementation and
 verification, use build, check, and test commands only. Do not infer permission to start a server
 from a request to change or verify frontend code.
+
+## Changelog
+
+Keep `CHANGELOG.md` in reverse chronological order. The `开发中` section must remain at the top,
+followed by the newest release date and then progressively older entries.
+
+Keep the changelog synchronized with repository changes throughout development. Update it for each
+change, but describe user-visible features, important optimizations, and meaningful behavioral
+changes rather than implementation details or minor fixes. Merge related work into a concise entry
+whenever possible instead of creating one entry per commit or edit.
+
+Record uncommitted and still-adjustable work under `开发中`. Before pushing, move work that is fully
+complete into the appropriate dated section. Consolidate the final entries around completed
+features, key improvements, or significant changes, and avoid duplicating development entries in
+the dated history.

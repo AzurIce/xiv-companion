@@ -152,9 +152,10 @@ pub fn CollectionPage() -> Element {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
             div { class: "border-b px-4 py-3 sm:px-6 lg:px-8",
                 div { class: "flex flex-wrap items-center justify-between gap-3",
-                    div { class: "min-w-0",
+                    div { class: "min-w-0 space-y-1.5",
                         div { class: "text-sm text-muted-foreground", "数据" }
                         h1 { class: "text-2xl font-semibold", "图鉴" }
+                        crate::app::modules::ModuleCapabilityBadges { module_id: "collection" }
                     }
                     div { class: "flex flex-wrap items-center justify-end gap-2",
                         Button {

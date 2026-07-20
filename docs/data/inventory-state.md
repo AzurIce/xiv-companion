@@ -1,6 +1,6 @@
 # 本地物品状态
 
-物品页面通过 XIV Local Bridge 的 `inventory.containers`、`inventory.container` 和对应变化事件读取当前角色的逻辑物品容器。
+物品页面通过 API Bridge 的 `inventory.containers`、`inventory.container` 和对应变化事件读取当前角色的逻辑物品容器。
 
 ## 状态作用域
 
