@@ -10,6 +10,9 @@ mod data;
 mod icons;
 #[cfg(target_arch = "wasm32")]
 mod indexed_db_cache;
+mod inventory_bridge;
+#[cfg(target_arch = "wasm32")]
+mod inventory_state;
 mod load_progress;
 mod log;
 #[cfg(target_arch = "wasm32")]

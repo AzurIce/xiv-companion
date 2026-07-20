@@ -15,6 +15,7 @@ const MAX_ITEM_IDS_PER_REQUEST: usize = 256;
 #[derive(Clone, Debug)]
 pub enum BridgeUpdate {
     Connected,
+    #[allow(dead_code)]
     SnapshotReady(Vec<u32>),
     Disconnected,
     Error(String),

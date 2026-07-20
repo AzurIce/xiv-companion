@@ -3,7 +3,8 @@ use dioxus::prelude::*;
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{
-    CollectionPage, CraftingPage, NotesPage, SettingsPage, WeaponModelsPage, WorkspacePage,
+    CollectionPage, CraftingPage, InventoryPage, NotesPage, SettingsPage, WeaponModelsPage,
+    WorkspacePage,
 };
 use crate::app::ui::{Badge, BadgeVariant};
 
@@ -13,6 +14,7 @@ pub enum Route {
     Crafting,
     Notes,
     WeaponModels,
+    Inventory,
     Collection,
     Settings,
 }
@@ -35,6 +37,7 @@ impl Route {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
             "/weapon-models" => Route::WeaponModels,
+            "/inventory" => Route::Inventory,
             "/collection" => Route::Collection,
             "/settings" => Route::Settings,
             _ => Route::Workspace,
@@ -47,6 +50,7 @@ impl Route {
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
             Route::WeaponModels => "/weapon-models",
+            Route::Inventory => "/inventory",
             Route::Collection => "/collection",
             Route::Settings => "/settings",
         }
@@ -58,6 +62,7 @@ impl Route {
             Route::Crafting => "合成检索",
             Route::Notes => "笔记",
             Route::WeaponModels => "武器模型",
+            Route::Inventory => "物品",
             Route::Collection => "图鉴",
             Route::Settings => "设置",
         }
@@ -88,6 +93,7 @@ fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
         "weapon-models" => IconKind::Sword,
+        "inventory" => IconKind::PackageSearch,
         "collection" => IconKind::BookOpen,
         "crafting" => IconKind::Wrench,
         _ => IconKind::Wrench,
@@ -355,6 +361,7 @@ fn PageContent(current: Route) -> Element {
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
             Route::WeaponModels => rsx! { WeaponModelsPage {} },
+            Route::Inventory => rsx! { InventoryPage {} },
             Route::Collection => rsx! { CollectionPage {} },
             Route::Settings => rsx! { SettingsPage {} },
         }

@@ -6,6 +6,7 @@ The app currently includes:
 
 - crafting search with recipe trees, material summaries, source choices, market estimates, and Raphael macro solving
 - notes with local storage, folders/pages, crafting summary cards, material planning, and item details
+- live and cached character inventory browsing through XIV Local Bridge
 
 ## Stack
 

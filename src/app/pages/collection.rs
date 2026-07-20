@@ -1,11 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::app::collection_bridge::{
-    BridgeUpdate, CollectionBridgeConnection, load_verified_bridge_url,
-};
-
 use dioxus::prelude::*;
+use xiv_companion::inventory_collection::inventory_collection_item_ids;
 use xiv_companion::{
     COLLECTION_CATEGORIES, CollectionItem, CollectionKind, ResourceOrigin, category_definition,
 };
@@ -13,6 +10,8 @@ use xiv_companion::{
 use crate::app::collection_index::{CollectionIndex, EquipmentSetGroup};
 use crate::app::data::load_collection_catalog_with_metadata;
 use crate::app::icons::{Icon, IconKind};
+#[cfg(target_arch = "wasm32")]
+use crate::app::inventory_state::{PersistedInventoryState, load_inventory_state};
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
 };
@@ -39,7 +38,6 @@ enum ObtainedFilter {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CollectionSyncDialogState {
-    Loading,
     Preview(CollectionSyncPreview),
     Error(String),
 }
@@ -91,6 +89,8 @@ async fn persist_obtained_entry(item_id: u32, obtained: bool) -> Result<(), Stri
 pub fn CollectionPage() -> Element {
     let catalog = use_resource(load_collection_catalog_with_metadata);
     let state = use_resource(load_obtained_state);
+    #[cfg(target_arch = "wasm32")]
+    let inventory_state = use_resource(load_inventory_state);
     let collection_index = use_memo(move || {
         catalog
             .read()
@@ -109,8 +109,6 @@ pub fn CollectionPage() -> Element {
     let mut hydrated = use_signal(|| false);
     let mut storage_message = use_signal(|| None::<Result<String, String>>);
     let mut import_input_version = use_signal(|| 0_u32);
-    let mut bridge_connection = use_signal(|| None::<Rc<CollectionBridgeConnection>>);
-    let mut bridge_generation = use_signal(|| 0_u64);
     let mut bridge_dialog = use_signal(|| None::<CollectionSyncDialogState>);
     let mut bridge_applying = use_signal(|| false);
 
@@ -127,7 +125,11 @@ pub fn CollectionPage() -> Element {
     });
 
     let catalog_snapshot = catalog.read().as_ref().cloned();
-    let bridge_catalog_snapshot = catalog_snapshot.clone();
+    let inventory_update_catalog = catalog_snapshot.clone();
+    #[cfg(target_arch = "wasm32")]
+    let inventory_snapshot = inventory_state.read().as_ref().cloned();
+    #[cfg(target_arch = "wasm32")]
+    let inventory_for_update = inventory_snapshot.clone();
     let index_snapshot = collection_index.read().clone();
     let query_snapshot = query();
     let hydrated_snapshot = hydrated();
@@ -139,9 +141,12 @@ pub fn CollectionPage() -> Element {
     let storage_message_snapshot = storage_message();
     let bridge_dialog_snapshot = bridge_dialog();
     let bridge_applying_snapshot = bridge_applying();
-    let verified_bridge_url = load_verified_bridge_url();
     let has_pending_writes = !pending_writes.read().is_empty();
     let collection_transfer_ready = hydrated_snapshot && !has_pending_writes;
+    #[cfg(target_arch = "wasm32")]
+    let inventory_update_ready = matches!(&inventory_snapshot, Some(Ok(Some(_))));
+    #[cfg(not(target_arch = "wasm32"))]
+    let inventory_update_ready = false;
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
@@ -152,25 +157,25 @@ pub fn CollectionPage() -> Element {
                         h1 { class: "text-2xl font-semibold", "图鉴" }
                     }
                     div { class: "flex flex-wrap items-center justify-end gap-2",
-                        if let Some(bridge_url) = verified_bridge_url.clone() {
-                            Button {
-                                variant: ButtonVariant::Outline,
-                                size: ButtonSize::Sm,
-                                disabled: !collection_transfer_ready || bridge_dialog_snapshot.is_some(),
-                                onclick: move |_| {
-                                    let Some(Ok(loaded)) = bridge_catalog_snapshot.as_ref() else { return; };
-                                    start_collection_sync(
-                                        bridge_url.clone(),
-                                        loaded.data.items.clone(),
-                                        bridge_connection,
-                                        bridge_generation,
-                                        bridge_dialog,
-                                        obtained,
-                                    );
-                                },
-                                Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
-                                "同步图鉴"
-                            }
+                        Button {
+                            variant: ButtonVariant::Outline,
+                            size: ButtonSize::Sm,
+                            disabled: !collection_transfer_ready || !inventory_update_ready || bridge_dialog_snapshot.is_some(),
+                            title: if inventory_update_ready { "从已保存的物品快照更新持有型图鉴" } else { "请先在物品页执行全量刷新" },
+                            onclick: move |_| {
+                                let Some(Ok(loaded)) = inventory_update_catalog.as_ref() else { return; };
+                                #[cfg(target_arch = "wasm32")]
+                                let Some(Ok(Some(inventory))) = inventory_for_update.as_ref() else { return; };
+                                #[cfg(target_arch = "wasm32")]
+                                start_inventory_collection_update(
+                                    inventory,
+                                    loaded.data.items.clone(),
+                                    bridge_dialog,
+                                    obtained,
+                                );
+                            },
+                            Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
+                            "从物品数据更新"
                         }
                         label {
                             class: if collection_transfer_ready { "inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground" } else { "inline-flex h-8 shrink-0 cursor-not-allowed items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground opacity-50" },
@@ -444,8 +449,6 @@ pub fn CollectionPage() -> Element {
                     state: sync_state,
                     applying: bridge_applying_snapshot,
                     on_close: move |_| {
-                        bridge_generation += 1;
-                        bridge_connection.set(None);
                         bridge_dialog.set(None);
                         bridge_applying.set(false);
                     },
@@ -462,7 +465,7 @@ pub fn CollectionPage() -> Element {
                             }.await;
                             match result {
                                 Ok(count) => {
-                                    storage_message.set(Some(Ok(format!("已同步 {count} 项图鉴解锁状态"))));
+                                    storage_message.set(Some(Ok(format!("已从物品数据更新 {count} 项图鉴"))));
                                     bridge_dialog.set(None);
                                 }
                                 Err(error) => bridge_dialog.set(Some(CollectionSyncDialogState::Error(error))),
@@ -476,79 +479,39 @@ pub fn CollectionPage() -> Element {
     }
 }
 
-fn start_collection_sync(
-    url: String,
+#[cfg(target_arch = "wasm32")]
+fn start_inventory_collection_update(
+    inventory: &PersistedInventoryState,
     catalog: Vec<CollectionItem>,
-    mut connection: Signal<Option<Rc<CollectionBridgeConnection>>>,
-    mut generation: Signal<u64>,
     mut dialog: Signal<Option<CollectionSyncDialogState>>,
     obtained: ObtainedStore,
 ) {
-    let active_generation = generation.peek().wrapping_add(1);
-    generation.set(active_generation);
-    dialog.set(Some(CollectionSyncDialogState::Loading));
-    let catalog_for_result = catalog.clone();
-    match CollectionBridgeConnection::connect(&url, &catalog, move |update| {
-        if *generation.peek() != active_generation {
-            return;
-        }
-        match update {
-            BridgeUpdate::Connected => {}
-            BridgeUpdate::SnapshotReady(item_ids) => {
-                let item_ids = item_ids.into_iter().collect::<HashSet<_>>();
-                let existing_count = item_ids
-                    .iter()
-                    .filter(|item_id| obtained.peek().contains(item_id))
-                    .count();
-                let mut new_items = catalog_for_result
-                    .iter()
-                    .filter(|item| {
-                        item_ids.contains(&item.id) && !obtained.peek().contains(&item.id)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                new_items.sort_by(|left, right| {
-                    left.kind
-                        .label()
-                        .cmp(right.kind.label())
-                        .then_with(|| left.name.cmp(&right.name))
-                        .then_with(|| left.id.cmp(&right.id))
-                });
-                dialog.set(Some(CollectionSyncDialogState::Preview(
-                    CollectionSyncPreview {
-                        detected_count: item_ids.len(),
-                        existing_count,
-                        item_ids: new_items.iter().map(|item| item.id).collect(),
-                        new_items,
-                    },
-                )));
-            }
-            BridgeUpdate::Disconnected => dialog.set(Some(CollectionSyncDialogState::Error(
-                "XIV Local Bridge 连接已断开".to_string(),
-            ))),
-            BridgeUpdate::Error(error) => dialog.set(Some(CollectionSyncDialogState::Error(error))),
-        }
-    }) {
-        Ok(next) => {
-            connection.set(Some(next));
-            spawn(async move {
-                gloo_timers::future::TimeoutFuture::new(15_000).await;
-                let still_loading = *generation.peek() == active_generation
-                    && matches!(&*dialog.peek(), Some(CollectionSyncDialogState::Loading));
-                if still_loading {
-                    generation += 1;
-                    connection.set(None);
-                    dialog.set(Some(CollectionSyncDialogState::Error(
-                        "XIV Local Bridge 同步请求超时".to_string(),
-                    )));
-                }
-            });
-        }
-        Err(error) => {
-            connection.set(None);
-            dialog.set(Some(CollectionSyncDialogState::Error(error)));
-        }
-    }
+    let owned_item_ids = inventory.item_ids();
+    let detected_item_ids = inventory_collection_item_ids(&owned_item_ids, &catalog);
+    let existing_count = detected_item_ids
+        .iter()
+        .filter(|item_id| obtained.peek().contains(item_id))
+        .count();
+    let mut new_items = catalog
+        .iter()
+        .filter(|item| detected_item_ids.contains(&item.id) && !obtained.peek().contains(&item.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    new_items.sort_by(|left, right| {
+        left.kind
+            .label()
+            .cmp(right.kind.label())
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    dialog.set(Some(CollectionSyncDialogState::Preview(
+        CollectionSyncPreview {
+            detected_count: detected_item_ids.len(),
+            existing_count,
+            item_ids: new_items.iter().map(|item| item.id).collect(),
+            new_items,
+        },
+    )));
 }
 
 #[component]
@@ -579,8 +542,8 @@ fn CollectionSyncDialog(
                         Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
                     }
                     div { class: "min-w-0 flex-1",
-                        div { class: "text-base font-semibold", "同步图鉴" }
-                        div { class: "text-xs text-muted-foreground", "XIV Local Bridge" }
+                        div { class: "text-base font-semibold", "从物品数据更新" }
+                        div { class: "text-xs text-muted-foreground", "已保存的物品快照" }
                     }
                     button {
                         r#type: "button",
@@ -595,11 +558,6 @@ fn CollectionSyncDialog(
 
                 div { class: "min-h-0 flex-1 overflow-y-auto p-4",
                     match &state {
-                        CollectionSyncDialogState::Loading => rsx! {
-                            div { class: "flex min-h-48 items-center justify-center",
-                                Icon { kind: IconKind::LoaderCircle, class: "h-5 w-5 animate-spin text-muted-foreground" }
-                            }
-                        },
                         CollectionSyncDialogState::Error(error) => rsx! {
                             div { class: "flex min-h-48 items-center justify-center text-sm text-destructive", "{error}" }
                         },
@@ -611,7 +569,7 @@ fn CollectionSyncDialog(
                                     SyncMetric { label: "新增", value: preview.new_items.len() }
                                 }
                                 if preview.new_items.is_empty() {
-                                    div { class: "flex min-h-32 items-center justify-center text-sm text-muted-foreground", "没有新的解锁内容" }
+                                    div { class: "flex min-h-32 items-center justify-center text-sm text-muted-foreground", "没有新的持有型图鉴条目" }
                                 } else {
                                     div { class: "divide-y rounded-md border",
                                         for item in &preview.new_items {

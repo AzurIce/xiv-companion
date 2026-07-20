@@ -46,6 +46,13 @@ pub const APP_MODULES: &[AppModule] = &[
         status: ModuleStatus::Experimental,
     },
     AppModule {
+        id: "inventory",
+        label: "物品",
+        href: "/inventory",
+        group: ModuleGroup::Data,
+        status: ModuleStatus::Ready,
+    },
+    AppModule {
         id: "collection",
         label: "图鉴",
         href: "/collection",

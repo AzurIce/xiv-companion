@@ -1,5 +1,9 @@
 #[doc(hidden)]
 pub mod collection_bridge_protocol;
+#[doc(hidden)]
+pub mod inventory_bridge_protocol;
+#[doc(hidden)]
+pub mod inventory_collection;
 pub mod model;
 pub mod planner;
 pub mod resources;

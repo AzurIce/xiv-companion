@@ -1,5 +1,6 @@
 pub mod collection;
 pub mod crafting;
+pub mod inventory;
 pub mod notes;
 pub mod settings;
 pub mod weapon_models;
@@ -37,6 +38,7 @@ use crate::app::utils::{cx, format_integer};
 
 pub use collection::CollectionPage;
 pub use crafting::CraftingPage;
+pub use inventory::InventoryPage;
 pub use notes::NotesPage;
 pub use settings::SettingsPage;
 pub use weapon_models::WeaponModelsPage;
