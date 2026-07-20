@@ -19,3 +19,10 @@ or render data handling:
 When modifying `xiv-companion-data` parsing or texture/material baking, compare field semantics
 against these references before changing assumptions. Keep fixes small and add focused tests for
 each semantic correction.
+
+## Local Development Servers
+
+Do not start a local development server unless the user explicitly asks for one. This includes
+`dx serve`, HTTP preview servers, and background server processes. For normal implementation and
+verification, use build, check, and test commands only. Do not infer permission to start a server
+from a request to change or verify frontend code.
