@@ -26,8 +26,9 @@ pub struct CollectionIndex {
     pub items_by_kind_expansion: BTreeMap<(CollectionKind, String), Vec<usize>>,
     pub equipment_sets: Vec<EquipmentSetGroup>,
     pub collection_expansions: Vec<String>,
-    pub equipment_job_options: Vec<String>,
     pub equipment_slot_options: Vec<String>,
+    pub equipment_level_bounds: (u16, u16),
+    pub equipment_item_level_bounds: (u16, u16),
 }
 
 impl CollectionIndex {
@@ -135,17 +136,20 @@ impl CollectionIndex {
                 .then(left.cmp(right))
         });
 
-        let equipment_job_options =
-            equipment_filter_options(&catalog, |item| &item.class_job_category_name);
         let equipment_slot_options = equipment_filter_options(&catalog, |item| &item.slot_name);
+        let equipment_level_bounds =
+            collect_equipment_level_bounds(&catalog, |item| item.level_equip);
+        let equipment_item_level_bounds =
+            collect_equipment_level_bounds(&catalog, |item| item.level_item);
 
         Self {
             catalog,
             items_by_kind_expansion,
             equipment_sets,
             collection_expansions,
-            equipment_job_options,
             equipment_slot_options,
+            equipment_level_bounds,
+            equipment_item_level_bounds,
         }
     }
 
@@ -217,6 +221,24 @@ fn equipment_filter_options(
     values
 }
 
+fn collect_equipment_level_bounds(
+    catalog: &CollectionCatalogPackage,
+    value: impl Fn(&CollectionItem) -> u16,
+) -> (u16, u16) {
+    let mut values = catalog
+        .items
+        .iter()
+        .filter(|item| item.kind == CollectionKind::Equipment)
+        .map(value)
+        .filter(|value| *value > 0);
+    let Some(first) = values.next() else {
+        return (0, 0);
+    };
+    values.fold((first, first), |(min, max), value| {
+        (min.min(value), max.max(value))
+    })
+}
+
 fn common_class_job_label(catalog: &CollectionCatalogPackage, indices: &[usize]) -> String {
     let labels = indices
         .iter()
@@ -277,6 +299,8 @@ mod tests {
         let index = CollectionIndex::new(catalog);
         assert_eq!(index.equipment_sets.len(), 1);
         assert_eq!(index.equipment_sets[0].item_indices, vec![1, 0]);
+        assert_eq!(index.equipment_level_bounds, (50, 50));
+        assert_eq!(index.equipment_item_level_bounds, (100, 100));
     }
 
     #[test]

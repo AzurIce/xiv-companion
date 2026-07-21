@@ -8,7 +8,7 @@ The app currently includes:
 - crafting search with recipe trees, material summaries, source choices, market estimates, and Raphael macro solving
 - notes with local storage, folders/pages, crafting summary cards, material planning, and item details
 - live and cached character inventory browsing through API Bridge
-- collection browsing with equipment progress updates from saved inventory snapshots
+- collection browsing split into equipment possession and permanent unlocks, with bidirectional equipment progress updates from saved inventory snapshots
 - local game directory, resource cache, and API Bridge management under Settings
 
 ## Stack

@@ -2,6 +2,14 @@ use std::collections::HashSet;
 
 use crate::{CollectionItem, CollectionKind};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventoryCollectionSync {
+    pub detected_equipment_ids: HashSet<u32>,
+    pub added_ids: HashSet<u32>,
+    pub removed_ids: HashSet<u32>,
+    pub next_collection_ids: HashSet<u32>,
+}
+
 pub fn inventory_collection_item_ids(
     owned_item_ids: &HashSet<u32>,
     catalog: &[CollectionItem],
@@ -11,6 +19,43 @@ pub fn inventory_collection_item_ids(
         .filter(|item| item.kind == CollectionKind::Equipment && owned_item_ids.contains(&item.id))
         .map(|item| item.id)
         .collect()
+}
+
+pub fn inventory_collection_sync(
+    owned_item_ids: &HashSet<u32>,
+    obtained_item_ids: &HashSet<u32>,
+    catalog: &[CollectionItem],
+) -> InventoryCollectionSync {
+    let equipment_catalog_ids = catalog
+        .iter()
+        .filter(|item| item.kind == CollectionKind::Equipment)
+        .map(|item| item.id)
+        .collect::<HashSet<_>>();
+    let detected_equipment_ids = inventory_collection_item_ids(owned_item_ids, catalog);
+    let current_equipment_ids = obtained_item_ids
+        .intersection(&equipment_catalog_ids)
+        .copied()
+        .collect::<HashSet<_>>();
+    let added_ids = detected_equipment_ids
+        .difference(&current_equipment_ids)
+        .copied()
+        .collect();
+    let removed_ids = current_equipment_ids
+        .difference(&detected_equipment_ids)
+        .copied()
+        .collect();
+    let mut next_collection_ids = obtained_item_ids
+        .difference(&equipment_catalog_ids)
+        .copied()
+        .collect::<HashSet<_>>();
+    next_collection_ids.extend(detected_equipment_ids.iter().copied());
+
+    InventoryCollectionSync {
+        detected_equipment_ids,
+        added_ids,
+        removed_ids,
+        next_collection_ids,
+    }
 }
 
 #[cfg(test)]
@@ -57,5 +102,25 @@ mod tests {
             inventory_collection_item_ids(&HashSet::from([10, 20, 40]), &catalog),
             HashSet::from([10])
         );
+    }
+
+    #[test]
+    fn synchronizes_equipment_in_both_directions_without_touching_unlocks() {
+        let catalog = vec![
+            item(10, CollectionKind::Equipment),
+            item(20, CollectionKind::Mount),
+            item(30, CollectionKind::Equipment),
+            item(40, CollectionKind::Equipment),
+        ];
+        let sync = inventory_collection_sync(
+            &HashSet::from([30, 40]),
+            &HashSet::from([10, 20, 30]),
+            &catalog,
+        );
+
+        assert_eq!(sync.detected_equipment_ids, HashSet::from([30, 40]));
+        assert_eq!(sync.added_ids, HashSet::from([40]));
+        assert_eq!(sync.removed_ids, HashSet::from([10]));
+        assert_eq!(sync.next_collection_ids, HashSet::from([20, 30, 40]));
     }
 }
