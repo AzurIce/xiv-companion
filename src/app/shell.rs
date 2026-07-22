@@ -60,7 +60,7 @@ impl Route {
         match self {
             Route::Home => "首页",
             Route::Crafting => "合成检索",
-            Route::Notes => "笔记",
+            Route::Notes => "制作清单",
             Route::WeaponModels => "武器模型",
             Route::Inventory => "物品",
             Route::Collection => "图鉴",
