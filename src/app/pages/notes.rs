@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use dioxus_flow::{FlowCanvas, FlowEdge, FlowNode, NodeId, NodeMove, Point, Size, Viewport};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,7 +28,6 @@ const MARKET_WORLD_DC_REGION: &str = "中国";
 
 #[derive(Clone)]
 struct SourceChoicesContext(HashMap<u32, SourceChoice>);
-const GRAPH_EDGE_COLOR: &str = "#94a3b8";
 const CRYSTAL_ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
 const CRYSTAL_TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
 const CRYSTAL_ELEMENT_STYLES: [(&str, &str, &str); 6] = [
@@ -204,8 +204,6 @@ struct PositionedCraftGraphEdge {
 struct CraftGraphLayout {
     nodes: Vec<PositionedCraftGraphNode>,
     edges: Vec<PositionedCraftGraphEdge>,
-    width: f64,
-    height: f64,
     node_width: f64,
     node_height: f64,
 }
@@ -1868,18 +1866,9 @@ fn build_graph_layout(graph: &MergedCraftGraph) -> CraftGraphLayout {
     }
     apply_graph_edge_ports(&mut positioned_edges, node_height);
 
-    let max_x = positioned
-        .iter()
-        .fold(node_width, |value, node| value.max(node.x + node_width));
-    let max_y = positioned
-        .iter()
-        .fold(node_height, |value, node| value.max(node.y + node_height));
-
     CraftGraphLayout {
         nodes: positioned,
         edges: positioned_edges,
-        width: max_x + padding,
-        height: f64::max(max_y + padding, content_height + padding * 2.0),
         node_width,
         node_height,
     }
@@ -1935,7 +1924,7 @@ fn MaterialSummaryPanel(
     let crystal_rows = crystal_summary_rows(&data, &materials);
 
     rsx! {
-        section { class: "overflow-hidden rounded-md border bg-background",
+        section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
             div { class: "shrink-0 border-b p-3",
                 div { class: "flex items-start justify-between gap-3",
                     div { class: "min-w-0",
@@ -1993,7 +1982,7 @@ fn MaterialSummaryPanel(
                 }
             }
 
-            div { class: "p-3",
+            div { class: "min-h-0 flex-1 overflow-y-auto p-3",
                 if plan.is_empty() && crystal_amount == 0 {
                     EmptyState {
                         icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
@@ -2207,10 +2196,7 @@ fn MaterialSummaryPanel(
 fn MergedCraftGraphNodeCard(
     data: Rc<CraftDataPackage>,
     node: PositionedCraftGraphNode,
-    width: f64,
-    height: f64,
     on_toggle: EventHandler<(u32, bool)>,
-    on_select: EventHandler<DetailTarget>,
 ) -> Element {
     let graph_node = node.node.clone();
     let counts_as_leaf = !graph_node.craftable || graph_node.collapsed;
@@ -2240,22 +2226,13 @@ fn MergedCraftGraphNodeCard(
 
     rsx! {
         div {
-            class: "absolute",
-            style: "left: {node.x}px; top: {node.y}px; width: {width}px; height: {height}px;",
+            class: "relative h-full w-full",
             button {
                 r#type: "button",
                 class: cx([
                     "grid h-full w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-1.5 rounded border border-border border-l-2 px-2 py-1.5 text-left text-xs shadow-sm transition-colors",
                     tone_class,
                 ]),
-                onclick: {
-                    let graph_node = graph_node.clone();
-                    move |_| on_select.call(DetailTarget {
-                        item_id: graph_node.item_id,
-                        amount_needed: graph_node.amount,
-                        recipe: graph_node.recipe.clone(),
-                    })
-                },
                 ItemIcon { icon: item.as_ref().map(|item| item.icon).unwrap_or(0), size: "sm" }
                 div { class: "min-w-0",
                     div { class: "truncate font-medium", "{get_item_name(&data, graph_node.item_id)}" }
@@ -2296,6 +2273,9 @@ fn MergedCraftGraphNodeCard(
                     class: "absolute right-[-12px] top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground",
                     aria_label: if graph_node.collapsed { "继续分解" } else { "停止分解" },
                     title: if graph_node.collapsed { "继续分解" } else { "停止分解" },
+                    "data-flow-no-drag": "true",
+                    onmousedown: move |event| event.stop_propagation(),
+                    onmouseup: move |event| event.stop_propagation(),
                     onclick: {
                         let graph_node = graph_node.clone();
                         move |event| {
@@ -2320,143 +2300,170 @@ fn CraftSummaryGraph(
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
-    let mut zoom = use_signal(|| 1.0f64);
-    let mut update_zoom = move |next: f64| {
-        let next = (next.clamp(0.5, 1.4) * 100.0).round() / 100.0;
-        zoom.set(next);
-    };
     let graph = build_merged_craft_graph(&data, &roots);
     let layout = build_graph_layout(&graph);
-    let outer_width = layout.width * zoom();
-    let outer_height = layout.height * zoom();
-    let zoom_percent = (zoom() * 100.0).round() as u32;
+    rsx! {
+        CraftFlowCanvas {
+            data,
+            root_count: roots.len(),
+            layout,
+            on_toggle_collapsed_item,
+            on_select,
+        }
+    }
+}
+
+#[component]
+fn CraftFlowCanvas(
+    data: Rc<CraftDataPackage>,
+    root_count: usize,
+    layout: CraftGraphLayout,
+    on_toggle_collapsed_item: EventHandler<(u32, bool)>,
+    on_select: EventHandler<DetailTarget>,
+) -> Element {
+    let mut viewport = use_signal(Viewport::default);
+    let mut node_offsets = use_signal(HashMap::<u32, (f64, f64)>::new);
+    let base_layout = layout;
+    let base_positions = base_layout
+        .nodes
+        .iter()
+        .map(|node| (node.node.item_id, (node.x, node.y)))
+        .collect::<HashMap<_, _>>();
+    let mut layout = base_layout.clone();
+    let offsets = node_offsets();
+    for node in &mut layout.nodes {
+        if let Some((x, y)) = offsets.get(&node.node.item_id) {
+            node.x += x;
+            node.y += y;
+        }
+    }
+    for edge in &mut layout.edges {
+        if let Some((x, y)) = offsets.get(&edge.from_node.node.item_id) {
+            edge.from_node.x += x;
+            edge.from_node.y += y;
+        }
+        if let Some((x, y)) = offsets.get(&edge.to_node.node.item_id) {
+            edge.to_node.x += x;
+            edge.to_node.y += y;
+        }
+    }
+    let flow_nodes = layout
+        .nodes
+        .iter()
+        .map(|node| FlowNode {
+            id: NodeId(node.node.item_id.to_string()),
+            position: Point::new(node.x, node.y),
+            size: Size::new(layout.node_width, layout.node_height),
+        })
+        .collect::<Vec<_>>();
+    let flow_edges = layout
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(index, edge)| FlowEdge {
+            id: format!("{}-{}-{index}", edge.edge.from, edge.edge.to),
+            source: NodeId(edge.edge.from.to_string()),
+            target: NodeId(edge.edge.to.to_string()),
+            source_offset: edge.from_offset,
+            target_offset: edge.to_offset,
+            label: Some(format!("×{}", format_integer(edge.edge.amount as f64))),
+        })
+        .collect::<Vec<_>>();
+    let nodes_by_id = layout
+        .nodes
+        .iter()
+        .cloned()
+        .map(|node| (node.node.item_id.to_string(), node))
+        .collect::<HashMap<_, _>>();
+    let nodes_for_click = nodes_by_id.clone();
+    let zoom_percent = (viewport().zoom * 100.0).round() as u32;
 
     rsx! {
-        section { class: "overflow-hidden rounded-md border bg-background",
+        section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
             div { class: "flex flex-wrap items-center justify-between gap-3 border-b p-3",
                 div { class: "min-w-0",
                     div { class: "text-sm font-semibold", "合成图" }
-                    div { class: "mt-0.5 text-xs text-muted-foreground", "全部目标合并为一张图，相同物品共用节点" }
+                    div { class: "mt-0.5 text-xs text-muted-foreground", "拖动画布平移，滚轮以指针为中心缩放，节点可自由移动" }
                 }
                 div { class: "flex flex-wrap items-center gap-2",
-                    Badge { variant: BadgeVariant::Outline, "目标 {roots.len()}" }
-                    Badge { variant: BadgeVariant::Outline, "节点 {layout.nodes.len()}" }
-                    Badge { variant: BadgeVariant::Outline, "边 {layout.edges.len()}" }
+                    Badge { variant: BadgeVariant::Outline, "目标 {root_count}" }
+                    Badge { variant: BadgeVariant::Outline, "节点 {flow_nodes.len()}" }
+                    Badge { variant: BadgeVariant::Outline, "边 {flow_edges.len()}" }
                     div { class: "flex items-center gap-1 rounded-md border bg-background p-1",
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
                             title: "缩小",
                             aria_label: "缩小",
-                            onclick: move |_| update_zoom(zoom() - 0.1),
+                            onclick: move |_| {
+                                let current = viewport();
+                                viewport.set(Viewport { zoom: (current.zoom - 0.1).clamp(0.35, 2.0), ..current });
+                            },
                             Icon { kind: IconKind::ZoomOut, class: "h-4 w-4" }
                         }
-                        div { class: "w-12 text-center text-xs font-medium text-muted-foreground",
-                            "{zoom_percent}%"
-                        }
+                        div { class: "w-12 text-center text-xs font-medium text-muted-foreground", "{zoom_percent}%" }
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
                             title: "放大",
                             aria_label: "放大",
-                            onclick: move |_| update_zoom(zoom() + 0.1),
+                            onclick: move |_| {
+                                let current = viewport();
+                                viewport.set(Viewport { zoom: (current.zoom + 0.1).clamp(0.35, 2.0), ..current });
+                            },
                             Icon { kind: IconKind::ZoomIn, class: "h-4 w-4" }
                         }
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                            title: "重置缩放",
-                            aria_label: "重置缩放",
-                            onclick: move |_| update_zoom(1.0),
+                            title: "重置视图和节点位置",
+                            aria_label: "重置视图和节点位置",
+                            onclick: move |_| {
+                                node_offsets.set(HashMap::new());
+                                viewport.set(Viewport::default());
+                            },
                             Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
                         }
                     }
                 }
             }
 
-            div { class: "overflow-x-auto overflow-y-visible bg-muted/10 p-3",
-                div {
-                    class: "relative min-w-max rounded-md border bg-background",
-                    style: "width: {outer_width}px; height: {outer_height}px;",
-                    div {
-                        class: "absolute left-0 top-0 origin-top-left",
-                        style: "width: {layout.width}px; height: {layout.height}px; transform: scale({zoom});",
-                        svg {
-                            class: "pointer-events-none absolute inset-0",
-                            width: "{layout.width}",
-                            height: "{layout.height}",
-                            view_box: "0 0 {layout.width} {layout.height}",
-                            defs {
-                                marker {
-                                    id: "craft-graph-arrow",
-                                    marker_width: "10",
-                                    marker_height: "10",
-                                    ref_x: "9",
-                                    ref_y: "5",
-                                    orient: "auto",
-                                    path { d: "M0,0 L10,5 L0,10 Z", fill: GRAPH_EDGE_COLOR }
-                                }
-                            }
-                            for edge in layout.edges.clone() {
-                                {
-                                    let x1 = edge.from_node.x + layout.node_width;
-                                    let y1 = edge.from_node.y + layout.node_height / 2.0 + edge.from_offset;
-                                    let x2 = edge.to_node.x;
-                                    let y2 = edge.to_node.y + layout.node_height / 2.0 + edge.to_offset;
-                                    let mid_x = (x1 + x2) / 2.0;
-                                    let path_value = format!(
-                                        "M {x1} {y1} C {mid_x} {y1}, {mid_x} {y2}, {x2} {y2}"
-                                    );
-                                    let label_x = x1 + (x2 - x1) * 0.68 - 22.0;
-                                    let label_y = y1 + (y2 - y1) * 0.68 - 10.0;
-                                    rsx! {
-                                        g {
-                                            path {
-                                                d: "{path_value}",
-                                                fill: "none",
-                                                stroke: GRAPH_EDGE_COLOR,
-                                                stroke_opacity: "0.68",
-                                                stroke_width: "1.75",
-                                                marker_end: "url(#craft-graph-arrow)",
-                                            }
-                                            foreignObject {
-                                                x: "{label_x}",
-                                                y: "{label_y}",
-                                                width: "44",
-                                                height: "20",
-                                                div { class: "flex h-5 items-center justify-center",
-                                                    span { class: "rounded border bg-background/90 px-1 text-[9px] font-medium leading-none text-muted-foreground shadow-sm",
-                                                        "x{format_integer(edge.edge.amount as f64)}"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        for node in layout.nodes.clone() {
-                            MergedCraftGraphNodeCard {
-                                data: data.clone(),
-                                node,
-                                width: layout.node_width,
-                                height: layout.node_height,
-                                on_toggle: on_toggle_collapsed_item,
-                                on_select,
-                            }
-                        }
-
-                        if layout.nodes.is_empty() {
-                            div { class: "absolute inset-0 flex items-center justify-center",
-                                EmptyState {
-                                    icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                                    title: "暂无图节点".to_string(),
-                                }
-                            }
+            FlowCanvas {
+                class: "min-h-0 flex-1 bg-muted/10",
+                nodes: flow_nodes,
+                edges: flow_edges,
+                viewport,
+                on_node_move: move |movement: NodeMove| {
+                    let Ok(item_id) = movement.id.0.parse::<u32>() else { return; };
+                    let Some((base_x, base_y)) = base_positions.get(&item_id).copied() else { return; };
+                    let mut offsets = node_offsets();
+                    offsets.insert(item_id, (movement.position.x - base_x, movement.position.y - base_y));
+                    node_offsets.set(offsets);
+                },
+                on_node_click: move |id: NodeId| {
+                    let Some(node) = nodes_for_click.get(&id.0) else { return; };
+                    on_select.call(DetailTarget {
+                        item_id: node.node.item_id,
+                        amount_needed: node.node.amount,
+                        recipe: node.node.recipe.clone(),
+                    });
+                },
+                render_node: move |id: NodeId| {
+                    let Some(node) = nodes_by_id.get(&id.0).cloned() else { return rsx! {}; };
+                    rsx! {
+                        MergedCraftGraphNodeCard {
+                            data: data.clone(),
+                            node,
+                            on_toggle: on_toggle_collapsed_item,
                         }
                     }
-                }
+                },
+                empty: rsx! {
+                    EmptyState {
+                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                        title: "暂无图节点".to_string(),
+                    }
+                },
             }
         }
     }
@@ -2537,40 +2544,35 @@ fn CraftAnalysisView(
                 } }
             }
 
-            div { class: "space-y-3 p-3",
-                if roots.is_empty() {
-                    EmptyState {
-                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                        title: "暂无物品".to_string(),
-                        action: rsx! {
-                            Button {
-                                size: ButtonSize::Sm,
-                                variant: ButtonVariant::Outline,
-                                onclick: move |_| on_edit.call(()),
-                                Icon { kind: IconKind::Plus, class: "h-4 w-4" }
-                                "选择物品"
-                            }
-                        },
-                    }
-                } else {
-                    CraftSummaryGraph {
-                        data: data.clone(),
-                        roots,
-                        on_toggle_collapsed_item,
-                        on_select: on_inspect,
+            div { class: "grid min-w-0 gap-3 p-3 xl:h-[640px] xl:grid-cols-[minmax(0,1fr)_400px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_460px]",
+                div { class: "min-h-0 min-w-0",
+                    if roots.is_empty() {
+                        EmptyState {
+                            icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                            title: "暂无物品".to_string(),
+                        }
+                    } else {
+                        CraftSummaryGraph {
+                            data: data.clone(),
+                            roots,
+                            on_toggle_collapsed_item,
+                            on_select: on_inspect,
+                        }
                     }
                 }
-                MaterialSummaryPanel {
-                    data: data.clone(),
-                    title: selection.title.clone(),
-                    materials,
-                    source_choices,
-                    on_choose: on_choose_source,
-                    on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
-                        item_id,
-                        amount_needed,
-                        recipe: None,
-                    }),
+                aside { class: "min-h-0 min-w-0",
+                    MaterialSummaryPanel {
+                        data: data.clone(),
+                        title: selection.title.clone(),
+                        materials,
+                        source_choices,
+                        on_choose: on_choose_source,
+                        on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
+                            item_id,
+                            amount_needed,
+                            recipe: None,
+                        }),
+                    }
                 }
             }
         }
@@ -3590,27 +3592,33 @@ pub fn NotesPage() -> Element {
                                             on_select: move |_| {},
                                             on_edit: move |_| {},
                                             on_remove: move |_| {},
-                                            on_toggle_collapsed_item: move |(item_id, collapsed)| {
-                                                let mut next = state();
-                                                for entry_id in selected_entry_ids() {
-                                                    if let Some(item) = next.items.get_mut(&entry_id) {
-                                                        item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed;
-                                                    }
-                                                }
-                                                state.set(next);
-                                            },
-                                            on_choose_source: move |(item_id, choice): (u32, Option<SourceChoice>)| {
-                                                let mut next = state();
-                                                for entry_id in selected_entry_ids() {
-                                                    if let Some(item) = next.items.get_mut(&entry_id) {
-                                                        if let Some(choice) = choice.clone() {
-                                                            item.source_choices.insert(item_id.to_string(), choice);
-                                                        } else {
-                                                            item.source_choices.remove(&item_id.to_string());
+                                            on_toggle_collapsed_item: {
+                                                let selected_ids = selected_ids.clone();
+                                                move |(item_id, collapsed)| {
+                                                    let mut next = state();
+                                                    for entry_id in &selected_ids {
+                                                        if let Some(item) = next.items.get_mut(entry_id) {
+                                                            item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed;
                                                         }
                                                     }
+                                                    state.set(next);
                                                 }
-                                                state.set(next);
+                                            },
+                                            on_choose_source: {
+                                                let selected_ids = selected_ids.clone();
+                                                move |(item_id, choice): (u32, Option<SourceChoice>)| {
+                                                    let mut next = state();
+                                                    for entry_id in &selected_ids {
+                                                        if let Some(item) = next.items.get_mut(entry_id) {
+                                                            if let Some(choice) = choice.clone() {
+                                                                item.source_choices.insert(item_id.to_string(), choice);
+                                                            } else {
+                                                                item.source_choices.remove(&item_id.to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                    state.set(next);
+                                                }
                                             },
                                             on_inspect: move |target| detail_target.set(Some(target)),
                                         }

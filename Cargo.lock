@@ -992,6 +992,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dioxus-flow"
+version = "0.1.0"
+dependencies = [
+ "dioxus",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "dioxus-free-icons"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4737,6 +4746,7 @@ dependencies = [
  "binrw",
  "console_error_panic_hook",
  "dioxus",
+ "dioxus-flow",
  "dioxus-free-icons",
  "flate2",
  "futures-executor",
