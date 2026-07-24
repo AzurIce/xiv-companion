@@ -33,7 +33,7 @@ if ([string]::IsNullOrWhiteSpace($GameDir)) {
 
 $resolvedGameDir = (Resolve-Path -LiteralPath $GameDir -ErrorAction Stop).Path
 $fixturePath = Join-Path $repoRoot "tests\fixtures\phantom_weapons.json"
-$fixture = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
+$fixture = Get-Content -LiteralPath $fixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $priorityCases = @(
     $fixture.cases |
         Where-Object { $_.priority -in @("P0", "P1") } |
@@ -54,8 +54,15 @@ Invoke-Checked cargo @(
     "audit_installed_weapon_shader_families", "--", "--ignored", "--exact", "--nocapture"
 )
 Invoke-Checked cargo @(
+    "test", "--jobs", "1", "--features", "game-data,render-test-support", "--test", "native_weapon_snapshot",
+    "--", "--ignored", "--nocapture", "--test-threads=1"
+)
+Invoke-Checked cargo @(
     "test", "--jobs", "1", "--features", "game-data,render-test-support", "--test", "phantom_weapon_snapshots",
     "render_phantom_weapon_snapshots", "--", "--ignored", "--exact", "--nocapture"
+)
+Invoke-Checked cargo @(
+    "test", "--jobs", "1", "-p", "xiv-companion-render", "--features", "renderer"
 )
 Invoke-Checked cargo @(
     "test", "--jobs", "1", "--workspace", "--all-features", "--exclude", "xtask-update-craft-data"

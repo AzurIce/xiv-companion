@@ -476,6 +476,11 @@ pub struct ModelMaterial {
     pub alpha_aperture: f32,
     #[serde(default)]
     pub alpha_offset: f32,
+    /// Descriptive name for material constant 0xAD94E254. Installed character
+    /// pixel shaders use it as `mix(vertex_alpha, 1, value)` before combining
+    /// vertex alpha with the selected texture alpha channel.
+    #[serde(default)]
+    pub vertex_alpha_to_one: f32,
     #[serde(default = "default_material_shadow_alpha_threshold")]
     pub shadow_alpha_threshold: f32,
     #[serde(default = "default_material_glass_ior")]
@@ -1148,10 +1153,19 @@ pub struct PreparedMaterialUnsupportedInputs {
     pub runtime_sub_color: bool,
     pub tile_array: bool,
     pub detail_array: bool,
+    /// BG detail layers can be selected and sampled, but MeddleTools marks
+    /// their final terrain influence as broken and does not establish a
+    /// trustworthy base-color or normal composition formula.
+    #[serde(default)]
+    pub detail_composition: bool,
     pub incomplete_shader_family_logic: bool,
     pub secondary_map_blend: bool,
     pub environment_mapping: bool,
     pub multi_map_interpretation: bool,
+    /// Non-default multi diffuse/emissive constants without a verified
+    /// primary/secondary color composition path.
+    #[serde(default)]
+    pub multi_color_composition: bool,
     pub character_reflection: bool,
     #[serde(default)]
     pub character_scroll_variant: bool,
@@ -1160,13 +1174,51 @@ pub struct PreparedMaterialUnsupportedInputs {
     #[serde(default)]
     pub ambient_occlusion_mask: bool,
     #[serde(default)]
+    pub ssao_mask: bool,
+    /// Sheen inputs are parsed and baked, but the checked MeddleTools character
+    /// material graph does not connect them to a final BSDF output.
+    #[serde(default)]
+    pub sheen_lighting: bool,
+    /// Sphere-map inputs are parsed and baked, but their final reflection
+    /// composition is not present in the checked MeddleTools graph.
+    #[serde(default)]
+    pub sphere_lighting: bool,
+    /// Toon constants have no MeddleTools node equivalent. Only non-default
+    /// overrides are marked; installed materials currently use SHPK defaults.
+    #[serde(default)]
+    pub toon_lighting: bool,
+    #[serde(default)]
     pub lightshaft_clip: bool,
     #[serde(default)]
     pub decal_color_mode: bool,
     #[serde(default)]
     pub alpha_multi_values: bool,
+    /// Alpha aperture/offset constants are preserved, but neither Meddle nor
+    /// MeddleTools establishes their final alpha shaping equation.
+    #[serde(default)]
+    pub alpha_shaping: bool,
+    /// `ApplyVertexColorOn` is retained as a feature/key, but its RGB
+    /// composition is not established by the checked MeddleTools graphs.
+    #[serde(default)]
+    pub vertex_color_composition: bool,
+    /// `g_SpecularColorMask` is preserved, but the checked references do not
+    /// establish either RGB multiplication or a fourth scalar channel.
+    #[serde(default)]
+    pub specular_color_mask_composition: bool,
+    /// Outline constants are retained, but the checked references do not
+    /// establish a world-space normal extrusion or final color pass.
+    #[serde(default)]
+    pub outline_composition: bool,
     #[serde(default)]
     pub legacy_specular_type: bool,
+    /// Legacy ColorTable GlossStrength is consumed by installed
+    /// `characterlegacy.shpk` through pass-specific exponent/specular paths.
+    /// The preview uses the proven MRT exponent as its environment roughness,
+    /// reproduces the installed camera-reflection direct lobe, and retains the
+    /// raw channel, but does not reproduce the remaining environment/color
+    /// composition around those consumers.
+    #[serde(default)]
+    pub legacy_gloss_composition: bool,
     #[serde(default)]
     pub tile_mip_bias_offset: bool,
     #[serde(default)]
@@ -1218,8 +1270,34 @@ pub struct PreparedMaterialRuntimeFallbacks {
 pub struct PreparedMaterialRuntimeInputRequirements {
     pub character_instance_state: bool,
     pub on_render_material_output: bool,
+    /// Runtime `g_MaterialParameterDynamic.m_EmissiveColor`. Installed
+    /// Character and Legacy ColorTable Final shaders consume this distinct
+    /// 16-byte cbuffer; it is not the static MTRL `g_EmissiveColor`.
+    #[serde(default)]
+    pub material_dynamic_emissive_color: bool,
+    /// Runtime `g_InstanceParameter.m_MulColor`, which scales installed Legacy
+    /// Final RGB after the material/environment accumulation.
+    #[serde(default)]
+    pub instance_mul_color: bool,
+    /// Runtime `g_InstanceParameter.m_CameraLight.m_DiffuseSpecular/m_Rim`.
+    /// These per-instance camera-light controls are not static MTRL fields.
+    #[serde(default)]
+    pub instance_camera_light_parameters: bool,
     pub gpu_color_table_texture: bool,
     pub resolved_resource_handles: bool,
+    /// Runtime `g_InstanceParameter.m_Wetness` and
+    /// `g_ModelParameter.m_Params.x` values. These are render-object state and
+    /// are not stored in static MDL or MTRL data.
+    #[serde(default)]
+    pub model_wetness_parameters: bool,
+    /// Scene-owned `g_AmbientParam`, including sphere harmonics, environment
+    /// location interpolation and reflection/baked-light controls.
+    #[serde(default)]
+    pub scene_ambient_parameters: bool,
+    /// The scene ReflectionArray cube-array resource selected by
+    /// `g_AmbientParam` environment location indices.
+    #[serde(default)]
+    pub reflection_array_texture: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1517,6 +1595,17 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                         model.materials().get(mesh.material_slot),
                         model.textures(),
                     );
+                prepared_material.texture_sampling.specular.color_space =
+                    prepared_specular_texture_color_space(
+                        model.materials().get(mesh.material_slot),
+                        model.textures(),
+                    );
+                let (sheen_lighting, sphere_lighting) = prepared_unverified_extra_lighting_inputs(
+                    model.materials().get(mesh.material_slot),
+                    model.textures(),
+                );
+                prepared_material.unsupported_inputs.sheen_lighting |= sheen_lighting;
+                prepared_material.unsupported_inputs.sphere_lighting |= sphere_lighting;
                 prepared_material.unsupported_inputs.tile_array =
                     prepared_material.feature_flags.uses_tile
                         && !matches!(
@@ -1676,6 +1765,7 @@ pub fn prepare_material_for_draw_role(
         runtime_input_requirements: prepared_material_runtime_input_requirements(
             shader_family,
             unsupported_inputs,
+            material.is_some_and(|material| material.color_table_rows.is_some()),
         ),
         render_backfaces: material
             .map(|material| material.render_backfaces)
@@ -1694,6 +1784,87 @@ fn prepared_material_texture_sampling(
         sampling.base_color.address_mode = PreparedTextureAddressMode::ClampToEdge;
     }
     sampling
+}
+
+/// Baked ColorTable specular ramps are identified separately from the original
+/// packed `g_SamplerSpecularMap0`. Their compatibility bytes are sRGB-encoded,
+/// while canonical loader output also carries linear float RGB plus unclamped
+/// anisotropy Alpha; the renderer prefers that float payload.
+fn prepared_specular_texture_color_space(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> PreparedTextureColorSpace {
+    let is_baked_color_table_ramp = material
+        .and_then(|material| material.specular_texture)
+        .and_then(|index| textures.get(index))
+        .is_some_and(|texture| {
+            texture.kind == ModelTextureKind::Specular
+                && texture.path.starts_with("baked://")
+                && texture.path.contains("#colorset-")
+        });
+    if is_baked_color_table_ramp {
+        PreparedTextureColorSpace::Srgb
+    } else {
+        PreparedTextureColorSpace::NonColor
+    }
+}
+
+/// Meddle/MeddleTools establish the ColorTable field layout and baked ramp
+/// channels, but the checked character node graph leaves Sheen and Sphere at a
+/// dead-end mix-group interface. Keep nonzero inputs visible to diagnostics
+/// until a final shader composition is supported by stronger evidence.
+fn prepared_unverified_extra_lighting_inputs(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> (bool, bool) {
+    let Some(material) = material else {
+        return (false, false);
+    };
+    let sheen_lighting = material_scalar_differs(material.sheen_rate, 0.0)
+        || prepared_texture_channel_has_nonzero_value(
+            material.sheen_properties_texture,
+            textures,
+            ModelTextureKind::SheenProperties,
+            0,
+        );
+    let sphere_lighting = material_scalar_differs(material.sphere_map_index, 0.0)
+        || prepared_texture_channel_has_nonzero_value(
+            material.sphere_properties_texture,
+            textures,
+            ModelTextureKind::SphereProperties,
+            1,
+        );
+    (sheen_lighting, sphere_lighting)
+}
+
+fn prepared_texture_channel_has_nonzero_value(
+    texture_index: Option<usize>,
+    textures: &[ModelTexture],
+    expected_kind: ModelTextureKind,
+    channel: usize,
+) -> bool {
+    texture_index
+        .and_then(|index| textures.get(index))
+        .filter(|texture| texture.kind == expected_kind)
+        .is_some_and(|texture| {
+            texture
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[channel] != 0)
+                || texture.rgba_f32.as_ref().is_some_and(|pixels| {
+                    pixels
+                        .iter()
+                        .any(|pixel| pixel[channel].is_finite() && pixel[channel].abs() > 0.000_001)
+                })
+        })
+}
+
+fn material_has_nondefault_toon_inputs(material: &ModelMaterial) -> bool {
+    material_scalar_differs(material.toon_index, 0.0)
+        || material_scalar_differs(material.toon_light_scale, 2.0)
+        || material_scalar_differs(material.toon_light_spec_aperture, 50.0)
+        || material_scalar_differs(material.toon_reflection_scale, 2.5)
+        || material_scalar_differs(material.toon_spec_index, 4.0e-45)
 }
 
 pub fn prepared_material_alpha_policy(
@@ -1725,6 +1896,11 @@ pub fn prepared_material_alpha_policy(
     ) || (is_character_family
         && !matches!(material.alpha_mode, MaterialAlphaMode::Opaque))
     {
+        // MeddleTools proves Normal Blue for the shared character surface, and
+        // the installed 45059 glass normal contains a real Blue payload while
+        // Alpha is constant. Installed characterglass permutations do not share
+        // one output-alpha formula, so glass keeps this as an explicit preview
+        // fallback under `glass_shader_parameters`, not as a recovered game formula.
         PreparedAlphaSource::NormalBlue
     } else {
         match material.alpha_mode {
@@ -1971,6 +2147,11 @@ pub fn prepared_material_unsupported_inputs(
             }),
         tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
         detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
+        detail_composition: matches!(
+            shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        ) && (feature_flags.uses_detail
+            || resource_availability.detail_array_complete),
         incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
         secondary_map_blend: material.is_some_and(|material| {
             matches!(shader_family, MaterialShaderFamily::BgUvScroll)
@@ -1984,11 +2165,22 @@ pub fn prepared_material_unsupported_inputs(
         }),
         environment_mapping: texture_bindings.environment.is_some(),
         multi_map_interpretation: texture_bindings.multi_map.is_some(),
+        multi_color_composition: material.is_some_and(|material| {
+            material_has_unverified_multi_color_inputs(material, shader_family, texture_bindings)
+        }),
         character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
         character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
         glass_shader_parameters: matches!(shader_family, MaterialShaderFamily::CharacterGlass),
         ambient_occlusion_mask: material
             .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
+        ssao_mask: material
+            .is_some_and(|material| material_scalar_differs(material.ssao_mask, 1.0)),
+        sheen_lighting: material
+            .is_some_and(|material| material_scalar_differs(material.sheen_rate, 0.0)),
+        sphere_lighting: material
+            .is_some_and(|material| material_scalar_differs(material.sphere_map_index, 0.0)),
+        toon_lighting: feature_flags.uses_toon
+            && material.is_some_and(material_has_nondefault_toon_inputs),
         lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
         decal_color_mode: material.is_some_and(|material| {
             !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
@@ -2001,9 +2193,32 @@ pub fn prepared_material_unsupported_inputs(
                     | MaterialValueMode::AlphaMulti3
             )
         }),
+        alpha_shaping: material.is_some_and(|material| {
+            material_scalar_differs(material.alpha_aperture, 2.0)
+                || material_scalar_differs(material.alpha_offset, 0.0)
+        }),
+        vertex_color_composition: material.is_some_and(|material| material.apply_vertex_color),
+        specular_color_mask_composition: material.is_some_and(|material| {
+            material_vec4_differs(
+                material.specular_color_mask,
+                default_material_specular_color_mask(),
+            )
+        }),
+        outline_composition: material.is_some_and(|material| {
+            material_scalar_differs(material.outline_width, 0.0)
+                || material_vec4_differs(material.outline_color, default_material_outline_color())
+        }),
         legacy_specular_type: material.is_some_and(material_has_unsupported_legacy_specular_type),
-        tile_mip_bias_offset: material
-            .is_some_and(|material| material_scalar_differs(material.tile_mip_bias_offset, 0.0)),
+        legacy_gloss_composition: material.is_some_and(|material| {
+            material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+                && material.color_table_rows.is_some()
+        }),
+        // Installed character DXBC proves this value is the additive bias for
+        // the Tile Normal/ORB array LOD path; the renderer consumes it.
+        tile_mip_bias_offset: false,
         vertex_movement_parameters: material.is_some_and(|material| {
             material_scalar_differs(material.vertex_movement_scale, 1.0)
                 || material_scalar_differs(material.vertex_movement_max_length, 1.0)
@@ -2156,6 +2371,7 @@ pub fn prepared_material_runtime_fallbacks(
 pub fn prepared_material_runtime_input_requirements(
     shader_family: MaterialShaderFamily,
     unsupported: PreparedMaterialUnsupportedInputs,
+    has_color_table_rows: bool,
 ) -> PreparedMaterialRuntimeInputRequirements {
     let tattoo_decal_color = matches!(shader_family, MaterialShaderFamily::CharacterTattoo)
         && unsupported.runtime_decal_color;
@@ -2165,6 +2381,8 @@ pub fn prepared_material_runtime_input_requirements(
         || unsupported.runtime_skin_material
         || unsupported.runtime_decal_texture
         || skin_decal_color;
+    let character_color_table_final =
+        matches!(shader_family, MaterialShaderFamily::Character) && has_color_table_rows;
 
     PreparedMaterialRuntimeInputRequirements {
         character_instance_state: unsupported.runtime_option_color
@@ -2172,8 +2390,14 @@ pub fn prepared_material_runtime_input_requirements(
             || unsupported.runtime_skin_color
             || unsupported.runtime_sub_color,
         on_render_material_output,
+        material_dynamic_emissive_color: character_color_table_final,
+        instance_mul_color: character_color_table_final,
+        instance_camera_light_parameters: character_color_table_final,
         gpu_color_table_texture: unsupported.runtime_color_table,
         resolved_resource_handles: on_render_material_output || unsupported.runtime_material_change,
+        model_wetness_parameters: unsupported.legacy_gloss_composition,
+        scene_ambient_parameters: unsupported.legacy_gloss_composition,
+        reflection_array_texture: unsupported.legacy_gloss_composition,
     }
 }
 
@@ -2280,6 +2504,25 @@ fn material_vec4_differs(value: [f32; 4], default: [f32; 4]) -> bool {
         .into_iter()
         .zip(default)
         .any(|(value, default)| material_scalar_differs(value, default))
+}
+
+fn material_has_unverified_multi_color_inputs(
+    material: &ModelMaterial,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> bool {
+    let has_multi_diffuse = material_vec4_differs(
+        material.shader_multi_diffuse_color,
+        default_material_shader_diffuse_color(),
+    );
+    let verified_multi_diffuse = matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+        && matches!(material.value_mode, MaterialValueMode::Multi)
+        && texture_bindings.secondary_base_color.is_some();
+    let has_multi_emissive = material_vec4_differs(
+        material.shader_multi_emissive_color,
+        default_material_shader_emissive_color(),
+    );
+    (has_multi_diffuse && !verified_multi_diffuse) || has_multi_emissive
 }
 
 fn prepared_render_pass(
@@ -2449,6 +2692,8 @@ fn default_render_backfaces() -> bool {
 pub struct ModelTexture {
     pub path: String,
     pub kind: ModelTextureKind,
+    #[serde(default, skip_serializing_if = "ModelTextureTexelLayout::is_standard")]
+    pub texel_layout: ModelTextureTexelLayout,
     pub width: u16,
     pub height: u16,
     #[serde(default = "default_texture_array_size")]
@@ -2459,6 +2704,23 @@ pub struct ModelTexture {
     /// Optional per-pixel float channels for non-unorm semantic data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgba_f32: Option<Vec<[f32; 4]>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelTextureTexelLayout {
+    #[default]
+    Standard,
+    /// Per source index texel, generic ColorTable A and B values occupy adjacent X texels.
+    ColorTableRampAb,
+    /// Per source index texel, ColorTable A and B values occupy adjacent X texels.
+    ColorTableTileRampAb,
+}
+
+impl ModelTextureTexelLayout {
+    fn is_standard(&self) -> bool {
+        *self == Self::Standard
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -2651,6 +2913,8 @@ pub struct ColorTableRowColors {
     pub tile_index: f32,
     pub sheen_rate: f32,
     pub sheen_tint: f32,
+    /// Dawntrail ColorTable SheenAptitude (Meddle field 14). This is distinct
+    /// from the material-level `g_SheenAperture` constant stored elsewhere.
     pub sheen_aperture: f32,
     pub sphere_index: f32,
     pub sphere_mask: f32,
@@ -2686,33 +2950,68 @@ impl Default for ColorTableRowColors {
 ///
 /// `diffuse_rgba` / `specular_rgba` / `emissive_rgba` 的 RGB 为 sRGB 编码；
 /// `diffuse_rgba` 的 Alpha 固定为不透明；ColorTable TileAlpha 是 tile 属性，不是材质透明度。
-/// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
-/// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
-/// metalness / roughness / gloss strength / specular strength。
-/// 额外的 ColorTable 语义贴图提供线性 unorm fallback；SheenProperties、
+/// diffuse/specular float payload 的 RGB 为未 clamp 的线性值；specular Alpha 额外保留
+/// 未 clamp 的 ColorTable Anisotropy。RGBA8 版本只作为兼容 payload，不能表达 installed HDR。
+/// `material_rgba` 保留兼容线性 unorm；float payload 的通道顺序对齐 MeddleTools:
+/// metalness / roughness / gloss strength / specular strength，并避免 installed
+/// GlossStrength/SpecularStrength 超过 1 时被静默截断。
+/// 额外的 ColorTable 语义贴图提供线性 unorm fallback；SheenProperties 的
+/// 第三通道是 ColorTable SheenAptitude，不是材质常量 `g_SheenAperture`；
 /// SphereProperties 与 TileMatrixProperties 同时保留未 clamp 的 float 通道。
 /// TileIndex 与 SphereIndex 在调用前已从 Dawntrail half bits 解码，
 /// bake 时分别按 0..64 与 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
     pub diffuse_rgba: Vec<u8>,
+    /// Linear ColorTable diffuse RGB plus opaque alpha.
+    pub diffuse_rgba_f32: Vec<[f32; 4]>,
+    pub diffuse_ab_rgba: Vec<u8>,
+    /// Adjacent A/B linear ColorTable diffuse RGB plus opaque alpha.
+    pub diffuse_ab_rgba_f32: Vec<[f32; 4]>,
     pub specular_rgba: Vec<u8>,
+    /// Linear ColorTable specular RGB plus unclamped Anisotropy alpha.
+    pub specular_rgba_f32: Vec<[f32; 4]>,
+    pub specular_ab_rgba: Vec<u8>,
+    /// Adjacent A/B linear specular RGB plus unclamped Anisotropy alpha.
+    pub specular_ab_rgba_f32: Vec<[f32; 4]>,
     pub material_rgba: Vec<u8>,
+    pub material_rgba_f32: Vec<[f32; 4]>,
+    pub material_ab_rgba: Vec<u8>,
+    pub material_ab_rgba_f32: Vec<[f32; 4]>,
     pub tile_properties_rgba: Vec<u8>,
+    /// TileIndex/TileAlpha A and B ramps packed as two horizontal texels per
+    /// source index pixel. The third channel stores the original index-texture
+    /// G value; the runtime shader derives the A-to-B interpolation factor as
+    /// `1 - G`.
+    pub tile_properties_ab_rgba: Vec<u8>,
     pub sheen_properties_rgba: Vec<u8>,
     pub sheen_properties_rgba_f32: Vec<[f32; 4]>,
+    pub sheen_properties_ab_rgba: Vec<u8>,
+    pub sheen_properties_ab_rgba_f32: Vec<[f32; 4]>,
     pub sphere_properties_rgba: Vec<u8>,
     pub sphere_properties_rgba_f32: Vec<[f32; 4]>,
+    pub sphere_properties_ab_rgba: Vec<u8>,
+    pub sphere_properties_ab_rgba_f32: Vec<[f32; 4]>,
     pub tile_matrix_rgba: Vec<u8>,
     pub tile_matrix_rgba_f32: Vec<[f32; 4]>,
+    /// TileMatrix A and B ramps packed as two horizontal texels per source
+    /// index pixel, preserving the non-linear array sampling order.
+    pub tile_matrix_ab_rgba: Vec<u8>,
+    pub tile_matrix_ab_rgba_f32: Vec<[f32; 4]>,
     /// 所有行 emissive 全黑时为 None
     pub emissive_rgba: Option<Vec<u8>>,
+    /// Linear emissive RGB preserving values above display white.
+    pub emissive_rgba_f32: Option<Vec<[f32; 4]>>,
+    pub emissive_ab_rgba: Option<Vec<u8>>,
+    /// Adjacent A/B linear emissive RGB preserving HDR values.
+    pub emissive_ab_rgba_f32: Option<Vec<[f32; 4]>>,
 }
 
 /// 按 `_id.tex` 逐像素查 ColorTable 烘焙 diffuse / emissive 贴图。
 ///
 /// MeddleTools 的 ColorTable ramp 语义按偶/奇行拆成 A/B ramp；这里用 R 通道选择行对，
-/// 行对 i 对应表中第 2i 与 2i+1 行，G 通道在两行之间线性混合。
+/// 行对 i 对应表中第 2i 与 2i+1 行；DXBC 使用 `1 - G` 作为从偶数 A 行
+/// 到奇数 B 行的线性插值因子。
 /// Dawntrail 通常是 32 行、16 个行对，R 通道以 17 为步长；Legacy 是 16 行、8 个行对。
 /// `rows` 为 ColorTable 全部行；`id_rgba` 为索引贴图 RGBA8 数据。
 pub fn bake_color_table_maps(
@@ -2726,22 +3025,45 @@ pub fn bake_color_table_maps(
     let pair_count = rows.len() / 2;
     let pixel_count = id_rgba.len() / 4;
     let mut diffuse_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut diffuse_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut diffuse_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut diffuse_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut specular_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut specular_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut specular_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut specular_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut material_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut material_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut material_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut material_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut tile_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut tile_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
     let mut sheen_properties_rgba = Vec::with_capacity(pixel_count * 4);
     let mut sheen_properties_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut sheen_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut sheen_properties_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut sphere_properties_rgba = Vec::with_capacity(pixel_count * 4);
     let mut sphere_properties_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut sphere_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut sphere_properties_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut tile_matrix_rgba = Vec::with_capacity(pixel_count * 4);
     let mut tile_matrix_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut tile_matrix_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut tile_matrix_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut emissive_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut emissive_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut emissive_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut has_emissive = false;
 
     for pixel in id_rgba.chunks_exact(4) {
         let pair = ((pixel[0] as f32 / 255.0) * (pair_count - 1) as f32).round() as usize;
         let pair = pair.min(pair_count - 1);
-        let blend = pixel[1] as f32 / 255.0;
+        let source_blend = pixel[1] as f32 / 255.0;
+        // Installed character/legacy DXBC samples the even row at A and the
+        // odd row at B, then uses `1 - index.G` as the A-to-B interpolation
+        // factor.
+        let blend = 1.0 - source_blend;
         let row_a = rows[pair * 2];
         let row_b = rows[pair * 2 + 1];
 
@@ -2766,38 +3088,135 @@ pub fn bake_color_table_maps(
         }
 
         push_srgb_pixel(&mut diffuse_rgba, diffuse, 1.0);
+        diffuse_rgba_f32.push([diffuse[0], diffuse[1], diffuse[2], 1.0]);
+        push_srgb_pixel(&mut diffuse_ab_rgba, row_a.diffuse, 1.0);
+        push_srgb_pixel(&mut diffuse_ab_rgba, row_b.diffuse, 1.0);
+        diffuse_ab_rgba_f32.push([row_a.diffuse[0], row_a.diffuse[1], row_a.diffuse[2], 1.0]);
+        diffuse_ab_rgba_f32.push([row_b.diffuse[0], row_b.diffuse[1], row_b.diffuse[2], 1.0]);
         push_srgb_pixel(&mut specular_rgba, specular, anisotropy);
+        specular_rgba_f32.push([specular[0], specular[1], specular[2], anisotropy]);
+        push_srgb_pixel(&mut specular_ab_rgba, row_a.specular, row_a.anisotropy);
+        push_srgb_pixel(&mut specular_ab_rgba, row_b.specular, row_b.anisotropy);
+        specular_ab_rgba_f32.push([
+            row_a.specular[0],
+            row_a.specular[1],
+            row_a.specular[2],
+            row_a.anisotropy,
+        ]);
+        specular_ab_rgba_f32.push([
+            row_b.specular[0],
+            row_b.specular[1],
+            row_b.specular[2],
+            row_b.anisotropy,
+        ]);
         push_unorm_pixel(
             &mut material_rgba,
             [metalness, roughness, gloss_strength, specular_strength],
         );
+        material_rgba_f32.push([metalness, roughness, gloss_strength, specular_strength]);
+        push_unorm_pixel(
+            &mut material_ab_rgba,
+            [
+                row_a.metalness,
+                row_a.roughness,
+                row_a.gloss_strength,
+                row_a.specular_strength,
+            ],
+        );
+        material_ab_rgba_f32.push([
+            row_a.metalness,
+            row_a.roughness,
+            row_a.gloss_strength,
+            row_a.specular_strength,
+        ]);
+        push_unorm_pixel(
+            &mut material_ab_rgba,
+            [
+                row_b.metalness,
+                row_b.roughness,
+                row_b.gloss_strength,
+                row_b.specular_strength,
+            ],
+        );
+        material_ab_rgba_f32.push([
+            row_b.metalness,
+            row_b.roughness,
+            row_b.gloss_strength,
+            row_b.specular_strength,
+        ]);
         push_unorm_pixel(
             &mut tile_properties_rgba,
             [tile_index / 64.0, tile_alpha, 1.0, 1.0],
         );
+        push_unorm_pixel(
+            &mut tile_properties_ab_rgba,
+            [row_a.tile_index / 64.0, row_a.tile_alpha, source_blend, 1.0],
+        );
+        push_unorm_pixel(
+            &mut tile_properties_ab_rgba,
+            [row_b.tile_index / 64.0, row_b.tile_alpha, source_blend, 1.0],
+        );
         let sheen_properties = [sheen_rate, sheen_tint, sheen_aperture, 1.0];
         sheen_properties_rgba_f32.push(sheen_properties);
         push_unorm_pixel(&mut sheen_properties_rgba, sheen_properties);
+        for row in [row_a, row_b] {
+            let properties = [row.sheen_rate, row.sheen_tint, row.sheen_aperture, 1.0];
+            sheen_properties_ab_rgba_f32.push(properties);
+            push_unorm_pixel(&mut sheen_properties_ab_rgba, properties);
+        }
         let sphere_properties = [sphere_index / 255.0, sphere_mask, 1.0, 1.0];
         sphere_properties_rgba_f32.push(sphere_properties);
         push_unorm_pixel(&mut sphere_properties_rgba, sphere_properties);
+        for row in [row_a, row_b] {
+            let properties = [row.sphere_index / 255.0, row.sphere_mask, 1.0, 1.0];
+            sphere_properties_ab_rgba_f32.push(properties);
+            push_unorm_pixel(&mut sphere_properties_ab_rgba, properties);
+        }
         tile_matrix_rgba_f32.push(tile_matrix);
         push_unorm_pixel(&mut tile_matrix_rgba, tile_matrix);
+        tile_matrix_ab_rgba_f32.push(row_a.tile_matrix);
+        tile_matrix_ab_rgba_f32.push(row_b.tile_matrix);
+        push_unorm_pixel(&mut tile_matrix_ab_rgba, row_a.tile_matrix);
+        push_unorm_pixel(&mut tile_matrix_ab_rgba, row_b.tile_matrix);
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
+        emissive_rgba_f32.push([emissive[0], emissive[1], emissive[2], 1.0]);
+        push_srgb_pixel(&mut emissive_ab_rgba, row_a.emissive, 1.0);
+        push_srgb_pixel(&mut emissive_ab_rgba, row_b.emissive, 1.0);
+        emissive_ab_rgba_f32.push([row_a.emissive[0], row_a.emissive[1], row_a.emissive[2], 1.0]);
+        emissive_ab_rgba_f32.push([row_b.emissive[0], row_b.emissive[1], row_b.emissive[2], 1.0]);
     }
 
     Some(BakedColorTableMaps {
         diffuse_rgba,
+        diffuse_rgba_f32,
+        diffuse_ab_rgba,
+        diffuse_ab_rgba_f32,
         specular_rgba,
+        specular_rgba_f32,
+        specular_ab_rgba,
+        specular_ab_rgba_f32,
         material_rgba,
+        material_rgba_f32,
+        material_ab_rgba,
+        material_ab_rgba_f32,
         tile_properties_rgba,
+        tile_properties_ab_rgba,
         sheen_properties_rgba,
         sheen_properties_rgba_f32,
+        sheen_properties_ab_rgba,
+        sheen_properties_ab_rgba_f32,
         sphere_properties_rgba,
         sphere_properties_rgba_f32,
+        sphere_properties_ab_rgba,
+        sphere_properties_ab_rgba_f32,
         tile_matrix_rgba,
         tile_matrix_rgba_f32,
+        tile_matrix_ab_rgba,
+        tile_matrix_ab_rgba_f32,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
+        emissive_rgba_f32: has_emissive.then_some(emissive_rgba_f32),
+        emissive_ab_rgba: has_emissive.then_some(emissive_ab_rgba),
+        emissive_ab_rgba_f32: has_emissive.then_some(emissive_ab_rgba_f32),
     })
 }
 
@@ -3580,18 +3999,29 @@ mod color_table_bake_tests {
                 runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
+                detail_composition: false,
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
                 environment_mapping: false,
                 multi_map_interpretation: true,
+                multi_color_composition: false,
                 character_reflection: true,
                 character_scroll_variant: false,
                 glass_shader_parameters: false,
                 ambient_occlusion_mask: false,
+                ssao_mask: false,
+                sheen_lighting: false,
+                sphere_lighting: false,
+                toon_lighting: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
                 alpha_multi_values: false,
+                alpha_shaping: false,
+                vertex_color_composition: false,
+                specular_color_mask_composition: false,
+                outline_composition: false,
                 legacy_specular_type: false,
+                legacy_gloss_composition: false,
                 tile_mip_bias_offset: false,
                 vertex_movement_parameters: false,
             }
@@ -3623,18 +4053,29 @@ mod color_table_bake_tests {
                 runtime_sub_color: false,
                 tile_array: true,
                 detail_array: true,
+                detail_composition: false,
                 incomplete_shader_family_logic: true,
                 secondary_map_blend: false,
                 environment_mapping: false,
                 multi_map_interpretation: true,
+                multi_color_composition: false,
                 character_reflection: true,
                 character_scroll_variant: false,
                 glass_shader_parameters: false,
                 ambient_occlusion_mask: false,
+                ssao_mask: false,
+                sheen_lighting: false,
+                sphere_lighting: false,
+                toon_lighting: false,
                 lightshaft_clip: false,
                 decal_color_mode: false,
                 alpha_multi_values: false,
+                alpha_shaping: false,
+                vertex_color_composition: false,
+                specular_color_mask_composition: false,
+                outline_composition: false,
                 legacy_specular_type: false,
+                legacy_gloss_composition: false,
                 tile_mip_bias_offset: false,
                 vertex_movement_parameters: false,
             }
@@ -3759,6 +4200,34 @@ mod color_table_bake_tests {
                 .ambient_occlusion_mask
         );
 
+        material.ssao_mask = 0.9;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .ssao_mask
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.toon_index = 3.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+        material.toon_index = 0.0;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+        material.shader_package_name = Some("bg.shpk".to_string());
+        material.toon_index = 3.0;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
             PreparedMaterialUnsupportedInputs::default()
@@ -3772,6 +4241,7 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .unsupported_inputs;
         assert!(!unsupported.legacy_specular_type);
+        assert!(!unsupported.legacy_gloss_composition);
         assert!(!unsupported.tile_mip_bias_offset);
         assert!(!unsupported.vertex_movement_parameters);
 
@@ -3789,6 +4259,39 @@ mod color_table_bake_tests {
             !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .unsupported_inputs
                 .legacy_specular_type
+        );
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_gloss_composition
+        );
+        material.color_table_rows = Some(vec![ColorTableRowColors::default()]);
+        let legacy = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(legacy.unsupported_inputs.legacy_gloss_composition);
+        assert_eq!(
+            legacy.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                material_dynamic_emissive_color: true,
+                instance_mul_color: true,
+                instance_camera_light_parameters: true,
+                model_wetness_parameters: true,
+                scene_ambient_parameters: true,
+                reflection_array_texture: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+        let mut modern = material.clone();
+        modern.shader_package_name = Some("character.shpk".to_string());
+        let modern = prepare_material_for_draw_role(Some(&modern), ModelMeshDrawRole::Normal);
+        assert!(!modern.unsupported_inputs.legacy_gloss_composition);
+        assert_eq!(
+            modern.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                material_dynamic_emissive_color: true,
+                instance_mul_color: true,
+                instance_camera_light_parameters: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
         );
         material.value_mode = MaterialValueMode::MultiMaterial;
         assert!(
@@ -3815,7 +4318,7 @@ mod color_table_bake_tests {
         material.specular_type_raw = None;
         material.tile_mip_bias_offset = 0.25;
         assert!(
-            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .unsupported_inputs
                 .tile_mip_bias_offset
         );
@@ -3981,6 +4484,210 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_specular_color_space_separates_baked_ramp_from_packed_map() {
+        let specular_texture = |path: &str| ModelTexture {
+            path: path.to_string(),
+            kind: ModelTextureKind::Specular,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: vec![128; 4],
+            rgba_f32: None,
+        };
+        let prepare = |texture: ModelTexture| {
+            let mut material = test_material();
+            material.shader_package_name = Some("character.shpk".to_string());
+            material.specular_texture = Some(0);
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures: vec![texture],
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+        };
+
+        let baked = prepare(specular_texture("baked://test.mtrl#colorset-specular"));
+        assert_eq!(
+            baked.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::Srgb,
+            "baked ColorTable specular ramps carry sRGB RGB and need GPU sRGB decoding"
+        );
+
+        let packed = prepare(specular_texture(
+            "chara/weapon/w0101/obj/body/b0001/texture/w01b0001b_s.tex",
+        ));
+        assert_eq!(
+            packed.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::NonColor,
+            "packed g_SamplerSpecularMap0 data is Non-Color"
+        );
+
+        let mut wrong_kind = specular_texture("baked://test.mtrl#colorset-specular");
+        wrong_kind.kind = ModelTextureKind::MaterialProperties;
+        assert_eq!(
+            prepare(wrong_kind).texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::NonColor
+        );
+    }
+
+    #[test]
+    fn prepared_model_exposes_nonzero_unverified_extra_lighting_inputs() {
+        let extra_texture = |kind| ModelTexture {
+            path: "baked://test.mtrl#colorset-extra".to_string(),
+            kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
+        };
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.sheen_properties_texture = Some(0);
+        material.sphere_properties_texture = Some(1);
+        let prepare = |material: ModelMaterial, textures: Vec<ModelTexture>| {
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures,
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+                .unsupported_inputs
+        };
+        let neutral = vec![
+            extra_texture(ModelTextureKind::SheenProperties),
+            extra_texture(ModelTextureKind::SphereProperties),
+        ];
+        let unsupported = prepare(material.clone(), neutral.clone());
+        assert!(!unsupported.sheen_lighting);
+        assert!(!unsupported.sphere_lighting);
+
+        let mut active_sheen = neutral.clone();
+        active_sheen[0].rgba[0] = 1;
+        let unsupported = prepare(material.clone(), active_sheen);
+        assert!(unsupported.sheen_lighting);
+        assert!(!unsupported.sphere_lighting);
+
+        let mut active_sphere = neutral.clone();
+        active_sphere[1].rgba[1] = 1;
+        let unsupported = prepare(material.clone(), active_sphere);
+        assert!(!unsupported.sheen_lighting);
+        assert!(unsupported.sphere_lighting);
+
+        material.sheen_rate = 0.25;
+        material.sphere_map_index = 2.0;
+        let unsupported = prepare(material, neutral);
+        assert!(unsupported.sheen_lighting);
+        assert!(unsupported.sphere_lighting);
+    }
+
+    #[test]
+    fn prepared_texture_sampling_covers_every_texture_kind() {
+        let expected = [
+            (ModelTextureKind::BaseColor, PreparedTextureColorSpace::Srgb),
+            (
+                ModelTextureKind::SecondaryBaseColor,
+                PreparedTextureColorSpace::Srgb,
+            ),
+            (
+                ModelTextureKind::Normal,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SecondaryNormal,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Mask, PreparedTextureColorSpace::NonColor),
+            (
+                ModelTextureKind::MaterialMap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::MultiMap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::Specular,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SecondarySpecular,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Emissive, PreparedTextureColorSpace::Srgb),
+            (
+                ModelTextureKind::Environment,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::MaterialProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SheenProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SphereProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileMatrixProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Index, PreparedTextureColorSpace::NonColor),
+            (
+                ModelTextureKind::TileNormalArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileOrbArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::DetailDiffuseArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::DetailNormalArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWave,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWaveSecondary,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWhitecap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Other, PreparedTextureColorSpace::NonColor),
+        ];
+        for (kind, color_space) in expected {
+            let sampling = prepared_texture_sampling_for_kind(kind);
+            assert_eq!(
+                sampling.color_space, color_space,
+                "{kind:?} must keep its documented sampling color space"
+            );
+        }
+    }
+
+    #[test]
     fn prepared_material_treats_index_texture_as_color_table_input() {
         let mut material = test_material();
         material.index_texture = Some(3);
@@ -4113,6 +4820,187 @@ mod color_table_bake_tests {
             !alpha_multi_without_map1
                 .unsupported_inputs
                 .secondary_map_blend
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_multi_color_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition
+        );
+
+        material.shader_multi_diffuse_color = [0.25, 0.5, 1.0, 1.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition
+        );
+
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(6);
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition,
+            "verified BG Map0/Map1 diffuse mix may consume g_MultiDiffuseColor"
+        );
+
+        material.shader_multi_emissive_color = [1.0, 0.2, 0.1, 1.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition,
+            "g_MultiEmissiveColor has no implemented secondary emissive composition"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_bg_detail_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition
+        );
+
+        material.detail_id = 2.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "non-default BG detail inputs need an explicit composition diagnostic"
+        );
+
+        material.detail_id = 0.0;
+        material.texture_arrays.detail_diffuse = Some(7);
+        material.texture_arrays.detail_normal = Some(8);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "ready BG detail arrays remain inspectable but their Final influence is unverified"
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "the BG composition boundary must not be generalized to character materials"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_alpha_shaping() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_aperture = 1.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_aperture = 2.0;
+        material.alpha_offset = 0.05;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_offset = f32::NAN;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_vertex_color_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_color_composition
+        );
+
+        material.apply_vertex_color = true;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_vertex_color);
+        assert!(prepared.unsupported_inputs.vertex_color_composition);
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_color_composition,
+            "an unexpected key on another family must remain visible instead of enabling a generic tint"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_specular_color_mask_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition
+        );
+
+        material.specular_color_mask = [0.25, 0.5, 0.75, 0.125];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition
+        );
+
+        material.specular_color_mask = [f32::NAN, 1.0, 1.0, 1.0];
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_outline_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        let default = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!default.feature_flags.uses_outline);
+        assert!(!default.unsupported_inputs.outline_composition);
+
+        material.outline_width = 0.02;
+        material.outline_color = [0.1, 0.2, 0.3, 1.0];
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_outline);
+        assert!(prepared.unsupported_inputs.outline_composition);
+
+        material.outline_width = f32::NAN;
+        material.outline_color = [f32::NAN, 0.0, 0.0, 1.0];
+        let non_finite = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!non_finite.feature_flags.uses_outline);
+        assert!(
+            !non_finite.unsupported_inputs.outline_composition,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
         );
     }
 
@@ -4677,6 +5565,7 @@ mod color_table_bake_tests {
             water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
             alpha_aperture: 2.0,
             alpha_offset: 0.0,
+            vertex_alpha_to_one: 0.0,
             shadow_alpha_threshold: 0.5,
             glass_ior: 1.0,
             glass_thickness_max: 0.01,
@@ -4787,6 +5676,7 @@ mod color_table_bake_tests {
         ModelTexture {
             path: "array.tex".to_string(),
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: array_size,
             array_size,
@@ -4872,12 +5762,12 @@ mod color_table_bake_tests {
 
     #[test]
     fn bake_selects_row_pair_from_red_channel() {
-        // 两个像素: R=0 → 行对 0, R=255 → 行对 1；G=0 → 不混合
+        // 两个像素: R=0 → 行对 0, R=255 → 行对 1；G=0 → 插值因子 1，完全取 B 行
         let id_rgba = [0, 0, 0, 255, 255, 0, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
 
-        // 像素 0: 纯红 (sRGB 255,0,0)
-        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
+        // 像素 0: 行对 0 的 B 行，纯绿
+        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
         // 像素 1: 纯蓝
         assert_eq!(&baked.diffuse_rgba[4..8], &[0, 0, 255, 255]);
         // 行对 1 有 emissive → 生成 emissive 贴图
@@ -4886,11 +5776,11 @@ mod color_table_bake_tests {
     }
 
     #[test]
-    fn bake_blends_rows_with_green_channel() {
-        // R=0 → 行对 0；G=255 → 完全取第二行 (纯绿)
+    fn bake_uses_inverted_green_as_ab_interpolation_factor() {
+        // R=0 → 行对 0；G=255 → 插值因子 0，完全取偶数 A 行 (纯红)
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
-        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
         // 全部像素 emissive 为 0 → 无 emissive 贴图
         assert!(baked.emissive_rgba.is_none());
     }
@@ -4922,8 +5812,36 @@ mod color_table_bake_tests {
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(baked.specular_rgba[3], 64);
-        assert_eq!(baked.material_rgba[3], 191);
+        assert_eq!(baked.specular_rgba[3], 26);
+        assert_eq!(baked.material_rgba[3], 51);
+    }
+
+    #[test]
+    fn bake_preserves_hdr_material_properties_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                metalness: 1.0,
+                roughness: 0.5,
+                gloss_strength: 193.375,
+                specular_strength: 100.0,
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                metalness: 0.25,
+                roughness: 0.75,
+                gloss_strength: 2.0,
+                specular_strength: 4.0,
+                ..Default::default()
+            },
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(baked.material_rgba, vec![255, 128, 255, 255]);
+        assert_eq!(baked.material_rgba_f32, vec![[1.0, 0.5, 193.375, 100.0]]);
+        assert_eq!(
+            baked.material_ab_rgba_f32,
+            vec![[1.0, 0.5, 193.375, 100.0], [0.25, 0.75, 2.0, 4.0]]
+        );
     }
 
     #[test]
@@ -4955,22 +5873,27 @@ mod color_table_bake_tests {
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(&baked.tile_properties_rgba[0..4], &[64, 191, 255, 255]);
-        assert_eq!(&baked.sheen_properties_rgba[0..4], &[64, 128, 191, 255]);
+        assert_eq!(&baked.tile_properties_rgba[0..4], &[32, 64, 255, 255]);
         assert_eq!(
-            baked.sheen_properties_rgba_f32,
-            vec![[0.25, 0.5, 0.75, 1.0]]
+            baked.tile_properties_ab_rgba,
+            vec![32, 64, 255, 255, 64, 191, 255, 255]
         );
-        assert_eq!(&baked.sphere_properties_rgba[0..4], &[128, 64, 255, 255]);
+        assert_eq!(&baked.sheen_properties_rgba[0..4], &[26, 51, 77, 255]);
+        assert_eq!(baked.sheen_properties_rgba_f32, vec![[0.1, 0.2, 0.3, 1.0]]);
+        assert_eq!(&baked.sphere_properties_rgba[0..4], &[32, 102, 255, 255]);
         assert_eq!(
             baked.sphere_properties_rgba_f32,
-            vec![[128.0 / 255.0, 0.25, 1.0, 1.0]]
+            vec![[32.0 / 255.0, 0.4, 1.0, 1.0]]
         );
-        assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 191, 128, 64]);
+        assert_eq!(&baked.tile_matrix_rgba[0..4], &[26, 51, 77, 102]);
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![[0.1, 0.2, 0.3, 0.4], [1.0, 0.75, 0.5, 0.25]]
+        );
     }
 
     #[test]
-    fn bake_preserves_hdr_sheen_aperture_in_float_payload() {
+    fn bake_preserves_hdr_sheen_aptitude_in_float_payload() {
         let rows = vec![
             ColorTableRowColors {
                 sheen_aperture: 4.0,
@@ -4978,10 +5901,70 @@ mod color_table_bake_tests {
             },
             ColorTableRowColors::default(),
         ];
-        let baked = bake_color_table_maps(&rows, &[0, 0, 0, 255]).expect("bake");
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
 
         assert_eq!(&baked.sheen_properties_rgba[0..4], &[0, 0, 255, 255]);
         assert_eq!(baked.sheen_properties_rgba_f32, vec![[0.0, 0.0, 4.0, 1.0]]);
+    }
+
+    #[test]
+    fn bake_preserves_hdr_diffuse_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                diffuse: [6.7929688, 2.0, 0.5],
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 188, 255]);
+        assert_eq!(baked.diffuse_rgba_f32, vec![[6.7929688, 2.0, 0.5, 1.0]]);
+        assert_eq!(
+            baked.diffuse_ab_rgba_f32,
+            vec![[6.7929688, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]]
+        );
+    }
+
+    #[test]
+    fn bake_preserves_hdr_anisotropy_in_specular_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                specular: [0.25, 0.5, 0.75],
+                anisotropy: 7.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(baked.specular_rgba[3], 255);
+        assert_eq!(baked.specular_rgba_f32, vec![[0.25, 0.5, 0.75, 7.0]]);
+        assert_eq!(
+            baked.specular_ab_rgba_f32,
+            vec![[0.25, 0.5, 0.75, 7.0], [0.0, 0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn bake_preserves_hdr_emissive_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                emissive: [61.46875, 2.0, 0.5],
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(
+            baked.emissive_rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0]])
+        );
+        assert_eq!(
+            baked.emissive_ab_rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
     }
 
     #[test]
@@ -4996,12 +5979,52 @@ mod color_table_bake_tests {
                 ..Default::default()
             },
         ];
-        let id_rgba = [0, 0, 0, 255];
+        let id_rgba = [0, 255, 0, 255];
 
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
         assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 0, 64, 255]);
         assert_eq!(baked.tile_matrix_rgba_f32, vec![[2.0, -0.5, 0.25, 1.5]]);
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![[2.0, -0.5, 0.25, 1.5], [0.0; 4]]
+        );
+    }
+
+    #[test]
+    fn bake_packs_tile_ramp_ab_texels_per_source_pixel() {
+        let rows = vec![
+            ColorTableRowColors {
+                tile_index: 8.0,
+                tile_alpha: 0.25,
+                tile_matrix: [1.0, 2.0, 3.0, 4.0],
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                tile_index: 16.0,
+                tile_alpha: 0.75,
+                tile_matrix: [5.0, 6.0, 7.0, 8.0],
+                ..Default::default()
+            },
+        ];
+        let baked =
+            bake_color_table_maps(&rows, &[0, 0, 0, 255, 0, 255, 0, 255]).expect("two-pixel bake");
+
+        assert_eq!(
+            baked.tile_properties_ab_rgba,
+            vec![
+                32, 64, 0, 255, 64, 191, 0, 255, 32, 64, 255, 255, 64, 191, 255, 255,
+            ]
+        );
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+            ]
+        );
     }
 
     #[test]
@@ -5052,8 +6075,8 @@ mod color_table_bake_tests {
         let id_rgba = [255, 0, 0, 255, 255, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
-        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 0, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 255, 255, 255]);
     }
 
     #[test]

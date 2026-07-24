@@ -52,13 +52,16 @@
 - draw role、render pass、culling、alpha source、texture binding、sampler policy、UV source、feature flags、resource availability 和 runtime fallback 已结构化。
 - Opaque、Cutout、Transparent、Glass、AdditiveLightShaft、dither depth 和 outline 路径已有明确分派。
 - shadow、terrainShadow、verticalFog 默认不进入 surface pass；crest 使用透明 fallback，materialChange 使用基础材质 fallback。
-- unsupported 输入已区分 runtime ColorTable、Option/Decal/Skin/Sub color、decal texture、Skin sampler composition、tile/detail arrays、tile mip bias、vertex movement、AlphaMulti、MultiMap、reflection、environment、lightshaft clip 等原因。
+- unsupported 输入已区分 runtime ColorTable、Option/Decal/Skin/Sub color、decal texture、Skin sampler composition、tile/detail arrays、BG detail composition、alpha shaping、vertex movement、AlphaMulti、MultiMap、reflection、environment、lightshaft clip 等原因。
 
 ### Renderer
 
 - GPU 顶点格式和 WGSL 已接收所有已解析顶点通道；flow0 和 secondary tangent frame 已在有证据的路径消费。
 - 15 个现有 texture bindings 使用逐 role sampler；base/emissive、data maps、index 和 extra ramps 不再共用错误采样策略。共享 tile/detail pair atlas 会逐 half、逐 layer 生成互不污染的 mip，并在 `fract` 前计算显式梯度做 nearest mip selection。
-- ColorTable diffuse/specular/material/tile/sheen/sphere/tile-matrix，以及 tile/detail pair atlas 已进入 renderer 和 debug views。
+- ColorTable diffuse/specular/material/tile/sheen/sphere/tile-matrix，以及 tile/detail pair atlas 已进入 renderer 和 debug views；BG detail 的最终 tint/normal influence 不进入 Final，并由 `detailComposition` 标记。`ApplyVertexColor` 的 key/feature/debug 保留，但未证明的通用 RGB tint 已从 Final 隔离并由 `vertexColorComposition` 标记。
+- installed ColorTable HDR 值域已锁定：Diffuse 最大 `6.7929688`、Specular 最大 `4900`、Emissive 最大 `61.46875`、Anisotropy 最大 `7`、SheenAptitude 最大 `52.09375`。canonical diffuse/specular/emissive 与 sheen 均使用 float payload；native pre-compose readback 直接验证三个颜色 ramp 的 GPU 采样保真。
+- `g_SpecularColorMask` 的三通道默认值、raw uniform 和 summary 保留；没有节点证据的 RGB/第四通道组合由 `specularColorMaskComposition` 标记，不进入 Final。
+- `g_OutlineColor/Width` 的 raw、feature flag、uniform 和 dormant pipeline 保留；未经证明的世界空间法线外扩由 `outlineComposition` 标记，不自动进入 Final。
 - character normal-B alpha、tattoo normal-A alpha、stockings opaque、water direct alpha/primary wave、bguvscroll Map0/Map1、lightshaft 双纹理与 alpha test 已实现第一版。
 - legacy Compatibility specular Default/Mask 已按 installed FXC 证据分别使用 1 与 `mask.r²` factor；其它 package/value mode 保持 generic 行为。
 - TileMatrix 使用 float texture；Sheen/Sphere 保留 HDR；Dawntrail TileIndex/SphereIndex 已按 half-float 语义解析。
@@ -67,17 +70,17 @@
 ### 验证
 
 - 数据层和 renderer 有 focused unit tests。
-- synthetic native WGPU 覆盖 Map1、tile/detail、ColorTable ramps、tattoo、water、lightshaft、secondary vertex debug 等最终像素差异。
+- synthetic native WGPU 覆盖 Map1、tile/detail、BG detail/vertex-color composition boundary、ColorTable ramps、tattoo、water、lightshaft、secondary vertex debug 等最终像素差异。
 - 透明三角形 synthetic WGPU 会在正背视角翻转同 mesh 红/蓝半透明层的主色，覆盖逐帧动态 index buffer 与实际 blend；45050 已在默认和两个额外视角验证毛片顺序。
 - 45052 覆盖 baseline、第一染色通道和第二通道 metallic；45059 覆盖 glass、SphereIndex 与 HDR ramp。
 - 45047、45048、45053、45068 的真实 final/tile-normal snapshot 已完成 atlas minification 回归；`fract` 后错误隐式梯度已消除。后续放大审查发现的 45053/45068 稳定网纹也已修复：TileIndex 离散化现按 MeddleTools `tile_select` 使用 `FLOOR`，约 21.58 会选择平缓 layer 21 而不是强网纹 layer 22；45068 final/tile-normal 前景高频分别下降约 53%/94%，45053 tile-normal 下降约 71%。45050 已验证 packed normal B/A 在 mip 中独立线性保留，前景覆盖保持稳定。
-- 45050 的毛发透明回归已修复：透明 `_b.mtrl` 为 `GetValuesMultiMaterial + NormalBlue`，807 个顶点中 445 个 A=0，848 个三角形中 400 个全为 A=0；NormalBlue/NormalAlpha 现不再误乘 vertex A。MeddleTools `meddle character.shpk` 的 Alpha 只连接 normal Blue，tattoo Alpha 只连接 normal Alpha，两者都没有 vertex color A 输入。真实 final 前景像素由 29,559 增至 33,358，alpha debug 保留毛束边缘/缝隙透明而主体恢复不透明。
+- 45050 的毛发透明回归已按 installed DXBC 收紧：`0xAD94E254` 在 character/legacy/glass 中执行 `mix(vertexA, 1, value)` 后乘入 NormalBlue/surface alpha。透明 `_b.mtrl` 的值为 `1`，因此 445/807 个 vertex-A=0 顶点不会被错误抹除；默认值 `0` 的其它 character 材质仍保留 vertex A。tattoo 等未被这三个 package 证明的 family 不继承该规则。
 - character Compatibility diffuse 组合已通过 focused/installed tests 和父提交真实回归：当前 `GetValues=GetValuesCompatibility` 与旧式 `GetValuesTextureType=Compatibility` 共用 multiply gate；45068 固定 Compatibility、`#base-times-colorset` 与原 base index；45047/45048/45050/45053/45068 的 PNG 全部逐字节一致。
 - WeaponCatalog audit 当前结果：8281 个条目、7365 个唯一模型、8112 个 model-material 引用、6399 个唯一 MTRL、4 个 exact SHPK、0 load/semantic failures；武器范围为 8091 character、15 skin、6 characterGlass。
 - material semantic coverage 已完成第一轮全量审计：48 个 scoped key coverage、244 个 constant coverage；每项同时报告唯一 MTRL 资源和 catalog item-material 引用，material/system/scene defaults 与 MTRL override 分开。`characterlegacy.shpk` 的 5519 个资源对应 12145 次 catalog 引用，证明引用数不再误用 model-material 次数。
-- `ApplyVertexMovement` 对 6399 个资源全部为 scene default Off，0 MTRL overrides；movement scale/max-length 虽有非默认静态值，仍只作为潜在参数诊断。`g_TileMipBiasOffset` 只有 47320=`+1`、46461/46462=`-1` 三个非零样本，尚无 tile-array LOD 公式证据。
+- `ApplyVertexMovement` 对 6399 个资源全部为 scene default Off，0 MTRL overrides；movement scale/max-length 虽有非默认静态值，仍只作为潜在参数诊断。`g_TileMipBiasOffset` 只有 47320=`+1`、46461/46462=`-1` 三个非零样本；installed character/legacy DXBC 已证明 `max(log2(minAxis/128),0)+offset`，作用域仅 Tile ORB/Normal arrays，renderer 已按显式梯度等价实现。
 - `CategorySpecularType=Mask` 仅有 4 个 legacy 资源/5 次 catalog 引用。installed SHPK/FXC 证明 Compatibility Mask 使用 `mask.r²` 调制 specular，Default 不使用 mask 调制；WGSL 已按 exact package/value mode 实现，30520 Mask/Default 原生快照 RGB difference 为 24048。
-- 未知 constant `0xAD94E254` 在 character 只有 3 个非默认资源/4 次引用，其中 45050 透明毛 `_b.mtrl` 为 1；未知 key `0xF52CCF05` 广泛覆盖 character family。两者继续保留 raw/value histogram，不进入 WGSL。当前全量报告无 malformed、non-finite 或 unresolved constant value。
+- 常量 `0xAD94E254` 仍无官方名称，现以描述性 `VertexAlphaToOne` 保存；DXBC audit 已证明其 vertex-alpha remap 与 surface-alpha product，renderer 已按 exact package gate 消费。character 只有 3 个非默认资源/4 次引用，其中 45050 透明毛 `_b.mtrl` 为 1。未知 key `0xF52CCF05` 继续保留 raw/value histogram。当前全量报告无 malformed、non-finite 或 unresolved constant value。
 - MeddleTools `shaders.blend` 的 texture-vector links 已核验：character/skin/glass/legacy/scroll/occlusion/tattoo 的主 Diffuse/Normal/Mask/Index 都使用 active `UVMap`，即 TEXCOORD0；bguvscroll Map0/Map1 分别使用 UV0Scroll/UV1Scroll，当前 prepared 规则正确。character 模板的 `g_SamplerSkinDiffuse/Normal/Mask` 明确使用 `UVMap.002`（TEXCOORD2），Decal 使用 `UVMap.001`（TEXCOORD1）；reflection 没有 MeddleTools material/template，不能推断。
 - sampler-role coverage 已完成全量审计：53 个 `exact SHPK + resource CRC/name + logical role + flags` coverage 行，0 unknown role、0 unresolved name、0 failures。6399 个唯一 MTRL 只出现主 BaseColor/Normal/Mask/Index，全部是已证实的 UV0 角色；没有任何武器 MTRL 使用 `g_SamplerSkinDiffuse/Normal/Mask`。loader 仍将潜在 Skin* 独立保存到三个材质/prepared binding，UV source 固定 UV2，并以 `skinSamplerComposition` unsupported 表示尚无混合公式/GPU binding；runtime Decal 继续留在显式 runtime input 阶段。
 - 45047/45048/45050/45053/45068 已在本轮重跑 final、tile/detail 与 alpha debug；五张 final PNG 与既有基线逐字节一致。
@@ -88,7 +91,11 @@
 
 队列只记录尚未完成且能实际推进的工作。完成后从本节移除，并在“完成能力摘要”增加一条简述；详细证据写入历史档案或提交记录。
 
-当前工作队列为空。后续只有 installed audit、参考仓或调用方新增真实输入/覆盖时重新建立任务；证据不足项继续按下节边界保留。
+- Legacy `g_InstanceParameter[4]` / `g_ModelParameter[0]` 的字段身份现已由 DXBC reflection 闭环：16/16 个配对 VS 都声明 `InstanceParameter.m_Wetness` offset 64/size 176 与 `ModelParameter.m_Params` offset 0/size 16，公式因此是运行时 wetness 垂直范围控制，而非未知的静态 model bounds。Meddle 模型/材质导出和 MeddleTools 节点树均不提供这两个 scene/render-object buffer；prepared 现以 `modelWetnessParameters` 明确要求 provider。仍需来自 live renderer 的实际值，静态 SqPack 不能重建。
+- 继续分类 Legacy ReflectionArray 在 HDR 解码、location 插值、`reflectionScale/reflectionOffset` 与 `bakeLightRate × 2.356194` ambient composition 之后，与 sphere harmonics、direct/scene light 和 material specular 的最终 color accumulation。显式 LOD 与 `g_AmbientParam` 基础环境处理已经闭环；forward 864/864 SpecularStrength composite 也已证明以 scalar 乘入包含 ReflectionArray/material、部分包含 scene lights 的 RGB 支路，再由独立 `mad` 合成，故 raw strength 已从 Legacy preview F0 隔离。末端 864/864 还消费 runtime dynamic emissive、instance MulColor 与 CameraLight DiffuseSpecular/Rim，prepared 已分别要求 provider；dynamic emissive 的静态侧固定为 ColorTable Emissive texel 2.5，随后 864/864 以 `max(dot(preEmissiveLighting, Rec.601 luma), 1)` 缩放并通过 216 `mad` / 648 `mul` 两种路径进入 Final。luma 源 864/864 还通过独立 `mad` 进入 RGB，provenance 全覆盖 Ambient/Instance/material 与 Normal/Occlusion/Table/Tile，故它是完整 pre-emissive lighting 而非可单独恢复的材质 scalar；modern Character 同一边界为 256/256（64/192）。WGSL 已用 preview `lit` 同构执行可恢复的 Rec.601/max 形状，并严格只缩放 ColorTable emissive；renderer 现通过 `ModelRenderOptions.dynamic_emissive_color` 接收该 runtime multiplier，默认单位元且非有限分量回退到 1，native control 证明它不会污染 raw Emissive debug 或非 exact Final。`InstanceParameter.m_EnvParameter` 未传播到这些 Legacy Final shader，因此不误报。renderer 仍不能在缺少其余 runtime 输入、ReflectionArray 与 Model/Ambient provider 时用单一 roughness/F0 remap 冒充完整同构；剩余差异保持 `legacyGlossComposition` structured unsupported。deferred audit 已闭环到 resource lane：576 个 Legacy consumer 读取 GBuffer1.X/W 并都到达 `o0.rgb`，288 个相关 producer 都写 `o1.xyzw`；但 X 是多 Table-lane 的复合量，仍需按 pass 确认 attachment/channel mapping 与 runtime provider，不能把它改名为 SpecularStrength 或直接映射到 preview PBR。
+- `GBuffer1.X` 的 producer provenance 现已按 SHPK node/pass/material key 分组：144 个 `mul` PS（3072 node/pass records）只在 pass `0x03ac862e`；48 个常量 `mov`（1024 records）及 96 个条件 `movc`（2048 records）都在 `0x6006067f`。`mov` 仅出现于 `GetDecalColorOff`，`movc` 仅出现于 Alpha/RGBA decal node；代表 DXBC 把 `g_SamplerDecal.a * g_DecalColor.w` 与 `0.75` 比较，在 `0.125490/0.172549` 之间选择。`mul` 则横跨全部 Off/Alpha/RGBA decal mode 与 24 个 GetValues/SpecularType/unknown-key 组合。故 X 还携带 runtime decal/pass control，不能由静态 MTRL 或 raw SpecularStrength 重建；继续保持 `legacyGlossComposition`，不接入 WGSL。
+- `GBuffer1.X` consumer 的 terminal boundary 也已全量闭环：按 swizzle 追踪 packed `movc` 后，576/576 都以 scalar X 乘入最终 RGB 支路并到达 `o0.rgb`，随后 576/576 首个合成均为 `mad`。X 乘法侧始终包含 ReflectionArray 及 material/GBuffer 复合来源，288 个 permutation 同时包含 LightDiffuse/LightSpecular；后继 `mad` 的独立项不含 ReflectionArray/LightSpecular，并新增 384 个 Diffuse sample。它由此可命名为 deferred composite multiplier boundary，但仍不能改名为静态材质 scalar；renderer 缺少游戏 ReflectionArray、scene lights、GBuffer attachment 和 runtime decal/provider，故本轮不接入 WGSL。
+- `InstanceParameter.m_MulColor` 的已知范围仍是 exact Character/Legacy ColorTable Final 到 `o0.rgb` 的全量可达性；尝试按反汇编文本的“直接首用”分类未能稳定覆盖这些数据流，不能据此推断全局 Final 乘法。后续审计必须以 component-taint 从 cbuffer producer 追到 RGB 合成节点，并记录该节点另一侧的资源/constant provenance，再决定 renderer 接入位置。
 
 ## 证据不足而明确延后
 
@@ -96,7 +103,11 @@
 
 - AlphaMulti/2/3 通道公式：MeddleTools 接口未连接，installed 武器无对应 key value。
 - MultiMap 通道解释：参考仓无 socket/config，installed 武器 sampler coverage 无该 role。
-- detail 对 base 的最终 influence：MeddleTools 明确标为 borked，installed 武器无 bg/bguvscroll 校准样本。
+- detail 对 base/normal 的最终 influence：MeddleTools 明确标为 borked，installed 武器无 bg/bguvscroll 校准样本；采样和 debug 保留，Final 已隔离并由 `detailComposition` 标记。
+- `ApplyVertexColorOn` 的 RGB composition：Meddle/MeddleTools 只证明 key 名称和布尔 mapping，实际组合位于未能在本机验证的 `shaders.blend`；installed 武器只有 character/skin/glass 且没有该 key coverage。color0/color1 和 family-specific Alpha/Blue 用途保留，通用 RGB tint 不进入 Final。
+- `g_SpecularColorMask` 的 Final composition：Meddle 只证明三通道字段名/默认值，MeddleTools 没有 mapping/node；installed 四个 SHPK 全部为默认 `[1,1,1]`，非默认值保留 raw/diagnostic，不进入 Final。
+- `g_AlphaAperture` / `g_AlphaOffset` 的 shaping composition：installed Character/Glass DXBC 已证明 view direction、指数链、scale/base composition 与 gate，但 scale/root 与 base/root 跨 Normal、Index、Mask、Table、TileOrb、vertex color 与 runtime constants；当前静态 preview 没有逐 permutation 的 runtime provider 和同构 intermediate graph。参数、uniform 与 `alphaShaping` diagnostic 保留，不把它误接为 Final opacity。
+- `g_OutlineColor/Width` 的几何与颜色 composition：参考仓没有 outline node、空间单位或外扩公式；installed 四个 SHPK 全部为零。现有 pipeline 保留但静态非默认输入只报告 diagnostic。
 - lightshaft Type/AngleClip/NearClip 游戏裁剪公式。
 - character reflection、crystal environment 和 sphere map 的真实混合公式。
 - character occlusion/scroll 的完整 family 公式；installed 武器为零覆盖，现有 raw mode 与 runtime SubColor 诊断保持不变。
@@ -121,7 +132,11 @@
 - 独立 sampler policy、ColorTable extra maps 和 float/HDR payload。
 - 逐 half/layer pair-atlas mip、`fract` 前显式 LOD 梯度，以及 RG 法线与 B/A packed payload 分离的 mip 语义。
 - ColorTable TileIndex 与 `g_TileIndex` fallback 按 MeddleTools `FLOOR` 语义离散选层。
-- character NormalBlue 与 tattoo NormalAlpha 透明度不再误乘 vertex A；normal channel 继续控制边缘透明。
+- character/legacy/glass 的 NormalBlue/surface alpha 按 `0xAD94E254` 对 vertex A 做 `mix(vertexA,1,value)`；45050 值为 1，默认值为 0。tattoo 等其它 family 不继承该 package-specific remap。
+- `ApplyVertexColor` 证据边界已结构化：key、feature flag、uniform 和 VertexColor debug 保留，未经证明的 generic RGB tint 不进入 Final；synthetic WGPU 固定开关前后 Final 一致、诊断与直接 vertex debug 可见。
+- `g_SpecularColorMask` 证据边界已结构化：uniform 保留，非默认值进入独立 unsupported；synthetic WGPU 固定强 override 不改变 Final，并显示独立诊断。
+- outline 证据边界已结构化：参数/feature/uniform/dormant pipeline 保留，正常 prepared 不提交未经证明的外扩；synthetic WGPU 固定强 override Final 不变并显示诊断。
+- `g_TextureMipBias` 已按 installed character/legacy/glass DXBC 收敛：audit 直接从 SqPack SHPK 本体现场反汇编，全部消费者同号执行 material + global PBR bias，直接作用域仅主 Diffuse/Normal/Mask；renderer 不再把它扩散到 baked specular/material ramps、secondary、emissive、tile arrays 或 lightshaft。全量 MTRL 审计固定 character 的 6 个非默认资源/9 次引用及 `+1/-1` 值域，native fixture 同时锁定主 Base 可见差异和 Specular/Emissive debug 不变。
 - character 当前/旧式 Compatibility key 使用 `base × ColorTable`，MultiMaterial 使用 baked ColorTable diffuse；同步/异步 loader 共用同一策略。
 - installed character DXBC resource binding 已验证 MultiMaterial 不采样 Diffuse、Compatibility 增加 Diffuse；武器实际 `GetValues`/sampler/family coverage 同时证明 AlphaMulti、MultiMap、bg detail 暂无可执行样本。
 - exact-SHPK material semantic audit：scoped key/default/override、constant/default/override、shader flags、资源/catalog 引用双计数、unknown/malformed/non-finite/unresolved 与代表样本。
@@ -135,7 +150,7 @@
 - runtime material input ownership 已结构化：prepared 明确区分 character instance、on-render output、GPU ColorTable texture 与 resolved handle requirement；当前 local/Web 静态调用方无 live provider，因此保持现有 fallback，不预建空壳颜色/纹理 binding 或 decal 公式。
 - runtime geometry requirement 已结构化：model-level prepared 区分 shape name/id、enabled mask、skeleton pose/skinning matrix 与 equipment race deformer；显式离线 mask 只满足对应状态，不冒充 live mapping/pose，也不注入 identity skinning。
 - 可选真实资源验证入口已完成：脚本动态运行 7 个 P0/P1 phantom、full installed audit 与全部标准门禁，并以单 job 控制 Windows 链接内存；hosted CI 无 SqPack 时不建立不可运行的假 workflow。
-- `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias/movement 无公式部分保持 unsupported。
+- `MaterialSpecularType`、tile mip bias 和 vertex-movement 参数已结构化；legacy Compatibility Default/Mask 已按 FXC 证据分别使用 1 与 `mask.r²` specular factor，tile bias 已按 DXBC 公式消费，movement 无公式部分保持 unsupported。installed audit 已直接从 SqPack SHPK 现场反汇编并锁定 A/B 各两次 bias、公式和 Tile ORB/Normal consumer scope；ColorTable A/B tile arrays 已按游戏顺序分别选层、变换、计算 LOD 和采样，再按 index G 混合结果。
 - Legacy/Dawntrail staining、Web 双通道染色选择、正式染色视觉回归。
 - Opaque/Cutout/Transparent/Glass/AdditiveLightShaft、dither depth、outline 和逐三角形透明排序。
 - character/tattoo/stockings/water/bguvscroll/lightshaft 的证据可支持部分。

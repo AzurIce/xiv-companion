@@ -23,9 +23,10 @@ use xiv_companion::{
     },
 };
 use xiv_companion_data::{
-    MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialLightShaftType,
-    MaterialSpecularType, MaterialValueMode, MdlMeshMetadata, MdlMetadata, ModelBoneTable,
-    ModelMaterialTextureArrays,
+    MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialDrawDepthMode,
+    MaterialLightShaftType, MaterialSpecularType, MaterialValueMode, MdlMeshMetadata, MdlMetadata,
+    ModelBoneTable, ModelMaterialTextureArrays, ModelTextureKind, PreparedAlphaSource,
+    PreparedRenderPass,
 };
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +54,7 @@ struct PhantomWeaponCase {
 struct CaseArtifacts {
     case_dir: PathBuf,
     snapshot_path: PathBuf,
+    snapshot_visibility: SnapshotVisibilityStats,
     summary_path: PathBuf,
     raw_manifest_path: PathBuf,
 }
@@ -66,6 +68,7 @@ struct ModelDebugSummary {
     name: String,
     focus: Vec<String>,
     snapshot: String,
+    snapshot_visibility: SnapshotVisibilityStats,
     model_main: xiv_companion::PackedModelId,
     model_sub: Option<xiv_companion::PackedModelId>,
     stain_ids: [u8; 2],
@@ -350,8 +353,11 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
         ));
     }
     manifest.push(String::new());
-    manifest.push("| priority | item | stains | focus | snapshot | summary | raw |".to_string());
-    manifest.push("| --- | --- | --- | --- | --- | --- | --- |".to_string());
+    manifest.push(
+        "| priority | item | stains | focus | visible pixels | bounds | snapshot | summary | raw |"
+            .to_string(),
+    );
+    manifest.push("| --- | --- | --- | --- | ---: | --- | --- | --- | --- |".to_string());
 
     for case in &fixture.cases {
         if !phantom_case_matches_filter(case, case_filter.as_ref()) {
@@ -380,13 +386,15 @@ fn render_phantom_weapon_snapshots() -> Result<()> {
                     .and_then(|name| name.to_str())
                     .unwrap_or(".");
                 manifest.push(format!(
-                    "| {} | {} {} | [{}, {}] | {} | [png]({}) | [json]({}) | [raw]({}) |",
+                    "| {} | {} {} | [{}, {}] | {} | {} | {} | [png]({}) | [json]({}) | [raw]({}) |",
                     case.priority,
                     case.item_id,
                     case.name,
                     case.stain_ids[0],
                     case.stain_ids[1],
                     case.focus.join(", "),
+                    artifacts.snapshot_visibility.covered_pixels,
+                    snapshot_bounds_markdown(artifacts.snapshot_visibility.bounds),
                     markdown_path(case_dir, &artifacts.snapshot_path),
                     markdown_path(case_dir, &artifacts.summary_path),
                     markdown_path(case_dir, &artifacts.raw_manifest_path)
@@ -478,15 +486,7 @@ fn render_case(
             material.outline_color = [1.0, 0.05, 0.02, 1.0];
         }
     }
-    if phantom_toon_override_enabled() {
-        for material in &mut model.materials {
-            material.toon_index = 3.0;
-            material.toon_light_scale = 3.0;
-            material.toon_light_spec_aperture = 12.0;
-            material.toon_reflection_scale = 5.0;
-            material.toon_spec_index = 4.0;
-        }
-    }
+    validate_glass_alpha_payload(case, &model)?;
     validate_transparency_geometry(case, &model)?;
     let snapshot = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("snapshot")
@@ -500,6 +500,7 @@ fn render_case(
         &model,
     )
     .with_context(|| format!("failed to render snapshot for {}", case.case_id))?;
+    let snapshot_visibility = validate_snapshot_visibility(case, &snapshot.png_path)?;
     if phantom_array_debug_enabled() {
         for (name, debug_mode) in [
             ("debug-tile-normal", ModelDebugMode::TileNormalArray),
@@ -562,6 +563,7 @@ fn render_case(
         name: case.name.clone(),
         focus: case.focus.clone(),
         snapshot: path_relative_to_case(&snapshot.png_path, &case_dir),
+        snapshot_visibility,
         model_main: model.model_main,
         model_sub: model.model_sub,
         stain_ids: model.stain_ids,
@@ -585,6 +587,7 @@ fn render_case(
     Ok(CaseArtifacts {
         case_dir,
         snapshot_path: snapshot.png_path,
+        snapshot_visibility,
         summary_path,
         raw_manifest_path,
     })
@@ -617,6 +620,96 @@ fn validate_45052_stain_snapshots(artifacts: &HashMap<String, CaseArtifacts>) ->
     Ok(())
 }
 
+fn validate_glass_alpha_payload(case: &PhantomWeaponCase, model: &WeaponModelData) -> Result<()> {
+    if case.item_id != 45059 {
+        return Ok(());
+    }
+
+    let (material_slot, material) = model
+        .materials
+        .iter()
+        .enumerate()
+        .find(|(_, material)| {
+            material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("characterglass.shpk"))
+        })
+        .context("45059 is missing its characterglass material")?;
+    anyhow::ensure!(
+        material.alpha_mode == MaterialAlphaMode::Glass,
+        "45059 characterglass alpha mode changed to {:?}",
+        material.alpha_mode
+    );
+    anyhow::ensure!(
+        material.draw_depth_mode == MaterialDrawDepthMode::Dither,
+        "45059 characterglass depth mode changed to {:?}",
+        material.draw_depth_mode
+    );
+    anyhow::ensure!(
+        !material.render_backfaces,
+        "45059 characterglass unexpectedly renders backfaces"
+    );
+
+    let normal_index = material
+        .normal_texture
+        .context("45059 characterglass is missing its normal texture")?;
+    let normal = model
+        .textures
+        .get(normal_index)
+        .context("45059 characterglass normal texture index is out of range")?;
+    anyhow::ensure!(
+        normal.kind == ModelTextureKind::Normal,
+        "45059 characterglass normal binding changed to {:?}",
+        normal.kind
+    );
+    anyhow::ensure!(
+        !normal.rgba.is_empty() && normal.rgba.len() % 4 == 0,
+        "45059 characterglass normal texture has invalid decoded RGBA data"
+    );
+    let mut blue_min = u8::MAX;
+    let mut blue_max = u8::MIN;
+    for pixel in normal.rgba.chunks_exact(4) {
+        blue_min = blue_min.min(pixel[2]);
+        blue_max = blue_max.max(pixel[2]);
+        anyhow::ensure!(
+            pixel[3] == u8::MAX,
+            "45059 characterglass normal Alpha is no longer opaque; re-audit its alpha source"
+        );
+    }
+    anyhow::ensure!(
+        blue_min == 57 && blue_max == 255,
+        "45059 characterglass normal Blue range changed from 57..255 to {blue_min}..{blue_max}; re-audit its alpha source"
+    );
+
+    let prepared = prepare_model_for_render(model);
+    let prepared_material = prepared
+        .meshes
+        .iter()
+        .find(|mesh| mesh.material_slot == material_slot)
+        .map(|mesh| mesh.prepared_material)
+        .context("45059 has no prepared mesh using its characterglass material")?;
+    anyhow::ensure!(
+        prepared_material.render_pass == PreparedRenderPass::Glass,
+        "45059 characterglass prepared pass changed to {:?}",
+        prepared_material.render_pass
+    );
+    anyhow::ensure!(
+        prepared_material.alpha_policy.source == PreparedAlphaSource::NormalBlue,
+        "45059 characterglass alpha source changed to {:?}",
+        prepared_material.alpha_policy.source
+    );
+    anyhow::ensure!(
+        prepared_material.alpha_policy.draw_depth_mode == MaterialDrawDepthMode::Dither,
+        "45059 characterglass prepared depth mode changed to {:?}",
+        prepared_material.alpha_policy.draw_depth_mode
+    );
+    eprintln!(
+        "45059 glass alpha payload: normal Alpha=255, Blue={blue_min}..{blue_max}, source=NormalBlue, depth=Dither"
+    );
+    Ok(())
+}
+
 fn snapshot_rgb_difference(left_path: &Path, right_path: &Path) -> Result<u64> {
     let left = image::open(left_path)
         .with_context(|| format!("failed to open {}", left_path.display()))?
@@ -641,6 +734,85 @@ fn snapshot_rgb_difference(left_path: &Path, right_path: &Path) -> Result<u64> {
                 .sum::<u64>()
         })
         .sum())
+}
+
+fn validate_snapshot_visibility(
+    case: &PhantomWeaponCase,
+    snapshot_path: &Path,
+) -> Result<SnapshotVisibilityStats> {
+    let image = image::open(snapshot_path)
+        .with_context(|| format!("failed to open {}", snapshot_path.display()))?
+        .to_rgba8();
+    let visibility = snapshot_visibility_stats(&image);
+    let minimum_covered = ((image.width() as usize * image.height() as usize) / 1000).max(256);
+    anyhow::ensure!(
+        visibility.covered_pixels >= minimum_covered,
+        "{} snapshot contains only {} visible pixels, expected at least {}",
+        case.case_id,
+        visibility.covered_pixels,
+        minimum_covered
+    );
+    let bounds = visibility
+        .bounds
+        .context("snapshot visibility bounds are missing despite nonzero coverage")?;
+    let minimum_margin = (image.width().min(image.height()) / 256).max(2);
+    anyhow::ensure!(
+        bounds[0] >= minimum_margin
+            && bounds[1] >= minimum_margin
+            && bounds[2] + minimum_margin < image.width()
+            && bounds[3] + minimum_margin < image.height(),
+        "{} snapshot visible bounds {:?} touch the {}x{} viewport margin {}",
+        case.case_id,
+        bounds,
+        image.width(),
+        image.height(),
+        minimum_margin
+    );
+    eprintln!(
+        "{} snapshot visibility: {} non-background pixels, bounds {:?}",
+        case.case_id, visibility.covered_pixels, bounds
+    );
+    Ok(visibility)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotVisibilityStats {
+    covered_pixels: usize,
+    bounds: Option<[u32; 4]>,
+}
+
+fn snapshot_visibility_stats(image: &image::RgbaImage) -> SnapshotVisibilityStats {
+    if image.width() == 0 || image.height() == 0 {
+        return SnapshotVisibilityStats {
+            covered_pixels: 0,
+            bounds: None,
+        };
+    }
+    let background = image.get_pixel(0, 0);
+    let mut covered_pixels = 0;
+    let mut bounds: Option<[u32; 4]> = None;
+    for (x, y, pixel) in image.enumerate_pixels() {
+        let difference = (0..3)
+            .map(|channel| pixel[channel].abs_diff(background[channel]) as u16)
+            .sum::<u16>();
+        if difference <= 18 {
+            continue;
+        }
+        covered_pixels += 1;
+        if let Some(bounds) = &mut bounds {
+            bounds[0] = bounds[0].min(x);
+            bounds[1] = bounds[1].min(y);
+            bounds[2] = bounds[2].max(x);
+            bounds[3] = bounds[3].max(y);
+        } else {
+            bounds = Some([x, y, x, y]);
+        }
+    }
+    SnapshotVisibilityStats {
+        covered_pixels,
+        bounds,
+    }
 }
 
 fn validate_transparency_geometry(case: &PhantomWeaponCase, model: &WeaponModelData) -> Result<()> {
@@ -833,10 +1005,6 @@ fn parse_phantom_outline_width(value: &str) -> Option<f32> {
         .map(|width| width.min(0.1))
 }
 
-fn phantom_toon_override_enabled() -> bool {
-    parse_phantom_toggle(&std::env::var("XIV_PHANTOM_TOON_OVERRIDE").unwrap_or_default())
-}
-
 fn parse_phantom_toggle(value: &str) -> bool {
     matches!(
         value.to_ascii_lowercase().as_str(),
@@ -875,6 +1043,33 @@ fn phantom_toggle_parser_accepts_explicit_true_values() {
     }
     assert!(!parse_phantom_toggle("0"));
     assert!(!parse_phantom_toggle("invalid"));
+}
+
+#[test]
+fn snapshot_visibility_counts_only_materially_different_pixels() {
+    let background = image::Rgba([37, 44, 49, 255]);
+    let mut image = image::RgbaImage::from_pixel(64, 64, background);
+    image.put_pixel(1, 1, image::Rgba([43, 50, 55, 255]));
+    for y in 20..44 {
+        for x in 20..44 {
+            image.put_pixel(x, y, image::Rgba([180, 40, 30, 255]));
+        }
+    }
+
+    assert_eq!(
+        snapshot_visibility_stats(&image),
+        SnapshotVisibilityStats {
+            covered_pixels: 24 * 24,
+            bounds: Some([20, 20, 43, 43]),
+        }
+    );
+    assert_eq!(
+        snapshot_visibility_stats(&image::RgbaImage::from_pixel(64, 64, background)),
+        SnapshotVisibilityStats {
+            covered_pixels: 0,
+            bounds: None,
+        }
+    );
 }
 
 fn phantom_case_matches_filter(case: &PhantomWeaponCase, filter: Option<&HashSet<String>>) -> bool {
@@ -1464,6 +1659,13 @@ fn markdown_path(case_dir: &str, path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or_default();
     format!("{case_dir}/{file_name}")
+}
+
+fn snapshot_bounds_markdown(bounds: Option<[u32; 4]>) -> String {
+    bounds.map_or_else(
+        || "-".to_string(),
+        |[min_x, min_y, max_x, max_y]| format!("`{min_x},{min_y}..{max_x},{max_y}`"),
+    )
 }
 
 fn path_relative_to_case(path: &Path, case_dir: &Path) -> String {

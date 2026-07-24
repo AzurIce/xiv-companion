@@ -6,13 +6,30 @@ use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
     MaterialRenderMode, MaterialShaderFamily, MaterialValueMode, ModelMaterial, ModelMeshDrawRole,
     ModelRenderData, ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial,
-    PreparedModelOptions, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter,
+    PreparedMaterialUnsupportedInputs, PreparedModelOptions, PreparedRenderPass,
+    PreparedTextureAddressMode, PreparedTextureColorSpace, PreparedTextureFilter,
     PreparedTextureSampling, PreparedUvSource, model_mesh_vertices_with_shape_mask,
     prepare_model_for_render_with_options,
 };
 
-const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+// HDR intermediate format for the scene/bloom attachments. `Rgba16Float`
+// is color-renderable, blendable, and filterable in core WebGPU, and keeps
+// metal highlights and emissive values above 1.0 intact until tone mapping.
+const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
+const DEFAULT_EXPOSURE: f32 = 1.0;
+/// Scene-linear bloom threshold: only HDR highlights (above display white)
+/// contribute to the bright pass.
+const BLOOM_THRESHOLD: f32 = 1.0;
+
+// Stable camera-relative preview-lighting contract. These coefficients define
+// the key direction in the camera basis and intentionally live outside
+// material semantics: shader/material fixes must not compensate by silently
+// moving the preview light. The matching color/intensity/environment constants
+// are centralized as `PREVIEW_*` constants in `model.wgsl`.
+const PREVIEW_KEY_RIGHT: f32 = -0.45;
+const PREVIEW_KEY_UP: f32 = 0.65;
+const PREVIEW_KEY_VIEW: f32 = 0.65;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelDebugMode {
@@ -46,6 +63,13 @@ pub enum ModelDebugMode {
     SecondaryNormal,
     Flow0,
     Flow1,
+    /// Paints each material with a diagnostic color derived from
+    /// `PreparedMaterialUnsupportedInputs`, so known-incomplete shader
+    /// families stop passing silently as fully supported renders.
+    UnsupportedInputs,
+    /// Encodes the per-fragment world-space direction to the camera as
+    /// `view * 0.5 + 0.5`, useful for auditing perspective Fresnel/normals.
+    ViewDirection,
 }
 
 impl ModelDebugMode {
@@ -80,6 +104,8 @@ impl ModelDebugMode {
             ModelDebugMode::SecondaryNormal => 26.0,
             ModelDebugMode::Flow0 => 27.0,
             ModelDebugMode::Flow1 => 28.0,
+            ModelDebugMode::UnsupportedInputs => 29.0,
+            ModelDebugMode::ViewDirection => 30.0,
         }
     }
 }
@@ -102,6 +128,9 @@ pub struct ModelRenderOptions {
     pub bloom: bool,
     pub bloom_strength: f32,
     pub uv_scroll_time: f32,
+    /// Runtime material dynamic emissive multiplier. The preview default is
+    /// the identity; the shader consumes it only for ColorTable emissive.
+    pub dynamic_emissive_color: [f32; 3],
     pub debug_mode: ModelDebugMode,
     pub glass_blend_mode: ModelGlassBlendMode,
 }
@@ -114,6 +143,7 @@ impl Default for ModelRenderOptions {
             bloom: true,
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
+            dynamic_emissive_color: [1.0; 3],
             debug_mode: ModelDebugMode::Final,
             glass_blend_mode: ModelGlassBlendMode::Alpha,
         }
@@ -132,6 +162,9 @@ impl ModelRenderOptions {
             } else {
                 0.0
             },
+            dynamic_emissive_color: self
+                .dynamic_emissive_color
+                .map(|value| if value.is_finite() { value } else { 1.0 }),
             debug_mode: self.debug_mode,
             glass_blend_mode: self.glass_blend_mode,
         }
@@ -793,7 +826,7 @@ impl ModelRenderer {
         let compose_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon compose uniform"),
             contents: bytemuck::bytes_of(&PostUniform {
-                params: [DEFAULT_BLOOM_STRENGTH, 0.0, 0.0, 0.0],
+                params: compose_post_params(DEFAULT_BLOOM_STRENGTH, format),
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -874,7 +907,7 @@ impl ModelRenderer {
             &self.compose_uniform_buffer,
             0,
             bytemuck::bytes_of(&PostUniform {
-                params: [options.bloom_strength(), 0.0, 0.0, 0.0],
+                params: compose_post_params(options.bloom_strength(), self.format),
             }),
         );
         let sorted_transparent = sorted_transparent_triangles(&self.draw_batches, yaw, pitch);
@@ -901,31 +934,20 @@ impl ModelRenderer {
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("weapon scene render pass"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &post.scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.055,
-                                g: 0.061,
-                                b: 0.067,
-                                a: 1.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &post.bright_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                ],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &post.scene_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.055,
+                            g: 0.061,
+                            b: 0.067,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -1062,7 +1084,7 @@ impl ModelRenderer {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&self.blur_pipeline);
-            render_pass.set_bind_group(0, &post.blur_bright_bind_group, &[]);
+            render_pass.set_bind_group(0, &post.blur_scene_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
@@ -1146,16 +1168,22 @@ impl ModelRenderer {
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
     }
+
+    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+    pub(crate) fn hdr_scene_texture(&self) -> Option<&wgpu::Texture> {
+        self.post_process.as_ref().map(|post| &post.scene_texture)
+    }
 }
 
 struct PostProcessState {
     width: u32,
     height: u32,
+    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+    scene_texture: wgpu::Texture,
     scene_view: wgpu::TextureView,
-    bright_view: wgpu::TextureView,
     blur_a_view: wgpu::TextureView,
     blur_b_view: wgpu::TextureView,
-    blur_bright_bind_group: wgpu::BindGroup,
+    blur_scene_bind_group: wgpu::BindGroup,
     blur_a_bind_group: wgpu::BindGroup,
     compose_bind_group: wgpu::BindGroup,
 }
@@ -1170,15 +1198,21 @@ impl PostProcessState {
         width: u32,
         height: u32,
     ) -> Self {
-        let scene_view = create_post_texture_view(device, "weapon scene texture", width, height);
-        let bright_view = create_post_texture_view(device, "weapon bright texture", width, height);
+        let scene_texture = create_post_texture(
+            device,
+            "weapon scene texture",
+            width,
+            height,
+            wgpu::TextureUsages::COPY_SRC,
+        );
+        let scene_view = scene_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let blur_a_view = create_post_texture_view(device, "weapon-bloom-pass a", width, height);
         let blur_b_view = create_post_texture_view(device, "weapon-bloom-pass b", width, height);
 
         let blur_horizontal_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon-bloom-pass horizontal uniform"),
             contents: bytemuck::bytes_of(&PostUniform {
-                params: [1.0 / width as f32, 0.0, 0.0, 0.0],
+                params: [1.0 / width as f32, 0.0, BLOOM_THRESHOLD, 1.0],
             }),
             usage: wgpu::BufferUsages::UNIFORM,
         });
@@ -1190,14 +1224,14 @@ impl PostProcessState {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        let blur_bright_bind_group = create_post_bind_group(
+        let blur_scene_bind_group = create_post_bind_group(
             device,
             blur_layout,
-            &bright_view,
+            &scene_view,
             sampler,
             &blur_horizontal_buffer,
-            &bright_view,
-            "weapon-bloom-pass bright bind group",
+            &scene_view,
+            "weapon-bloom-pass scene bind group",
         );
         let blur_a_bind_group = create_post_bind_group(
             device,
@@ -1221,11 +1255,12 @@ impl PostProcessState {
         Self {
             width,
             height,
+            #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+            scene_texture,
             scene_view,
-            bright_view,
             blur_a_view,
             blur_b_view,
-            blur_bright_bind_group,
+            blur_scene_bind_group,
             blur_a_bind_group,
             compose_bind_group,
         }
@@ -1582,18 +1617,11 @@ fn create_model_pipeline_with_fragment_entry(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment_entry),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend,
-                    write_mask: blend_mode.color_write_mask(),
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend,
-                    write_mask: blend_mode.color_write_mask(),
-                }),
-            ],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: POST_FORMAT,
+                blend,
+                write_mask: blend_mode.color_write_mask(),
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
@@ -1636,18 +1664,11 @@ fn create_outline_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_outline"),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: POST_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
@@ -1771,22 +1792,33 @@ fn create_post_texture_view(
     width: u32,
     height: u32,
 ) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: POST_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
+    create_post_texture(device, label, width, height, wgpu::TextureUsages::empty())
         .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+fn create_post_texture(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+    extra_usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: POST_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | extra_usage,
+        view_formats: &[],
+    })
 }
 
 fn create_post_bind_group(
@@ -1901,6 +1933,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     let effective_normal_texture = effective_normal_texture(material, prepared_material);
     let uv_sources = material_uv_source_params(prepared_material);
     let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
+    let sheen_sphere_params = material_sheen_sphere_params(material, prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -1966,6 +1999,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         ],
         alpha_params: material_alpha_params(material),
         alpha_policy_params: material_alpha_policy_params(prepared_material),
+        alpha_composition_params: material_alpha_composition_params(material),
         water_deep_color: material_water_deep_color(material),
         water_refraction_color: material_water_refraction_color(material),
         water_whitecap_color: material_water_whitecap_color(material),
@@ -1974,9 +2008,10 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         tile_params: material_tile_params(material),
         toon_sheen_params: material_toon_sheen_params(material),
         toon_params: material_toon_params(material, prepared_material),
-        sheen_sphere_params: material_sheen_sphere_params(material),
+        sheen_sphere_params,
         detail_params: material_detail_params(material, prepared_material),
         array_params: material_array_params(prepared_material),
+        tile_lod_params: material_tile_lod_params(material, model, prepared_material),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
         shader_diffuse_color: material_shader_diffuse_color(material),
@@ -2003,9 +2038,11 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_scroll_masks2: uv_scroll_masks.2,
         uv_scroll_masks3: uv_scroll_masks.3,
         feature_params: material_feature_params(prepared_material),
+        family_params: material_family_params(material),
         secondary_map_params: material_secondary_map_params(material, model, prepared_material),
         draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
+        unsupported_color: unsupported_inputs_diagnostic_color(prepared_material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -2017,15 +2054,22 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .base_color_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::SrgbColor,
-            )
+            let label = format!("weapon texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.base_color.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
             create_mipped_rgba_texture(
@@ -2068,15 +2112,28 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .emissive_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon emissive texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::SrgbColor,
-            )
+            let label = format!("weapon emissive texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(
+                    device,
+                    queue,
+                    &label,
+                    Some(texture),
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.emissive.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
             create_mipped_rgba_texture(
@@ -2119,15 +2176,26 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .material_properties_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon material properties texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::LinearData,
-            )
+            let label = format!("weapon material properties texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(
+                    device,
+                    queue,
+                    &label,
+                    Some(texture),
+                    [0.0, 1.0, 1.0, 1.0],
+                )
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    RgbaMipSemantic::LinearData,
+                )
+            }
         })
         .unwrap_or_else(|| {
             create_mipped_rgba_texture(
@@ -2150,15 +2218,22 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .specular_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon specular texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::LinearData,
-            )
+            let label = format!("weapon specular texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.specular.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
             create_mipped_rgba_texture(
@@ -2183,6 +2258,17 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     } else {
         material.tile_properties_texture
     };
+    let tile_binding_format = texture_format_for_color_space(if uses_secondary_maps {
+        prepared_material
+            .texture_sampling
+            .secondary_base_color
+            .color_space
+    } else {
+        prepared_material
+            .texture_sampling
+            .tile_properties
+            .color_space
+    });
     let tile_properties_texture_view = tile_binding_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
@@ -2193,11 +2279,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                if uses_secondary_maps {
-                    wgpu::TextureFormat::Rgba8UnormSrgb
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                },
+                tile_binding_format,
             )
         })
         .unwrap_or_else(|| {
@@ -2212,11 +2294,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 } else {
                     &[0, 255, 255, 255]
                 },
-                if uses_secondary_maps {
-                    wgpu::TextureFormat::Rgba8UnormSrgb
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                },
+                tile_binding_format,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -2685,6 +2763,94 @@ fn material_array_params(prepared_material: PreparedMaterial) -> [f32; 4] {
     ]
 }
 
+fn material_tile_lod_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let tile_ready = matches!(
+        prepared_material.resource_availability.tile_array.status,
+        crate::PreparedTextureArrayStatus::Ready
+    );
+    let has_packed_color_table = material_baked_color_table_ramps_are_ab(material, model);
+    let has_packed_tile = material_baked_color_table_tile_ramps_are_ab(material, model);
+    [
+        if tile_ready {
+            finite_or(material.tile_mip_bias_offset, 0.0).clamp(-16.0, 15.99)
+        } else {
+            0.0
+        },
+        if has_packed_color_table { 1.0 } else { 0.0 },
+        if has_packed_color_table
+            && material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("character.shpk"))
+        {
+            1.0
+        } else {
+            0.0
+        },
+        if has_packed_tile { 1.0 } else { 0.0 },
+    ]
+}
+
+fn material_baked_color_table_ramps_are_ab<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> bool {
+    let has_layout = |index: Option<usize>, expected_kind, expected_layout| {
+        index
+            .and_then(|index| model.textures().get(index))
+            .is_some_and(|texture| {
+                texture.kind == expected_kind && texture.texel_layout == expected_layout
+            })
+    };
+    let generic = crate::ModelTextureTexelLayout::ColorTableRampAb;
+    has_layout(
+        material.base_color_texture,
+        crate::ModelTextureKind::BaseColor,
+        generic,
+    ) && has_layout(
+        material.specular_texture,
+        crate::ModelTextureKind::Specular,
+        generic,
+    ) && has_layout(
+        material.material_properties_texture,
+        crate::ModelTextureKind::MaterialProperties,
+        generic,
+    ) && has_layout(
+        material.sheen_properties_texture,
+        crate::ModelTextureKind::SheenProperties,
+        generic,
+    ) && has_layout(
+        material.sphere_properties_texture,
+        crate::ModelTextureKind::SphereProperties,
+        generic,
+    )
+}
+
+fn material_baked_color_table_tile_ramps_are_ab<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> bool {
+    let has_layout = |index: Option<usize>, expected_kind| {
+        index
+            .and_then(|index| model.textures().get(index))
+            .is_some_and(|texture| {
+                texture.kind == expected_kind
+                    && texture.texel_layout == crate::ModelTextureTexelLayout::ColorTableTileRampAb
+            })
+    };
+    has_layout(
+        material.tile_properties_texture,
+        crate::ModelTextureKind::TileProperties,
+    ) && has_layout(
+        material.tile_matrix_texture,
+        crate::ModelTextureKind::TileMatrixProperties,
+    )
+}
+
 fn model_texture_pair_for_kinds<M: ModelRenderData + ?Sized>(
     model: &M,
     first_kind: ModelTextureKind,
@@ -2807,6 +2973,26 @@ enum RgbaMipSemantic {
     LinearData,
     /// Normal XY are packed in RG; B/A remain independent scalar payloads such as alpha masks.
     PackedNormalRg,
+}
+
+/// Maps a prepared sampling color space to the mip/upload semantic of the
+/// bound texture. `Srgb` uploads decode RGB on the GPU (`Rgba8UnormSrgb`,
+/// alpha stays linear); `NonColor` stays raw linear data. This is the single
+/// place where the prepared policy becomes a GPU format decision; special
+/// textures (packed normals, float ramps, pair atlases, neutral fallbacks)
+/// stay explicit at their call sites instead of being inferred here.
+fn mip_semantic_for_color_space(color_space: PreparedTextureColorSpace) -> RgbaMipSemantic {
+    match color_space {
+        PreparedTextureColorSpace::Srgb => RgbaMipSemantic::SrgbColor,
+        PreparedTextureColorSpace::NonColor => RgbaMipSemantic::LinearData,
+    }
+}
+
+fn texture_format_for_color_space(color_space: PreparedTextureColorSpace) -> wgpu::TextureFormat {
+    match color_space {
+        PreparedTextureColorSpace::Srgb => wgpu::TextureFormat::Rgba8UnormSrgb,
+        PreparedTextureColorSpace::NonColor => wgpu::TextureFormat::Rgba8Unorm,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3383,6 +3569,7 @@ fn fallback_material() -> ModelMaterial {
         water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
+        vertex_alpha_to_one: 0.0,
         shadow_alpha_threshold: 0.5,
         glass_ior: 1.0,
         glass_thickness_max: 0.01,
@@ -3570,6 +3757,25 @@ fn material_alpha_policy_params(prepared_material: PreparedMaterial) -> [f32; 4]
     ]
 }
 
+fn material_alpha_composition_params(material: &ModelMaterial) -> [f32; 4] {
+    let package_consumes_vertex_alpha =
+        material.shader_package_name.as_deref().is_some_and(|name| {
+            name.eq_ignore_ascii_case("character.shpk")
+                || name.eq_ignore_ascii_case("characterlegacy.shpk")
+                || name.eq_ignore_ascii_case("characterglass.shpk")
+        });
+    [
+        finite_or(material.vertex_alpha_to_one, 0.0),
+        if package_consumes_vertex_alpha {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+    ]
+}
+
 fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
     [
         material.normal_scale.clamp(0.0, 4.0),
@@ -3610,11 +3816,21 @@ fn material_toon_params(material: &ModelMaterial, prepared_material: PreparedMat
     ]
 }
 
-fn material_sheen_sphere_params(material: &ModelMaterial) -> [f32; 4] {
+fn material_sheen_sphere_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
     [
         finite_or(material.sheen_aperture, 1.0),
         finite_or(material.sphere_map_index, 0.0),
-        0.0,
+        if matches!(
+            prepared_material.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::Srgb
+        ) {
+            1.0
+        } else {
+            0.0
+        },
         0.0,
     ]
 }
@@ -3675,10 +3891,7 @@ fn material_specular_color_mask(material: &ModelMaterial) -> [f32; 4] {
 }
 
 fn material_legacy_specular_mode(material: &ModelMaterial) -> f32 {
-    let uses_legacy_compatibility = material
-        .shader_package_name
-        .as_deref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+    let uses_legacy_compatibility = material_is_character_legacy(material)
         && matches!(material.value_mode, crate::MaterialValueMode::Compatibility);
     if !uses_legacy_compatibility {
         return 0.0;
@@ -3688,6 +3901,21 @@ fn material_legacy_specular_mode(material: &ModelMaterial) -> f32 {
         MaterialSpecularType::Mask => 2.0,
         MaterialSpecularType::Unknown => 0.0,
     }
+}
+
+fn material_is_character_legacy(material: &ModelMaterial) -> bool {
+    material
+        .shader_package_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+}
+
+fn material_has_character_colortable_final(material: &ModelMaterial) -> bool {
+    material.color_table_rows.is_some()
+        && material.shader_package_name.as_deref().is_some_and(|name| {
+            name.eq_ignore_ascii_case("character.shpk")
+                || name.eq_ignore_ascii_case("characterlegacy.shpk")
+        })
 }
 
 fn material_surface_params(
@@ -3851,6 +4079,23 @@ fn material_feature_params(prepared_material: PreparedMaterial) -> [f32; 4] {
     ]
 }
 
+fn material_family_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        if material_is_character_legacy(material) {
+            1.0
+        } else {
+            0.0
+        },
+        if material_has_character_colortable_final(material) {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+    ]
+}
+
 fn material_secondary_map_params<M: ModelRenderData + ?Sized>(
     material: &ModelMaterial,
     model: &M,
@@ -3897,6 +4142,102 @@ fn draw_role_debug_color(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         ModelMeshDrawRole::MaterialChange => [1.0, 0.34, 0.76, 1.0],
         ModelMeshDrawRole::CrestChange => [1.0, 0.62, 0.2, 1.0],
     }
+}
+
+/// Diagnostic color for the `UnsupportedInputs` debug view. Known-incomplete
+/// shader families and other unsupported inputs get distinct hues so silently
+/// approximated materials become visible instead of passing as fully
+/// supported. Priority goes to the visible weapon families (lightshaft,
+/// crystal environment maps, character reflection/scroll/glass), then any
+/// other known-incomplete family, then material-semantics gaps with installed
+/// coverage (AlphaMulti, unverified vertex-color/Toon/Sheen/Sphere lighting,
+/// AO/SSAO, legacy specular, tile LOD, vertex movement), then any remaining
+/// runtime-only input.
+fn unsupported_inputs_diagnostic_color(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let unsupported = prepared_material.unsupported_inputs;
+    let rgb = if unsupported.lightshaft_clip {
+        [1.0, 0.82, 0.2]
+    } else if unsupported.environment_mapping {
+        [0.25, 0.5, 1.0]
+    } else if unsupported.character_reflection {
+        [1.0, 0.3, 0.75]
+    } else if unsupported.character_scroll_variant {
+        [1.0, 0.55, 0.1]
+    } else if unsupported.glass_shader_parameters {
+        [0.15, 0.85, 0.9]
+    } else if unsupported.incomplete_shader_family_logic {
+        [0.95, 0.2, 0.2]
+    } else if unsupported.alpha_multi_values {
+        [0.68, 0.28, 1.0]
+    } else if unsupported.multi_color_composition {
+        [0.92, 0.36, 0.16]
+    } else if unsupported.detail_composition {
+        [0.72, 0.52, 0.96]
+    } else if unsupported.alpha_shaping {
+        [0.94, 0.44, 0.78]
+    } else if unsupported.vertex_color_composition {
+        [0.18, 0.76, 0.54]
+    } else if unsupported.specular_color_mask_composition {
+        [0.84, 0.28, 0.62]
+    } else if unsupported.outline_composition {
+        [0.46, 0.82, 0.94]
+    } else if unsupported.toon_lighting {
+        [0.88, 0.64, 0.22]
+    } else if unsupported.sheen_lighting {
+        [0.95, 0.48, 0.62]
+    } else if unsupported.sphere_lighting {
+        [0.34, 0.7, 0.92]
+    } else if unsupported.ambient_occlusion_mask || unsupported.ssao_mask {
+        [0.58, 0.72, 0.16]
+    } else if unsupported.legacy_gloss_composition {
+        [0.76, 0.3, 0.9]
+    } else if unsupported.legacy_specular_type {
+        [0.58, 0.38, 0.88]
+    } else if unsupported.tile_mip_bias_offset {
+        [0.78, 0.4, 0.12]
+    } else if unsupported.vertex_movement_parameters {
+        [0.32, 0.88, 0.28]
+    } else if has_any_unsupported_inputs(unsupported) {
+        [0.6, 0.6, 0.6]
+    } else {
+        [0.05, 0.22, 0.1]
+    };
+    [rgb[0], rgb[1], rgb[2], 1.0]
+}
+
+fn has_any_unsupported_inputs(unsupported: PreparedMaterialUnsupportedInputs) -> bool {
+    unsupported.dye_application
+        || unsupported.runtime_color_table
+        || unsupported.decal_or_crest
+        || unsupported.runtime_material_change
+        || unsupported.runtime_option_color
+        || unsupported.runtime_decal_color
+        || unsupported.runtime_decal_texture
+        || unsupported.runtime_skin_color
+        || unsupported.runtime_skin_material
+        || unsupported.skin_sampler_composition
+        || unsupported.runtime_sub_color
+        || unsupported.tile_array
+        || unsupported.detail_array
+        || unsupported.detail_composition
+        || unsupported.secondary_map_blend
+        || unsupported.multi_map_interpretation
+        || unsupported.multi_color_composition
+        || unsupported.ambient_occlusion_mask
+        || unsupported.ssao_mask
+        || unsupported.sheen_lighting
+        || unsupported.sphere_lighting
+        || unsupported.toon_lighting
+        || unsupported.decal_color_mode
+        || unsupported.alpha_multi_values
+        || unsupported.alpha_shaping
+        || unsupported.vertex_color_composition
+        || unsupported.specular_color_mask_composition
+        || unsupported.outline_composition
+        || unsupported.legacy_gloss_composition
+        || unsupported.legacy_specular_type
+        || unsupported.tile_mip_bias_offset
+        || unsupported.vertex_movement_parameters
 }
 
 fn draw_role_params(draw_role: ModelMeshDrawRole) -> [f32; 4] {
@@ -3993,17 +4334,25 @@ fn camera_uniform(
         0.01,
         distance + radius * 6.0,
     );
-    let light = (-right * 0.45 + up * 0.65 + view_dir * 0.65).normalize();
+    let light =
+        (right * PREVIEW_KEY_RIGHT + up * PREVIEW_KEY_UP + view_dir * PREVIEW_KEY_VIEW).normalize();
 
     CameraUniform {
         view_proj: (projection * view).to_cols_array_2d(),
         light_dir: [light.x, light.y, light.z, 0.0],
         view_dir: [view_dir.x, view_dir.y, view_dir.z, 0.0],
+        camera_position: [eye.x, eye.y, eye.z, 1.0],
         options: [
             if options.normal_mapping { 1.0 } else { 0.0 },
             options.normal_y_sign,
             options.uv_scroll_time,
             options.debug_mode.shader_value(),
+        ],
+        dynamic_emissive_color: [
+            options.dynamic_emissive_color[0],
+            options.dynamic_emissive_color[1],
+            options.dynamic_emissive_color[2],
+            0.0,
         ],
     }
 }
@@ -4014,7 +4363,9 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
     view_dir: [f32; 4],
+    camera_position: [f32; 4],
     options: [f32; 4],
+    dynamic_emissive_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -4028,6 +4379,7 @@ struct MaterialUniform {
     render: [f32; 4],
     alpha_params: [f32; 4],
     alpha_policy_params: [f32; 4],
+    alpha_composition_params: [f32; 4],
     water_deep_color: [f32; 4],
     water_refraction_color: [f32; 4],
     water_whitecap_color: [f32; 4],
@@ -4039,6 +4391,7 @@ struct MaterialUniform {
     sheen_sphere_params: [f32; 4],
     detail_params: [f32; 4],
     array_params: [f32; 4],
+    tile_lod_params: [f32; 4],
     detail_color: [f32; 4],
     multi_detail_color: [f32; 4],
     shader_diffuse_color: [f32; 4],
@@ -4065,15 +4418,30 @@ struct MaterialUniform {
     uv_scroll_masks2: [f32; 4],
     uv_scroll_masks3: [f32; 4],
     feature_params: [f32; 4],
+    family_params: [f32; 4],
     secondary_map_params: [f32; 4],
     draw_role_params: [f32; 4],
     debug_color: [f32; 4],
+    unsupported_color: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PostUniform {
     params: [f32; 4],
+}
+
+/// Compose uniform: bloom strength, exposure, and whether the shader must
+/// encode sRGB itself because the target surface is not an sRGB format.
+/// sRGB targets encode on write, so the shader must skip its own encode to
+/// keep output encoding happening exactly once.
+fn compose_post_params(bloom_strength: f32, target_format: wgpu::TextureFormat) -> [f32; 4] {
+    [
+        bloom_strength,
+        DEFAULT_EXPOSURE,
+        if target_format.is_srgb() { 0.0 } else { 1.0 },
+        0.0,
+    ]
 }
 
 #[derive(Clone, Debug)]
@@ -4130,6 +4498,10 @@ impl DrawBatch {
 
     fn uses_outline_pass(&self) -> bool {
         self.prepared_material.feature_flags.uses_outline
+            && !self
+                .prepared_material
+                .unsupported_inputs
+                .outline_composition
             && matches!(
                 self.draw_role,
                 ModelMeshDrawRole::Normal
@@ -4306,13 +4678,13 @@ mod tests {
             .expect("fs_main surface entry section");
 
         for stage in [
-            "resolve_surface_samples(input)",
+            "resolve_surface_samples(input, color_table_blend)",
             "resolve_surface_state(",
             "resolve_surface_output(",
         ] {
             assert!(fs_main.contains(stage), "fs_main must dispatch {stage}");
         }
-        for implementation_detail in ["textureSample", "smoothstep"] {
+        for implementation_detail in ["textureSample(", "smoothstep"] {
             assert!(
                 !fs_main.contains(implementation_detail),
                 "fs_main must not inline {implementation_detail}"
@@ -4331,6 +4703,156 @@ mod tests {
     }
 
     #[test]
+    fn model_shader_keeps_modern_colortable_shaping_explicit() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("let base_weight = 1.0 - clamp(source_blend, 0.0, 1.0);"),
+            "ColorTable blend must retain the installed inverted index weight"
+        );
+        assert!(
+            shader
+                .contains("let view_term = clamp(1.0 - abs(dot(primary_world, view)), 0.0, 1.0);"),
+            "modern shaping must use the primary world-normal/view term"
+        );
+        assert!(
+            shader.contains("(1.0 - pow(view_term, 1.0 / shaping_anisotropy)) * base_weight"),
+            "modern shaping must preserve the installed anisotropy exponent"
+        );
+        assert!(
+            shader.contains(
+                "let shaping_anisotropy = max(load_packed_specular(specular_uv, 0u).a, 0.0);",
+            ) && shader.contains("1.0 / shaping_anisotropy"),
+            "modern shaping exponent must come from installed A-row specular alpha"
+        );
+        assert!(
+            shader.contains("material.tile_lod_params.z <= 0.5"),
+            "modern shaping must remain an explicit material/package capability"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_vertex_rgb_out_of_surface_composition() {
+        let shader = include_str!("model.wgsl");
+        let surface_state = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
+            .map(|(section, _)| section)
+            .expect("surface-state section");
+
+        assert!(
+            !surface_state.contains("input.color.rgb"),
+            "ApplyVertexColor lacks a verified RGB composition formula and must not tint Final"
+        );
+        assert!(
+            shader.contains("color = input.color.rgb;"),
+            "direct VertexColor debug must remain available"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_specular_color_mask_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("specular_color_mask: vec4<f32>"),
+            "the parsed constant must remain available in the material uniform"
+        );
+        assert!(
+            !shader.contains("material.specular_color_mask"),
+            "neither RGB multiplication nor a fabricated Alpha scalar has verified composition evidence"
+        );
+    }
+
+    #[test]
+    fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
+        let shader = include_str!("model.wgsl");
+        let samples = shader
+            .split_once("fn resolve_surface_samples")
+            .and_then(|(_, rest)| rest.split_once("struct SurfaceState"))
+            .map(|(section, _)| section)
+            .expect("surface sample section");
+        let dither = shader
+            .split_once("fn fs_dither_depth")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_main"))
+            .map(|(section, _)| section)
+            .expect("dither depth section");
+        let lightshaft = shader
+            .split_once("fn fs_lightshaft")
+            .and_then(|(_, rest)| rest.split_once("fn debug_fragment_output"))
+            .map(|(section, _)| section)
+            .expect("lightshaft section");
+        let properties = shader
+            .split_once("fn resolve_material_properties")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_specular_mask_factor"))
+            .map(|(section, _)| section)
+            .expect("material properties section");
+
+        for required in [
+            "out.normal = textureSampleBias(normal_texture",
+            "return textureSampleBias(base_color_texture",
+            "return textureSampleBias(mask_texture",
+            "return select(\n        0.0,\n        clamp(material.surface_params.y, -16.0, 15.99)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "verified character mip-bias path must preserve {required}"
+            );
+        }
+        for unverified in [
+            "out.secondary_normal = textureSampleBias",
+            "out.specular = textureSampleBias",
+            "out.secondary_specular = textureSampleBias",
+            "out.secondary_base = textureSampleBias",
+            "out.emissive = textureSampleBias",
+        ] {
+            assert!(
+                !samples.contains(unverified),
+                "g_TextureMipBias must not expand to unverified sampler role {unverified}"
+            );
+        }
+        assert!(!dither.contains("sampled_secondary_base = textureSampleBias"));
+        assert!(!lightshaft.contains("textureSampleBias"));
+        assert!(!properties.contains("textureSampleBias"));
+    }
+
+    #[test]
+    fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
+        let shader = include_str!("model.wgsl");
+        let tile = shader
+            .split_once("fn resolve_tile_array")
+            .and_then(|(_, rest)| rest.split_once("fn tile_array_layer"))
+            .map(|(section, _)| section)
+            .expect("tile array section");
+        let detail = shader
+            .split_once("fn resolve_detail_array")
+            .and_then(|(_, rest)| rest.split_once("struct PairAtlasCoordinates"))
+            .map(|(section, _)| section)
+            .expect("detail array section");
+
+        for required in [
+            "min(length(tile_matrix.xz), length(tile_matrix.yw)) * 0.0078125",
+            "max(log2(max(matrix_scale, 1.0e-8)), 0.0)",
+            "matrix_bias + material.tile_lod_params.x",
+            "normal_coordinates_a.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_a))",
+            "normal_coordinates_b.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_b))",
+            "orb_coordinates_a.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_a))",
+            "orb_coordinates_b.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_b))",
+            "out.normal = normalize(mix(normal_a, normal_b, ramp_blend))",
+            "out.orb = mix(",
+        ] {
+            assert!(
+                shader.contains(required),
+                "verified TileMipBiasOffset path must preserve {required}"
+            );
+        }
+        assert!(tile.contains("textureSampleGrad"));
+        assert!(
+            !detail.contains("resolve_tile_lod_bias")
+                && !detail.contains("material.tile_lod_params"),
+            "TileMipBiasOffset must not expand to the BG detail array samplers"
+        );
+    }
+
+    #[test]
     fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
         let shader = include_str!("model.wgsl");
         let surface_output = shader
@@ -4340,7 +4862,7 @@ mod tests {
             .expect("surface output section");
 
         for required in [
-            "let view = normalize(camera.view_dir.xyz);",
+            "let view = resolve_view_direction(input.world_position);",
             "let f0 = mix(dielectric_f0",
             "* (1.0 - metalness)",
             "studio_environment(reflection, roughness)",
@@ -4354,6 +4876,502 @@ mod tests {
         assert!(
             !surface_output.contains("light + vec3<f32>(0.0, 0.0, 1.0)"),
             "surface lighting must not use a fixed camera direction"
+        );
+    }
+
+    #[test]
+    fn model_shader_applies_normal_light_once_per_direct_term() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        let direct_diffuse = surface_output
+            .split_once("let direct_diffuse")
+            .and_then(|(_, rest)| rest.split_once("let ggx_direct_specular"))
+            .map(|(section, _)| section)
+            .expect("direct diffuse section");
+        let direct_specular = surface_output
+            .split_once("let ggx_direct_specular")
+            .and_then(|(_, rest)| rest.split_once("let ambient_diffuse"))
+            .map(|(section, _)| section)
+            .expect("direct specular section");
+        assert_eq!(
+            direct_diffuse.matches("normal_light").count(),
+            1,
+            "direct diffuse must consume NdotL exactly once"
+        );
+        assert_eq!(
+            direct_specular.matches("normal_light").count(),
+            1,
+            "direct specular must multiply the GGX BRDF by NdotL exactly once"
+        );
+    }
+
+    #[test]
+    fn model_shader_consumes_only_baked_specular_alpha_as_anisotropy() {
+        let shader = include_str!("model.wgsl");
+        for required in [
+            "specular: vec4<f32>",
+            "clamp(samples.specular.a, 0.0, 1.0)",
+            "material.sheen_sphere_params.z > 0.5",
+            "fn ggx_anisotropic_distribution",
+            "let anisotropy_frame = resolve_anisotropy_frame(input, normal);",
+        ] {
+            assert!(
+                shader.contains(required),
+                "anisotropy path must preserve {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !surface_output.contains("material.surface_params.x")
+                && !surface_output.contains("ambient_visibility"),
+            "g_SSAOMask has no verified MeddleTools/runtime SSAO composition and must not silently darken Final shading"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !shader.contains("fn resolve_extra_lighting")
+                && !surface_output.contains("extra.sheen")
+                && !surface_output.contains("extra.sphere"),
+            "MeddleTools leaves Sheen/Sphere at a dead-end interface, so Final must not invent a lighting formula"
+        );
+        assert!(
+            shader.contains("extra.sheen = textureSample")
+                && shader.contains("extra.sphere = textureSample"),
+            "Sheen/Sphere bindings must remain available to their dedicated debug views"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_toon_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !shader.contains("fn resolve_toon_lighting")
+                && !surface_output.contains("toon_sheen_params")
+                && !surface_output.contains("toon_params"),
+            "MeddleTools has no Toon node semantics, so Final must not invent banding or reflection formulas"
+        );
+        for invented_formula in ["0.6180339", "toon_diffuse", "toon_specular", "spec_band"] {
+            assert!(
+                !shader.contains(invented_formula),
+                "shader reintroduced unsupported Toon formula {invented_formula}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_composes_colortable_lighting_fields_independently() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+
+        // MeddleTools character topology keeps modern Roughness independent
+        // of GlossStrength. Installed Legacy DXBC separately proves its MRT
+        // exp2(-Gloss/15) parameterization. Installed character/legacy DXBC
+        // consumes raw SpecularStrength through a direct mul, so it must not
+        // be clamped before composition; the final physical F0 is bounded
+        // separately.
+        assert!(
+            !surface_output.contains("mix(1.0, 0.68, gloss_strength)"),
+            "roughness must not be scaled by GlossStrength"
+        );
+        assert!(
+            !surface_output.contains("mix(0.025, 0.10, specular_strength)"),
+            "SpecularStrength must not remap to an arbitrary F0 range"
+        );
+        for required in [
+            "let legacy_gloss_roughness = exp2(-max(surface.properties.z, 0.0) / 15.0);",
+            "let roughness_source = select(",
+            "surface.properties.y,\n        legacy_gloss_roughness,",
+            "material.properties.x > 0.5 && material.family_params.x > 0.5,",
+            "let roughness = clamp(roughness_source, 0.06, 1.0);",
+            "let specular_strength = max(surface.properties.w, 0.0);",
+            "let specular_weight = specular_strength",
+            "let preview_f0_specular_weight = select(",
+            "specular_weight,\n        1.0,\n        uses_legacy_colortable,",
+            "let uses_colortable_specular_mask = material.properties.x > 0.5",
+            "&& legacy_specular_mode < 0.5;",
+            "clamp(surface.mask.r, 0.0, 1.0),\n        uses_colortable_specular_mask,",
+            "surface.material_specular * (0.08 * preview_f0_specular_weight)",
+            "let specular_mask = clamp(resolve_specular_mask_factor(surface.mask.r), 0.0, 1.35);",
+        ] {
+            assert!(
+                surface_output.contains(required),
+                "surface lighting must preserve the verified composition: {required}"
+            );
+        }
+        assert!(
+            !surface_output.contains("clamp(surface.properties.w, 0.0, 1.0)"),
+            "installed raw SpecularStrength must survive until the final F0 bound"
+        );
+        let material_properties = shader
+            .split_once("fn resolve_material_properties")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_specular_mask_factor"))
+            .map(|(section, _)| section)
+            .expect("material properties section");
+        assert!(
+            !material_properties.contains("mask.r * 1.35"),
+            "specular strength must compose with mask.R directly, without an empirical factor"
+        );
+        assert!(
+            material_properties
+                .contains("let specular_strength = mix(1.0, mask.r, material.params.w);"),
+            "mask fallback must keep the verified specular strength composition"
+        );
+        let specular_mask_factor = shader
+            .split_once("fn resolve_specular_mask_factor")
+            .and_then(|(_, rest)| rest.split_once("struct TileArraySample"))
+            .map(|(section, _)| section)
+            .expect("specular mask factor section");
+        assert!(
+            specular_mask_factor.contains("return mask_red * mask_red;")
+                && specular_mask_factor.contains("return 1.0;")
+                && !specular_mask_factor.contains("1.35")
+                && !specular_mask_factor.contains("material.params.w"),
+            "only verified legacy Compatibility Mask may add a second mask-R factor"
+        );
+        assert!(
+            !surface_output.contains(
+                "select(\n            resolve_specular_mask_factor(surface.mask.r),\n            1.0,\n            material.properties.x > 0.5,"
+            ),
+            "ColorTable properties must not disable the verified legacy Default/Mask permutation"
+        );
+    }
+
+    #[test]
+    fn model_shader_uses_proven_legacy_camera_reflection_lobe() {
+        let shader = include_str!("model.wgsl");
+        let lobe = shader
+            .split_once("fn legacy_camera_reflection_lobe")
+            .and_then(|(_, rest)| rest.split_once("fn ggx_anisotropic_distribution"))
+            .map(|(section, _)| section)
+            .expect("Legacy camera-reflection lobe section");
+        for required in [
+            "+ vec3<f32>(0.0, 0.2, 0.0);",
+            "let reflected_view = reflect(-view, normal);",
+            "let normal_light = clamp(dot(normal, light), 0.0, 1.0);",
+            "let visibility = min(3.0 - 3.0 * one_minus_light * one_minus_light, 1.0);",
+            "let reflection_light = clamp(dot(reflected_view, light), 0.0, 1.0);",
+            "return visibility * pow(reflection_light, max(gloss_strength, 0.0));",
+        ] {
+            assert!(
+                lobe.contains(required),
+                "Legacy lobe must retain installed DXBC formula: {required}"
+            );
+        }
+        assert!(shader.contains("material.properties.x > 0.5 && material.family_params.x > 0.5,"));
+    }
+
+    #[test]
+    fn model_shader_uses_emissive_texture_or_fallback_without_empirical_gates() {
+        let shader = include_str!("model.wgsl");
+        let emissive = shader
+            .split_once("fn resolve_emissive")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_shader_diffuse_tint"))
+            .map(|(section, _)| section)
+            .expect("emissive resolve section");
+        for required in [
+            "let material_emissive = material.emissive_color.rgb;",
+            "let shader_emissive = material.shader_emissive_color.rgb * material.shader_emissive_color.a;",
+            "let texture_presence = material.emissive_color.a;",
+            "let texture_emissive = emissive_tex * texture_presence;",
+            "let fallback_emissive = material_emissive * (1.0 - texture_presence);",
+            "return texture_emissive + fallback_emissive + shader_emissive;",
+        ] {
+            assert!(
+                emissive.contains(required),
+                "emissive source boundary must preserve {required}"
+            );
+        }
+        for unsupported_formula in [
+            "smoothstep",
+            "mask.b",
+            "vertex_alpha",
+            "shader_multi_emissive",
+            "texture_luma",
+            "clamp",
+        ] {
+            assert!(
+                !emissive.contains(unsupported_formula),
+                "emissive must not reintroduce empirical gate {unsupported_formula}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        for required in [
+            "samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb",
+            "let uses_character_colortable_emissive_scale = material.properties.x > 0.5",
+            "&& material.family_params.y > 0.5;",
+            "let lit_luminance = dot(lit, vec3<f32>(0.298910, 0.586610, 0.114480));",
+            "max(lit_luminance, 1.0),",
+            "let unscaled_emissive = surface.emissive - surface.color_table_emissive;",
+            "+ surface.color_table_emissive * color_table_emissive_scale;",
+        ] {
+            assert!(
+                shader.contains(required) || surface.contains(required),
+                "Character ColorTable emissive must retain installed Final formula: {required}"
+            );
+        }
+        assert!(
+            !surface.contains("surface.emissive * color_table_emissive_scale"),
+            "static/shader emissive must not inherit the ColorTable-only luminance scale"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_generic_multi_diffuse_mask_blending() {
+        let shader = include_str!("model.wgsl");
+        let generic_tint = shader
+            .split_once("fn resolve_shader_diffuse_tint")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_lightshaft_color"))
+            .map(|(section, _)| section)
+            .expect("generic shader tint section");
+        assert!(
+            generic_tint.contains("return material.shader_diffuse_color.rgb;")
+                && !generic_tint.contains("shader_multi_diffuse_color")
+                && !generic_tint.contains("clamp")
+                && !generic_tint.contains("smoothstep")
+                && !generic_tint.contains("mask.r")
+                && !generic_tint.contains("0.35"),
+            "generic Final must not invent a mask-R formula for g_MultiDiffuseColor"
+        );
+        assert!(
+            shader.contains("samples.secondary_base.rgb * material.shader_multi_diffuse_color.rgb"),
+            "verified BG secondary-base mix must retain g_MultiDiffuseColor"
+        );
+    }
+
+    #[test]
+    fn model_shader_preserves_verified_water_deep_color_as_linear_hdr() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
+            .map(|(section, _)| section)
+            .expect("surface state section");
+        assert!(
+            surface.contains("material.water_deep_color.rgb,")
+                && !surface.contains("clamp(material.water_deep_color"),
+            "verified water deep color must not be clipped by a preview-only range"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_detail_composition_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_surface_output"))
+            .map(|(section, _)| section)
+            .expect("surface state section");
+        let normal = shader
+            .split_once("fn resolve_normal")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_uv"))
+            .map(|(section, _)| section)
+            .expect("normal resolution section");
+
+        assert!(
+            !surface.contains("detail_array")
+                && !surface.contains("detail_color")
+                && !normal.contains("detail_array")
+                && !shader.contains("fn resolve_detail_tint")
+                && !shader.contains("fn resolve_single_detail_tint"),
+            "unverified BG detail tint/normal composition must not affect Final"
+        );
+        for empirical_constant in ["* 0.22", "* 0.14", "0.32", "0.073", "0.65"] {
+            assert!(
+                !shader.contains(empirical_constant),
+                "detail composition must not restore empirical constant {empirical_constant}"
+            );
+        }
+        for debug_sample in [
+            "color = detail_array.diffuse",
+            "color = detail_array.normal",
+        ] {
+            assert!(
+                shader.contains(debug_sample),
+                "detail array sampling must remain directly inspectable via {debug_sample}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_alpha_shaping_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        let alpha = shader
+            .split_once("fn resolve_surface_alpha")
+            .and_then(|(_, rest)| rest.split_once("fn ordered_dither_threshold"))
+            .map(|(section, _)| section)
+            .expect("surface alpha section");
+        assert!(
+            !shader.contains("fn resolve_alpha_shaping")
+                && !alpha.contains("material.alpha_params.x")
+                && !alpha.contains("material.alpha_params.y")
+                && !alpha.contains("pow("),
+            "g_AlphaAperture/g_AlphaOffset must not alter Final without a verified formula"
+        );
+    }
+
+    #[test]
+    fn model_shader_orients_two_sided_normals_toward_the_viewer() {
+        let shader = include_str!("model.wgsl");
+        let resolve_normal = shader
+            .split_once("fn resolve_normal")
+            .and_then(|(_, rest)| rest.split_once("\nfn resolve_uv"))
+            .map(|(section, _)| section)
+            .expect("resolve_normal section");
+
+        assert!(
+            !resolve_normal.contains("front_facing"),
+            "resolve_normal must not derive two-sided orientation from triangle winding"
+        );
+        assert!(
+            !resolve_normal.contains("face_sign"),
+            "resolve_normal must not keep a winding-based face sign"
+        );
+        for required in [
+            "orient_geometric_normal_toward_viewer(input.normal, view)",
+            "orient_geometric_normal_toward_viewer(input.normal1, view)",
+        ] {
+            assert!(
+                resolve_normal.contains(required),
+                "every world-space normal path must apply {required}"
+            );
+        }
+        for required in [
+            "fn resolve_view_direction(world_position: vec3<f32>) -> vec3<f32>",
+            "camera.camera_position.xyz - world_position",
+            "vertex_normal: vec3<f32>,\n    view: vec3<f32>",
+            "select(-1.0, 1.0, dot(normal, view) >= 0.0)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "two-sided orientation helper must contain {required}"
+            );
+        }
+        let fs_main = shader
+            .split_once("fn fs_main")
+            .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
+            .map(|(entry, _)| entry)
+            .expect("fs_main surface entry section");
+        assert!(
+            !fs_main.contains("front_facing"),
+            "fs_main must not plumb triangle winding into surface state"
+        );
+    }
+
+    #[test]
+    fn post_pipeline_uses_hdr_intermediates_and_tone_mapped_compose() {
+        assert_eq!(
+            POST_FORMAT,
+            wgpu::TextureFormat::Rgba16Float,
+            "scene/bright intermediates must keep HDR values above 1.0 until composition"
+        );
+
+        let shader = include_str!("postprocess.wgsl");
+        let compose = shader
+            .split_once("fn compose_fs")
+            .and_then(|(_, rest)| rest.split_once("fn tonemap_pbr_neutral"))
+            .map(|(section, _)| section)
+            .expect("compose section");
+        for required in [
+            "let exposure = post.params.y;",
+            "tonemap_pbr_neutral(color)",
+            "if post.params.z > 0.5",
+        ] {
+            assert!(
+                compose.contains(required),
+                "compose pass must contain {required}"
+            );
+        }
+        let encode_call_count = compose.matches("linear_to_srgb_channel(color.").count();
+        assert_eq!(
+            encode_call_count, 3,
+            "compose must encode RGB exactly once inside the non-sRGB branch"
+        );
+        assert!(
+            shader.contains("fn tonemap_pbr_neutral(input_color: vec3<f32>) -> vec3<f32>"),
+            "compose must use the documented Khronos PBR Neutral operator"
+        );
+    }
+
+    #[test]
+    fn bloom_uses_scene_linear_threshold_in_the_post_pass() {
+        assert_eq!(
+            BLOOM_THRESHOLD, 1.0,
+            "bloom threshold is defined in scene-linear units (display white)"
+        );
+        let shader = include_str!("postprocess.wgsl");
+        for required in [
+            "fn bloom_contribution(color: vec3<f32>, threshold: f32) -> vec3<f32>",
+            "smoothstep(threshold, threshold + BLOOM_KNEE, luma)",
+            "mix(color, bloom_contribution(color, post.params.z), post.params.w)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "bloom pass must contain {required}"
+            );
+        }
+        let model_shader = include_str!("model.wgsl");
+        assert!(
+            !model_shader.contains("bright"),
+            "material shader must not own bright-pass extraction anymore"
+        );
+        assert!(
+            !model_shader.contains("highlight"),
+            "material shader must not embed highlight extraction constants"
+        );
+    }
+
+    #[test]
+    fn compose_post_params_encode_exactly_once_for_the_target_format() {
+        let srgb = compose_post_params(0.68, wgpu::TextureFormat::Rgba8UnormSrgb);
+        assert_eq!(
+            srgb,
+            [0.68, DEFAULT_EXPOSURE, 0.0, 0.0],
+            "sRGB targets encode on write; the shader must not encode again"
+        );
+        let linear = compose_post_params(0.68, wgpu::TextureFormat::Rgba8Unorm);
+        assert_eq!(
+            linear,
+            [0.68, DEFAULT_EXPOSURE, 1.0, 0.0],
+            "non-sRGB targets need the shader-side sRGB encode"
         );
     }
 
@@ -4663,6 +5681,18 @@ mod tests {
     fn outline_pass_only_selects_eligible_surface_batches() {
         let mut normal = test_batch(0, PreparedRenderPass::Opaque, [0.0; 3]);
         normal.prepared_material.feature_flags.uses_outline = true;
+        normal
+            .prepared_material
+            .unsupported_inputs
+            .outline_composition = true;
+        assert!(
+            !normal.uses_outline_pass(),
+            "unverified static outline inputs must not automatically alter Final"
+        );
+        normal
+            .prepared_material
+            .unsupported_inputs
+            .outline_composition = false;
         assert!(normal.uses_outline_pass());
 
         let mut lightshaft = test_batch(1, PreparedRenderPass::AdditiveLightShaft, [0.0; 3]);
@@ -4691,6 +5721,39 @@ mod tests {
         let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
         assert_eq!(uniform.options[2], 0.0);
         assert_eq!(uniform.options[3], 3.0);
+    }
+
+    #[test]
+    fn camera_uniform_carries_dynamic_emissive_with_identity_and_finite_fallbacks() {
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 64],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions {
+                dynamic_emissive_color: [2.0, 0.5, 3.0],
+                ..ModelRenderOptions::default()
+            },
+        );
+        assert_eq!(uniform.dynamic_emissive_color, [2.0, 0.5, 3.0, 0.0]);
+
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 64],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions {
+                dynamic_emissive_color: [f32::NAN, f32::INFINITY, 0.25],
+                ..ModelRenderOptions::default()
+            },
+        );
+        assert_eq!(uniform.dynamic_emissive_color, [1.0, 1.0, 0.25, 0.0]);
     }
 
     #[test]
@@ -4728,6 +5791,45 @@ mod tests {
     }
 
     #[test]
+    fn preview_lighting_contract_is_explicit_and_stable() {
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let expected =
+            glam::Vec3::new(PREVIEW_KEY_RIGHT, PREVIEW_KEY_UP, PREVIEW_KEY_VIEW).normalize();
+        let actual = glam::Vec3::from_array([
+            uniform.light_dir[0],
+            uniform.light_dir[1],
+            uniform.light_dir[2],
+        ]);
+        assert!(actual.abs_diff_eq(expected, 1.0e-6));
+
+        let shader = include_str!("model.wgsl");
+        for constant in [
+            "PREVIEW_KEY_COLOR",
+            "PREVIEW_DIRECT_DIFFUSE_SCALE",
+            "PREVIEW_DIRECT_SPECULAR_SCALE",
+            "PREVIEW_AMBIENT_GROUND",
+            "PREVIEW_AMBIENT_SKY",
+            "PREVIEW_ENV_GROUND",
+            "PREVIEW_ENV_SKY",
+            "PREVIEW_RIM_SCALE",
+        ] {
+            assert!(
+                shader.contains(constant),
+                "preview lighting parameter {constant} must stay named and auditable"
+            );
+        }
+    }
+
+    #[test]
     fn model_debug_modes_have_stable_shader_values() {
         assert_eq!(ModelDebugMode::Final.shader_value(), 0.0);
         assert_eq!(ModelDebugMode::BaseColor.shader_value(), 1.0);
@@ -4758,6 +5860,181 @@ mod tests {
         assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 26.0);
         assert_eq!(ModelDebugMode::Flow0.shader_value(), 27.0);
         assert_eq!(ModelDebugMode::Flow1.shader_value(), 28.0);
+        assert_eq!(ModelDebugMode::UnsupportedInputs.shader_value(), 29.0);
+        assert_eq!(ModelDebugMode::ViewDirection.shader_value(), 30.0);
+    }
+
+    #[test]
+    fn unsupported_inputs_diagnostic_color_prioritizes_visible_families() {
+        let prepared = |patch: &dyn Fn(&mut PreparedMaterialUnsupportedInputs)| {
+            let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+            patch(&mut prepared.unsupported_inputs);
+            prepared
+        };
+
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|_| {})),
+            [0.05, 0.22, 0.1, 1.0],
+            "fully supported materials must not look like unsupported ones"
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.lightshaft_clip = true;
+            })),
+            [1.0, 0.82, 0.2, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.environment_mapping = true;
+            })),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.character_reflection = true;
+            })),
+            [1.0, 0.3, 0.75, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.character_scroll_variant = true;
+            })),
+            [1.0, 0.55, 0.1, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.glass_shader_parameters = true;
+                inputs.incomplete_shader_family_logic = true;
+            })),
+            [0.15, 0.85, 0.9, 1.0],
+            "family-specific flags must win over the generic incomplete-family hue"
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.incomplete_shader_family_logic = true;
+            })),
+            [0.95, 0.2, 0.2, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.alpha_multi_values = true;
+            })),
+            [0.68, 0.28, 1.0, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.multi_color_composition = true;
+            })),
+            [0.92, 0.36, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.detail_composition = true;
+            })),
+            [0.72, 0.52, 0.96, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.alpha_shaping = true;
+            })),
+            [0.94, 0.44, 0.78, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.vertex_color_composition = true;
+            })),
+            [0.18, 0.76, 0.54, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.specular_color_mask_composition = true;
+            })),
+            [0.84, 0.28, 0.62, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.outline_composition = true;
+            })),
+            [0.46, 0.82, 0.94, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.toon_lighting = true;
+            })),
+            [0.88, 0.64, 0.22, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.sheen_lighting = true;
+            })),
+            [0.95, 0.48, 0.62, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.sphere_lighting = true;
+            })),
+            [0.34, 0.7, 0.92, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.ambient_occlusion_mask = true;
+            })),
+            [0.58, 0.72, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.ssao_mask = true;
+            })),
+            [0.58, 0.72, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.legacy_gloss_composition = true;
+            })),
+            [0.76, 0.3, 0.9, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.legacy_specular_type = true;
+            })),
+            [0.58, 0.38, 0.88, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.tile_mip_bias_offset = true;
+            })),
+            [0.78, 0.4, 0.12, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.vertex_movement_parameters = true;
+            })),
+            [0.32, 0.88, 0.28, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.runtime_color_table = true;
+            })),
+            [0.6, 0.6, 0.6, 1.0],
+            "any other unsupported input must still surface as unsupported"
+        );
+    }
+
+    #[test]
+    fn model_shader_exposes_unsupported_inputs_debug_view() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("unsupported_color: vec4<f32>"),
+            "material uniform must carry the unsupported-input diagnostic color"
+        );
+        let debug_output = shader
+            .split_once("fn debug_fragment_output")
+            .map(|(_, rest)| rest)
+            .expect("debug fragment output section");
+        assert!(
+            debug_output.contains("color = material.unsupported_color.rgb;"),
+            "debug output must route the unsupported-input mode to the diagnostic color"
+        );
     }
 
     #[test]
@@ -4855,6 +6132,28 @@ mod tests {
         assert_eq!(nearest_clip.mipmap_filter, wgpu::MipmapFilterMode::Nearest);
         assert_eq!(nearest_clip.address_mode_u, wgpu::AddressMode::ClampToEdge);
         assert_eq!(nearest_clip.address_mode_v, wgpu::AddressMode::ClampToEdge);
+    }
+
+    #[test]
+    fn texture_formats_follow_prepared_color_space() {
+        assert_eq!(
+            mip_semantic_for_color_space(PreparedTextureColorSpace::Srgb),
+            RgbaMipSemantic::SrgbColor,
+            "sRGB-sampled textures need sRGB GPU decoding with linear alpha"
+        );
+        assert_eq!(
+            mip_semantic_for_color_space(PreparedTextureColorSpace::NonColor),
+            RgbaMipSemantic::LinearData,
+            "Non-Color textures must stay raw linear data"
+        );
+        assert_eq!(
+            texture_format_for_color_space(PreparedTextureColorSpace::Srgb),
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            texture_format_for_color_space(PreparedTextureColorSpace::NonColor),
+            wgpu::TextureFormat::Rgba8Unorm
+        );
     }
 
     #[test]
@@ -4998,6 +6297,7 @@ mod tests {
         let texture = |kind, rgba| crate::ModelTexture {
             path: format!("synthetic/{kind:?}.tex"),
             kind,
+            texel_layout: crate::ModelTextureTexelLayout::Standard,
             width: 2,
             height: 4,
             array_size: 2,
@@ -5108,6 +6408,101 @@ mod tests {
     }
 
     #[test]
+    fn material_tile_lod_params_require_a_ready_tile_array() {
+        let mut material = fallback_material();
+        let mut model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: Vec::new(),
+        };
+        material.tile_mip_bias_offset = -1.0;
+        let mut prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0; 4]
+        );
+
+        prepared.resource_availability.tile_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(64),
+        };
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [-1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.tile_mip_bias_offset = f32::INFINITY;
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0; 4]
+        );
+
+        material.tile_properties_texture = Some(0);
+        material.tile_matrix_texture = Some(1);
+        let mut tile = test_texture(crate::ModelTextureKind::TileProperties);
+        let mut matrix = test_texture(crate::ModelTextureKind::TileMatrixProperties);
+        tile.path = "renamed://tile-properties".to_string();
+        matrix.path = "renamed://tile-matrix".to_string();
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+
+        tile.texel_layout = crate::ModelTextureTexelLayout::ColorTableTileRampAb;
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+
+        matrix.texel_layout = crate::ModelTextureTexelLayout::ColorTableTileRampAb;
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.base_color_texture = Some(2);
+        material.specular_texture = Some(3);
+        material.material_properties_texture = Some(4);
+        material.sheen_properties_texture = Some(5);
+        material.sphere_properties_texture = Some(6);
+        let generic_kinds = [
+            crate::ModelTextureKind::BaseColor,
+            crate::ModelTextureKind::Specular,
+            crate::ModelTextureKind::MaterialProperties,
+            crate::ModelTextureKind::SheenProperties,
+            crate::ModelTextureKind::SphereProperties,
+        ];
+        model.textures.extend(generic_kinds.into_iter().map(|kind| {
+            let mut texture = test_texture(kind);
+            texture.texel_layout = crate::ModelTextureTexelLayout::ColorTableRampAb;
+            texture
+        }));
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 1.0, 1.0, 1.0]
+        );
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 1.0, 0.0, 1.0]
+        );
+
+        matrix.kind = crate::ModelTextureKind::SheenProperties;
+        model.textures = vec![tile, matrix];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
     fn tile_matrix_texture_pixels_preserve_float_channels_and_fallbacks() {
         let mut texture = test_texture(crate::ModelTextureKind::TileMatrixProperties);
         texture.rgba = vec![255, 64, 128, 191];
@@ -5197,7 +6592,7 @@ mod tests {
             [50.0, 2.5, 4.0e-45, 0.0]
         );
         assert_eq!(
-            material_sheen_sphere_params(&material),
+            material_sheen_sphere_params(&material, prepared),
             [1.0, 0.0, 0.0, 0.0]
         );
 
@@ -5221,7 +6616,7 @@ mod tests {
             [64.0, 3.5, 2.0, 1.0]
         );
         assert_eq!(
-            material_sheen_sphere_params(&material),
+            material_sheen_sphere_params(&material, prepared),
             [0.8, 3.0, 0.0, 0.0]
         );
 
@@ -5241,8 +6636,16 @@ mod tests {
             [50.0, 2.5, 4.0e-45, 1.0]
         );
         assert_eq!(
-            material_sheen_sphere_params(&material),
+            material_sheen_sphere_params(&material, prepared),
             [1.0, 0.0, 0.0, 0.0]
+        );
+
+        let mut baked_anisotropy = prepared;
+        baked_anisotropy.texture_sampling.specular.color_space = PreparedTextureColorSpace::Srgb;
+        assert_eq!(
+            material_sheen_sphere_params(&material, baked_anisotropy),
+            [1.0, 0.0, 1.0, 0.0],
+            "only a baked ColorTable specular ramp may expose alpha as anisotropy"
         );
     }
 
@@ -5262,6 +6665,39 @@ mod tests {
         material.shadow_alpha_threshold = 4.0;
         material.transparency = -1.0;
         assert_eq!(material_alpha_params(&material), [2.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn material_alpha_composition_params_scope_vertex_alpha_remap_to_dxbc_packages() {
+        let mut material = fallback_material();
+        material.vertex_alpha_to_one = 0.01;
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.01, 0.0, 0.0, 0.0]
+        );
+
+        for package in [
+            "character.shpk",
+            "characterlegacy.shpk",
+            "characterglass.shpk",
+        ] {
+            material.shader_package_name = Some(package.to_string());
+            assert_eq!(
+                material_alpha_composition_params(&material),
+                [0.01, 1.0, 0.0, 0.0]
+            );
+        }
+
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.01, 0.0, 0.0, 0.0]
+        );
+        material.vertex_alpha_to_one = f32::NAN;
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.0, 0.0, 0.0, 0.0]
+        );
     }
 
     #[test]
@@ -5495,9 +6931,19 @@ mod tests {
     #[test]
     fn legacy_compatibility_specular_mode_is_key_aware() {
         let mut material = fallback_material();
+        assert!(!material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [0.0; 4]);
         assert_eq!(material_legacy_specular_mode(&material), 0.0);
 
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(!material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [0.0; 4]);
+        material.color_table_rows = Some(vec![crate::ColorTableRowColors::default()]);
+        assert_eq!(material_family_params(&material), [0.0, 1.0, 0.0, 0.0]);
+
         material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        assert!(material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [1.0, 1.0, 0.0, 0.0]);
         material.value_mode = crate::MaterialValueMode::Compatibility;
         assert_eq!(material_legacy_specular_mode(&material), 1.0);
 
@@ -5510,6 +6956,11 @@ mod tests {
         material.specular_type = MaterialSpecularType::Mask;
         material.value_mode = crate::MaterialValueMode::MultiMaterial;
         assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.shader_package_name = Some("CharacterLegacy.SHPK".to_string());
+        assert!(material_is_character_legacy(&material));
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(!material_is_character_legacy(&material));
     }
 
     #[test]
@@ -6066,6 +7517,7 @@ mod tests {
         crate::ModelTexture {
             path: "test.tex".to_string(),
             kind,
+            texel_layout: crate::ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
             array_size: 1,

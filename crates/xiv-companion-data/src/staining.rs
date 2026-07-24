@@ -802,6 +802,7 @@ mod tests {
         let mut first = dawntrail_dye_row(1001, 0);
         first.diffuse = true;
         first.roughness = true;
+        first.sheen_aperture = true;
         let mut second = dawntrail_dye_row(1002, 1);
         second.metalness = true;
         second.sphere_map_index = true;
@@ -814,6 +815,8 @@ mod tests {
         assert_eq!(first_report.rows_skipped_no_stain, 1);
         assert_eq!(rows[0].diffuse, [0.25, 0.5, 1.0]);
         assert_eq!(rows[0].roughness, 0.3);
+        // STM scalar column 5 is the ColorTable SheenAptitude ramp input.
+        assert_eq!(rows[0].sheen_aperture, 2.0);
         assert_eq!(rows[1].metalness, 0.0);
 
         rows = vec![ColorTableRowColors::default(); 2];
@@ -908,6 +911,102 @@ mod tests {
                 template.entry_count()
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn audits_installed_gud_sphere_map_index_values() {
+        use std::path::PathBuf;
+
+        use physis::resource::{Resource, SqPackResource};
+
+        let game_dir = std::env::var_os("XIV_GAME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"E:\_ff14\game"));
+        let game_dir = game_dir.to_string_lossy();
+        let mut resource = SqPackResource::from_existing(&game_dir);
+        let bytes = resource
+            .read(DAWNTRAIL_STAINING_TEMPLATE_PATH)
+            .expect("read GUD STM");
+        let template = StainingTemplate::from_bytes(&bytes).expect("parse GUD STM");
+
+        let mut count = 0usize;
+        let mut non_finite = 0usize;
+        let mut non_integer = 0usize;
+        let mut minimum = f32::INFINITY;
+        let mut maximum = f32::NEG_INFINITY;
+        for entry in template.entries.values() {
+            for value in entry.scalars.get(7).into_iter().flatten() {
+                count += 1;
+                if !value.is_finite() {
+                    non_finite += 1;
+                } else {
+                    minimum = minimum.min(*value);
+                    maximum = maximum.max(*value);
+                    if (*value - value.round()).abs() > 0.0001 {
+                        non_integer += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(count > 0, "GUD STM has no SphereMapIndex values");
+        assert_eq!(non_finite, 0, "SphereMapIndex values must be finite");
+        assert_eq!(
+            non_integer, 0,
+            "SphereMapIndex values must remain discrete before conversion to u16"
+        );
+        assert!(
+            minimum >= 0.0 && maximum <= f32::from(u16::MAX),
+            "SphereMapIndex range {minimum}..={maximum} does not fit u16"
+        );
+        eprintln!(
+            "GUD STM SphereMapIndex values: count={count}, range={minimum}..={maximum}, non_integer={non_integer}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn audits_installed_gud_anisotropy_values() {
+        use std::path::PathBuf;
+
+        use physis::resource::{Resource, SqPackResource};
+
+        let game_dir = std::env::var_os("XIV_GAME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"E:\_ff14\game"));
+        let game_dir = game_dir.to_string_lossy();
+        let mut resource = SqPackResource::from_existing(&game_dir);
+        let bytes = resource
+            .read(DAWNTRAIL_STAINING_TEMPLATE_PATH)
+            .expect("read GUD STM");
+        let template = StainingTemplate::from_bytes(&bytes).expect("parse GUD STM");
+
+        let mut count = 0usize;
+        let mut non_finite = 0usize;
+        let mut negative = 0usize;
+        let mut above_one = 0usize;
+        let mut minimum = f32::INFINITY;
+        let mut maximum = f32::NEG_INFINITY;
+        for entry in template.entries.values() {
+            for value in entry.scalars.get(6).into_iter().flatten() {
+                count += 1;
+                if !value.is_finite() {
+                    non_finite += 1;
+                    continue;
+                }
+                minimum = minimum.min(*value);
+                maximum = maximum.max(*value);
+                negative += usize::from(*value < 0.0);
+                above_one += usize::from(*value > 1.0);
+            }
+        }
+
+        assert!(count > 0, "GUD STM has no Anisotropy values");
+        assert_eq!(non_finite, 0, "GUD STM Anisotropy values must be finite");
+        eprintln!(
+            "GUD STM Anisotropy values: count={count}, range={minimum}..={maximum}, negative={negative}, above_one={above_one}"
+        );
     }
 
     fn staining_fixture(

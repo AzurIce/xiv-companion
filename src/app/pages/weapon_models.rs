@@ -861,6 +861,8 @@ fn WeaponRenderControls(
                     option { value: "tile-orb-array", "Tile ORB" }
                     option { value: "detail-diffuse-array", "Detail Diffuse" }
                     option { value: "detail-normal-array", "Detail Normal" }
+                    option { value: "unsupported", "Unsupported" }
+                    option { value: "view-direction", "View Direction" }
                 }
                 label { class: "flex items-center justify-between gap-3",
                     span { class: "text-muted-foreground", "Glass" }
@@ -1057,6 +1059,8 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::SecondaryNormal => "normal1",
         ModelDebugMode::Flow0 => "flow0",
         ModelDebugMode::Flow1 => "flow1",
+        ModelDebugMode::UnsupportedInputs => "unsupported",
+        ModelDebugMode::ViewDirection => "view-direction",
     }
 }
 
@@ -1090,6 +1094,8 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "normal1" => ModelDebugMode::SecondaryNormal,
         "flow0" => ModelDebugMode::Flow0,
         "flow1" => ModelDebugMode::Flow1,
+        "unsupported" => ModelDebugMode::UnsupportedInputs,
+        "view-direction" => ModelDebugMode::ViewDirection,
         _ => ModelDebugMode::Final,
     }
 }
@@ -1554,6 +1560,8 @@ mod weapon_url_tests {
             ModelDebugMode::SecondaryNormal,
             ModelDebugMode::Flow0,
             ModelDebugMode::Flow1,
+            ModelDebugMode::UnsupportedInputs,
+            ModelDebugMode::ViewDirection,
         ] {
             assert_eq!(parse_debug_mode(debug_mode_value(mode)), mode);
         }

@@ -6,15 +6,16 @@ pub use crate::model::{
     ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
     ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays,
     ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta,
-    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelVertex,
-    PackedModelId, PreparedMeshVisibility, PreparedModelOptions, StainingApplicationReport,
-    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
-    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
-    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind,
+    ModelTextureTexelLayout, ModelVertex, PackedModelId, PreparedMeshVisibility,
+    PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem,
+    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
+    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
+    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
+    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
+    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
+    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
+    weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
@@ -44,6 +45,8 @@ const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 const G_ALPHA_APERTURE: u32 = 0xD62B_F368;
 #[cfg(feature = "game-data")]
 const G_ALPHA_OFFSET: u32 = 0xD07A_6A65;
+#[cfg(feature = "game-data")]
+const G_VERTEX_ALPHA_TO_ONE: u32 = 0xAD94_E254;
 #[cfg(feature = "game-data")]
 const G_SHADOW_ALPHA_THRESHOLD: u32 = 0xD925_FF32;
 #[cfg(feature = "game-data")]
@@ -1167,6 +1170,7 @@ fn decode_and_push_shared_texture_array(
     textures.push(ModelTexture {
         path: path.to_string(),
         kind,
+        texel_layout: ModelTextureTexelLayout::Standard,
         width: decoded.width,
         height: decoded.height,
         array_size: decoded.array_size,
@@ -1916,6 +1920,11 @@ fn material_semantic_summary(
 fn known_material_constant_name(id: u32) -> Option<String> {
     if id == 0x9A69_6A17 {
         return Some("UvScrollMapping".to_string());
+    }
+    if id == G_VERTEX_ALPHA_TO_ONE {
+        // Meddle still records this CRC as unknown. The descriptive label is
+        // based on the installed DXBC formula, not claimed as an official name.
+        return Some("VertexAlphaToOne".to_string());
     }
     known_crc_label(
         id,
@@ -2687,6 +2696,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
+        let vertex_alpha_to_one = composed_material_vertex_alpha_to_one(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
         let glass_ior = composed_material_glass_ior(&semantics);
         let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
@@ -2795,6 +2805,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             water_whitecap_color,
             alpha_aperture,
             alpha_offset,
+            vertex_alpha_to_one,
             shadow_alpha_threshold,
             glass_ior,
             glass_thickness_max,
@@ -3009,6 +3020,7 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: decoded.width,
             height: decoded.height,
             array_size: decoded.array_size,
@@ -3496,6 +3508,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
         let alpha_aperture = composed_material_alpha_aperture(&semantics);
         let alpha_offset = composed_material_alpha_offset(&semantics);
+        let vertex_alpha_to_one = composed_material_vertex_alpha_to_one(&semantics);
         let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
         let glass_ior = composed_material_glass_ior(&semantics);
         let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
@@ -3605,6 +3618,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             water_whitecap_color,
             alpha_aperture,
             alpha_offset,
+            vertex_alpha_to_one,
             shadow_alpha_threshold,
             glass_ior,
             glass_thickness_max,
@@ -3821,6 +3835,7 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: decoded.width,
             height: decoded.height,
             array_size: decoded.array_size,
@@ -4363,87 +4378,105 @@ fn bake_weapon_color_table_textures(
     let index_texture = textures.get(index_texture?)?;
     let width = index_texture.width;
     let height = index_texture.height;
+    let tile_ramp_width = width.checked_mul(2)?;
     let id_rgba = index_texture.rgba.clone();
     let baked = bake_color_table_maps(rows, &id_rgba)?;
     let material_key = normalize_game_resource_path(material_path);
 
     let base_path = format!("baked://{material_key}#colorset-diffuse");
-    let base_color = push_or_replace_baked_texture(
+    let base_color = push_or_replace_baked_texture_with_float_channels(
         textures,
         base_path,
         WeaponModelTextureKind::BaseColor,
-        width,
+        tile_ramp_width,
         height,
-        baked.diffuse_rgba,
+        baked.diffuse_ab_rgba,
+        Some(baked.diffuse_ab_rgba_f32),
     );
+    textures[base_color].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
-    let specular = push_or_replace_baked_texture(
+    let specular = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-specular"),
         WeaponModelTextureKind::Specular,
-        width,
+        tile_ramp_width,
         height,
-        baked.specular_rgba,
+        baked.specular_ab_rgba,
+        Some(baked.specular_ab_rgba_f32),
     );
+    textures[specular].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
-    let material_properties = push_or_replace_baked_texture(
+    let material_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-material-properties"),
         WeaponModelTextureKind::MaterialProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.material_rgba,
+        baked.material_ab_rgba,
+        Some(baked.material_ab_rgba_f32),
     );
+    textures[material_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
     let tile_properties = push_or_replace_baked_texture(
         textures,
-        format!("baked://{material_key}#colorset-tile-properties"),
+        format!("baked://{material_key}#colorset-tile-properties-ab"),
         WeaponModelTextureKind::TileProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.tile_properties_rgba,
+        baked.tile_properties_ab_rgba,
     );
+    textures[tile_properties].texel_layout = ModelTextureTexelLayout::ColorTableTileRampAb;
 
     let sheen_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sheen-properties"),
         WeaponModelTextureKind::SheenProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.sheen_properties_rgba,
-        Some(baked.sheen_properties_rgba_f32),
+        baked.sheen_properties_ab_rgba,
+        Some(baked.sheen_properties_ab_rgba_f32),
     );
+    textures[sheen_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
     let sphere_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sphere-properties"),
         WeaponModelTextureKind::SphereProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.sphere_properties_rgba,
-        Some(baked.sphere_properties_rgba_f32),
+        baked.sphere_properties_ab_rgba,
+        Some(baked.sphere_properties_ab_rgba_f32),
     );
+    textures[sphere_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
     let tile_matrix = push_or_replace_baked_texture_with_float_channels(
         textures,
-        format!("baked://{material_key}#colorset-tile-matrix"),
+        format!("baked://{material_key}#colorset-tile-matrix-ab"),
         WeaponModelTextureKind::TileMatrixProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.tile_matrix_rgba,
-        Some(baked.tile_matrix_rgba_f32),
+        baked.tile_matrix_ab_rgba,
+        Some(baked.tile_matrix_ab_rgba_f32),
     );
+    textures[tile_matrix].texel_layout = ModelTextureTexelLayout::ColorTableTileRampAb;
 
     let emissive = if bake_emissive {
         baked.emissive_rgba.map(|rgba| {
-            push_or_replace_baked_texture(
+            let float_channels = baked
+                .emissive_ab_rgba_f32
+                .clone()
+                .or_else(|| baked.emissive_rgba_f32.clone());
+            let index = push_or_replace_baked_texture_with_float_channels(
                 textures,
                 format!("baked://{material_key}#colorset-emissive"),
                 WeaponModelTextureKind::Emissive,
-                width,
+                tile_ramp_width,
                 height,
-                rgba,
-            )
+                baked.emissive_ab_rgba.clone().unwrap_or(rgba),
+                float_channels,
+            );
+            textures[index].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
+            index
         })
     } else {
         None
@@ -4726,6 +4759,11 @@ fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f3
 #[cfg(feature = "game-data")]
 fn composed_material_alpha_offset(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_ALPHA_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_alpha_to_one(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_ALPHA_TO_ONE, 0.0)
 }
 
 #[cfg(feature = "game-data")]
@@ -5034,6 +5072,11 @@ fn combine_base_with_colorset_texture(
     let base_height = base.height.max(1) as usize;
 
     let mut rgba = Vec::with_capacity(colorset.rgba.len());
+    let mut rgba_f32 = colorset
+        .rgba_f32
+        .as_ref()
+        .filter(|pixels| pixels.len() == width * height)
+        .map(|_| Vec::with_capacity(width * height));
     for y in 0..height {
         let base_y = y * base_height / height;
         for x in 0..width {
@@ -5041,22 +5084,36 @@ fn combine_base_with_colorset_texture(
             let base_offset = (base_y * base_width + base_x) * 4;
             let colorset_offset = (y * width + x) * 4;
             let base = base.rgba.get(base_offset..base_offset + 4)?;
-            let colorset = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
-            rgba.push(multiply_srgb_channels(base[0], colorset[0]));
-            rgba.push(multiply_srgb_channels(base[1], colorset[1]));
-            rgba.push(multiply_srgb_channels(base[2], colorset[2]));
+            let colorset_bytes = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
+            rgba.push(multiply_srgb_channels(base[0], colorset_bytes[0]));
+            rgba.push(multiply_srgb_channels(base[1], colorset_bytes[1]));
+            rgba.push(multiply_srgb_channels(base[2], colorset_bytes[2]));
             rgba.push(base[3]);
+            if let (Some(colorset_pixels), Some(output)) =
+                (colorset.rgba_f32.as_ref(), rgba_f32.as_mut())
+            {
+                let colorset = colorset_pixels[colorset_offset / 4];
+                output.push([
+                    srgb_u8_to_linear(base[0]) * colorset[0],
+                    srgb_u8_to_linear(base[1]) * colorset[1],
+                    srgb_u8_to_linear(base[2]) * colorset[2],
+                    f32::from(base[3]) / 255.0,
+                ]);
+            }
         }
     }
 
-    Some(push_or_replace_baked_texture(
+    let index = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_path}#base-times-colorset"),
         WeaponModelTextureKind::BaseColor,
         colorset.width,
         colorset.height,
         rgba,
-    ))
+        rgba_f32,
+    );
+    textures[index].texel_layout = colorset.texel_layout;
+    Some(index)
 }
 
 #[cfg(feature = "game-data")]
@@ -5129,6 +5186,7 @@ fn push_or_replace_baked_texture_with_float_channels(
         textures[index] = WeaponModelTexture {
             path,
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width,
             height,
             array_size: 1,
@@ -5143,6 +5201,7 @@ fn push_or_replace_baked_texture_with_float_channels(
     textures.push(WeaponModelTexture {
         path,
         kind,
+        texel_layout: ModelTextureTexelLayout::Standard,
         width,
         height,
         array_size: 1,
@@ -5390,6 +5449,7 @@ fn fallback_weapon_material(
         water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
         alpha_aperture: 2.0,
         alpha_offset: 0.0,
+        vertex_alpha_to_one: 0.0,
         shadow_alpha_threshold: 0.5,
         glass_ior: 1.0,
         glass_thickness_max: 0.01,
@@ -6387,6 +6447,7 @@ mod weapon_material_tests {
             textures: vec![WeaponModelTexture {
                 path: "index.tex".to_string(),
                 kind: WeaponModelTextureKind::Index,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -6648,6 +6709,18 @@ mod weapon_material_tests {
         assert_eq!(material.vertex_movement_max_length, 0.0);
         assert!(prepared.unsupported_inputs.vertex_movement_parameters);
         assert!(base.path.ends_with("#base-times-colorset"));
+        assert_eq!(base.texel_layout, ModelTextureTexelLayout::ColorTableRampAb);
+        assert_eq!(
+            base.rgba_f32.as_ref().map(Vec::len),
+            Some(usize::from(base.width) * usize::from(base.height))
+        );
+        assert!(
+            base.rgba_f32
+                .as_deref()
+                .expect("Compatibility float diffuse payload")
+                .iter()
+                .all(|pixel| pixel.iter().all(|value| value.is_finite()))
+        );
         assert!(material.texture_indices.iter().any(|index| {
             model.textures[*index]
                 .path
@@ -6686,7 +6759,7 @@ mod weapon_material_tests {
 
             assert_eq!(material.tile_mip_bias_offset, expected_bias);
             assert!((material.vertex_movement_scale - expected_scale).abs() < 0.000_01);
-            assert!(prepared.unsupported_inputs.tile_mip_bias_offset);
+            assert!(!prepared.unsupported_inputs.tile_mip_bias_offset);
         }
     }
 
@@ -6898,6 +6971,7 @@ mod weapon_material_tests {
             (G_VERTEX_MOVEMENT_SCALE, "g_VertexMovementScale"),
             (G_VERTEX_MOVEMENT_MAX_LENGTH, "g_VertexMovementMaxLength"),
             (G_AMBIENT_OCCLUSION_MASK, "g_AmbientOcclusionMask"),
+            (G_VERTEX_ALPHA_TO_ONE, "VertexAlphaToOne"),
         ] {
             assert_eq!(
                 known_material_constant_name(value).as_deref(),
@@ -7346,11 +7420,12 @@ mod weapon_material_tests {
         let mut textures = vec![WeaponModelTexture {
             path: "index.tex".to_string(),
             kind: WeaponModelTextureKind::Index,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
             array_size: 1,
             array_layer_height: 1,
-            rgba: vec![0, 0, 0, 255],
+            rgba: vec![0, 255, 0, 255],
             rgba_f32: None,
         }];
         let rows = weapon_color_table_rows(&color_table).expect("color table rows");
@@ -7370,14 +7445,30 @@ mod weapon_material_tests {
             WeaponModelTextureKind::TileMatrixProperties
         );
         assert_eq!(&tile_matrix.rgba[0..4], &[255, 0, 64, 255]);
-        assert_eq!(tile_matrix.rgba_f32, Some(vec![[2.0, -0.5, 0.25, 1.5]]));
+        assert_eq!(tile_matrix.width, 2);
+        assert_eq!(
+            tile_matrix.texel_layout,
+            ModelTextureTexelLayout::ColorTableTileRampAb
+        );
+        assert_eq!(
+            textures[baked.tile_properties].texel_layout,
+            ModelTextureTexelLayout::ColorTableTileRampAb
+        );
+        assert_eq!(
+            tile_matrix.rgba_f32,
+            Some(vec![[2.0, -0.5, 0.25, 1.5], [0.0; 4]])
+        );
         assert_eq!(textures[baked.base_color].rgba[3], 255);
     }
 
     #[test]
-    fn baked_sheen_and_sphere_textures_preserve_float_channels() {
+    fn baked_diffuse_specular_emissive_sheen_and_sphere_textures_preserve_float_channels() {
         let rows = vec![
             ColorTableRowColors {
+                diffuse: [6.7929688, 2.0, 0.5],
+                specular: [0.25, 0.5, 0.75],
+                anisotropy: 7.0,
+                emissive: [61.46875, 2.0, 0.5],
                 sheen_aperture: 4.0,
                 sphere_index: 2.0,
                 ..Default::default()
@@ -7387,11 +7478,12 @@ mod weapon_material_tests {
         let mut textures = vec![WeaponModelTexture {
             path: "index.tex".to_string(),
             kind: WeaponModelTextureKind::Index,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
             array_size: 1,
             array_layer_height: 1,
-            rgba: vec![0, 0, 0, 255],
+            rgba: vec![0, 255, 0, 255],
             rgba_f32: None,
         }];
 
@@ -7404,15 +7496,29 @@ mod weapon_material_tests {
         )
         .expect("bake");
 
+        assert_eq!(
+            textures[baked.base_color].rgba_f32,
+            Some(vec![[6.7929688, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
+        assert_eq!(textures[baked.specular].rgba[3], 255);
+        assert_eq!(
+            textures[baked.specular].rgba_f32,
+            Some(vec![[0.25, 0.5, 0.75, 7.0], [0.0, 0.0, 0.0, 0.0]])
+        );
         assert_eq!(textures[baked.sheen_properties].rgba[2], 255);
         assert_eq!(
             textures[baked.sheen_properties].rgba_f32,
-            Some(vec![[0.0, 0.0, 4.0, 1.0]])
+            Some(vec![[0.0, 0.0, 4.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
         );
         assert_eq!(textures[baked.sphere_properties].rgba[0], 2);
         assert_eq!(
             textures[baked.sphere_properties].rgba_f32,
-            Some(vec![[2.0 / 255.0, 0.0, 1.0, 1.0]])
+            Some(vec![[2.0 / 255.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0],])
+        );
+        let emissive = baked.emissive.expect("HDR emissive texture");
+        assert_eq!(
+            textures[emissive].rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
         );
     }
 
@@ -7707,6 +7813,7 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "normal.tex".to_string(),
                 kind: WeaponModelTextureKind::Normal,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -7717,6 +7824,7 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "index.tex".to_string(),
                 kind: WeaponModelTextureKind::Index,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -8445,16 +8553,19 @@ mod weapon_material_tests {
         let shader_package = test_shpk_with_material_defaults(&[
             (G_ALPHA_APERTURE, &[2.5]),
             (G_ALPHA_OFFSET, &[-0.25]),
+            (G_VERTEX_ALPHA_TO_ONE, &[0.01]),
             (G_SHADOW_ALPHA_THRESHOLD, &[0.35]),
         ]);
 
         assert_eq!(composed_material_alpha_aperture(&semantics), 2.0);
         assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.0);
         assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.5);
 
         semantics.apply_shader_package_material_constants(&shader_package);
         assert_eq!(composed_material_alpha_aperture(&semantics), 2.5);
         assert_eq!(composed_material_alpha_offset(&semantics), -0.25);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.01);
         assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.35);
 
         let material = test_mtrl_with_constant(G_ALPHA_APERTURE, &[4.0], 0);
@@ -8464,6 +8575,10 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[0.2], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_alpha_offset(&semantics), 0.2);
+
+        let material = test_mtrl_with_constant(G_VERTEX_ALPHA_TO_ONE, &[1.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 1.0);
 
         let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[1.5], 0);
         semantics.apply_material_constants(&material);
@@ -8476,6 +8591,10 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[f32::INFINITY], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_VERTEX_ALPHA_TO_ONE, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.0);
 
         let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[f32::NEG_INFINITY], 0);
         semantics.apply_material_constants(&material);
@@ -9501,11 +9620,12 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn colorset_base_selection_replaces_multi_material_diffuse() {
+    fn colorset_base_selection_and_compatibility_multiply_preserve_hdr_diffuse() {
         let mut textures = vec![
             WeaponModelTexture {
                 path: "base.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -9516,12 +9636,13 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "baked://material#colorset-diffuse".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
                 array_layer_height: 1,
                 rgba: vec![64, 128, 192, 255],
-                rgba_f32: None,
+                rgba_f32: Some(vec![[6.7929688, 2.0, 0.5, 1.0]]),
             },
         ];
 
@@ -9545,6 +9666,14 @@ mod weapon_material_tests {
         )
         .expect("multiply compatibility diffuse");
         assert_eq!(textures[multiplied].rgba[3], 77);
+        let multiplied_float = textures[multiplied]
+            .rgba_f32
+            .as_deref()
+            .expect("Compatibility float diffuse")[0];
+        assert!((multiplied_float[0] - srgb_u8_to_linear(128) * 6.7929688).abs() < 1.0e-6);
+        assert!((multiplied_float[1] - srgb_u8_to_linear(64) * 2.0).abs() < 1.0e-6);
+        assert!((multiplied_float[2] - srgb_u8_to_linear(32) * 0.5).abs() < 1.0e-6);
+        assert_eq!(multiplied_float[3], 77.0 / 255.0);
         assert!(textures[multiplied].path.ends_with("#base-times-colorset"));
     }
 
@@ -9554,6 +9683,7 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "base.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -9564,6 +9694,7 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "colorset.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -9794,6 +9925,7 @@ mod weapon_material_tests {
         WeaponModelTexture {
             path: path.to_string(),
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
             array_size: 1,
