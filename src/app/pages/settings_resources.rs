@@ -817,7 +817,7 @@ pub(super) fn ResourceSettingsSection() -> Element {
 fn module_description(id: &str) -> &'static str {
     match id {
         "crafting" => "配方树、素材汇总、来源选择",
-        "notes" => "目录页面、分栏卡片、材料汇总",
+        "notes" => "物品树、多选汇总、单项分析",
         "weapon-models" => "本地 SqPack 武器检索和模型预览",
         _ => "应用模块",
     }

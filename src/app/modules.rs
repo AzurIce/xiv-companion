@@ -92,7 +92,7 @@ pub const APP_MODULES: &[AppModule] = &[
     },
     AppModule {
         id: "notes",
-        label: "笔记",
+        label: "制作清单",
         href: "/notes",
         group: ModuleGroup::Tools,
         status: ModuleStatus::Ready,

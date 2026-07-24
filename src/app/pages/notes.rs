@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use dioxus_flow::{FlowCanvas, FlowEdge, FlowNode, NodeId, NodeMove, Point, Size, Viewport};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,7 +28,6 @@ const MARKET_WORLD_DC_REGION: &str = "中国";
 
 #[derive(Clone)]
 struct SourceChoicesContext(HashMap<u32, SourceChoice>);
-const GRAPH_EDGE_COLOR: &str = "#94a3b8";
 const CRYSTAL_ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
 const CRYSTAL_TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
 const CRYSTAL_ELEMENT_STYLES: [(&str, &str, &str); 6] = [
@@ -60,42 +60,53 @@ struct CraftSummaryTarget {
     collapsed: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CraftSummaryCard {
+#[derive(Clone, Debug, PartialEq)]
+struct CraftAnalysisSelection {
     id: String,
-    kind: String,
     title: String,
     targets: Vec<CraftSummaryTarget>,
+    source_choices: BTreeMap<String, SourceChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LegacySummaryCard {
+    id: String,
+    title: String,
+    targets: Vec<CraftSummaryTarget>,
+    source_choices: BTreeMap<String, SourceChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LegacyNotePage {
+    id: String,
+    cards: Vec<LegacySummaryCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteItem {
+    id: String,
+    recipe_id: u32,
+    item_id: u32,
+    amount: u32,
+    #[serde(default)]
+    collapsed: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     source_choices: BTreeMap<String, SourceChoice>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NotePage {
-    id: String,
-    #[serde(default)]
-    cards: Vec<CraftSummaryCard>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct NotesState {
     tree: Vec<NoteTreeNode>,
-    pages: BTreeMap<String, NotePage>,
+    items: BTreeMap<String, NoteItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    active_page_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    active_card_id: Option<String>,
+    active_item_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NameDialogKind {
     AddFolder {
-        parent_id: Option<String>,
-    },
-    AddPage {
         parent_id: Option<String>,
     },
     RenameNode {
@@ -108,7 +119,6 @@ impl NameDialogKind {
     fn title(&self) -> &'static str {
         match self {
             NameDialogKind::AddFolder { .. } => "新建目录",
-            NameDialogKind::AddPage { .. } => "新建页面",
             NameDialogKind::RenameNode { .. } => "重命名",
         }
     }
@@ -116,7 +126,6 @@ impl NameDialogKind {
     fn label(&self) -> &'static str {
         match self {
             NameDialogKind::AddFolder { .. } => "目录名称",
-            NameDialogKind::AddPage { .. } => "页面名称",
             NameDialogKind::RenameNode { .. } => "名称",
         }
     }
@@ -124,7 +133,6 @@ impl NameDialogKind {
     fn initial_value(&self) -> String {
         match self {
             NameDialogKind::AddFolder { .. } => "新目录".to_string(),
-            NameDialogKind::AddPage { .. } => "新页面".to_string(),
             NameDialogKind::RenameNode { current_title, .. } => current_title.clone(),
         }
     }
@@ -140,7 +148,6 @@ impl NameDialogKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ConfirmDialogKind {
     DeleteNode { node_id: String },
-    DeleteCard { card_id: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -197,8 +204,6 @@ struct PositionedCraftGraphEdge {
 struct CraftGraphLayout {
     nodes: Vec<PositionedCraftGraphNode>,
     edges: Vec<PositionedCraftGraphEdge>,
-    width: f64,
-    height: f64,
     node_width: f64,
     node_height: f64,
 }
@@ -234,32 +239,23 @@ fn id() -> String {
     format!("{now:x}-{random:x}")
 }
 
-fn create_default_page(page_id: String) -> NotePage {
-    NotePage {
+fn create_default_page(page_id: String) -> LegacyNotePage {
+    LegacyNotePage {
         id: page_id,
         cards: Vec::new(),
     }
 }
 
 fn create_default_state() -> NotesState {
-    let page_id = id();
-    let mut pages = BTreeMap::new();
-    pages.insert(page_id.clone(), create_default_page(page_id.clone()));
     NotesState {
-        tree: vec![NoteTreeNode {
-            id: page_id.clone(),
-            kind: "page".to_string(),
-            title: "新笔记".to_string(),
-            children: Vec::new(),
-        }],
-        pages,
-        active_page_id: Some(page_id),
-        active_card_id: None,
+        tree: Vec::new(),
+        items: BTreeMap::new(),
+        active_item_id: None,
     }
 }
 
 fn collect_page_ids(node: &NoteTreeNode, result: &mut Vec<String>) {
-    if node.kind == "page" {
+    if is_entry_node(node) {
         result.push(node.id.clone());
     }
     for child in &node.children {
@@ -269,7 +265,7 @@ fn collect_page_ids(node: &NoteTreeNode, result: &mut Vec<String>) {
 
 fn first_page_id(nodes: &[NoteTreeNode]) -> Option<String> {
     for node in nodes {
-        if node.kind == "page" {
+        if is_entry_node(node) {
             return Some(node.id.clone());
         }
         if let Some(id) = first_page_id(&node.children) {
@@ -362,6 +358,281 @@ fn delete_tree_node(nodes: &[NoteTreeNode], node_id: &str) -> (Vec<NoteTreeNode>
     (next_nodes, removed_pages)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NotesViewMode {
+    Summary,
+    Items,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TreeItemMeta {
+    icon: u32,
+    amount: u32,
+}
+
+fn is_entry_node(node: &NoteTreeNode) -> bool {
+    node.kind == "item" || node.kind == "page"
+}
+
+fn collect_entry_ids(node: &NoteTreeNode, result: &mut Vec<String>) {
+    if is_entry_node(node) {
+        result.push(node.id.clone());
+    }
+    for child in &node.children {
+        collect_entry_ids(child, result);
+    }
+}
+
+fn visible_entry_ids(nodes: &[NoteTreeNode], expanded: &HashSet<String>) -> Vec<String> {
+    fn visit(nodes: &[NoteTreeNode], expanded: &HashSet<String>, result: &mut Vec<String>) {
+        for node in nodes {
+            if is_entry_node(node) {
+                result.push(node.id.clone());
+            } else if expanded.contains(&node.id) {
+                visit(&node.children, expanded, result);
+            }
+        }
+    }
+    let mut result = Vec::new();
+    visit(nodes, expanded, &mut result);
+    result
+}
+
+fn analysis_selection(item: &NoteItem, title: String) -> CraftAnalysisSelection {
+    CraftAnalysisSelection {
+        id: item.id.clone(),
+        title,
+        targets: vec![CraftSummaryTarget {
+            id: item.id.clone(),
+            recipe_id: item.recipe_id,
+            item_id: item.item_id,
+            amount: item.amount,
+            collapsed: item.collapsed.clone(),
+        }],
+        source_choices: item.source_choices.clone(),
+    }
+}
+
+fn find_parent_folder_id(nodes: &[NoteTreeNode], node_id: &str) -> Option<String> {
+    for node in nodes {
+        if node.kind != "folder" {
+            continue;
+        }
+        if node.children.iter().any(|child| child.id == node_id) {
+            return Some(node.id.clone());
+        }
+        if let Some(parent_id) = find_parent_folder_id(&node.children, node_id) {
+            return Some(parent_id);
+        }
+    }
+    None
+}
+
+fn select_entry_ids(
+    visible: &[String],
+    selected: &[String],
+    clicked: &str,
+    ctrl: bool,
+    shift: bool,
+    anchor: Option<&str>,
+) -> Vec<String> {
+    if shift {
+        if let (Some(_anchor), Some(start), Some(end)) = (
+            anchor,
+            anchor.and_then(|anchor| visible.iter().position(|id| id == anchor)),
+            visible.iter().position(|id| id == clicked),
+        ) {
+            let (from, to) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            return visible[from..=to].to_vec();
+        }
+    }
+    if ctrl {
+        let mut next = selected.to_vec();
+        if let Some(index) = next.iter().position(|id| id == clicked) {
+            next.remove(index);
+        } else {
+            next.push(clicked.to_string());
+        }
+        return next;
+    }
+    vec![clicked.to_string()]
+}
+
+fn contains_tree_node(nodes: &[NoteTreeNode], node_id: &str) -> bool {
+    nodes.iter().any(|node| {
+        node.id == node_id || (node.kind == "folder" && contains_tree_node(&node.children, node_id))
+    })
+}
+
+fn contains_tree_node_kind(nodes: &[NoteTreeNode], kind: &str) -> bool {
+    nodes.iter().any(|node| {
+        node.kind == kind
+            || (node.kind == "folder" && contains_tree_node_kind(&node.children, kind))
+    })
+}
+
+fn take_tree_node(
+    nodes: &[NoteTreeNode],
+    node_id: &str,
+) -> (Vec<NoteTreeNode>, Option<NoteTreeNode>) {
+    let mut removed = None;
+    let mut next = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if node.id == node_id {
+            removed = Some(node.clone());
+            continue;
+        }
+        let mut node = node.clone();
+        if node.kind == "folder" {
+            let (children, child) = take_tree_node(&node.children, node_id);
+            node.children = children;
+            if child.is_some() {
+                removed = child;
+            }
+        }
+        next.push(node);
+    }
+    (next, removed)
+}
+
+fn insert_tree_node(
+    nodes: &[NoteTreeNode],
+    target_id: Option<&str>,
+    into_folder: bool,
+    node_to_add: NoteTreeNode,
+) -> Vec<NoteTreeNode> {
+    if target_id.is_none() {
+        let mut next = nodes.to_vec();
+        next.push(node_to_add);
+        return next;
+    }
+    let target_id = target_id.unwrap();
+    let mut next = Vec::with_capacity(nodes.len() + 1);
+    for node in nodes {
+        if node.id == target_id {
+            if into_folder && node.kind == "folder" {
+                let mut target = node.clone();
+                target.children.push(node_to_add.clone());
+                next.push(target);
+            } else {
+                next.push(node_to_add.clone());
+                next.push(node.clone());
+            }
+            continue;
+        }
+        let mut node = node.clone();
+        if node.kind == "folder" {
+            node.children = insert_tree_node(
+                &node.children,
+                Some(target_id),
+                into_folder,
+                node_to_add.clone(),
+            );
+        }
+        next.push(node);
+    }
+    next
+}
+
+fn move_tree_node(
+    nodes: &[NoteTreeNode],
+    source_id: &str,
+    target_id: Option<&str>,
+    into_folder: bool,
+) -> Vec<NoteTreeNode> {
+    let source = find_tree_node(nodes, Some(source_id));
+    let target_is_descendant = target_id.is_some_and(|target| {
+        source.is_some_and(|source| contains_tree_node(&source.children, target))
+    });
+    if target_id == Some(source_id) || target_is_descendant {
+        return nodes.to_vec();
+    }
+    let (without_source, Some(source)) = take_tree_node(nodes, source_id) else {
+        return nodes.to_vec();
+    };
+    insert_tree_node(&without_source, target_id, into_folder, source)
+}
+
+#[cfg(test)]
+mod note_tree_tests {
+    use super::*;
+
+    fn item(id: &str) -> NoteTreeNode {
+        NoteTreeNode {
+            id: id.to_string(),
+            kind: "item".to_string(),
+            title: id.to_string(),
+            children: Vec::new(),
+        }
+    }
+
+    fn folder(id: &str, children: Vec<NoteTreeNode>) -> NoteTreeNode {
+        NoteTreeNode {
+            id: id.to_string(),
+            kind: "folder".to_string(),
+            title: id.to_string(),
+            children,
+        }
+    }
+
+    #[test]
+    fn ctrl_and_shift_selection_follow_visible_order() {
+        let visible = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(
+            select_entry_ids(&visible, &["a".to_string()], "c", true, false, Some("a")),
+            vec!["a", "c"]
+        );
+        assert_eq!(
+            select_entry_ids(&visible, &[], "c", false, true, Some("a")),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn moving_an_item_into_a_folder_preserves_the_other_nodes() {
+        let tree = vec![item("a"), folder("group", vec![item("b")]), item("c")];
+        let moved = move_tree_node(&tree, "c", Some("group"), true);
+        assert_eq!(moved.len(), 2);
+        assert_eq!(
+            moved[1]
+                .children
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
+    }
+
+    #[test]
+    fn a_folder_cannot_be_moved_into_its_descendant() {
+        let tree = vec![folder("outer", vec![folder("inner", vec![item("a")])])];
+        assert_eq!(move_tree_node(&tree, "outer", Some("inner"), true), tree);
+    }
+
+    #[test]
+    fn current_notes_schema_stores_items_without_pages_or_cards() {
+        let state = normalize_state(serde_json::json!({
+            "tree": [{ "id": "item-a", "kind": "item", "title": "测试物品" }],
+            "items": {
+                "item-a": {
+                    "id": "item-a",
+                    "recipeId": 10,
+                    "itemId": 20,
+                    "amount": 3
+                }
+            },
+            "activeItemId": "item-a"
+        }));
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.active_item_id.as_deref(), Some("item-a"));
+        assert_eq!(state.items["item-a"].amount, 3);
+    }
+}
+
 fn normalize_target(raw: &Value) -> Option<CraftSummaryTarget> {
     let recipe_id = raw.get("recipeId")?.as_u64()? as u32;
     let item_id = raw.get("itemId")?.as_u64()? as u32;
@@ -397,7 +668,7 @@ fn normalize_target(raw: &Value) -> Option<CraftSummaryTarget> {
     })
 }
 
-fn normalize_card(raw: &Value, fallback_title: &str) -> Option<CraftSummaryCard> {
+fn normalize_card(raw: &Value, fallback_title: &str) -> Option<LegacySummaryCard> {
     if raw.get("kind").and_then(Value::as_str) == Some("craftSummary") {
         let targets = raw
             .get("targets")
@@ -414,13 +685,12 @@ fn normalize_card(raw: &Value, fallback_title: &str) -> Option<CraftSummaryCard>
             .cloned()
             .and_then(|value| serde_json::from_value::<BTreeMap<String, SourceChoice>>(value).ok())
             .unwrap_or_default();
-        return Some(CraftSummaryCard {
+        return Some(LegacySummaryCard {
             id: raw
                 .get("id")
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(id),
-            kind: "craftSummary".to_string(),
             title: raw
                 .get("title")
                 .and_then(Value::as_str)
@@ -432,22 +702,21 @@ fn normalize_card(raw: &Value, fallback_title: &str) -> Option<CraftSummaryCard>
         });
     }
 
-    normalize_target(raw).map(|target| CraftSummaryCard {
+    normalize_target(raw).map(|target| LegacySummaryCard {
         id: id(),
-        kind: "craftSummary".to_string(),
         title: fallback_title.to_string(),
         targets: vec![target],
         source_choices: BTreeMap::new(),
     })
 }
 
-fn normalize_page(raw: Option<&Value>, page_id: &str) -> NotePage {
+fn normalize_page(raw: Option<&Value>, page_id: &str) -> LegacyNotePage {
     let Some(raw) = raw else {
         return create_default_page(page_id.to_string());
     };
 
     if let Some(cards) = raw.get("cards").and_then(Value::as_array) {
-        return NotePage {
+        return LegacyNotePage {
             id: page_id.to_string(),
             cards: cards
                 .iter()
@@ -484,13 +753,12 @@ fn normalize_page(raw: Option<&Value>, page_id: &str) -> NotePage {
                         serde_json::from_value::<BTreeMap<String, SourceChoice>>(value).ok()
                     })
                     .unwrap_or_default();
-                Some(CraftSummaryCard {
+                Some(LegacySummaryCard {
                     id: section
                         .get("id")
                         .and_then(Value::as_str)
                         .map(str::to_string)
                         .unwrap_or_else(id),
-                    kind: "craftSummary".to_string(),
                     title: section
                         .get("title")
                         .and_then(Value::as_str)
@@ -502,7 +770,7 @@ fn normalize_page(raw: Option<&Value>, page_id: &str) -> NotePage {
                 })
             })
             .collect::<Vec<_>>();
-        return NotePage {
+        return LegacyNotePage {
             id: page_id.to_string(),
             cards,
         };
@@ -514,7 +782,7 @@ fn normalize_page(raw: Option<&Value>, page_id: &str) -> NotePage {
 fn normalize_tree_node(raw: &Value) -> Option<NoteTreeNode> {
     let id = raw.get("id")?.as_str()?.to_string();
     let kind = raw.get("kind")?.as_str()?.to_string();
-    if kind != "folder" && kind != "page" {
+    if kind != "folder" && kind != "page" && kind != "item" {
         return None;
     }
     let title = raw
@@ -524,7 +792,7 @@ fn normalize_tree_node(raw: &Value) -> Option<NoteTreeNode> {
         .unwrap_or(if kind == "folder" {
             "新目录"
         } else {
-            "新笔记"
+            "新物品"
         })
         .to_string();
     let children = raw
@@ -537,6 +805,134 @@ fn normalize_tree_node(raw: &Value) -> Option<NoteTreeNode> {
         kind,
         title,
         children,
+    })
+}
+
+fn migrate_legacy_tree(
+    nodes: &[NoteTreeNode],
+    legacy_pages: &BTreeMap<String, LegacyNotePage>,
+    items: &mut BTreeMap<String, NoteItem>,
+) -> Vec<NoteTreeNode> {
+    nodes
+        .iter()
+        .map(|node| {
+            if node.kind == "folder" {
+                return NoteTreeNode {
+                    children: migrate_legacy_tree(&node.children, legacy_pages, items),
+                    ..node.clone()
+                };
+            }
+            if node.kind == "item" {
+                if let Some(page) = legacy_pages.get(&node.id) {
+                    if let Some(target) = page.cards.first().and_then(|card| card.targets.first()) {
+                        items.insert(
+                            node.id.clone(),
+                            NoteItem {
+                                id: node.id.clone(),
+                                recipe_id: target.recipe_id,
+                                item_id: target.item_id,
+                                amount: target.amount,
+                                collapsed: target.collapsed.clone(),
+                                source_choices: page
+                                    .cards
+                                    .first()
+                                    .map(|card| card.source_choices.clone())
+                                    .unwrap_or_default(),
+                            },
+                        );
+                    }
+                }
+                return node.clone();
+            }
+
+            let mut children = Vec::new();
+            if let Some(page) = legacy_pages.get(&node.id) {
+                for card in &page.cards {
+                    let mut card_entries = Vec::new();
+                    for (index, target) in card.targets.iter().enumerate() {
+                        let entry_id = target.id.clone();
+                        let title = if card.targets.len() == 1 {
+                            card.title.clone()
+                        } else {
+                            format!("{} · {}", card.title, index + 1)
+                        };
+                        items.insert(
+                            entry_id.clone(),
+                            NoteItem {
+                                id: entry_id.clone(),
+                                recipe_id: target.recipe_id,
+                                item_id: target.item_id,
+                                amount: target.amount,
+                                collapsed: target.collapsed.clone(),
+                                source_choices: card.source_choices.clone(),
+                            },
+                        );
+                        card_entries.push(NoteTreeNode {
+                            id: entry_id,
+                            kind: "item".to_string(),
+                            title,
+                            children: Vec::new(),
+                        });
+                    }
+                    if card_entries.len() > 1 {
+                        children.push(NoteTreeNode {
+                            id: format!("group-{}", card.id),
+                            kind: "folder".to_string(),
+                            title: card.title.clone(),
+                            children: card_entries,
+                        });
+                    } else {
+                        children.extend(card_entries);
+                    }
+                }
+            }
+            NoteTreeNode {
+                id: node.id.clone(),
+                kind: "folder".to_string(),
+                title: node.title.clone(),
+                children,
+            }
+        })
+        .collect()
+}
+
+fn normalize_item(raw: &Value, fallback_id: &str) -> Option<NoteItem> {
+    let recipe_id = raw.get("recipeId")?.as_u64()? as u32;
+    let item_id = raw.get("itemId")?.as_u64()? as u32;
+    if recipe_id == 0 || item_id == 0 {
+        return None;
+    }
+    let id = raw
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_id)
+        .to_string();
+    let source_choices = raw
+        .get("sourceChoices")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<BTreeMap<String, SourceChoice>>(value).ok())
+        .unwrap_or_default();
+    Some(NoteItem {
+        id,
+        recipe_id,
+        item_id,
+        amount: raw
+            .get("amount")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1) as u32,
+        collapsed: raw
+            .get("collapsed")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        source_choices,
     })
 }
 
@@ -556,44 +952,49 @@ fn normalize_state(raw: Value) -> NotesState {
         return fallback;
     }
 
-    let mut page_ids = Vec::new();
+    let mut entry_ids = Vec::new();
     for node in &tree {
-        collect_page_ids(node, &mut page_ids);
+        collect_page_ids(node, &mut entry_ids);
     }
-    if page_ids.is_empty() {
-        return fallback;
-    }
-
     let raw_pages = raw.get("pages").and_then(Value::as_object);
-    let mut pages = BTreeMap::new();
-    for page_id in &page_ids {
-        let raw_page = raw_pages.and_then(|pages| pages.get(page_id));
-        pages.insert(page_id.clone(), normalize_page(raw_page, page_id));
+    let has_legacy_pages = tree.iter().any(|node| {
+        node.kind == "page"
+            || (node.kind == "folder" && contains_tree_node_kind(&node.children, "page"))
+    });
+    if has_legacy_pages {
+        let mut pages = BTreeMap::new();
+        for page_id in &entry_ids {
+            let raw_page = raw_pages.and_then(|pages| pages.get(page_id));
+            pages.insert(page_id.clone(), normalize_page(raw_page, page_id));
+        }
+        let mut items = BTreeMap::new();
+        let tree = migrate_legacy_tree(&tree, &pages, &mut items);
+        return NotesState {
+            active_item_id: first_page_id(&tree),
+            tree,
+            items,
+        };
     }
 
-    let active_page_id = raw
-        .get("activePageId")
+    let raw_items = raw.get("items").and_then(Value::as_object);
+    let mut items = BTreeMap::new();
+    for entry_id in &entry_ids {
+        if let Some(raw_item) = raw_items.and_then(|items| items.get(entry_id)) {
+            if let Some(item) = normalize_item(raw_item, entry_id) {
+                items.insert(entry_id.clone(), item);
+            }
+        }
+    }
+    let active_item_id = raw
+        .get("activeItemId")
         .and_then(Value::as_str)
-        .filter(|id| page_ids.iter().any(|page_id| page_id == id))
+        .filter(|id| items.contains_key(*id))
         .map(str::to_string)
         .or_else(|| first_page_id(&tree));
-    let active_card_id = active_page_id.as_ref().and_then(|page_id| {
-        let active_page = pages.get(page_id)?;
-        let raw_active = raw
-            .get("activeCardId")
-            .or_else(|| raw.get("activeSectionId"))
-            .and_then(Value::as_str);
-        raw_active
-            .filter(|id| active_page.cards.iter().any(|card| card.id == *id))
-            .map(str::to_string)
-            .or_else(|| active_page.cards.first().map(|card| card.id.clone()))
-    });
-
     NotesState {
         tree,
-        pages,
-        active_page_id,
-        active_card_id,
+        items,
+        active_item_id,
     }
 }
 
@@ -629,10 +1030,10 @@ fn choice_record_to_map(record: &BTreeMap<String, SourceChoice>) -> HashMap<u32,
 
 fn summarize_card_materials(
     engine: &CraftDataEngine,
-    card: &CraftSummaryCard,
+    selection: &CraftAnalysisSelection,
 ) -> Vec<MaterialSummary> {
     let mut totals = BTreeMap::<u32, u32>::new();
-    for target in &card.targets {
+    for target in &selection.targets {
         let tree = build_tree(engine, target.item_id, target.amount.max(1));
         let collapsed = collapsed_keys_for_tree(&tree, &target.collapsed.iter().cloned().collect());
         for material in summarize_materials(&tree, &collapsed) {
@@ -1465,18 +1866,9 @@ fn build_graph_layout(graph: &MergedCraftGraph) -> CraftGraphLayout {
     }
     apply_graph_edge_ports(&mut positioned_edges, node_height);
 
-    let max_x = positioned
-        .iter()
-        .fold(node_width, |value, node| value.max(node.x + node_width));
-    let max_y = positioned
-        .iter()
-        .fold(node_height, |value, node| value.max(node.y + node_height));
-
     CraftGraphLayout {
         nodes: positioned,
         edges: positioned_edges,
-        width: max_x + padding,
-        height: f64::max(max_y + padding, content_height + padding * 2.0),
         node_width,
         node_height,
     }
@@ -1532,7 +1924,7 @@ fn MaterialSummaryPanel(
     let crystal_rows = crystal_summary_rows(&data, &materials);
 
     rsx! {
-        section { class: "overflow-hidden rounded-md border bg-background",
+        section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
             div { class: "shrink-0 border-b p-3",
                 div { class: "flex items-start justify-between gap-3",
                     div { class: "min-w-0",
@@ -1590,12 +1982,12 @@ fn MaterialSummaryPanel(
                 }
             }
 
-            div { class: "p-3",
+            div { class: "min-h-0 flex-1 overflow-y-auto p-3",
                 if plan.is_empty() && crystal_amount == 0 {
                     EmptyState {
                         icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
                         title: "暂无材料".to_string(),
-                        description: "卡片里选择物品后会汇总叶子材料".to_string(),
+                        description: "选择物品后可查看材料汇总与单项制作分析".to_string(),
                     }
                 } else {
                     div { class: "space-y-4",
@@ -1804,10 +2196,7 @@ fn MaterialSummaryPanel(
 fn MergedCraftGraphNodeCard(
     data: Rc<CraftDataPackage>,
     node: PositionedCraftGraphNode,
-    width: f64,
-    height: f64,
     on_toggle: EventHandler<(u32, bool)>,
-    on_select: EventHandler<DetailTarget>,
 ) -> Element {
     let graph_node = node.node.clone();
     let counts_as_leaf = !graph_node.craftable || graph_node.collapsed;
@@ -1837,22 +2226,13 @@ fn MergedCraftGraphNodeCard(
 
     rsx! {
         div {
-            class: "absolute",
-            style: "left: {node.x}px; top: {node.y}px; width: {width}px; height: {height}px;",
+            class: "relative h-full w-full",
             button {
                 r#type: "button",
                 class: cx([
                     "grid h-full w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-1.5 rounded border border-border border-l-2 px-2 py-1.5 text-left text-xs shadow-sm transition-colors",
                     tone_class,
                 ]),
-                onclick: {
-                    let graph_node = graph_node.clone();
-                    move |_| on_select.call(DetailTarget {
-                        item_id: graph_node.item_id,
-                        amount_needed: graph_node.amount,
-                        recipe: graph_node.recipe.clone(),
-                    })
-                },
                 ItemIcon { icon: item.as_ref().map(|item| item.icon).unwrap_or(0), size: "sm" }
                 div { class: "min-w-0",
                     div { class: "truncate font-medium", "{get_item_name(&data, graph_node.item_id)}" }
@@ -1893,6 +2273,9 @@ fn MergedCraftGraphNodeCard(
                     class: "absolute right-[-12px] top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground",
                     aria_label: if graph_node.collapsed { "继续分解" } else { "停止分解" },
                     title: if graph_node.collapsed { "继续分解" } else { "停止分解" },
+                    "data-flow-no-drag": "true",
+                    onmousedown: move |event| event.stop_propagation(),
+                    onmouseup: move |event| event.stop_propagation(),
                     onclick: {
                         let graph_node = graph_node.clone();
                         move |event| {
@@ -1917,154 +2300,182 @@ fn CraftSummaryGraph(
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
-    let mut zoom = use_signal(|| 1.0f64);
-    let mut update_zoom = move |next: f64| {
-        let next = (next.clamp(0.5, 1.4) * 100.0).round() / 100.0;
-        zoom.set(next);
-    };
     let graph = build_merged_craft_graph(&data, &roots);
     let layout = build_graph_layout(&graph);
-    let outer_width = layout.width * zoom();
-    let outer_height = layout.height * zoom();
-    let zoom_percent = (zoom() * 100.0).round() as u32;
+    rsx! {
+        CraftFlowCanvas {
+            data,
+            root_count: roots.len(),
+            layout,
+            on_toggle_collapsed_item,
+            on_select,
+        }
+    }
+}
+
+#[component]
+fn CraftFlowCanvas(
+    data: Rc<CraftDataPackage>,
+    root_count: usize,
+    layout: CraftGraphLayout,
+    on_toggle_collapsed_item: EventHandler<(u32, bool)>,
+    on_select: EventHandler<DetailTarget>,
+) -> Element {
+    let mut viewport = use_signal(Viewport::default);
+    let mut node_offsets = use_signal(HashMap::<u32, (f64, f64)>::new);
+    let base_layout = layout;
+    let base_positions = base_layout
+        .nodes
+        .iter()
+        .map(|node| (node.node.item_id, (node.x, node.y)))
+        .collect::<HashMap<_, _>>();
+    let mut layout = base_layout.clone();
+    let offsets = node_offsets();
+    for node in &mut layout.nodes {
+        if let Some((x, y)) = offsets.get(&node.node.item_id) {
+            node.x += x;
+            node.y += y;
+        }
+    }
+    for edge in &mut layout.edges {
+        if let Some((x, y)) = offsets.get(&edge.from_node.node.item_id) {
+            edge.from_node.x += x;
+            edge.from_node.y += y;
+        }
+        if let Some((x, y)) = offsets.get(&edge.to_node.node.item_id) {
+            edge.to_node.x += x;
+            edge.to_node.y += y;
+        }
+    }
+    let flow_nodes = layout
+        .nodes
+        .iter()
+        .map(|node| FlowNode {
+            id: NodeId(node.node.item_id.to_string()),
+            position: Point::new(node.x, node.y),
+            size: Size::new(layout.node_width, layout.node_height),
+        })
+        .collect::<Vec<_>>();
+    let flow_edges = layout
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(index, edge)| FlowEdge {
+            id: format!("{}-{}-{index}", edge.edge.from, edge.edge.to),
+            source: NodeId(edge.edge.from.to_string()),
+            target: NodeId(edge.edge.to.to_string()),
+            source_offset: edge.from_offset,
+            target_offset: edge.to_offset,
+            label: Some(format!("×{}", format_integer(edge.edge.amount as f64))),
+        })
+        .collect::<Vec<_>>();
+    let nodes_by_id = layout
+        .nodes
+        .iter()
+        .cloned()
+        .map(|node| (node.node.item_id.to_string(), node))
+        .collect::<HashMap<_, _>>();
+    let nodes_for_click = nodes_by_id.clone();
+    let zoom_percent = (viewport().zoom * 100.0).round() as u32;
 
     rsx! {
-        section { class: "overflow-hidden rounded-md border bg-background",
+        section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
             div { class: "flex flex-wrap items-center justify-between gap-3 border-b p-3",
                 div { class: "min-w-0",
                     div { class: "text-sm font-semibold", "合成图" }
-                    div { class: "mt-0.5 text-xs text-muted-foreground", "全部目标合并为一张图，相同物品共用节点" }
+                    div { class: "mt-0.5 text-xs text-muted-foreground", "拖动画布平移，滚轮以指针为中心缩放，节点可自由移动" }
                 }
                 div { class: "flex flex-wrap items-center gap-2",
-                    Badge { variant: BadgeVariant::Outline, "目标 {roots.len()}" }
-                    Badge { variant: BadgeVariant::Outline, "节点 {layout.nodes.len()}" }
-                    Badge { variant: BadgeVariant::Outline, "边 {layout.edges.len()}" }
+                    Badge { variant: BadgeVariant::Outline, "目标 {root_count}" }
+                    Badge { variant: BadgeVariant::Outline, "节点 {flow_nodes.len()}" }
+                    Badge { variant: BadgeVariant::Outline, "边 {flow_edges.len()}" }
                     div { class: "flex items-center gap-1 rounded-md border bg-background p-1",
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
                             title: "缩小",
                             aria_label: "缩小",
-                            onclick: move |_| update_zoom(zoom() - 0.1),
+                            onclick: move |_| {
+                                let current = viewport();
+                                viewport.set(Viewport { zoom: (current.zoom - 0.1).clamp(0.35, 2.0), ..current });
+                            },
                             Icon { kind: IconKind::ZoomOut, class: "h-4 w-4" }
                         }
-                        div { class: "w-12 text-center text-xs font-medium text-muted-foreground",
-                            "{zoom_percent}%"
-                        }
+                        div { class: "w-12 text-center text-xs font-medium text-muted-foreground", "{zoom_percent}%" }
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
                             title: "放大",
                             aria_label: "放大",
-                            onclick: move |_| update_zoom(zoom() + 0.1),
+                            onclick: move |_| {
+                                let current = viewport();
+                                viewport.set(Viewport { zoom: (current.zoom + 0.1).clamp(0.35, 2.0), ..current });
+                            },
                             Icon { kind: IconKind::ZoomIn, class: "h-4 w-4" }
                         }
                         button {
                             r#type: "button",
                             class: "flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                            title: "重置缩放",
-                            aria_label: "重置缩放",
-                            onclick: move |_| update_zoom(1.0),
+                            title: "重置视图和节点位置",
+                            aria_label: "重置视图和节点位置",
+                            onclick: move |_| {
+                                node_offsets.set(HashMap::new());
+                                viewport.set(Viewport::default());
+                            },
                             Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
                         }
                     }
                 }
             }
 
-            div { class: "overflow-x-auto overflow-y-visible bg-muted/10 p-3",
-                div {
-                    class: "relative min-w-max rounded-md border bg-background",
-                    style: "width: {outer_width}px; height: {outer_height}px;",
-                    div {
-                        class: "absolute left-0 top-0 origin-top-left",
-                        style: "width: {layout.width}px; height: {layout.height}px; transform: scale({zoom});",
-                        svg {
-                            class: "pointer-events-none absolute inset-0",
-                            width: "{layout.width}",
-                            height: "{layout.height}",
-                            view_box: "0 0 {layout.width} {layout.height}",
-                            defs {
-                                marker {
-                                    id: "craft-graph-arrow",
-                                    marker_width: "10",
-                                    marker_height: "10",
-                                    ref_x: "9",
-                                    ref_y: "5",
-                                    orient: "auto",
-                                    path { d: "M0,0 L10,5 L0,10 Z", fill: GRAPH_EDGE_COLOR }
-                                }
-                            }
-                            for edge in layout.edges.clone() {
-                                {
-                                    let x1 = edge.from_node.x + layout.node_width;
-                                    let y1 = edge.from_node.y + layout.node_height / 2.0 + edge.from_offset;
-                                    let x2 = edge.to_node.x;
-                                    let y2 = edge.to_node.y + layout.node_height / 2.0 + edge.to_offset;
-                                    let mid_x = (x1 + x2) / 2.0;
-                                    let path_value = format!(
-                                        "M {x1} {y1} C {mid_x} {y1}, {mid_x} {y2}, {x2} {y2}"
-                                    );
-                                    let label_x = x1 + (x2 - x1) * 0.68 - 22.0;
-                                    let label_y = y1 + (y2 - y1) * 0.68 - 10.0;
-                                    rsx! {
-                                        g {
-                                            path {
-                                                d: "{path_value}",
-                                                fill: "none",
-                                                stroke: GRAPH_EDGE_COLOR,
-                                                stroke_opacity: "0.68",
-                                                stroke_width: "1.75",
-                                                marker_end: "url(#craft-graph-arrow)",
-                                            }
-                                            foreignObject {
-                                                x: "{label_x}",
-                                                y: "{label_y}",
-                                                width: "44",
-                                                height: "20",
-                                                div { class: "flex h-5 items-center justify-center",
-                                                    span { class: "rounded border bg-background/90 px-1 text-[9px] font-medium leading-none text-muted-foreground shadow-sm",
-                                                        "x{format_integer(edge.edge.amount as f64)}"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        for node in layout.nodes.clone() {
-                            MergedCraftGraphNodeCard {
-                                data: data.clone(),
-                                node,
-                                width: layout.node_width,
-                                height: layout.node_height,
-                                on_toggle: on_toggle_collapsed_item,
-                                on_select,
-                            }
-                        }
-
-                        if layout.nodes.is_empty() {
-                            div { class: "absolute inset-0 flex items-center justify-center",
-                                EmptyState {
-                                    icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                                    title: "暂无图节点".to_string(),
-                                }
-                            }
+            FlowCanvas {
+                class: "min-h-0 flex-1 bg-muted/10",
+                nodes: flow_nodes,
+                edges: flow_edges,
+                viewport,
+                on_node_move: move |movement: NodeMove| {
+                    let Ok(item_id) = movement.id.0.parse::<u32>() else { return; };
+                    let Some((base_x, base_y)) = base_positions.get(&item_id).copied() else { return; };
+                    let mut offsets = node_offsets();
+                    offsets.insert(item_id, (movement.position.x - base_x, movement.position.y - base_y));
+                    node_offsets.set(offsets);
+                },
+                on_node_click: move |id: NodeId| {
+                    let Some(node) = nodes_for_click.get(&id.0) else { return; };
+                    on_select.call(DetailTarget {
+                        item_id: node.node.item_id,
+                        amount_needed: node.node.amount,
+                        recipe: node.node.recipe.clone(),
+                    });
+                },
+                render_node: move |id: NodeId| {
+                    let Some(node) = nodes_by_id.get(&id.0).cloned() else { return rsx! {}; };
+                    rsx! {
+                        MergedCraftGraphNodeCard {
+                            data: data.clone(),
+                            node,
+                            on_toggle: on_toggle_collapsed_item,
                         }
                     }
-                }
+                },
+                empty: rsx! {
+                    EmptyState {
+                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                        title: "暂无图节点".to_string(),
+                    }
+                },
             }
         }
     }
 }
 
 #[component]
-fn CraftSummaryCardView(
+fn CraftAnalysisView(
     data: Rc<CraftDataPackage>,
     engine: CraftDataEngine,
-    card: CraftSummaryCard,
+    selection: CraftAnalysisSelection,
     active: bool,
+    #[props(default = true)] show_actions: bool,
     source_choices: HashMap<u32, SourceChoice>,
     on_select: EventHandler<()>,
     on_edit: EventHandler<()>,
@@ -2073,8 +2484,8 @@ fn CraftSummaryCardView(
     on_choose_source: EventHandler<(u32, Option<SourceChoice>)>,
     on_inspect: EventHandler<DetailTarget>,
 ) -> Element {
-    let materials = summarize_card_materials(&engine, &card);
-    let roots = card
+    let materials = summarize_card_materials(&engine, &selection);
+    let roots = selection
         .targets
         .iter()
         .map(|target| {
@@ -2101,18 +2512,18 @@ fn CraftSummaryCardView(
                     Icon { kind: IconKind::PackageSearch, class: "h-4 w-4" }
                 }
                 div { class: "min-w-0 flex-1",
-                    div { class: "truncate text-sm font-semibold", "{card.title}" }
+                        div { class: "truncate text-sm font-semibold", "{selection.title}" }
                     div { class: "mt-0.5 flex flex-wrap gap-1.5 text-xs text-muted-foreground",
-                        Badge { variant: BadgeVariant::Outline, "物品 {card.targets.len()}" }
+                            Badge { variant: BadgeVariant::Outline, "物品 {selection.targets.len()}" }
                         Badge { variant: BadgeVariant::Outline, "叶子 {materials.len()}" }
                     }
                 }
-                div { class: "flex shrink-0 items-center gap-1",
+                if show_actions { div { class: "flex shrink-0 items-center gap-1",
                     button {
                         r#type: "button",
                         class: "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                        title: "编辑卡片",
-                        aria_label: "编辑卡片",
+                        title: "编辑物品",
+                        aria_label: "编辑物品",
                         onclick: move |event| {
                             event.stop_propagation();
                             on_edit.call(());
@@ -2122,51 +2533,46 @@ fn CraftSummaryCardView(
                     button {
                         r#type: "button",
                         class: "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                        title: "删除卡片",
-                        aria_label: "删除卡片",
+                        title: "删除物品",
+                        aria_label: "删除物品",
                         onclick: move |event| {
                             event.stop_propagation();
                             on_remove.call(());
                         },
                         Icon { kind: IconKind::Trash2, class: "h-4 w-4" }
                     }
-                }
+                } }
             }
 
-            div { class: "space-y-3 p-3",
-                if roots.is_empty() {
-                    EmptyState {
-                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                        title: "暂无物品".to_string(),
-                        action: rsx! {
-                            Button {
-                                size: ButtonSize::Sm,
-                                variant: ButtonVariant::Outline,
-                                onclick: move |_| on_edit.call(()),
-                                Icon { kind: IconKind::Plus, class: "h-4 w-4" }
-                                "选择物品"
-                            }
-                        },
-                    }
-                } else {
-                    CraftSummaryGraph {
-                        data: data.clone(),
-                        roots,
-                        on_toggle_collapsed_item,
-                        on_select: on_inspect,
+            div { class: "grid min-w-0 gap-3 p-3 xl:h-[640px] xl:grid-cols-[minmax(0,1fr)_400px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_460px]",
+                div { class: "min-h-0 min-w-0",
+                    if roots.is_empty() {
+                        EmptyState {
+                            icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                            title: "暂无物品".to_string(),
+                        }
+                    } else {
+                        CraftSummaryGraph {
+                            data: data.clone(),
+                            roots,
+                            on_toggle_collapsed_item,
+                            on_select: on_inspect,
+                        }
                     }
                 }
-                MaterialSummaryPanel {
-                    data: data.clone(),
-                    title: card.title.clone(),
-                    materials,
-                    source_choices,
-                    on_choose: on_choose_source,
-                    on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
-                        item_id,
-                        amount_needed,
-                        recipe: None,
-                    }),
+                aside { class: "min-h-0 min-w-0",
+                    MaterialSummaryPanel {
+                        data: data.clone(),
+                        title: selection.title.clone(),
+                        materials,
+                        source_choices,
+                        on_choose: on_choose_source,
+                        on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
+                            item_id,
+                            amount_needed,
+                            recipe: None,
+                        }),
+                    }
                 }
             }
         }
@@ -2177,39 +2583,79 @@ fn CraftSummaryCardView(
 fn TreeNodeRow(
     node: NoteTreeNode,
     depth: u32,
-    active_page_id: Option<String>,
+    item_meta: HashMap<String, TreeItemMeta>,
+    selected_ids: HashSet<String>,
     expanded: HashSet<String>,
     on_toggle: EventHandler<String>,
-    on_select_page: EventHandler<String>,
+    on_select: EventHandler<(String, bool, bool)>,
     on_add_folder: EventHandler<String>,
-    on_add_page: EventHandler<String>,
+    on_add_item: EventHandler<String>,
+    on_change_amount: EventHandler<(String, u32)>,
     on_rename: EventHandler<(String, String)>,
     on_delete: EventHandler<String>,
+    on_drag_start: EventHandler<String>,
+    on_drop: EventHandler<(String, bool)>,
 ) -> Element {
     let is_folder = node.kind == "folder";
     let is_expanded = expanded.contains(&node.id);
-    let active = node.kind == "page" && active_page_id.as_deref() == Some(node.id.as_str());
+    let mut descendants = Vec::new();
+    collect_entry_ids(&node, &mut descendants);
+    let selected = if is_folder {
+        !descendants.is_empty() && descendants.iter().all(|id| selected_ids.contains(id))
+    } else {
+        selected_ids.contains(&node.id)
+    };
     let padding_left = format!("{}px", 8 + depth * 16);
 
     rsx! {
         div {
             div {
+                class: "h-1 rounded-full transition-colors hover:bg-primary/30",
+                title: "插入到此节点前",
+                ondragover: move |event| event.prevent_default(),
+                ondrop: {
+                    let node_id = node.id.clone();
+                    move |event| {
+                        event.prevent_default();
+                        event.stop_propagation();
+                        on_drop.call((node_id.clone(), false));
+                    }
+                },
+            }
+            div {
+                draggable: "true",
                 class: cx([
-                    "group flex h-9 items-center gap-1 rounded-md px-2 text-sm transition-colors",
-                    if active {
-                        "bg-accent text-foreground"
+                    "group flex min-h-9 items-center gap-1 rounded-md px-2 text-sm transition-colors",
+                    if selected {
+                        "bg-accent text-foreground ring-1 ring-foreground/10"
                     } else {
                         "text-muted-foreground hover:bg-accent/70 hover:text-foreground"
                     },
                 ]),
                 style: "padding-left: {padding_left};",
+                ondragstart: {
+                    let node_id = node.id.clone();
+                    move |_| on_drag_start.call(node_id.clone())
+                },
+                ondragover: move |event| event.prevent_default(),
+                ondrop: {
+                    let node_id = node.id.clone();
+                    move |event| {
+                        event.prevent_default();
+                        event.stop_propagation();
+                        on_drop.call((node_id.clone(), is_folder));
+                    }
+                },
+                span { class: "flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground/60", title: "拖动整理",
+                    Icon { kind: IconKind::GripVertical, class: "h-3.5 w-3.5" }
+                }
                 button {
                     r#type: "button",
                     class: "flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-background/80",
                     aria_label: if is_folder {
                         if is_expanded { "折叠目录" } else { "展开目录" }
                     } else {
-                        "打开页面"
+                        "选择物品"
                     },
                     onclick: {
                         let node_id = node.id.clone();
@@ -2217,7 +2663,7 @@ fn TreeNodeRow(
                             if is_folder {
                                 on_toggle.call(node_id.clone());
                             } else {
-                                on_select_page.call(node_id.clone());
+                                on_select.call((node_id.clone(), false, false));
                             }
                         }
                     },
@@ -2226,40 +2672,75 @@ fn TreeNodeRow(
                             kind: if is_expanded { IconKind::ChevronDown } else { IconKind::ChevronRight },
                             class: "h-4 w-4"
                         }
+                    } else if let Some(meta) = item_meta.get(&node.id) {
+                        ItemIcon { icon: meta.icon, size: "sm" }
                     } else {
-                        Icon { kind: IconKind::BookOpen, class: "h-4 w-4" }
+                        Icon { kind: IconKind::PackageSearch, class: "h-4 w-4" }
                     }
                 }
                 button {
                     r#type: "button",
-                    class: "min-w-0 flex-1 truncate text-left",
+                    class: "min-w-0 flex-1 truncate px-1 text-left font-medium",
+                    title: "{node.title}",
                     onclick: {
                         let node_id = node.id.clone();
-                        move |_| {
+                        let descendants = descendants.clone();
+                        move |event| {
                             if is_folder {
-                                on_toggle.call(node_id.clone());
+                                if let Some(first) = descendants.first() {
+                                    let modifiers = event.data().modifiers();
+                                    on_select.call((first.clone(), modifiers.ctrl(), modifiers.shift()));
+                                    for entry_id in descendants.iter().skip(1) {
+                                        on_select.call((entry_id.clone(), true, false));
+                                    }
+                                }
                             } else {
-                                on_select_page.call(node_id.clone());
+                                let modifiers = event.data().modifiers();
+                                on_select.call((node_id.clone(), modifiers.ctrl(), modifiers.shift()));
                             }
                         }
                     },
                     "{node.title}"
+                }
+                if !is_folder {
+                    if let Some(meta) = item_meta.get(&node.id) {
+                        div {
+                            class: "flex h-7 shrink-0 items-center rounded border border-input bg-background px-1 text-xs text-muted-foreground focus-within:ring-2 focus-within:ring-ring",
+                            span { class: "select-none", "×" }
+                            input {
+                                r#type: "number",
+                                min: "1",
+                                value: "{meta.amount}",
+                                style: "width: 2.25rem; appearance: textfield;",
+                                class: "h-6 border-0 bg-transparent px-0.5 text-right text-xs font-medium text-foreground outline-none",
+                                aria_label: "物品数量",
+                                onclick: move |event| event.stop_propagation(),
+                                oninput: {
+                                    let node_id = node.id.clone();
+                                    move |event| {
+                                        let amount = event.value().parse::<u32>().unwrap_or(1).max(1);
+                                        on_change_amount.call((node_id.clone(), amount));
+                                    }
+                                },
+                            }
+                        }
+                    }
                 }
                 div { class: "flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
                     if is_folder {
                         button {
                             r#type: "button",
                             class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                            title: "添加页面",
-                            aria_label: "添加页面",
+                            title: "添加物品",
+                            aria_label: "添加物品",
                             onclick: {
                                 let node_id = node.id.clone();
                                 move |event| {
                                     event.stop_propagation();
-                                    on_add_page.call(node_id.clone());
+                                    on_add_item.call(node_id.clone());
                                 }
                             },
-                            Icon { kind: IconKind::FilePlus2, class: "h-3.5 w-3.5" }
+                            Icon { kind: IconKind::Plus, class: "h-3.5 w-3.5" }
                         }
                         button {
                             r#type: "button",
@@ -2276,20 +2757,22 @@ fn TreeNodeRow(
                             Icon { kind: IconKind::FolderPlus, class: "h-3.5 w-3.5" }
                         }
                     }
-                    button {
-                        r#type: "button",
-                        class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                        title: "重命名",
-                        aria_label: "重命名",
-                        onclick: {
-                            let node_id = node.id.clone();
-                            let title = node.title.clone();
-                            move |event| {
-                                event.stop_propagation();
-                                on_rename.call((node_id.clone(), title.clone()));
-                            }
-                        },
-                        Icon { kind: IconKind::MoreHorizontal, class: "h-3.5 w-3.5" }
+                    if is_folder {
+                        button {
+                            r#type: "button",
+                            class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
+                            title: "重命名目录",
+                            aria_label: "重命名目录",
+                            onclick: {
+                                let node_id = node.id.clone();
+                                let title = node.title.clone();
+                                move |event| {
+                                    event.stop_propagation();
+                                    on_rename.call((node_id.clone(), title.clone()));
+                                }
+                            },
+                            Icon { kind: IconKind::Pencil, class: "h-3.5 w-3.5" }
+                        }
                     }
                     button {
                         r#type: "button",
@@ -2313,14 +2796,18 @@ fn TreeNodeRow(
                     TreeNodeRow {
                         node: child,
                         depth: depth + 1,
-                        active_page_id: active_page_id.clone(),
+                        item_meta: item_meta.clone(),
+                        selected_ids: selected_ids.clone(),
                         expanded: expanded.clone(),
                         on_toggle,
-                        on_select_page,
+                        on_select,
                         on_add_folder,
-                        on_add_page,
+                        on_add_item,
+                        on_change_amount,
                         on_rename,
                         on_delete,
+                        on_drag_start,
+                        on_drop,
                     }
                 }
             }
@@ -2448,23 +2935,26 @@ fn ConfirmDialog(
 }
 
 #[component]
-fn CraftSummaryEditorDialog(
+fn CraftItemPickerDialog(
     data: Rc<CraftDataPackage>,
     engine: CraftDataEngine,
-    card: Option<CraftSummaryCard>,
-    on_save: EventHandler<CraftSummaryCard>,
+    item: Option<NoteItem>,
+    on_save: EventHandler<Vec<NoteItem>>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut query = use_signal(String::new);
     let mut craft_type = use_signal(|| None::<u32>);
-    let mut title = use_signal(|| {
-        card.as_ref()
-            .map(|card| card.title.clone())
-            .unwrap_or_else(|| "合成汇总".to_string())
-    });
     let mut targets = use_signal(|| {
-        card.as_ref()
-            .map(|card| card.targets.clone())
+        item.as_ref()
+            .map(|item| {
+                vec![CraftSummaryTarget {
+                    id: item.id.clone(),
+                    recipe_id: item.recipe_id,
+                    item_id: item.item_id,
+                    amount: item.amount,
+                    collapsed: item.collapsed.clone(),
+                }]
+            })
             .unwrap_or_default()
     });
     let recipes = craftable_recipes(&engine, craft_type(), &query(), 120);
@@ -2527,7 +3017,7 @@ fn CraftSummaryEditorDialog(
                     }
                     div { class: "min-w-0 flex-1",
                         div { class: "text-base font-semibold",
-                            if card.is_some() { "编辑合成汇总卡片" } else { "新建合成汇总卡片" }
+                            if item.is_some() { "编辑物品" } else { "添加物品" }
                         }
                         div { class: "text-xs text-muted-foreground", "搜索并多选需要制作的物品" }
                     }
@@ -2544,14 +3034,6 @@ fn CraftSummaryEditorDialog(
                 div { class: "grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_360px]",
                     section { class: "flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r",
                         div { class: "space-y-3 border-b p-3",
-                            label { class: "grid gap-1.5 text-sm font-medium",
-                                "卡片名称"
-                                input {
-                                    class: input_class(""),
-                                    value: "{title}",
-                                    oninput: move |event| title.set(event.value()),
-                                }
-                            }
                             div { class: "relative",
                                 Icon { kind: IconKind::Search, class: "absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" }
                                 input {
@@ -2730,20 +3212,22 @@ fn CraftSummaryEditorDialog(
                         variant: ButtonVariant::Primary,
                         disabled: targets().is_empty(),
                         onclick: {
-                            let card = card.clone();
+                            let item = item.clone();
                             move |_| {
-                                let trimmed_title = title().trim().to_string();
-                                on_save.call(CraftSummaryCard {
-                                    id: card.as_ref().map(|card| card.id.clone()).unwrap_or_else(id),
-                                    kind: "craftSummary".to_string(),
-                                    title: if trimmed_title.is_empty() { "合成汇总".to_string() } else { trimmed_title },
-                                    targets: targets(),
-                                    source_choices: card.as_ref().map(|card| card.source_choices.clone()).unwrap_or_default(),
-                                });
+                                let source_choices = item.as_ref().map(|item| item.source_choices.clone()).unwrap_or_default();
+                                let items = targets().into_iter().enumerate().map(|(index, target)| NoteItem {
+                                    id: if index == 0 { item.as_ref().map(|item| item.id.clone()).unwrap_or(target.id.clone()) } else { target.id.clone() },
+                                    recipe_id: target.recipe_id,
+                                    item_id: target.item_id,
+                                    amount: target.amount,
+                                    collapsed: target.collapsed,
+                                    source_choices: source_choices.clone(),
+                                }).collect();
+                                on_save.call(items);
                                 on_close.call(());
                             }
                         },
-                        "保存卡片"
+                        if item.is_some() { "保存" } else { "添加到清单" }
                     }
                 }
             }
@@ -2756,7 +3240,12 @@ pub fn NotesPage() -> Element {
     let craft_data = use_resource(load_craft_data);
     let mut state = use_signal(load_notes_state);
     let mut expanded_folders = use_signal(HashSet::<String>::new);
-    let mut editing_card_id = use_signal(|| None::<String>);
+    let mut selected_entry_ids = use_signal(Vec::<String>::new);
+    let mut selection_anchor_id = use_signal(|| None::<String>);
+    let mut view_mode = use_signal(|| NotesViewMode::Summary);
+    let mut dragged_node_id = use_signal(|| None::<String>);
+    let mut add_item_parent_id = use_signal(|| None::<String>);
+    let mut editing_item_id = use_signal(|| None::<String>);
     let mut detail_target = use_signal(|| None::<DetailTarget>);
     let mut name_dialog = use_signal(|| None::<NameDialogKind>);
     let mut confirm_dialog = use_signal(|| None::<ConfirmDialogKind>);
@@ -2775,29 +3264,70 @@ pub fn NotesPage() -> Element {
         .as_ref()
         .map(|data| create_craft_data_engine(data.clone()));
     let current_state = state();
-    let active_page_id = current_state.active_page_id.clone();
-    let active_page = active_page_id
-        .as_ref()
-        .and_then(|page_id| current_state.pages.get(page_id))
-        .cloned();
-    let active_page_node = find_tree_node(&current_state.tree, active_page_id.as_deref()).cloned();
-    let active_card_id = current_state.active_card_id.clone();
-    let active_card = active_page
-        .as_ref()
-        .and_then(|page| {
-            active_card_id
-                .as_ref()
-                .and_then(|card_id| page.cards.iter().find(|card| &card.id == card_id))
-                .or_else(|| page.cards.first())
+    let mut selected_ids = selected_entry_ids();
+    if selected_ids.is_empty() {
+        if let Some(active_id) = current_state.active_item_id.clone() {
+            selected_ids.push(active_id);
+        }
+    }
+    selected_ids.retain(|id| current_state.items.contains_key(id));
+    let selected_id_set = selected_ids.iter().cloned().collect::<HashSet<_>>();
+    let item_meta = current_state
+        .items
+        .iter()
+        .filter_map(|(id, item)| {
+            data.as_ref()
+                .and_then(|data| get_item(data, item.item_id))
+                .map(|game_item| {
+                    (
+                        id.clone(),
+                        TreeItemMeta {
+                            icon: game_item.icon,
+                            amount: item.amount,
+                        },
+                    )
+                })
         })
-        .cloned();
-    let editing_card = editing_card_id().and_then(|card_id| {
-        if card_id == "new" {
+        .collect::<HashMap<_, _>>();
+    let selected_analyses = selected_ids
+        .iter()
+        .filter_map(|entry_id| {
+            current_state.items.get(entry_id).map(|item| {
+                let title = find_tree_node(&current_state.tree, Some(entry_id))
+                    .map(|node| node.title.clone())
+                    .unwrap_or_else(|| format!("物品 #{}", item.item_id));
+                (entry_id.clone(), analysis_selection(item, title))
+            })
+        })
+        .collect::<Vec<_>>();
+    let combined_analysis = if selected_analyses.is_empty() {
+        None
+    } else {
+        Some(CraftAnalysisSelection {
+            id: "selected-summary".to_string(),
+            title: format!("已选 {} 项", selected_analyses.len()),
+            targets: selected_analyses
+                .iter()
+                .flat_map(|(_, analysis)| analysis.targets.clone())
+                .collect(),
+            source_choices: selected_analyses.iter().fold(
+                BTreeMap::new(),
+                |mut result, (_, analysis)| {
+                    for (item_id, choice) in &analysis.source_choices {
+                        result
+                            .entry(item_id.clone())
+                            .or_insert_with(|| choice.clone());
+                    }
+                    result
+                },
+            ),
+        })
+    };
+    let editing_item = editing_item_id().and_then(|entry_id| {
+        if entry_id == "new" {
             None
         } else {
-            active_page
-                .as_ref()
-                .and_then(|page| page.cards.iter().find(|card| card.id == card_id).cloned())
+            current_state.items.get(&entry_id).cloned()
         }
     });
     let detail_recipe = detail_target().and_then(|target| {
@@ -2827,76 +3357,72 @@ pub fn NotesPage() -> Element {
         expanded.insert(folder_id);
         expanded_folders.set(expanded);
     };
-    let mut create_page = move |title: String, parent_id: Option<String>| {
-        let page_id = id();
-        let node = NoteTreeNode {
-            id: page_id.clone(),
-            kind: "page".to_string(),
-            title,
-            children: Vec::new(),
-        };
+    let mut delete_node = move |node_id: String| {
         let mut next = state();
-        next.tree = append_tree_node(&next.tree, parent_id.as_deref(), node);
-        next.pages
-            .insert(page_id.clone(), create_default_page(page_id.clone()));
-        next.active_page_id = Some(page_id.clone());
-        next.active_card_id = None;
+        let (tree, removed_items) = delete_tree_node(&next.tree, &node_id);
+        for item_id in &removed_items {
+            next.items.remove(item_id);
+        }
+        let active_removed = next
+            .active_item_id
+            .as_ref()
+            .map(|item_id| removed_items.contains(item_id))
+            .unwrap_or(false);
+        next.tree = tree;
+        if active_removed {
+            next.active_item_id = first_page_id(&next.tree);
+        }
+        let mut selected = selected_entry_ids();
+        selected.retain(|id| !removed_items.contains(id));
+        selected_entry_ids.set(selected);
         state.set(next);
+    };
+    let save_data = data.clone();
+    let mut save_items = move |items: Vec<NoteItem>| {
+        let mut next = state();
+        let editing_id = editing_item_id();
+        let Some(data) = save_data.as_ref() else {
+            return;
+        };
+        let parent_id = add_item_parent_id();
+        let mut created_ids = Vec::new();
+        for (index, mut item) in items.into_iter().enumerate() {
+            let entry_id = if index == 0 {
+                editing_id
+                    .clone()
+                    .filter(|id| id != "new")
+                    .unwrap_or_else(|| item.id.clone())
+            } else {
+                item.id.clone()
+            };
+            let title = get_item_name(data, item.item_id);
+            item.id = entry_id.clone();
+            next.items.insert(entry_id.clone(), item);
+            if editing_id.as_deref() == Some(entry_id.as_str()) {
+                next.tree = rename_tree_node(&next.tree, &entry_id, &title);
+            } else {
+                next.tree = append_tree_node(
+                    &next.tree,
+                    parent_id.as_deref(),
+                    NoteTreeNode {
+                        id: entry_id.clone(),
+                        kind: "item".to_string(),
+                        title,
+                        children: Vec::new(),
+                    },
+                );
+            }
+            created_ids.push(entry_id);
+        }
+        if let Some(first) = created_ids.first() {
+            next.active_item_id = Some(first.clone());
+        }
+        state.set(next);
+        selected_entry_ids.set(created_ids);
         if let Some(parent_id) = parent_id {
             let mut expanded = expanded_folders();
             expanded.insert(parent_id);
             expanded_folders.set(expanded);
-        }
-    };
-    let mut delete_node = move |node_id: String| {
-        let mut next = state();
-        let (tree, removed_pages) = delete_tree_node(&next.tree, &node_id);
-        for page_id in &removed_pages {
-            next.pages.remove(page_id);
-        }
-        let active_removed = next
-            .active_page_id
-            .as_ref()
-            .map(|page_id| removed_pages.contains(page_id))
-            .unwrap_or(false);
-        next.tree = tree;
-        if active_removed {
-            next.active_page_id = first_page_id(&next.tree);
-            next.active_card_id = next
-                .active_page_id
-                .as_ref()
-                .and_then(|page_id| next.pages.get(page_id))
-                .and_then(|page| page.cards.first())
-                .map(|card| card.id.clone());
-        }
-        state.set(next);
-    };
-    let mut save_card = move |card: CraftSummaryCard| {
-        let mut next = state();
-        let Some(page_id) = next.active_page_id.clone() else {
-            return;
-        };
-        if let Some(page) = next.pages.get_mut(&page_id) {
-            if let Some(existing) = page.cards.iter_mut().find(|item| item.id == card.id) {
-                *existing = card.clone();
-            } else {
-                page.cards.push(card.clone());
-            }
-            next.active_card_id = Some(card.id);
-            state.set(next);
-        }
-    };
-    let mut delete_card = move |card_id: String| {
-        let mut next = state();
-        let Some(page_id) = next.active_page_id.clone() else {
-            return;
-        };
-        if let Some(page) = next.pages.get_mut(&page_id) {
-            page.cards.retain(|card| card.id != card_id);
-            if next.active_card_id.as_deref() == Some(card_id.as_str()) {
-                next.active_card_id = page.cards.first().map(|card| card.id.clone());
-            }
-            state.set(next);
         }
     };
     rsx! {
@@ -2904,8 +3430,8 @@ pub fn NotesPage() -> Element {
             div { class: "shrink-0 border-b bg-background px-4 py-4 sm:px-6 lg:px-8",
                 div { class: "mx-auto flex max-w-[1720px] flex-col gap-3 xl:flex-row xl:items-end xl:justify-between",
                     div { class: "space-y-1.5",
-                        div { class: "text-sm text-muted-foreground", "工具 / 笔记" }
-                        h1 { class: "text-2xl font-semibold", "笔记" }
+                        div { class: "text-sm text-muted-foreground", "工具 / 制作清单" }
+                        h1 { class: "text-2xl font-semibold", "制作清单" }
                         crate::app::modules::ModuleCapabilityBadges { module_id: "notes" }
                     }
                     if let Some(data) = data.as_ref() {
@@ -2918,20 +3444,23 @@ pub fn NotesPage() -> Element {
                 }
             }
 
-            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)]",
+            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[340px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]",
                 aside { class: "flex h-[320px] flex-col overflow-hidden border-b bg-card xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r",
                     div { class: "flex items-center justify-between gap-2 border-b p-3",
                         div { class: "flex items-center gap-2 text-sm font-semibold",
                             Icon { kind: IconKind::Folder, class: "h-4 w-4" }
-                            "笔记树"
+                            "物品树"
                         }
                         div { class: "flex gap-1",
                             Button {
                                 size: ButtonSize::Icon,
                                 variant: ButtonVariant::Ghost,
-                                title: Some("添加页面".to_string()),
-                                onclick: move |_| name_dialog.set(Some(NameDialogKind::AddPage { parent_id: None })),
-                                Icon { kind: IconKind::FilePlus2, class: "h-4 w-4" }
+                                title: Some("添加物品".to_string()),
+                                onclick: move |_| {
+                                    add_item_parent_id.set(None);
+                                    editing_item_id.set(Some("new".to_string()));
+                                },
+                                Icon { kind: IconKind::Plus, class: "h-4 w-4" }
                             }
                             Button {
                                 size: ButtonSize::Icon,
@@ -2947,7 +3476,8 @@ pub fn NotesPage() -> Element {
                             TreeNodeRow {
                                 node,
                                 depth: 0,
-                                active_page_id: current_state.active_page_id.clone(),
+                                item_meta: item_meta.clone(),
+                                selected_ids: selected_id_set.clone(),
                                 expanded: expanded_folders(),
                                 on_toggle: move |folder_id| {
                                     let mut expanded = expanded_folders();
@@ -2958,129 +3488,159 @@ pub fn NotesPage() -> Element {
                                     }
                                     expanded_folders.set(expanded);
                                 },
-                                on_select_page: move |page_id| {
+                                on_select: move |selection: (String, bool, bool)| {
+                                    let (entry_id, ctrl, shift) = selection;
+                                    let visible = visible_entry_ids(&state().tree, &expanded_folders());
+                                    let next_selection = select_entry_ids(
+                                        &visible,
+                                        &selected_entry_ids(),
+                                        &entry_id,
+                                        ctrl,
+                                        shift,
+                                        selection_anchor_id().as_deref(),
+                                    );
                                     let mut next = state();
-                                    let card_id = next.pages.get(&page_id).and_then(|page| page.cards.first()).map(|card| card.id.clone());
-                                    next.active_page_id = Some(page_id);
-                                    next.active_card_id = card_id;
+                                    next.active_item_id = next_selection.last().cloned();
                                     state.set(next);
+                                    selected_entry_ids.set(next_selection);
+                                    if !shift {
+                                        selection_anchor_id.set(Some(entry_id));
+                                    }
                                 },
                                 on_add_folder: move |parent_id| name_dialog.set(Some(NameDialogKind::AddFolder { parent_id: Some(parent_id) })),
-                                on_add_page: move |parent_id| name_dialog.set(Some(NameDialogKind::AddPage { parent_id: Some(parent_id) })),
+                                on_add_item: move |parent_id| {
+                                    add_item_parent_id.set(Some(parent_id));
+                                    editing_item_id.set(Some("new".to_string()));
+                                },
+                                on_change_amount: move |change: (String, u32)| {
+                                    let (item_id, amount) = change;
+                                    let mut next = state();
+                                    if let Some(item) = next.items.get_mut(&item_id) {
+                                        item.amount = amount.max(1);
+                                    }
+                                    state.set(next);
+                                },
                                 on_rename: move |(node_id, current_title)| name_dialog.set(Some(NameDialogKind::RenameNode { node_id, current_title })),
                                 on_delete: move |node_id| confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id })),
+                                on_drag_start: move |node_id| dragged_node_id.set(Some(node_id)),
+                                on_drop: move |drop_target: (String, bool)| {
+                                    let (target_id, into_folder) = drop_target;
+                                    let Some(source_id) = dragged_node_id() else { return; };
+                                    let mut next = state();
+                                    next.tree = move_tree_node(&next.tree, &source_id, Some(&target_id), into_folder);
+                                    state.set(next);
+                                    dragged_node_id.set(None);
+                                },
                             }
+                        }
+                        div {
+                            class: "h-8 rounded-md border border-dashed border-transparent hover:border-border",
+                            title: "移至根目录",
+                            ondragover: move |event| event.prevent_default(),
+                            ondrop: move |event| {
+                                event.prevent_default();
+                                let Some(source_id) = dragged_node_id() else { return; };
+                                let mut next = state();
+                                next.tree = move_tree_node(&next.tree, &source_id, None, false);
+                                state.set(next);
+                                dragged_node_id.set(None);
+                            },
                         }
                     }
                 }
 
                 main { class: "min-h-[560px] overflow-hidden bg-background lg:min-h-0",
-                    if let (Some(data), Some(engine), Some(page)) = (data.as_ref(), engine.clone(), active_page.clone()) {
+                    if let (Some(data), Some(engine)) = (data.as_ref(), engine.clone()) {
                         div { class: "flex h-full min-h-[560px] flex-col lg:min-h-0",
                             div { class: "flex flex-wrap items-center justify-between gap-3 border-b p-4",
                                 div { class: "min-w-0",
                                     div { class: "truncate text-base font-semibold",
-                                        "{active_page_node.as_ref().map(|node| node.title.as_str()).unwrap_or(\"未命名页面\")}"
+                                        "制作分析"
                                     }
                                     div { class: "mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground",
                                         Badge { variant: BadgeVariant::Outline,
                                             Icon { kind: IconKind::Hammer, class: "mr-1 h-3 w-3" }
-                                            "汇总卡片 {page.cards.len()}"
+                                            "已选 {selected_analyses.len()} 项"
                                         }
                                     }
                                 }
-                                Button {
-                                    variant: ButtonVariant::Primary,
-                                    onclick: move |_| editing_card_id.set(Some("new".to_string())),
-                                    Icon { kind: IconKind::Plus, class: "h-4 w-4" }
-                                    "添加汇总卡片"
+                                div { class: "flex items-center gap-2",
+                                    div { class: "flex rounded-md border bg-muted/30 p-0.5",
+                                        Button { size: ButtonSize::Sm, variant: if view_mode() == NotesViewMode::Summary { ButtonVariant::Primary } else { ButtonVariant::Ghost }, onclick: move |_| view_mode.set(NotesViewMode::Summary), Icon { kind: IconKind::Layers3, class: "h-3.5 w-3.5" }, "汇总" }
+                                        Button { size: ButtonSize::Sm, variant: if view_mode() == NotesViewMode::Items { ButtonVariant::Primary } else { ButtonVariant::Ghost }, onclick: move |_| view_mode.set(NotesViewMode::Items), Icon { kind: IconKind::ListTree, class: "h-3.5 w-3.5" }, "单项" }
+                                    }
                                 }
                             }
 
                             div { class: "min-h-0 flex-1 overflow-y-auto p-3",
-                                if page.cards.is_empty() {
+                                if selected_analyses.is_empty() {
                                     EmptyState {
                                         icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                                        title: "还没有合成汇总卡片".to_string(),
-                                        description: "创建一张卡片后，可以在里面搜索并多选要制作的物品。".to_string(),
-                                        action: rsx! {
-                                            Button {
-                                                variant: ButtonVariant::Primary,
-                                                onclick: move |_| editing_card_id.set(Some("new".to_string())),
-                                                Icon { kind: IconKind::Plus, class: "h-4 w-4" }
-                                                "添加汇总卡片"
-                                            }
-                                        },
+                                        title: "选择一个物品开始".to_string(),
+                                        description: "左侧树支持 Ctrl 多选、Shift 连选，也可以直接拖动条目整理目录。".to_string(),
+                                    }
+                                } else if view_mode() == NotesViewMode::Summary {
+                                    if let Some(selection) = combined_analysis.clone() {
+                                        CraftAnalysisView {
+                                            key: "{selection.id}",
+                                            data: data.clone(),
+                                            engine: engine.clone(),
+                                            active: true,
+                                            show_actions: false,
+                                            source_choices: choice_record_to_map(&selection.source_choices),
+                                            selection,
+                                            on_select: move |_| {},
+                                            on_edit: move |_| {},
+                                            on_remove: move |_| {},
+                                            on_toggle_collapsed_item: {
+                                                let selected_ids = selected_ids.clone();
+                                                move |(item_id, collapsed)| {
+                                                    let mut next = state();
+                                                    for entry_id in &selected_ids {
+                                                        if let Some(item) = next.items.get_mut(entry_id) {
+                                                            item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed;
+                                                        }
+                                                    }
+                                                    state.set(next);
+                                                }
+                                            },
+                                            on_choose_source: {
+                                                let selected_ids = selected_ids.clone();
+                                                move |(item_id, choice): (u32, Option<SourceChoice>)| {
+                                                    let mut next = state();
+                                                    for entry_id in &selected_ids {
+                                                        if let Some(item) = next.items.get_mut(entry_id) {
+                                                            if let Some(choice) = choice.clone() {
+                                                                item.source_choices.insert(item_id.to_string(), choice);
+                                                            } else {
+                                                                item.source_choices.remove(&item_id.to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                    state.set(next);
+                                                }
+                                            },
+                                            on_inspect: move |target| detail_target.set(Some(target)),
+                                        }
                                     }
                                 } else {
                                     div { class: "grid w-full gap-3",
-                                        for card in page.cards.clone() {
+                                        for (entry_id, analysis) in selected_analyses.clone() {
                                             {
-                                                let card_id = card.id.clone();
-                                                let source_choices = choice_record_to_map(&card.source_choices);
+                                                let source_choices = choice_record_to_map(&analysis.source_choices);
                                                 rsx! {
-                                                    CraftSummaryCardView {
-                                                        key: "{card.id}",
+                                                    CraftAnalysisView {
+                                                        key: "{entry_id}",
                                                         data: data.clone(),
                                                         engine: engine.clone(),
-                                                        active: active_card.as_ref().map(|active| active.id.as_str()) == Some(card.id.as_str()),
+                                                        active: true,
                                                         source_choices,
-                                                        card,
-                                                        on_select: {
-                                                            let card_id = card_id.clone();
-                                                            move |_| {
-                                                                let mut next = state();
-                                                                next.active_card_id = Some(card_id.clone());
-                                                                state.set(next);
-                                                            }
-                                                        },
-                                                        on_edit: {
-                                                            let card_id = card_id.clone();
-                                                            move |_| editing_card_id.set(Some(card_id.clone()))
-                                                        },
-                                                        on_remove: {
-                                                            let card_id = card_id.clone();
-                                                            move |_| confirm_dialog.set(Some(ConfirmDialogKind::DeleteCard { card_id: card_id.clone() }))
-                                                        },
-                                                        on_toggle_collapsed_item: {
-                                                            let card_id = card_id.clone();
-                                                            move |(item_id, collapsed)| {
-                                                                let mut next = state();
-                                                                if let Some(page_id) = next.active_page_id.clone() {
-                                                                    if let Some(page) = next.pages.get_mut(&page_id) {
-                                                                        page.cards = page.cards.clone().into_iter().map(|card| {
-                                                                            if card.id == card_id {
-                                                                                CraftSummaryCard {
-                                                                                    targets: card.targets.iter().map(|target| target_with_collapsed_item(target, item_id, collapsed)).collect(),
-                                                                                    ..card
-                                                                                }
-                                                                            } else {
-                                                                                card
-                                                                            }
-                                                                        }).collect();
-                                                                    }
-                                                                }
-                                                                state.set(next);
-                                                            }
-                                                        },
-                                                        on_choose_source: {
-                                                            let card_id = card_id.clone();
-                                                            move |(item_id, choice): (u32, Option<SourceChoice>)| {
-                                                                let mut next = state();
-                                                                if let Some(page_id) = next.active_page_id.clone() {
-                                                                    if let Some(page) = next.pages.get_mut(&page_id) {
-                                                                        if let Some(card) = page.cards.iter_mut().find(|card| card.id == card_id) {
-                                                                            if let Some(choice) = choice {
-                                                                                card.source_choices.insert(item_id.to_string(), choice);
-                                                                            } else {
-                                                                                card.source_choices.remove(&item_id.to_string());
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                                state.set(next);
-                                                            }
-                                                        },
+                                                        selection: analysis,
+                                                        on_select: move |_| {},
+                                                        on_edit: { let entry_id = entry_id.clone(); move |_| { add_item_parent_id.set(find_parent_folder_id(&state().tree, &entry_id)); editing_item_id.set(Some(entry_id.clone())); } },
+                                                        on_remove: { let entry_id = entry_id.clone(); move |_| confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id: entry_id.clone() })) },
+                                                        on_toggle_collapsed_item: { let entry_id = entry_id.clone(); move |(item_id, collapsed)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed; } state.set(next); } },
+                                                        on_choose_source: { let entry_id = entry_id.clone(); move |(item_id, choice): (u32, Option<SourceChoice>)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { if let Some(choice) = choice { item.source_choices.insert(item_id.to_string(), choice); } else { item.source_choices.remove(&item_id.to_string()); } } state.set(next); } },
                                                         on_inspect: move |target| detail_target.set(Some(target)),
                                                     }
                                                 }
@@ -3094,7 +3654,7 @@ pub fn NotesPage() -> Element {
                         div { class: "p-4",
                             EmptyState {
                                 icon: rsx! { Icon { kind: IconKind::BookOpen, class: "h-6 w-6" } },
-                                title: "笔记未载入".to_string(),
+                                title: "制作清单未载入".to_string(),
                             }
                         }
                     }
@@ -3110,13 +3670,13 @@ pub fn NotesPage() -> Element {
                 }
             }
 
-            if let (Some(data), Some(engine), Some(card_id)) = (data.as_ref(), engine.clone(), editing_card_id()) {
-                CraftSummaryEditorDialog {
+            if let (Some(data), Some(engine), Some(item_id)) = (data.as_ref(), engine.clone(), editing_item_id()) {
+                CraftItemPickerDialog {
                     data: data.clone(),
                     engine,
-                    card: if card_id == "new" { None } else { editing_card.clone() },
-                    on_save: move |card| save_card(card),
-                    on_close: move |_| editing_card_id.set(None),
+                    item: if item_id == "new" { None } else { editing_item.clone() },
+                    on_save: move |items| save_items(items),
+                    on_close: move |_| editing_item_id.set(None),
                 }
             }
 
@@ -3126,7 +3686,6 @@ pub fn NotesPage() -> Element {
                     on_confirm: move |(kind, value)| {
                         match kind {
                             NameDialogKind::AddFolder { parent_id } => create_folder(value, parent_id),
-                            NameDialogKind::AddPage { parent_id } => create_page(value, parent_id),
                             NameDialogKind::RenameNode { node_id, .. } => {
                                 let mut next = state();
                                 next.tree = rename_tree_node(&next.tree, &node_id, &value);
@@ -3144,22 +3703,14 @@ pub fn NotesPage() -> Element {
                         ConfirmDialogKind::DeleteNode { node_id } => {
                             let node = find_tree_node(&current_state.tree, Some(node_id));
                             let is_folder = node.map(|node| node.kind.as_str()) == Some("folder");
-                            let title = if is_folder { "删除目录" } else { "删除页面" }.to_string();
+                            let title = if is_folder { "删除目录" } else { "删除物品" }.to_string();
                             let name = node.map(|node| node.title.clone()).unwrap_or_default();
                             let description = if is_folder {
-                                format!("将删除“{name}”以及其中所有页面。")
+                                format!("将删除“{name}”以及其中所有物品。")
                             } else {
-                                format!("将删除页面“{name}”。")
+                                format!("将删除物品“{name}”。")
                             };
                             (title, description, "删除")
-                        }
-                        ConfirmDialogKind::DeleteCard { card_id } => {
-                            let name = active_page
-                                .as_ref()
-                                .and_then(|page| page.cards.iter().find(|card| card.id == *card_id))
-                                .map(|card| card.title.clone())
-                                .unwrap_or_else(|| "合成汇总".to_string());
-                            ("删除合成汇总卡片".to_string(), format!("将删除“{name}”。"), "删除")
                         }
                     };
                     rsx! {
@@ -3171,7 +3722,6 @@ pub fn NotesPage() -> Element {
                                 let kind = kind.clone();
                                 move |_| match kind.clone() {
                                     ConfirmDialogKind::DeleteNode { node_id } => delete_node(node_id),
-                                    ConfirmDialogKind::DeleteCard { card_id } => delete_card(card_id),
                                 }
                             },
                             on_close: move |_| confirm_dialog.set(None),
