@@ -15,10 +15,22 @@ pub(crate) struct MdlGeometryMesh {
     pub material_index: u16,
     pub material_name: String,
     pub bone_table: Option<ModelBoneTable>,
-    pub shape_influences: Vec<ModelShapeInfo>,
+    pub shape_targets: Vec<MdlGeometryShapeTarget>,
     pub vertices: Vec<WeaponModelVertex>,
     pub indices: Vec<u16>,
     pub submeshes: Vec<MdlGeometrySubmesh>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MdlGeometryShapeTarget {
+    pub info: ModelShapeInfo,
+    pub replacements: Vec<MdlGeometryShapeReplacement>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MdlGeometryShapeReplacement {
+    pub base_indices_index: usize,
+    pub replacing_vertex_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,13 +101,14 @@ pub(crate) fn extract_mdl_lod0_geometry(
             .material_name
             .clone()
             .unwrap_or_else(|| format!("material-{}", mesh.material_index));
+        let shape_targets = geometry_shape_targets(&metadata, mesh.start_index);
         meshes.push(MdlGeometryMesh {
             mesh_index,
             category,
             material_index: mesh.material_index,
             material_name,
             bone_table: mesh.bone_table.as_ref().map(model_bone_table_from_metadata),
-            shape_influences: geometry_shape_influences(&metadata, mesh.start_index),
+            shape_targets,
             vertices,
             indices,
             submeshes: geometry_submeshes(mesh),
@@ -132,11 +145,11 @@ fn mesh_indices_from_ranges(ranges: &[MdlMeshRangeMetadata]) -> Vec<(usize, Stri
     indices
 }
 
-fn geometry_shape_influences(
+fn geometry_shape_targets(
     metadata: &crate::mdl_metadata::MdlMetadata,
     mesh_start_index: u32,
-) -> Vec<ModelShapeInfo> {
-    let mut influences = Vec::new();
+) -> Vec<MdlGeometryShapeTarget> {
+    let mut targets = Vec::new();
     for shape in &metadata.shapes {
         let start = usize::from(shape.shape_mesh_start_indices[0]);
         let count = usize::from(shape.shape_mesh_counts[0]);
@@ -148,19 +161,30 @@ fn geometry_shape_influences(
                 continue;
             }
             let shape_index_mask = shape_index_mask(shape.index);
-            influences.push(ModelShapeInfo {
+            let info = ModelShapeInfo {
                 index: shape.index,
                 name: shape.name.clone(),
                 shape_index_mask,
                 shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
                 shape_mesh_index,
                 shape_value_count: shape_mesh.shape_value_count,
-            });
+            };
+            let value_start = shape_mesh.shape_value_offset as usize;
+            let value_end = value_start.saturating_add(shape_mesh.shape_value_count as usize);
+            let replacements = metadata.shape_values[value_start.min(metadata.shape_values.len())
+                ..value_end.min(metadata.shape_values.len())]
+                .iter()
+                .map(|value| MdlGeometryShapeReplacement {
+                    base_indices_index: usize::from(value.base_indices_index),
+                    replacing_vertex_index: usize::from(value.replacing_vertex_index),
+                })
+                .collect();
+            targets.push(MdlGeometryShapeTarget { info, replacements });
         }
     }
 
-    influences.sort_by_key(|shape| (shape.index, shape.shape_mesh_index));
-    influences
+    targets.sort_by_key(|target| (target.info.index, target.info.shape_mesh_index));
+    targets
 }
 
 fn shape_index_mask(shape_index: usize) -> u32 {

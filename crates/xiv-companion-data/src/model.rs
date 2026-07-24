@@ -7,13 +7,31 @@ pub struct WeaponCatalogPackage {
     pub game_version: String,
     pub source: String,
     pub counts: WeaponCatalogCounts,
+    #[serde(default)]
+    pub stains: Vec<WeaponStain>,
     pub items: Vec<WeaponCatalogItem>,
 }
+
+pub const WEAPON_CATALOG_SCHEMA_REVISION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WeaponCatalogCounts {
     pub items: usize,
+    #[serde(default)]
+    pub stains: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponStain {
+    pub id: u8,
+    pub name: String,
+    pub se_color: u32,
+    pub ui_color: [u8; 4],
+    pub shade: u8,
+    pub sub_order: u8,
+    pub metallic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -82,6 +100,8 @@ pub struct WeaponModelData {
     pub item_name: String,
     pub model_main: PackedModelId,
     pub model_sub: Option<PackedModelId>,
+    #[serde(default)]
+    pub stain_ids: [u8; 2],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub load_diagnostics: Vec<WeaponModelLoadDiagnostic>,
     pub loaded_paths: Vec<String>,
@@ -173,6 +193,8 @@ pub struct ModelMesh {
     pub submesh: Option<ModelSubmeshInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_influences: Vec<ModelShapeInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_targets: Vec<ModelShapeTarget>,
     pub material_index: u16,
     #[serde(default)]
     pub material_slot: usize,
@@ -207,6 +229,21 @@ pub struct ModelShapeInfo {
     pub shape_value_count: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShapeTarget {
+    pub shape: ModelShapeInfo,
+    pub vertex_deltas: Vec<ModelShapeVertexDelta>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShapeVertexDelta {
+    pub vertex_index: u32,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelMeshDrawRole {
@@ -216,14 +253,18 @@ pub enum ModelMeshDrawRole {
     LightShaft,
     ShadowOnly,
     Ignored,
-    DebugVisible,
+    MaterialChange,
+    CrestChange,
 }
 
 impl ModelMeshDrawRole {
     pub fn renders_in_main_pass(self) -> bool {
         matches!(
             self,
-            ModelMeshDrawRole::Normal | ModelMeshDrawRole::Glass | ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::Normal
+                | ModelMeshDrawRole::Glass
+                | ModelMeshDrawRole::MaterialChange
+                | ModelMeshDrawRole::CrestChange
         )
     }
 
@@ -242,9 +283,8 @@ pub fn mesh_draw_role_for_category(category: Option<&str>) -> ModelMeshDrawRole 
         "lightshaft" | "light_shaft" => ModelMeshDrawRole::LightShaft,
         "shadow" | "terrainshadow" | "terrain_shadow" => ModelMeshDrawRole::ShadowOnly,
         "verticalfog" | "vertical_fog" => ModelMeshDrawRole::Ignored,
-        "materialchange" | "material_change" | "crestchange" | "crest_change" => {
-            ModelMeshDrawRole::DebugVisible
-        }
+        "materialchange" | "material_change" => ModelMeshDrawRole::MaterialChange,
+        "crestchange" | "crest_change" => ModelMeshDrawRole::CrestChange,
         _ => ModelMeshDrawRole::Normal,
     }
 }
@@ -307,11 +347,90 @@ pub struct ModelBlendIndices {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelLegacyColorDyeTableRow {
+    pub template: u16,
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub gloss: bool,
+    pub specular_strength: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDawntrailColorDyeTableRow {
+    pub template: u16,
+    pub channel: u8,
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emissive: bool,
+    pub scalar3: bool,
+    pub metalness: bool,
+    pub roughness: bool,
+    pub sheen_rate: bool,
+    pub sheen_tint_rate: bool,
+    pub sheen_aperture: bool,
+    pub anisotropy: bool,
+    pub sphere_map_index: bool,
+    pub sphere_map_mask: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", content = "rows", rename_all = "camelCase")]
+pub enum ModelColorDyeTable {
+    Legacy(Vec<ModelLegacyColorDyeTableRow>),
+    Dawntrail(Vec<ModelDawntrailColorDyeTableRow>),
+    Opaque,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StainingApplicationReport {
+    pub rows_considered: usize,
+    pub rows_changed: usize,
+    pub rows_skipped_no_stain: usize,
+    pub rows_skipped_missing_template: usize,
+    pub rows_unavailable: usize,
+    pub template_kind_mismatch: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStainingApplication {
+    pub stain_ids: [u8; 2],
+    pub template_path: String,
+    pub report: StainingApplicationReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelMaterialReferenceFallback {
+    pub kind: ModelMaterialReferenceFallbackKind,
+    pub requested_name: String,
+    pub source_slot: usize,
+    pub source_material_index: u16,
+    pub source_name: String,
+    pub source_path: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelMaterialReferenceFallbackKind {
+    SameIndexLoadedMaterial,
+    SameIndexLoadedColorTable,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelMaterial {
     pub slot: usize,
     pub material_index: u16,
     pub name: String,
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_fallback: Option<ModelMaterialReferenceFallback>,
     pub shader_package_name: Option<String>,
     #[serde(default)]
     pub render_mode: MaterialRenderMode,
@@ -320,7 +439,54 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub alpha_threshold: f32,
     #[serde(default)]
+    pub draw_depth_mode: MaterialDrawDepthMode,
+    #[serde(default)]
+    pub lighting_mode: MaterialLightingMode,
+    #[serde(default)]
+    pub specular_type: MaterialSpecularType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_type_raw: Option<u32>,
+    #[serde(default)]
+    pub flow_mode: MaterialFlowMode,
+    #[serde(default)]
+    pub value_mode: MaterialValueMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_mode_raw: Option<u32>,
+    #[serde(default)]
+    pub sub_color_mode: MaterialSubColorMode,
+    #[serde(default)]
+    pub decal_color_mode: MaterialDecalColorMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal_color_mode_raw: Option<u32>,
+    #[serde(default)]
+    pub skin_value_mode: MaterialSkinValueMode,
+    #[serde(default)]
+    pub character_scroll_variant: MaterialCharacterScrollVariant,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_scroll_variant_raw: Option<u32>,
+    #[serde(default)]
     pub transparency: f32,
+    #[serde(default = "default_material_water_deep_color")]
+    pub water_deep_color: [f32; 4],
+    #[serde(default = "default_material_water_refraction_color")]
+    pub water_refraction_color: [f32; 4],
+    #[serde(default = "default_material_water_whitecap_color")]
+    pub water_whitecap_color: [f32; 4],
+    #[serde(default = "default_material_alpha_aperture")]
+    pub alpha_aperture: f32,
+    #[serde(default)]
+    pub alpha_offset: f32,
+    /// Descriptive name for material constant 0xAD94E254. Installed character
+    /// pixel shaders use it as `mix(vertex_alpha, 1, value)` before combining
+    /// vertex alpha with the selected texture alpha channel.
+    #[serde(default)]
+    pub vertex_alpha_to_one: f32,
+    #[serde(default = "default_material_shadow_alpha_threshold")]
+    pub shadow_alpha_threshold: f32,
+    #[serde(default = "default_material_glass_ior")]
+    pub glass_ior: f32,
+    #[serde(default = "default_material_glass_thickness_max")]
+    pub glass_thickness_max: f32,
     #[serde(default = "default_material_normal_scale")]
     pub normal_scale: f32,
     #[serde(default = "default_material_normal_scale")]
@@ -336,9 +502,59 @@ pub struct ModelMaterial {
     #[serde(default = "default_material_tile_scale")]
     pub tile_scale: [f32; 2],
     #[serde(default)]
+    pub toon_index: f32,
+    #[serde(default = "default_material_toon_light_scale")]
+    pub toon_light_scale: f32,
+    #[serde(default = "default_material_toon_light_spec_aperture")]
+    pub toon_light_spec_aperture: f32,
+    #[serde(default = "default_material_toon_reflection_scale")]
+    pub toon_reflection_scale: f32,
+    #[serde(default = "default_material_toon_spec_index")]
+    pub toon_spec_index: f32,
+    #[serde(default)]
+    pub sheen_rate: f32,
+    #[serde(default)]
+    pub sheen_tint_rate: f32,
+    #[serde(default = "default_material_sheen_aperture")]
+    pub sheen_aperture: f32,
+    #[serde(default)]
+    pub sphere_map_index: f32,
+    #[serde(default)]
     pub detail_id: f32,
     #[serde(default)]
     pub multi_detail_id: f32,
+    #[serde(default = "default_material_detail_color")]
+    pub detail_color: [f32; 4],
+    #[serde(default = "default_material_detail_color")]
+    pub multi_detail_color: [f32; 4],
+    #[serde(default = "default_material_shader_diffuse_color")]
+    pub shader_diffuse_color: [f32; 4],
+    #[serde(default = "default_material_shader_diffuse_color")]
+    pub shader_multi_diffuse_color: [f32; 4],
+    #[serde(default = "default_material_shader_emissive_color")]
+    pub shader_emissive_color: [f32; 4],
+    #[serde(default = "default_material_shader_emissive_color")]
+    pub shader_multi_emissive_color: [f32; 4],
+    #[serde(default = "default_material_outline_color")]
+    pub outline_color: [f32; 4],
+    #[serde(default)]
+    pub outline_width: f32,
+    #[serde(default = "default_material_specular_color_mask")]
+    pub specular_color_mask: [f32; 4],
+    #[serde(default = "default_material_ssao_mask")]
+    pub ssao_mask: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient_occlusion_mask: Option<f32>,
+    #[serde(default)]
+    pub texture_mip_bias: f32,
+    #[serde(default)]
+    pub tile_mip_bias_offset: f32,
+    #[serde(default)]
+    pub shadow_pos_offset: f32,
+    #[serde(default = "default_material_vertex_movement")]
+    pub vertex_movement_scale: f32,
+    #[serde(default = "default_material_vertex_movement")]
+    pub vertex_movement_max_length: f32,
     #[serde(default = "default_material_detail_uv_scale")]
     pub detail_color_uv_scale: [f32; 4],
     #[serde(default = "default_material_detail_uv_scale")]
@@ -355,12 +571,31 @@ pub struct ModelMaterial {
     pub lightshaft_tex_v: [f32; 4],
     #[serde(default)]
     pub lightshaft_ray: [f32; 4],
+    #[serde(default)]
+    pub lightshaft_type: MaterialLightShaftType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightshaft_type_raw: Option<u32>,
+    #[serde(default)]
+    pub lightshaft_angle_clip: f32,
+    #[serde(default = "default_material_lightshaft_near_clip")]
+    pub lightshaft_near_clip: f32,
     #[serde(default = "default_material_opacity")]
     pub opacity: f32,
     #[serde(default = "default_render_backfaces")]
     pub render_backfaces: bool,
     #[serde(default)]
     pub apply_vertex_color: bool,
+    #[serde(default)]
+    pub has_color_dye_table: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_dye_table: Option<ModelColorDyeTable>,
+    /// Unstained ColorTable rows retained for fast runtime dye previews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_table_rows: Option<Vec<ColorTableRowColors>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staining_application: Option<ModelStainingApplication>,
+    #[serde(default)]
+    pub texture_arrays: ModelMaterialTextureArrays,
     pub fallback_color: [f32; 3],
     pub diffuse_color: [f32; 3],
     pub specular_color: [f32; 3],
@@ -372,9 +607,19 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub base_color_texture: Option<usize>,
     #[serde(default)]
+    pub secondary_base_color_texture: Option<usize>,
+    #[serde(default)]
     pub normal_texture: Option<usize>,
     #[serde(default)]
+    pub secondary_normal_texture: Option<usize>,
+    #[serde(default)]
     pub mask_texture: Option<usize>,
+    #[serde(default)]
+    pub skin_diffuse_texture: Option<usize>,
+    #[serde(default)]
+    pub skin_normal_texture: Option<usize>,
+    #[serde(default)]
+    pub skin_mask_texture: Option<usize>,
     #[serde(default)]
     pub material_map_texture: Option<usize>,
     #[serde(default)]
@@ -382,7 +627,11 @@ pub struct ModelMaterial {
     #[serde(default)]
     pub specular_texture: Option<usize>,
     #[serde(default)]
+    pub secondary_specular_texture: Option<usize>,
+    #[serde(default)]
     pub emissive_texture: Option<usize>,
+    #[serde(default)]
+    pub environment_texture: Option<usize>,
     #[serde(default)]
     pub material_properties_texture: Option<usize>,
     #[serde(default)]
@@ -395,6 +644,27 @@ pub struct ModelMaterial {
     pub tile_matrix_texture: Option<usize>,
     #[serde(default)]
     pub index_texture: Option<usize>,
+    #[serde(default)]
+    pub water_wave_texture: Option<usize>,
+    #[serde(default)]
+    pub water_wave1_texture: Option<usize>,
+    #[serde(default)]
+    pub water_whitecap_texture: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelMaterialTextureArrays {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_normal: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_orb: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_diffuse: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_normal: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -418,8 +688,112 @@ pub enum MaterialAlphaMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MaterialDrawDepthMode {
+    #[default]
+    None,
+    Dither,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialLightingMode {
+    #[default]
+    Default,
+    Enabled,
+    Disabled,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSpecularType {
+    #[default]
+    Default,
+    Mask,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialFlowMode {
+    #[default]
+    Standard,
+    Flow,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialValueMode {
+    #[default]
+    Single,
+    Multi,
+    AlphaMulti,
+    AlphaMulti2,
+    AlphaMulti3,
+    MultiMaterial,
+    Compatibility,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSubColorMode {
+    #[default]
+    None,
+    Face,
+    Hair,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialDecalColorMode {
+    #[default]
+    Off,
+    Alpha,
+    Rgba,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSkinValueMode {
+    #[default]
+    None,
+    Face,
+    Body,
+    BodyJjm,
+    FaceEmissive,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialCharacterScrollVariant {
+    #[default]
+    None,
+    Value69eb4ae0,
+    Value9a8a46f5,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialLightShaftType {
+    #[default]
+    None,
+    Type0,
+    Type1,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MaterialShaderFamily {
     Character,
+    Skin,
     CharacterStockings,
     CharacterGlass,
     CharacterReflection,
@@ -428,6 +802,8 @@ pub enum MaterialShaderFamily {
     CharacterTattoo,
     CharacterOcclusion,
     Bg,
+    BgUvScroll,
+    Crystal,
     LightShaft,
     Water,
     #[default]
@@ -451,6 +827,7 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "character.shpk" | "characterlegacy.shpk" | "characterinc.shpk" => {
             MaterialShaderFamily::Character
         }
+        "skin.shpk" => MaterialShaderFamily::Skin,
         "characterstockings.shpk" => MaterialShaderFamily::CharacterStockings,
         "characterglass.shpk" => MaterialShaderFamily::CharacterGlass,
         "characterreflection.shpk" => MaterialShaderFamily::CharacterReflection,
@@ -459,6 +836,8 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "charactertattoo.shpk" => MaterialShaderFamily::CharacterTattoo,
         "characterocclusion.shpk" => MaterialShaderFamily::CharacterOcclusion,
         "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
+        "bguvscroll.shpk" => MaterialShaderFamily::BgUvScroll,
+        "crystal.shpk" => MaterialShaderFamily::Crystal,
         "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
         "water.shpk" | "river.shpk" => MaterialShaderFamily::Water,
         _ => MaterialShaderFamily::Unknown,
@@ -469,6 +848,19 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
 #[serde(rename_all = "camelCase")]
 pub struct PreparedModel {
     pub meshes: Vec<PreparedMesh>,
+    #[serde(default)]
+    pub runtime_geometry_requirements: PreparedModelRuntimeGeometryRequirements,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedModelRuntimeGeometryRequirements {
+    pub shape_name_id_mapping: bool,
+    pub enabled_shape_mask: bool,
+    pub enabled_attribute_mask: bool,
+    pub skeleton_pose: bool,
+    pub skinning_matrices: bool,
+    pub race_deformer: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -544,19 +936,78 @@ pub struct PreparedMeshShapeInfluences {
 pub struct PreparedMaterial {
     pub render_pass: PreparedRenderPass,
     pub shader_family: MaterialShaderFamily,
+    #[serde(default)]
+    pub flow_mode: MaterialFlowMode,
+    #[serde(default)]
+    pub value_mode: MaterialValueMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_mode_raw: Option<u32>,
+    #[serde(default)]
+    pub sub_color_mode: MaterialSubColorMode,
+    #[serde(default)]
+    pub decal_color_mode: MaterialDecalColorMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal_color_mode_raw: Option<u32>,
+    #[serde(default)]
+    pub skin_value_mode: MaterialSkinValueMode,
+    #[serde(default)]
+    pub lightshaft_type: MaterialLightShaftType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightshaft_type_raw: Option<u32>,
+    #[serde(default)]
+    pub alpha_policy: PreparedMaterialAlphaPolicy,
     pub texture_bindings: PreparedTextureBindings,
     pub texture_sampling: PreparedTextureSamplingSet,
     #[serde(default)]
     pub uv_sources: PreparedMaterialUvSources,
     #[serde(default)]
     pub feature_flags: PreparedMaterialFeatureFlags,
+    #[serde(default)]
+    pub unsupported_inputs: PreparedMaterialUnsupportedInputs,
+    #[serde(default)]
+    pub resource_availability: PreparedMaterialResourceAvailability,
+    #[serde(default)]
+    pub runtime_fallbacks: PreparedMaterialRuntimeFallbacks,
+    #[serde(default)]
+    pub runtime_input_requirements: PreparedMaterialRuntimeInputRequirements,
     pub render_backfaces: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialAlphaPolicy {
+    pub source: PreparedAlphaSource,
+    pub draw_depth_mode: MaterialDrawDepthMode,
+    pub lighting_enabled: bool,
+}
+
+impl Default for PreparedMaterialAlphaPolicy {
+    fn default() -> Self {
+        Self {
+            source: PreparedAlphaSource::Opaque,
+            draw_depth_mode: MaterialDrawDepthMode::None,
+            lighting_enabled: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedAlphaSource {
+    #[default]
+    Opaque,
+    BaseColorAlpha,
+    NormalBlue,
+    MaterialTransparency,
+    NormalAlpha,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedMaterialUvSources {
     pub textures: PreparedTextureUvSources,
+    #[serde(default)]
+    pub scroll: PreparedTextureScrollSet,
     pub uv0_scroll: PreparedUvSource,
     pub uv1_scroll: PreparedUvSource,
 }
@@ -565,6 +1016,7 @@ impl Default for PreparedMaterialUvSources {
     fn default() -> Self {
         Self {
             textures: PreparedTextureUvSources::default(),
+            scroll: PreparedTextureScrollSet::default(),
             uv0_scroll: PreparedUvSource::Uv0,
             uv1_scroll: PreparedUvSource::Uv1,
         }
@@ -572,15 +1024,49 @@ impl Default for PreparedMaterialUvSources {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PreparedTextureScrollSet {
+    pub base_color: bool,
+    pub secondary_base_color: bool,
+    pub normal: bool,
+    pub secondary_normal: bool,
+    pub mask: bool,
+    pub material_map: bool,
+    pub multi_map: bool,
+    pub specular: bool,
+    pub secondary_specular: bool,
+    pub emissive: bool,
+    pub environment: bool,
+    pub material_properties: bool,
+    pub tile_properties: bool,
+    pub sheen_properties: bool,
+    pub sphere_properties: bool,
+    pub tile_matrix: bool,
+    pub index: bool,
+    pub other: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureUvSources {
     pub base_color: PreparedUvSource,
+    pub secondary_base_color: PreparedUvSource,
     pub normal: PreparedUvSource,
+    pub secondary_normal: PreparedUvSource,
     pub mask: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_diffuse: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_normal: PreparedUvSource,
+    #[serde(default = "default_skin_texture_uv_source")]
+    pub skin_mask: PreparedUvSource,
     pub material_map: PreparedUvSource,
     pub multi_map: PreparedUvSource,
     pub specular: PreparedUvSource,
+    pub secondary_specular: PreparedUvSource,
     pub emissive: PreparedUvSource,
+    #[serde(default)]
+    pub environment: PreparedUvSource,
     pub material_properties: PreparedUvSource,
     pub tile_properties: PreparedUvSource,
     pub sheen_properties: PreparedUvSource,
@@ -588,6 +1074,38 @@ pub struct PreparedTextureUvSources {
     pub tile_matrix: PreparedUvSource,
     pub index: PreparedUvSource,
     pub other: PreparedUvSource,
+}
+
+impl Default for PreparedTextureUvSources {
+    fn default() -> Self {
+        Self {
+            base_color: PreparedUvSource::Uv0,
+            secondary_base_color: PreparedUvSource::Uv0,
+            normal: PreparedUvSource::Uv0,
+            secondary_normal: PreparedUvSource::Uv0,
+            mask: PreparedUvSource::Uv0,
+            skin_diffuse: PreparedUvSource::Uv2,
+            skin_normal: PreparedUvSource::Uv2,
+            skin_mask: PreparedUvSource::Uv2,
+            material_map: PreparedUvSource::Uv0,
+            multi_map: PreparedUvSource::Uv0,
+            specular: PreparedUvSource::Uv0,
+            secondary_specular: PreparedUvSource::Uv0,
+            emissive: PreparedUvSource::Uv0,
+            environment: PreparedUvSource::Uv0,
+            material_properties: PreparedUvSource::Uv0,
+            tile_properties: PreparedUvSource::Uv0,
+            sheen_properties: PreparedUvSource::Uv0,
+            sphere_properties: PreparedUvSource::Uv0,
+            tile_matrix: PreparedUvSource::Uv0,
+            index: PreparedUvSource::Uv0,
+            other: PreparedUvSource::Uv0,
+        }
+    }
+}
+
+fn default_skin_texture_uv_source() -> PreparedUvSource {
+    PreparedUvSource::Uv2
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -610,42 +1128,267 @@ pub struct PreparedMaterialFeatureFlags {
     pub uses_scroll: bool,
     pub uses_flow: bool,
     pub uses_dye: bool,
+    pub uses_outline: bool,
+    pub uses_toon: bool,
+    pub uses_secondary_maps: bool,
+    pub uses_environment_map: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialUnsupportedInputs {
+    pub dye_application: bool,
+    pub runtime_color_table: bool,
+    pub decal_or_crest: bool,
+    pub runtime_material_change: bool,
+    pub runtime_option_color: bool,
+    pub runtime_decal_color: bool,
+    #[serde(default)]
+    pub runtime_decal_texture: bool,
+    #[serde(default)]
+    pub runtime_skin_color: bool,
+    pub runtime_skin_material: bool,
+    #[serde(default)]
+    pub skin_sampler_composition: bool,
+    pub runtime_sub_color: bool,
+    pub tile_array: bool,
+    pub detail_array: bool,
+    /// BG detail layers can be selected and sampled, but MeddleTools marks
+    /// their final terrain influence as broken and does not establish a
+    /// trustworthy base-color or normal composition formula.
+    #[serde(default)]
+    pub detail_composition: bool,
+    pub incomplete_shader_family_logic: bool,
+    pub secondary_map_blend: bool,
+    pub environment_mapping: bool,
+    pub multi_map_interpretation: bool,
+    /// Non-default multi diffuse/emissive constants without a verified
+    /// primary/secondary color composition path.
+    #[serde(default)]
+    pub multi_color_composition: bool,
+    pub character_reflection: bool,
+    #[serde(default)]
+    pub character_scroll_variant: bool,
+    #[serde(default)]
+    pub glass_shader_parameters: bool,
+    #[serde(default)]
+    pub ambient_occlusion_mask: bool,
+    #[serde(default)]
+    pub ssao_mask: bool,
+    /// Sheen inputs are parsed and baked, but the checked MeddleTools character
+    /// material graph does not connect them to a final BSDF output.
+    #[serde(default)]
+    pub sheen_lighting: bool,
+    /// Sphere-map inputs are parsed and baked, but their final reflection
+    /// composition is not present in the checked MeddleTools graph.
+    #[serde(default)]
+    pub sphere_lighting: bool,
+    /// Toon constants have no MeddleTools node equivalent. Only non-default
+    /// overrides are marked; installed materials currently use SHPK defaults.
+    #[serde(default)]
+    pub toon_lighting: bool,
+    #[serde(default)]
+    pub lightshaft_clip: bool,
+    #[serde(default)]
+    pub decal_color_mode: bool,
+    #[serde(default)]
+    pub alpha_multi_values: bool,
+    /// Alpha aperture/offset constants are preserved, but neither Meddle nor
+    /// MeddleTools establishes their final alpha shaping equation.
+    #[serde(default)]
+    pub alpha_shaping: bool,
+    /// `ApplyVertexColorOn` is retained as a feature/key, but its RGB
+    /// composition is not established by the checked MeddleTools graphs.
+    #[serde(default)]
+    pub vertex_color_composition: bool,
+    /// `g_SpecularColorMask` is preserved, but the checked references do not
+    /// establish either RGB multiplication or a fourth scalar channel.
+    #[serde(default)]
+    pub specular_color_mask_composition: bool,
+    /// Outline constants are retained, but the checked references do not
+    /// establish a world-space normal extrusion or final color pass.
+    #[serde(default)]
+    pub outline_composition: bool,
+    #[serde(default)]
+    pub legacy_specular_type: bool,
+    /// Legacy ColorTable GlossStrength is consumed by installed
+    /// `characterlegacy.shpk` through pass-specific exponent/specular paths.
+    /// The preview uses the proven MRT exponent as its environment roughness,
+    /// reproduces the installed camera-reflection direct lobe, and retains the
+    /// raw channel, but does not reproduce the remaining environment/color
+    /// composition around those consumers.
+    #[serde(default)]
+    pub legacy_gloss_composition: bool,
+    #[serde(default)]
+    pub tile_mip_bias_offset: bool,
+    #[serde(default)]
+    pub vertex_movement_parameters: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialResourceAvailability {
+    pub tile_array_complete: bool,
+    pub detail_array_complete: bool,
+    #[serde(default)]
+    pub tile_array: PreparedTextureArrayResource,
+    #[serde(default)]
+    pub detail_array: PreparedTextureArrayResource,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedTextureArrayResource {
+    pub status: PreparedTextureArrayStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_count: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedTextureArrayStatus {
+    #[default]
+    MissingBindings,
+    Unvalidated,
+    MissingTexture,
+    WrongTextureKind,
+    NonCanonicalBinding,
+    InvalidLayout,
+    IncompatiblePair,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialRuntimeFallbacks {
+    pub decal_or_crest: PreparedRuntimeFallback,
+    pub material_change: PreparedRuntimeFallback,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedMaterialRuntimeInputRequirements {
+    pub character_instance_state: bool,
+    pub on_render_material_output: bool,
+    /// Runtime `g_MaterialParameterDynamic.m_EmissiveColor`. Installed
+    /// Character and Legacy ColorTable Final shaders consume this distinct
+    /// 16-byte cbuffer; it is not the static MTRL `g_EmissiveColor`.
+    #[serde(default)]
+    pub material_dynamic_emissive_color: bool,
+    /// Runtime `g_InstanceParameter.m_MulColor`, which scales installed Legacy
+    /// Final RGB after the material/environment accumulation.
+    #[serde(default)]
+    pub instance_mul_color: bool,
+    /// Runtime `g_InstanceParameter.m_CameraLight.m_DiffuseSpecular/m_Rim`.
+    /// These per-instance camera-light controls are not static MTRL fields.
+    #[serde(default)]
+    pub instance_camera_light_parameters: bool,
+    pub gpu_color_table_texture: bool,
+    pub resolved_resource_handles: bool,
+    /// Runtime `g_InstanceParameter.m_Wetness` and
+    /// `g_ModelParameter.m_Params.x` values. These are render-object state and
+    /// are not stored in static MDL or MTRL data.
+    #[serde(default)]
+    pub model_wetness_parameters: bool,
+    /// Scene-owned `g_AmbientParam`, including sphere harmonics, environment
+    /// location interpolation and reflection/baked-light controls.
+    #[serde(default)]
+    pub scene_ambient_parameters: bool,
+    /// The scene ReflectionArray cube-array resource selected by
+    /// `g_AmbientParam` environment location indices.
+    #[serde(default)]
+    pub reflection_array_texture: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparedRuntimeFallback {
+    #[default]
+    NotRequired,
+    TransparentTexture,
+    BaseMaterial,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureBindings {
     pub base_color: Option<usize>,
+    pub secondary_base_color: Option<usize>,
     pub normal: Option<usize>,
+    pub secondary_normal: Option<usize>,
     pub mask: Option<usize>,
+    #[serde(default)]
+    pub skin_diffuse: Option<usize>,
+    #[serde(default)]
+    pub skin_normal: Option<usize>,
+    #[serde(default)]
+    pub skin_mask: Option<usize>,
     pub material_map: Option<usize>,
     pub multi_map: Option<usize>,
     pub specular: Option<usize>,
+    pub secondary_specular: Option<usize>,
     pub emissive: Option<usize>,
+    #[serde(default)]
+    pub environment: Option<usize>,
     pub material_properties: Option<usize>,
     pub tile_properties: Option<usize>,
     pub sheen_properties: Option<usize>,
     pub sphere_properties: Option<usize>,
     pub tile_matrix: Option<usize>,
     pub index: Option<usize>,
+    #[serde(default)]
+    pub water_wave: Option<usize>,
+    #[serde(default)]
+    pub water_wave1: Option<usize>,
+    #[serde(default)]
+    pub water_whitecap: Option<usize>,
+    pub tile_normal_array: Option<usize>,
+    pub tile_orb_array: Option<usize>,
+    pub detail_diffuse_array: Option<usize>,
+    pub detail_normal_array: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureSamplingSet {
     pub base_color: PreparedTextureSampling,
+    pub secondary_base_color: PreparedTextureSampling,
     pub normal: PreparedTextureSampling,
+    pub secondary_normal: PreparedTextureSampling,
     pub mask: PreparedTextureSampling,
+    #[serde(default = "default_skin_diffuse_texture_sampling")]
+    pub skin_diffuse: PreparedTextureSampling,
+    #[serde(default = "default_skin_normal_texture_sampling")]
+    pub skin_normal: PreparedTextureSampling,
+    #[serde(default = "default_skin_mask_texture_sampling")]
+    pub skin_mask: PreparedTextureSampling,
     pub material_map: PreparedTextureSampling,
     pub multi_map: PreparedTextureSampling,
     pub specular: PreparedTextureSampling,
+    pub secondary_specular: PreparedTextureSampling,
     pub emissive: PreparedTextureSampling,
+    #[serde(default = "default_environment_texture_sampling")]
+    pub environment: PreparedTextureSampling,
     pub material_properties: PreparedTextureSampling,
     pub tile_properties: PreparedTextureSampling,
     pub sheen_properties: PreparedTextureSampling,
     pub sphere_properties: PreparedTextureSampling,
     pub tile_matrix: PreparedTextureSampling,
     pub index: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_wave: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_wave1: PreparedTextureSampling,
+    #[serde(default = "default_water_texture_sampling")]
+    pub water_whitecap: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub tile_normal_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub tile_orb_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub detail_diffuse_array: PreparedTextureSampling,
+    #[serde(default = "default_texture_array_sampling")]
+    pub detail_normal_array: PreparedTextureSampling,
     pub other: PreparedTextureSampling,
 }
 
@@ -653,12 +1396,23 @@ impl Default for PreparedTextureSamplingSet {
     fn default() -> Self {
         Self {
             base_color: prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor),
+            secondary_base_color: prepared_texture_sampling_for_kind(
+                ModelTextureKind::SecondaryBaseColor,
+            ),
             normal: prepared_texture_sampling_for_kind(ModelTextureKind::Normal),
+            secondary_normal: prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryNormal),
             mask: prepared_texture_sampling_for_kind(ModelTextureKind::Mask),
+            skin_diffuse: default_skin_diffuse_texture_sampling(),
+            skin_normal: default_skin_normal_texture_sampling(),
+            skin_mask: default_skin_mask_texture_sampling(),
             material_map: prepared_texture_sampling_for_kind(ModelTextureKind::MaterialMap),
             multi_map: prepared_texture_sampling_for_kind(ModelTextureKind::MultiMap),
             specular: prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
+            secondary_specular: prepared_texture_sampling_for_kind(
+                ModelTextureKind::SecondarySpecular,
+            ),
             emissive: prepared_texture_sampling_for_kind(ModelTextureKind::Emissive),
+            environment: prepared_texture_sampling_for_kind(ModelTextureKind::Environment),
             material_properties: prepared_texture_sampling_for_kind(
                 ModelTextureKind::MaterialProperties,
             ),
@@ -669,9 +1423,46 @@ impl Default for PreparedTextureSamplingSet {
             ),
             tile_matrix: prepared_texture_sampling_for_kind(ModelTextureKind::TileMatrixProperties),
             index: prepared_texture_sampling_for_kind(ModelTextureKind::Index),
+            water_wave: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWave),
+            water_wave1: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWaveSecondary),
+            water_whitecap: prepared_texture_sampling_for_kind(ModelTextureKind::WaterWhitecap),
+            tile_normal_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::TileNormalArray,
+            ),
+            tile_orb_array: prepared_texture_sampling_for_kind(ModelTextureKind::TileOrbArray),
+            detail_diffuse_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::DetailDiffuseArray,
+            ),
+            detail_normal_array: prepared_texture_sampling_for_kind(
+                ModelTextureKind::DetailNormalArray,
+            ),
             other: prepared_texture_sampling_for_kind(ModelTextureKind::Other),
         }
     }
+}
+
+fn default_skin_diffuse_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor)
+}
+
+fn default_skin_normal_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Normal)
+}
+
+fn default_skin_mask_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Mask)
+}
+
+fn default_texture_array_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::TileNormalArray)
+}
+
+fn default_water_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::WaterWave)
+}
+
+fn default_environment_texture_sampling() -> PreparedTextureSampling {
+    prepared_texture_sampling_for_kind(ModelTextureKind::Environment)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -748,10 +1539,37 @@ pub fn prepare_model_for_render<M: ModelRenderData + ?Sized>(model: &M) -> Prepa
     prepare_model_for_render_with_options(model, PreparedModelOptions::default())
 }
 
+pub fn model_mesh_vertices_with_shape_mask(
+    mesh: &ModelMesh,
+    enabled_shape_mask: Option<u32>,
+) -> Vec<ModelVertex> {
+    let Some(enabled_shape_mask) = enabled_shape_mask else {
+        return mesh.vertices.clone();
+    };
+    let mut vertices = mesh.vertices.clone();
+    for target in &mesh.shape_targets {
+        if target.shape.shape_index_mask & enabled_shape_mask == 0 {
+            continue;
+        }
+        for delta in &target.vertex_deltas {
+            let Some(vertex) = vertices.get_mut(delta.vertex_index as usize) else {
+                continue;
+            };
+            for axis in 0..3 {
+                vertex.position[axis] += delta.position[axis];
+                vertex.normal[axis] += delta.normal[axis];
+            }
+        }
+    }
+    vertices
+}
+
 pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
     model: &M,
     options: PreparedModelOptions,
 ) -> PreparedModel {
+    let runtime_geometry_requirements =
+        prepared_model_runtime_geometry_requirements(model, options);
     PreparedModel {
         meshes: model
             .meshes()
@@ -769,7 +1587,37 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                     model.materials().get(mesh.material_slot),
                     draw_role,
                 );
-                prepared_material.feature_flags.uses_flow |= mesh_has_flow_attributes(mesh);
+                prepared_material.feature_flags.uses_flow =
+                    matches!(prepared_material.flow_mode, MaterialFlowMode::Flow)
+                        && mesh_has_primary_flow_attribute(mesh);
+                prepared_material.resource_availability =
+                    prepared_material_resource_availability_for_model(
+                        model.materials().get(mesh.material_slot),
+                        model.textures(),
+                    );
+                prepared_material.texture_sampling.specular.color_space =
+                    prepared_specular_texture_color_space(
+                        model.materials().get(mesh.material_slot),
+                        model.textures(),
+                    );
+                let (sheen_lighting, sphere_lighting) = prepared_unverified_extra_lighting_inputs(
+                    model.materials().get(mesh.material_slot),
+                    model.textures(),
+                );
+                prepared_material.unsupported_inputs.sheen_lighting |= sheen_lighting;
+                prepared_material.unsupported_inputs.sphere_lighting |= sphere_lighting;
+                prepared_material.unsupported_inputs.tile_array =
+                    prepared_material.feature_flags.uses_tile
+                        && !matches!(
+                            prepared_material.resource_availability.tile_array.status,
+                            PreparedTextureArrayStatus::Ready
+                        );
+                prepared_material.unsupported_inputs.detail_array =
+                    prepared_material.feature_flags.uses_detail
+                        && !matches!(
+                            prepared_material.resource_availability.detail_array.status,
+                            PreparedTextureArrayStatus::Ready
+                        );
                 PreparedMesh {
                     mesh_index,
                     material_slot: mesh.material_slot,
@@ -784,7 +1632,44 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 }
             })
             .collect(),
+        runtime_geometry_requirements,
     }
+}
+
+pub fn prepared_model_runtime_geometry_requirements<M: ModelRenderData + ?Sized>(
+    model: &M,
+    options: PreparedModelOptions,
+) -> PreparedModelRuntimeGeometryRequirements {
+    let has_shapes = model
+        .meshes()
+        .iter()
+        .any(|mesh| !mesh.shape_influences.is_empty() || !mesh.shape_targets.is_empty());
+    let has_attributes = model.meshes().iter().any(|mesh| {
+        mesh.submesh
+            .as_ref()
+            .is_some_and(|submesh| submesh.attribute_index_mask != 0)
+    });
+    let has_skinning = model.meshes().iter().any(model_mesh_has_skinning_payload);
+    let has_equipment_skinning = model.meshes().iter().any(|mesh| {
+        mesh.path.starts_with("chara/equipment/") && model_mesh_has_skinning_payload(mesh)
+    });
+
+    PreparedModelRuntimeGeometryRequirements {
+        shape_name_id_mapping: has_shapes,
+        enabled_shape_mask: has_shapes && options.enabled_shape_mask.is_none(),
+        enabled_attribute_mask: has_attributes && options.enabled_attribute_mask.is_none(),
+        skeleton_pose: has_skinning,
+        skinning_matrices: has_skinning,
+        race_deformer: has_equipment_skinning,
+    }
+}
+
+fn model_mesh_has_skinning_payload(mesh: &ModelMesh) -> bool {
+    mesh.bone_table.is_some()
+        && mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.blend_weights.is_some() && vertex.blend_indices.is_some())
 }
 
 fn prepared_mesh_shape_influences(
@@ -828,10 +1713,8 @@ fn prepared_mesh_visibility(
     }
 }
 
-fn mesh_has_flow_attributes(mesh: &ModelMesh) -> bool {
-    mesh.vertices
-        .iter()
-        .any(|vertex| vertex.flow0.is_some() || vertex.flow1.is_some())
+fn mesh_has_primary_flow_attribute(mesh: &ModelMesh) -> bool {
+    mesh.vertices.iter().any(|vertex| vertex.flow0.is_some())
 }
 
 pub fn prepare_material_for_draw_role(
@@ -842,17 +1725,203 @@ pub fn prepare_material_for_draw_role(
         material.and_then(|material| material.shader_package_name.as_deref()),
     );
     let texture_bindings = prepared_texture_bindings(material);
+    let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
+    let texture_sampling = prepared_material_texture_sampling(material, shader_family);
+    let unsupported_inputs =
+        prepared_material_unsupported_inputs(material, draw_role, shader_family, texture_bindings);
 
     PreparedMaterial {
-        render_pass: prepared_render_pass(material, draw_role),
+        render_pass: prepared_render_pass(material, draw_role, shader_family),
         shader_family,
+        flow_mode: material
+            .map(|material| material.flow_mode)
+            .unwrap_or_default(),
+        value_mode: material
+            .map(|material| material.value_mode)
+            .unwrap_or_default(),
+        value_mode_raw: material.and_then(|material| material.value_mode_raw),
+        sub_color_mode: material
+            .map(|material| material.sub_color_mode)
+            .unwrap_or_default(),
+        decal_color_mode: material
+            .map(|material| material.decal_color_mode)
+            .unwrap_or_default(),
+        decal_color_mode_raw: material.and_then(|material| material.decal_color_mode_raw),
+        skin_value_mode: material
+            .map(|material| material.skin_value_mode)
+            .unwrap_or_default(),
+        lightshaft_type: material
+            .map(|material| material.lightshaft_type)
+            .unwrap_or_default(),
+        lightshaft_type_raw: material.and_then(|material| material.lightshaft_type_raw),
+        alpha_policy: prepared_material_alpha_policy(material, shader_family),
         texture_bindings,
-        texture_sampling: PreparedTextureSamplingSet::default(),
-        uv_sources: PreparedMaterialUvSources::default(),
+        texture_sampling,
+        uv_sources,
         feature_flags: prepared_material_feature_flags(material, shader_family, texture_bindings),
+        unsupported_inputs,
+        resource_availability: prepared_material_resource_availability(material),
+        runtime_fallbacks: prepared_material_runtime_fallbacks(draw_role),
+        runtime_input_requirements: prepared_material_runtime_input_requirements(
+            shader_family,
+            unsupported_inputs,
+            material.is_some_and(|material| material.color_table_rows.is_some()),
+        ),
         render_backfaces: material
             .map(|material| material.render_backfaces)
             .unwrap_or(true),
+    }
+}
+
+fn prepared_material_texture_sampling(
+    material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+) -> PreparedTextureSamplingSet {
+    let mut sampling = PreparedTextureSamplingSet::default();
+    if shader_family == MaterialShaderFamily::Skin
+        && material.is_some_and(|material| material.skin_value_mode == MaterialSkinValueMode::Face)
+    {
+        sampling.base_color.address_mode = PreparedTextureAddressMode::ClampToEdge;
+    }
+    sampling
+}
+
+/// Baked ColorTable specular ramps are identified separately from the original
+/// packed `g_SamplerSpecularMap0`. Their compatibility bytes are sRGB-encoded,
+/// while canonical loader output also carries linear float RGB plus unclamped
+/// anisotropy Alpha; the renderer prefers that float payload.
+fn prepared_specular_texture_color_space(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> PreparedTextureColorSpace {
+    let is_baked_color_table_ramp = material
+        .and_then(|material| material.specular_texture)
+        .and_then(|index| textures.get(index))
+        .is_some_and(|texture| {
+            texture.kind == ModelTextureKind::Specular
+                && texture.path.starts_with("baked://")
+                && texture.path.contains("#colorset-")
+        });
+    if is_baked_color_table_ramp {
+        PreparedTextureColorSpace::Srgb
+    } else {
+        PreparedTextureColorSpace::NonColor
+    }
+}
+
+/// Meddle/MeddleTools establish the ColorTable field layout and baked ramp
+/// channels, but the checked character node graph leaves Sheen and Sphere at a
+/// dead-end mix-group interface. Keep nonzero inputs visible to diagnostics
+/// until a final shader composition is supported by stronger evidence.
+fn prepared_unverified_extra_lighting_inputs(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> (bool, bool) {
+    let Some(material) = material else {
+        return (false, false);
+    };
+    let sheen_lighting = material_scalar_differs(material.sheen_rate, 0.0)
+        || prepared_texture_channel_has_nonzero_value(
+            material.sheen_properties_texture,
+            textures,
+            ModelTextureKind::SheenProperties,
+            0,
+        );
+    let sphere_lighting = material_scalar_differs(material.sphere_map_index, 0.0)
+        || prepared_texture_channel_has_nonzero_value(
+            material.sphere_properties_texture,
+            textures,
+            ModelTextureKind::SphereProperties,
+            1,
+        );
+    (sheen_lighting, sphere_lighting)
+}
+
+fn prepared_texture_channel_has_nonzero_value(
+    texture_index: Option<usize>,
+    textures: &[ModelTexture],
+    expected_kind: ModelTextureKind,
+    channel: usize,
+) -> bool {
+    texture_index
+        .and_then(|index| textures.get(index))
+        .filter(|texture| texture.kind == expected_kind)
+        .is_some_and(|texture| {
+            texture
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[channel] != 0)
+                || texture.rgba_f32.as_ref().is_some_and(|pixels| {
+                    pixels
+                        .iter()
+                        .any(|pixel| pixel[channel].is_finite() && pixel[channel].abs() > 0.000_001)
+                })
+        })
+}
+
+fn material_has_nondefault_toon_inputs(material: &ModelMaterial) -> bool {
+    material_scalar_differs(material.toon_index, 0.0)
+        || material_scalar_differs(material.toon_light_scale, 2.0)
+        || material_scalar_differs(material.toon_light_spec_aperture, 50.0)
+        || material_scalar_differs(material.toon_reflection_scale, 2.5)
+        || material_scalar_differs(material.toon_spec_index, 4.0e-45)
+}
+
+pub fn prepared_material_alpha_policy(
+    material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+) -> PreparedMaterialAlphaPolicy {
+    let Some(material) = material else {
+        return PreparedMaterialAlphaPolicy::default();
+    };
+    let is_character_family = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
+    let source = if matches!(shader_family, MaterialShaderFamily::Water) {
+        PreparedAlphaSource::MaterialTransparency
+    } else if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
+        PreparedAlphaSource::Opaque
+    } else if matches!(shader_family, MaterialShaderFamily::CharacterTattoo) {
+        PreparedAlphaSource::NormalAlpha
+    } else if matches!(
+        shader_family,
+        MaterialShaderFamily::CharacterGlass | MaterialShaderFamily::CharacterTransparency
+    ) || (is_character_family
+        && !matches!(material.alpha_mode, MaterialAlphaMode::Opaque))
+    {
+        // MeddleTools proves Normal Blue for the shared character surface, and
+        // the installed 45059 glass normal contains a real Blue payload while
+        // Alpha is constant. Installed characterglass permutations do not share
+        // one output-alpha formula, so glass keeps this as an explicit preview
+        // fallback under `glass_shader_parameters`, not as a recovered game formula.
+        PreparedAlphaSource::NormalBlue
+    } else {
+        match material.alpha_mode {
+            MaterialAlphaMode::Opaque => PreparedAlphaSource::Opaque,
+            MaterialAlphaMode::Mask | MaterialAlphaMode::Blend | MaterialAlphaMode::Glass => {
+                PreparedAlphaSource::BaseColorAlpha
+            }
+        }
+    };
+    let lighting_enabled = !matches!(
+        (shader_family, material.lighting_mode),
+        (
+            MaterialShaderFamily::CharacterTransparency,
+            MaterialLightingMode::Disabled
+        )
+    );
+
+    PreparedMaterialAlphaPolicy {
+        source,
+        draw_depth_mode: material.draw_depth_mode,
+        lighting_enabled,
     }
 }
 
@@ -863,18 +1932,101 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
 
     PreparedTextureBindings {
         base_color: material.base_color_texture,
+        secondary_base_color: material.secondary_base_color_texture,
         normal: material.normal_texture,
+        secondary_normal: material.secondary_normal_texture,
         mask: material.mask_texture,
+        skin_diffuse: material.skin_diffuse_texture,
+        skin_normal: material.skin_normal_texture,
+        skin_mask: material.skin_mask_texture,
         material_map: material.material_map_texture,
         multi_map: material.multi_map_texture,
         specular: material.specular_texture,
+        secondary_specular: material.secondary_specular_texture,
         emissive: material.emissive_texture,
+        environment: material.environment_texture,
         material_properties: material.material_properties_texture,
         tile_properties: material.tile_properties_texture,
         sheen_properties: material.sheen_properties_texture,
         sphere_properties: material.sphere_properties_texture,
         tile_matrix: material.tile_matrix_texture,
         index: material.index_texture,
+        water_wave: material.water_wave_texture,
+        water_wave1: material.water_wave1_texture,
+        water_whitecap: material.water_whitecap_texture,
+        tile_normal_array: material.texture_arrays.tile_normal,
+        tile_orb_array: material.texture_arrays.tile_orb,
+        detail_diffuse_array: material.texture_arrays.detail_diffuse,
+        detail_normal_array: material.texture_arrays.detail_normal,
+    }
+}
+
+pub fn prepared_material_uv_sources(
+    _material: Option<&ModelMaterial>,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> PreparedMaterialUvSources {
+    let mut sources = PreparedMaterialUvSources::default();
+    if matches!(shader_family, MaterialShaderFamily::BgUvScroll) {
+        // MeddleTools bguvscroll connects Map0 to UV0Scroll and Map1 to UV1Scroll.
+        sources.scroll.base_color = texture_bindings.base_color.is_some();
+        sources.scroll.normal = texture_bindings.normal.is_some();
+        sources.scroll.specular = texture_bindings.specular.is_some();
+        sources.textures.secondary_base_color = PreparedUvSource::Uv1;
+        sources.textures.secondary_normal = PreparedUvSource::Uv1;
+        sources.textures.secondary_specular = PreparedUvSource::Uv1;
+        sources.scroll.secondary_base_color = texture_bindings.secondary_base_color.is_some();
+        sources.scroll.secondary_normal = texture_bindings.secondary_normal.is_some();
+        sources.scroll.secondary_specular = texture_bindings.secondary_specular.is_some();
+    }
+    sources
+}
+
+fn prepared_material_uses_scroll(
+    material: &ModelMaterial,
+    uv_sources: PreparedMaterialUvSources,
+) -> bool {
+    let textures = uv_sources.textures;
+    let scroll = uv_sources.scroll;
+    let secondary_scroll = matches!(material.value_mode, MaterialValueMode::Multi);
+    [
+        (scroll.base_color, textures.base_color),
+        (
+            scroll.secondary_base_color && secondary_scroll,
+            textures.secondary_base_color,
+        ),
+        (scroll.normal, textures.normal),
+        (
+            scroll.secondary_normal && secondary_scroll,
+            textures.secondary_normal,
+        ),
+        (scroll.mask, textures.mask),
+        (scroll.material_map, textures.material_map),
+        (scroll.multi_map, textures.multi_map),
+        (scroll.specular, textures.specular),
+        (
+            scroll.secondary_specular && secondary_scroll,
+            textures.secondary_specular,
+        ),
+        (scroll.emissive, textures.emissive),
+        (scroll.environment, textures.environment),
+        (scroll.material_properties, textures.material_properties),
+        (scroll.tile_properties, textures.tile_properties),
+        (scroll.sheen_properties, textures.sheen_properties),
+        (scroll.sphere_properties, textures.sphere_properties),
+        (scroll.tile_matrix, textures.tile_matrix),
+        (scroll.index, textures.index),
+        (scroll.other, textures.other),
+    ]
+    .into_iter()
+    .any(|(enabled, source)| enabled && prepared_uv_source_has_scroll(material.uv_scroll, source))
+}
+
+fn prepared_uv_source_has_scroll(uv_scroll: [f32; 4], source: PreparedUvSource) -> bool {
+    match source {
+        PreparedUvSource::Uv0 => material_vec2_differs([uv_scroll[0], uv_scroll[1]], [0.0; 2]),
+        PreparedUvSource::Uv1 => material_vec2_differs([uv_scroll[2], uv_scroll[3]], [0.0; 2]),
+        PreparedUvSource::Uv2 | PreparedUvSource::Uv3 => false,
     }
 }
 
@@ -883,6 +2035,7 @@ pub fn prepared_material_feature_flags(
     shader_family: MaterialShaderFamily,
     texture_bindings: PreparedTextureBindings,
 ) -> PreparedMaterialFeatureFlags {
+    let uv_sources = prepared_material_uv_sources(material, shader_family, texture_bindings);
     let mut flags = PreparedMaterialFeatureFlags {
         uses_color_table: texture_bindings.index.is_some()
             || texture_bindings.material_properties.is_some()
@@ -892,7 +2045,17 @@ pub fn prepared_material_feature_flags(
             || texture_bindings.tile_matrix.is_some(),
         uses_tile: texture_bindings.tile_properties.is_some(),
         uses_detail: texture_bindings.multi_map.is_some(),
-        uses_scroll: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
+        uses_environment_map: texture_bindings.environment.is_some(),
+        uses_secondary_maps: (matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+            && matches!(
+                material.map(|material| material.value_mode),
+                Some(MaterialValueMode::Multi)
+            )
+            && (texture_bindings.secondary_base_color.is_some()
+                || texture_bindings.secondary_normal.is_some()
+                || texture_bindings.secondary_specular.is_some()))
+            || (matches!(shader_family, MaterialShaderFamily::LightShaft)
+                && texture_bindings.secondary_base_color.is_some()),
         ..PreparedMaterialFeatureFlags::default()
     };
 
@@ -901,6 +2064,7 @@ pub fn prepared_material_feature_flags(
     };
 
     flags.uses_vertex_color = material.apply_vertex_color;
+    flags.uses_dye = material_has_color_dye_table(material);
     flags.uses_tile |= material_scalar_differs(material.tile_index, 0.0)
         || material_scalar_differs(material.tile_alpha, 1.0)
         || material_vec2_differs(material.tile_scale, [16.0, 16.0]);
@@ -909,37 +2073,395 @@ pub fn prepared_material_feature_flags(
         || material_scalar_differs(material.multi_detail_normal_scale, 1.0)
         || material_scalar_differs(material.detail_id, 0.0)
         || material_scalar_differs(material.multi_detail_id, 0.0)
+        || material_vec4_differs(material.detail_color, [0.5, 0.5, 0.5, 1.0])
+        || material_vec4_differs(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
         || material_vec4_differs(material.detail_color_uv_scale, [4.0; 4])
         || material_vec4_differs(material.detail_normal_uv_scale, [4.0; 4]);
-    flags.uses_scroll |= material_vec4_differs(material.uv_scroll, [0.0; 4])
-        || material_vec4_differs(material.lightshaft_tex_anim, [0.0; 4]);
+    flags.uses_scroll = prepared_material_uses_scroll(material, uv_sources);
+    flags.uses_outline = material.outline_width.is_finite()
+        && material.outline_width > 0.0
+        && matches!(
+            shader_family,
+            MaterialShaderFamily::Character
+                | MaterialShaderFamily::CharacterStockings
+                | MaterialShaderFamily::CharacterGlass
+                | MaterialShaderFamily::CharacterReflection
+                | MaterialShaderFamily::CharacterTransparency
+                | MaterialShaderFamily::CharacterScroll
+                | MaterialShaderFamily::CharacterTattoo
+                | MaterialShaderFamily::CharacterOcclusion
+        );
+    flags.uses_toon = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
 
     flags
 }
 
+pub fn prepared_material_unsupported_inputs(
+    material: Option<&ModelMaterial>,
+    draw_role: ModelMeshDrawRole,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> PreparedMaterialUnsupportedInputs {
+    let feature_flags = prepared_material_feature_flags(material, shader_family, texture_bindings);
+    let resource_availability = prepared_material_resource_availability(material);
+    let dye_application = material
+        .and_then(|material| material.staining_application.as_ref())
+        .is_some_and(staining_application_is_incomplete);
+
+    PreparedMaterialUnsupportedInputs {
+        dye_application,
+        runtime_color_table: feature_flags.uses_color_table,
+        decal_or_crest: matches!(draw_role, ModelMeshDrawRole::CrestChange),
+        runtime_material_change: false,
+        runtime_option_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo),
+        runtime_decal_color: matches!(shader_family, MaterialShaderFamily::CharacterTattoo)
+            || (matches!(shader_family, MaterialShaderFamily::Skin)
+                && material.is_some_and(|material| {
+                    !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+                })),
+        runtime_decal_texture: matches!(shader_family, MaterialShaderFamily::Skin)
+            && material.is_some_and(|material| {
+                !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+            }),
+        runtime_skin_color: matches!(shader_family, MaterialShaderFamily::Skin),
+        runtime_skin_material: matches!(shader_family, MaterialShaderFamily::CharacterStockings),
+        skin_sampler_composition: texture_bindings.skin_diffuse.is_some()
+            || texture_bindings.skin_normal.is_some()
+            || texture_bindings.skin_mask.is_some(),
+        runtime_sub_color: matches!(shader_family, MaterialShaderFamily::CharacterOcclusion)
+            || material.is_some_and(|material| {
+                matches!(
+                    material.sub_color_mode,
+                    MaterialSubColorMode::Face | MaterialSubColorMode::Hair
+                )
+            }),
+        tile_array: feature_flags.uses_tile && !resource_availability.tile_array_complete,
+        detail_array: feature_flags.uses_detail && !resource_availability.detail_array_complete,
+        detail_composition: matches!(
+            shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        ) && (feature_flags.uses_detail
+            || resource_availability.detail_array_complete),
+        incomplete_shader_family_logic: prepared_shader_family_needs_more_logic(shader_family),
+        secondary_map_blend: material.is_some_and(|material| {
+            matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+                && (texture_bindings.secondary_base_color.is_some()
+                    || texture_bindings.secondary_normal.is_some()
+                    || texture_bindings.secondary_specular.is_some())
+                && !matches!(
+                    material.value_mode,
+                    MaterialValueMode::Single | MaterialValueMode::Multi
+                )
+        }),
+        environment_mapping: texture_bindings.environment.is_some(),
+        multi_map_interpretation: texture_bindings.multi_map.is_some(),
+        multi_color_composition: material.is_some_and(|material| {
+            material_has_unverified_multi_color_inputs(material, shader_family, texture_bindings)
+        }),
+        character_reflection: matches!(shader_family, MaterialShaderFamily::CharacterReflection),
+        character_scroll_variant: matches!(shader_family, MaterialShaderFamily::CharacterScroll),
+        glass_shader_parameters: matches!(shader_family, MaterialShaderFamily::CharacterGlass),
+        ambient_occlusion_mask: material
+            .is_some_and(|material| material.ambient_occlusion_mask.is_some()),
+        ssao_mask: material
+            .is_some_and(|material| material_scalar_differs(material.ssao_mask, 1.0)),
+        sheen_lighting: material
+            .is_some_and(|material| material_scalar_differs(material.sheen_rate, 0.0)),
+        sphere_lighting: material
+            .is_some_and(|material| material_scalar_differs(material.sphere_map_index, 0.0)),
+        toon_lighting: feature_flags.uses_toon
+            && material.is_some_and(material_has_nondefault_toon_inputs),
+        lightshaft_clip: matches!(shader_family, MaterialShaderFamily::LightShaft),
+        decal_color_mode: material.is_some_and(|material| {
+            !matches!(material.decal_color_mode, MaterialDecalColorMode::Off)
+        }),
+        alpha_multi_values: material.is_some_and(|material| {
+            matches!(
+                material.value_mode,
+                MaterialValueMode::AlphaMulti
+                    | MaterialValueMode::AlphaMulti2
+                    | MaterialValueMode::AlphaMulti3
+            )
+        }),
+        alpha_shaping: material.is_some_and(|material| {
+            material_scalar_differs(material.alpha_aperture, 2.0)
+                || material_scalar_differs(material.alpha_offset, 0.0)
+        }),
+        vertex_color_composition: material.is_some_and(|material| material.apply_vertex_color),
+        specular_color_mask_composition: material.is_some_and(|material| {
+            material_vec4_differs(
+                material.specular_color_mask,
+                default_material_specular_color_mask(),
+            )
+        }),
+        outline_composition: material.is_some_and(|material| {
+            material_scalar_differs(material.outline_width, 0.0)
+                || material_vec4_differs(material.outline_color, default_material_outline_color())
+        }),
+        legacy_specular_type: material.is_some_and(material_has_unsupported_legacy_specular_type),
+        legacy_gloss_composition: material.is_some_and(|material| {
+            material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+                && material.color_table_rows.is_some()
+        }),
+        // Installed character DXBC proves this value is the additive bias for
+        // the Tile Normal/ORB array LOD path; the renderer consumes it.
+        tile_mip_bias_offset: false,
+        vertex_movement_parameters: material.is_some_and(|material| {
+            material_scalar_differs(material.vertex_movement_scale, 1.0)
+                || material_scalar_differs(material.vertex_movement_max_length, 1.0)
+        }),
+    }
+}
+
+pub fn prepared_material_resource_availability(
+    material: Option<&ModelMaterial>,
+) -> PreparedMaterialResourceAvailability {
+    let Some(material) = material else {
+        return PreparedMaterialResourceAvailability::default();
+    };
+    let tile_array_complete =
+        material.texture_arrays.tile_normal.is_some() && material.texture_arrays.tile_orb.is_some();
+    let detail_array_complete = material.texture_arrays.detail_diffuse.is_some()
+        && material.texture_arrays.detail_normal.is_some();
+    PreparedMaterialResourceAvailability {
+        tile_array_complete,
+        detail_array_complete,
+        tile_array: unvalidated_texture_array_resource(tile_array_complete),
+        detail_array: unvalidated_texture_array_resource(detail_array_complete),
+    }
+}
+
+fn unvalidated_texture_array_resource(bindings_complete: bool) -> PreparedTextureArrayResource {
+    PreparedTextureArrayResource {
+        status: if bindings_complete {
+            PreparedTextureArrayStatus::Unvalidated
+        } else {
+            PreparedTextureArrayStatus::MissingBindings
+        },
+        layer_count: None,
+    }
+}
+
+fn prepared_material_resource_availability_for_model(
+    material: Option<&ModelMaterial>,
+    textures: &[ModelTexture],
+) -> PreparedMaterialResourceAvailability {
+    let mut availability = prepared_material_resource_availability(material);
+    let Some(material) = material else {
+        return availability;
+    };
+    availability.tile_array = prepared_texture_array_resource(
+        material.texture_arrays.tile_normal,
+        material.texture_arrays.tile_orb,
+        textures,
+        ModelTextureKind::TileNormalArray,
+        ModelTextureKind::TileOrbArray,
+    );
+    availability.detail_array = prepared_texture_array_resource(
+        material.texture_arrays.detail_diffuse,
+        material.texture_arrays.detail_normal,
+        textures,
+        ModelTextureKind::DetailDiffuseArray,
+        ModelTextureKind::DetailNormalArray,
+    );
+    availability
+}
+
+fn prepared_texture_array_resource(
+    first_index: Option<usize>,
+    second_index: Option<usize>,
+    textures: &[ModelTexture],
+    first_kind: ModelTextureKind,
+    second_kind: ModelTextureKind,
+) -> PreparedTextureArrayResource {
+    let (Some(first_index), Some(second_index)) = (first_index, second_index) else {
+        return PreparedTextureArrayResource::default();
+    };
+    let (Some(first), Some(second)) = (textures.get(first_index), textures.get(second_index))
+    else {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::MissingTexture,
+            layer_count: None,
+        };
+    };
+    if first.kind != first_kind || second.kind != second_kind {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::WrongTextureKind,
+            layer_count: None,
+        };
+    }
+    if textures
+        .iter()
+        .position(|texture| texture.kind == first_kind)
+        != Some(first_index)
+        || textures
+            .iter()
+            .position(|texture| texture.kind == second_kind)
+            != Some(second_index)
+    {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::NonCanonicalBinding,
+            layer_count: None,
+        };
+    }
+    if !texture_array_layout_is_valid(first) || !texture_array_layout_is_valid(second) {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::InvalidLayout,
+            layer_count: None,
+        };
+    }
+    if first.width != second.width
+        || first.height != second.height
+        || first.array_size != second.array_size
+        || first.array_layer_height != second.array_layer_height
+    {
+        return PreparedTextureArrayResource {
+            status: PreparedTextureArrayStatus::IncompatiblePair,
+            layer_count: None,
+        };
+    }
+    PreparedTextureArrayResource {
+        status: PreparedTextureArrayStatus::Ready,
+        layer_count: Some(first.array_size),
+    }
+}
+
+fn texture_array_layout_is_valid(texture: &ModelTexture) -> bool {
+    let expected_rgba_len = usize::from(texture.width)
+        .checked_mul(usize::from(texture.height))
+        .and_then(|pixel_count| pixel_count.checked_mul(4));
+    texture.width != 0
+        && texture.array_size > 1
+        && texture.array_layer_height != 0
+        && u32::from(texture.height)
+            == u32::from(texture.array_size) * u32::from(texture.array_layer_height)
+        && expected_rgba_len == Some(texture.rgba.len())
+}
+
+pub fn prepared_material_runtime_fallbacks(
+    draw_role: ModelMeshDrawRole,
+) -> PreparedMaterialRuntimeFallbacks {
+    PreparedMaterialRuntimeFallbacks {
+        decal_or_crest: if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+            PreparedRuntimeFallback::TransparentTexture
+        } else {
+            PreparedRuntimeFallback::NotRequired
+        },
+        material_change: if matches!(draw_role, ModelMeshDrawRole::MaterialChange) {
+            PreparedRuntimeFallback::BaseMaterial
+        } else {
+            PreparedRuntimeFallback::NotRequired
+        },
+    }
+}
+
+pub fn prepared_material_runtime_input_requirements(
+    shader_family: MaterialShaderFamily,
+    unsupported: PreparedMaterialUnsupportedInputs,
+    has_color_table_rows: bool,
+) -> PreparedMaterialRuntimeInputRequirements {
+    let tattoo_decal_color = matches!(shader_family, MaterialShaderFamily::CharacterTattoo)
+        && unsupported.runtime_decal_color;
+    let skin_decal_color =
+        matches!(shader_family, MaterialShaderFamily::Skin) && unsupported.runtime_decal_color;
+    let on_render_material_output = unsupported.decal_or_crest
+        || unsupported.runtime_skin_material
+        || unsupported.runtime_decal_texture
+        || skin_decal_color;
+    let character_color_table_final =
+        matches!(shader_family, MaterialShaderFamily::Character) && has_color_table_rows;
+
+    PreparedMaterialRuntimeInputRequirements {
+        character_instance_state: unsupported.runtime_option_color
+            || tattoo_decal_color
+            || unsupported.runtime_skin_color
+            || unsupported.runtime_sub_color,
+        on_render_material_output,
+        material_dynamic_emissive_color: character_color_table_final,
+        instance_mul_color: character_color_table_final,
+        instance_camera_light_parameters: character_color_table_final,
+        gpu_color_table_texture: unsupported.runtime_color_table,
+        resolved_resource_handles: on_render_material_output || unsupported.runtime_material_change,
+        model_wetness_parameters: unsupported.legacy_gloss_composition,
+        scene_ambient_parameters: unsupported.legacy_gloss_composition,
+        reflection_array_texture: unsupported.legacy_gloss_composition,
+    }
+}
+
+fn material_has_color_dye_table(material: &ModelMaterial) -> bool {
+    material.has_color_dye_table || material.color_dye_table.is_some()
+}
+
+fn staining_application_is_incomplete(application: &ModelStainingApplication) -> bool {
+    application.error.is_some()
+        || application.report.template_kind_mismatch
+        || application.report.rows_skipped_missing_template != 0
+        || application.report.rows_unavailable != 0
+}
+
+fn prepared_shader_family_needs_more_logic(shader_family: MaterialShaderFamily) -> bool {
+    matches!(
+        shader_family,
+        MaterialShaderFamily::Skin
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+            | MaterialShaderFamily::Crystal
+            | MaterialShaderFamily::LightShaft
+    )
+}
+
 pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTextureSampling {
     match kind {
-        ModelTextureKind::BaseColor | ModelTextureKind::Specular | ModelTextureKind::Emissive => {
-            PreparedTextureSampling {
-                color_space: PreparedTextureColorSpace::Srgb,
-                filter: PreparedTextureFilter::Linear,
-                address_mode: PreparedTextureAddressMode::Repeat,
-            }
-        }
+        ModelTextureKind::BaseColor
+        | ModelTextureKind::SecondaryBaseColor
+        | ModelTextureKind::Emissive => PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::Srgb,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        },
         ModelTextureKind::Index
         | ModelTextureKind::TileProperties
         | ModelTextureKind::SheenProperties
         | ModelTextureKind::SphereProperties
-        | ModelTextureKind::TileMatrixProperties => PreparedTextureSampling {
+        | ModelTextureKind::TileMatrixProperties
+        | ModelTextureKind::TileNormalArray
+        | ModelTextureKind::TileOrbArray
+        | ModelTextureKind::DetailDiffuseArray
+        | ModelTextureKind::DetailNormalArray => PreparedTextureSampling {
             color_space: PreparedTextureColorSpace::NonColor,
             filter: PreparedTextureFilter::Nearest,
             address_mode: PreparedTextureAddressMode::Repeat,
         },
         ModelTextureKind::Normal
+        | ModelTextureKind::SecondaryNormal
+        | ModelTextureKind::Specular
+        | ModelTextureKind::SecondarySpecular
         | ModelTextureKind::Mask
         | ModelTextureKind::MaterialMap
         | ModelTextureKind::MultiMap
         | ModelTextureKind::MaterialProperties
+        | ModelTextureKind::WaterWave
+        | ModelTextureKind::WaterWaveSecondary
+        | ModelTextureKind::WaterWhitecap
+        | ModelTextureKind::Environment
         | ModelTextureKind::Other => PreparedTextureSampling {
             color_space: PreparedTextureColorSpace::NonColor,
             filter: PreparedTextureFilter::Linear,
@@ -950,6 +2472,24 @@ pub fn prepared_texture_sampling_for_kind(kind: ModelTextureKind) -> PreparedTex
 
 fn material_scalar_differs(value: f32, default: f32) -> bool {
     value.is_finite() && (value - default).abs() > 0.000_001
+}
+
+fn material_has_unsupported_legacy_specular_type(material: &ModelMaterial) -> bool {
+    match material.specular_type {
+        MaterialSpecularType::Default => false,
+        MaterialSpecularType::Unknown => true,
+        MaterialSpecularType::Mask => {
+            let is_character_legacy = material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"));
+            !(is_character_legacy
+                && matches!(
+                    material.value_mode,
+                    MaterialValueMode::MultiMaterial | MaterialValueMode::Compatibility
+                ))
+        }
+    }
 }
 
 fn material_vec2_differs(value: [f32; 2], default: [f32; 2]) -> bool {
@@ -966,20 +2506,58 @@ fn material_vec4_differs(value: [f32; 4], default: [f32; 4]) -> bool {
         .any(|(value, default)| material_scalar_differs(value, default))
 }
 
+fn material_has_unverified_multi_color_inputs(
+    material: &ModelMaterial,
+    shader_family: MaterialShaderFamily,
+    texture_bindings: PreparedTextureBindings,
+) -> bool {
+    let has_multi_diffuse = material_vec4_differs(
+        material.shader_multi_diffuse_color,
+        default_material_shader_diffuse_color(),
+    );
+    let verified_multi_diffuse = matches!(shader_family, MaterialShaderFamily::BgUvScroll)
+        && matches!(material.value_mode, MaterialValueMode::Multi)
+        && texture_bindings.secondary_base_color.is_some();
+    let has_multi_emissive = material_vec4_differs(
+        material.shader_multi_emissive_color,
+        default_material_shader_emissive_color(),
+    );
+    (has_multi_diffuse && !verified_multi_diffuse) || has_multi_emissive
+}
+
 fn prepared_render_pass(
     material: Option<&ModelMaterial>,
     draw_role: ModelMeshDrawRole,
+    shader_family: MaterialShaderFamily,
 ) -> PreparedRenderPass {
     if matches!(draw_role, ModelMeshDrawRole::LightShaft) {
         return PreparedRenderPass::AdditiveLightShaft;
     }
+    if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+        return PreparedRenderPass::Transparent;
+    }
     if matches!(draw_role, ModelMeshDrawRole::Glass) {
         return PreparedRenderPass::Glass;
+    }
+    if matches!(shader_family, MaterialShaderFamily::CharacterGlass) {
+        return PreparedRenderPass::Glass;
+    }
+    if matches!(shader_family, MaterialShaderFamily::CharacterTransparency) {
+        return PreparedRenderPass::Transparent;
+    }
+    if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
+        return PreparedRenderPass::Opaque;
     }
 
     let Some(material) = material else {
         return PreparedRenderPass::Opaque;
     };
+    if matches!(shader_family, MaterialShaderFamily::Water)
+        && material.transparency.is_finite()
+        && material.transparency < 1.0
+    {
+        return PreparedRenderPass::Transparent;
+    }
 
     match material.alpha_mode {
         MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
@@ -997,8 +2575,40 @@ fn default_material_opacity() -> f32 {
     1.0
 }
 
+fn default_material_water_deep_color() -> [f32; 4] {
+    [0.3529, 0.372_549, 0.3921, 1.0]
+}
+
+fn default_material_water_refraction_color() -> [f32; 4] {
+    [0.4117, 0.4313, 0.4509, 1.0]
+}
+
+fn default_material_water_whitecap_color() -> [f32; 4] {
+    [0.4509, 0.4705, 0.4901, 0.3]
+}
+
 fn default_material_normal_scale() -> f32 {
     1.0
+}
+
+fn default_material_vertex_movement() -> f32 {
+    1.0
+}
+
+fn default_material_alpha_aperture() -> f32 {
+    2.0
+}
+
+fn default_material_shadow_alpha_threshold() -> f32 {
+    0.5
+}
+
+fn default_material_glass_ior() -> f32 {
+    1.0
+}
+
+fn default_material_glass_thickness_max() -> f32 {
+    0.01
 }
 
 fn default_material_tile_alpha() -> f32 {
@@ -1009,8 +2619,52 @@ fn default_material_tile_scale() -> [f32; 2] {
     [16.0, 16.0]
 }
 
+fn default_material_toon_light_scale() -> f32 {
+    2.0
+}
+
+fn default_material_toon_light_spec_aperture() -> f32 {
+    50.0
+}
+
+fn default_material_toon_reflection_scale() -> f32 {
+    2.5
+}
+
+fn default_material_toon_spec_index() -> f32 {
+    4.0e-45
+}
+
+fn default_material_sheen_aperture() -> f32 {
+    1.0
+}
+
 fn default_material_detail_uv_scale() -> [f32; 4] {
     [4.0, 4.0, 4.0, 4.0]
+}
+
+fn default_material_detail_color() -> [f32; 4] {
+    [0.5, 0.5, 0.5, 1.0]
+}
+
+fn default_material_shader_diffuse_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_shader_emissive_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_material_outline_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_material_specular_color_mask() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_ssao_mask() -> f32 {
+    1.0
 }
 
 fn default_material_lightshaft_color() -> [f32; 4] {
@@ -1025,6 +2679,10 @@ fn default_material_lightshaft_tex_v() -> [f32; 4] {
     [0.0, 1.0, 0.0, 0.0]
 }
 
+fn default_material_lightshaft_near_clip() -> f32 {
+    0.25
+}
+
 fn default_render_backfaces() -> bool {
     true
 }
@@ -1034,26 +2692,54 @@ fn default_render_backfaces() -> bool {
 pub struct ModelTexture {
     pub path: String,
     pub kind: ModelTextureKind,
+    #[serde(default, skip_serializing_if = "ModelTextureTexelLayout::is_standard")]
+    pub texel_layout: ModelTextureTexelLayout,
     pub width: u16,
     pub height: u16,
+    #[serde(default = "default_texture_array_size")]
+    pub array_size: u16,
+    #[serde(default)]
+    pub array_layer_height: u16,
     pub rgba: Vec<u8>,
     /// Optional per-pixel float channels for non-unorm semantic data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgba_f32: Option<Vec<[f32; 4]>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelTextureTexelLayout {
+    #[default]
+    Standard,
+    /// Per source index texel, generic ColorTable A and B values occupy adjacent X texels.
+    ColorTableRampAb,
+    /// Per source index texel, ColorTable A and B values occupy adjacent X texels.
+    ColorTableTileRampAb,
+}
+
+impl ModelTextureTexelLayout {
+    fn is_standard(&self) -> bool {
+        *self == Self::Standard
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelTextureKind {
     BaseColor,
+    SecondaryBaseColor,
     Normal,
+    SecondaryNormal,
     Mask,
     /// Explicit `g_SamplerMaterial` texture. Its channel semantics are shader-specific.
     MaterialMap,
     /// Explicit `g_SamplerMulti` texture. Its channel semantics are shader-specific.
     MultiMap,
     Specular,
+    SecondarySpecular,
     Emissive,
+    /// Explicit `g_SamplerEnvMap` texture used by BG/crystal environment mapping.
+    Environment,
     /// ColorTable 派生出的物理参数贴图，通道为 metalness / roughness / gloss / specular strength。
     MaterialProperties,
     /// ColorTable 派生出的 tile 参数贴图，通道为 tile index / tile alpha / 1 / 1。
@@ -1066,7 +2752,18 @@ pub enum ModelTextureKind {
     TileMatrixProperties,
     /// ColorTable 行索引贴图 (`_id.tex`)，本身不是颜色，用于逐像素查调色板
     Index,
+    TileNormalArray,
+    TileOrbArray,
+    DetailDiffuseArray,
+    DetailNormalArray,
+    WaterWave,
+    WaterWaveSecondary,
+    WaterWhitecap,
     Other,
+}
+
+fn default_texture_array_size() -> u16 {
+    1
 }
 
 pub type WeaponMaterialRenderMode = MaterialRenderMode;
@@ -1083,6 +2780,10 @@ pub trait ModelRenderData {
     fn materials(&self) -> &[ModelMaterial];
     fn textures(&self) -> &[ModelTexture];
     fn meshes(&self) -> &[ModelMesh];
+
+    fn mesh_component_index(&self, _mesh_index: usize) -> u16 {
+        0
+    }
 }
 
 impl ModelRenderData for ModelData {
@@ -1119,6 +2820,33 @@ impl ModelRenderData for WeaponModelData {
     fn meshes(&self) -> &[ModelMesh] {
         &self.meshes
     }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.meshes
+            .get(mesh_index)
+            .map(|mesh| weapon_model_mesh_component_index(self, mesh))
+            .unwrap_or(0)
+    }
+}
+
+pub fn weapon_model_mesh_component_index(model: &WeaponModelData, mesh: &ModelMesh) -> u16 {
+    let Some(secondary) = model.model_sub else {
+        return 0;
+    };
+    let secondary_match = weapon_model_path_matches(&mesh.path, secondary);
+    let primary_match = weapon_model_path_matches(&mesh.path, model.model_main);
+    u16::from(secondary_match && !primary_match)
+}
+
+fn weapon_model_path_matches(path: &str, model: PackedModelId) -> bool {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    path.contains(&format!(
+        "/w{:04}/obj/body/b{:04}/",
+        model.model_id, model.body_id
+    )) || path.starts_with(&format!(
+        "chara/weapon/w{:04}/obj/body/b{:04}/",
+        model.model_id, model.body_id
+    ))
 }
 
 impl<T: ModelRenderData + ?Sized> ModelRenderData for std::rc::Rc<T> {
@@ -1136,6 +2864,10 @@ impl<T: ModelRenderData + ?Sized> ModelRenderData for std::rc::Rc<T> {
 
     fn meshes(&self) -> &[ModelMesh] {
         self.as_ref().meshes()
+    }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.as_ref().mesh_component_index(mesh_index)
     }
 }
 
@@ -1155,14 +2887,21 @@ impl<T: ModelRenderData + ?Sized> ModelRenderData for std::sync::Arc<T> {
     fn meshes(&self) -> &[ModelMesh] {
         self.as_ref().meshes()
     }
+
+    fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+        self.as_ref().mesh_component_index(mesh_index)
+    }
 }
 
 /// ColorTable 单行中参与烘焙的颜色（线性空间）
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ColorTableRowColors {
     pub diffuse: [f32; 3],
     pub specular: [f32; 3],
     pub emissive: [f32; 3],
+    /// Dawntrail ColorTable Scalar11，受 ColorDyeTable 的 Scalar3 flag 控制。
+    pub scalar3: f32,
     pub gloss_strength: f32,
     pub specular_strength: f32,
     pub roughness: f32,
@@ -1174,6 +2913,8 @@ pub struct ColorTableRowColors {
     pub tile_index: f32,
     pub sheen_rate: f32,
     pub sheen_tint: f32,
+    /// Dawntrail ColorTable SheenAptitude (Meddle field 14). This is distinct
+    /// from the material-level `g_SheenAperture` constant stored elsewhere.
     pub sheen_aperture: f32,
     pub sphere_index: f32,
     pub sphere_mask: f32,
@@ -1187,6 +2928,7 @@ impl Default for ColorTableRowColors {
             diffuse: [0.0; 3],
             specular: [0.0; 3],
             emissive: [0.0; 3],
+            scalar3: 0.0,
             gloss_strength: 1.0,
             specular_strength: 1.0,
             roughness: 0.5,
@@ -1208,31 +2950,68 @@ impl Default for ColorTableRowColors {
 ///
 /// `diffuse_rgba` / `specular_rgba` / `emissive_rgba` 的 RGB 为 sRGB 编码；
 /// `diffuse_rgba` 的 Alpha 固定为不透明；ColorTable TileAlpha 是 tile 属性，不是材质透明度。
-/// `specular_rgba` 的 Alpha 来自 ColorTable Anisotropy，与 MeddleTools 的 specular ramp 对齐。
-/// `material_rgba` 为线性 unorm，通道顺序对齐 MeddleTools:
-/// metalness / roughness / gloss strength / specular strength。
-/// 额外的 ColorTable 语义贴图同样为线性 unorm，用于预览 MeddleTools 中的
-/// TileProperties / SheenProperties / SphereProperties / TileMatrixProperties ramp。
-/// TileMatrix 同时在 `tile_matrix_rgba_f32` 中保留未 clamp 的 UU / UV / VU / VV。
-/// TileIndex 按 0..64 归一化，SphereIndex 按 0..255 归一化。
+/// diffuse/specular float payload 的 RGB 为未 clamp 的线性值；specular Alpha 额外保留
+/// 未 clamp 的 ColorTable Anisotropy。RGBA8 版本只作为兼容 payload，不能表达 installed HDR。
+/// `material_rgba` 保留兼容线性 unorm；float payload 的通道顺序对齐 MeddleTools:
+/// metalness / roughness / gloss strength / specular strength，并避免 installed
+/// GlossStrength/SpecularStrength 超过 1 时被静默截断。
+/// 额外的 ColorTable 语义贴图提供线性 unorm fallback；SheenProperties 的
+/// 第三通道是 ColorTable SheenAptitude，不是材质常量 `g_SheenAperture`；
+/// SphereProperties 与 TileMatrixProperties 同时保留未 clamp 的 float 通道。
+/// TileIndex 与 SphereIndex 在调用前已从 Dawntrail half bits 解码，
+/// bake 时分别按 0..64 与 0..255 归一化。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedColorTableMaps {
     pub diffuse_rgba: Vec<u8>,
+    /// Linear ColorTable diffuse RGB plus opaque alpha.
+    pub diffuse_rgba_f32: Vec<[f32; 4]>,
+    pub diffuse_ab_rgba: Vec<u8>,
+    /// Adjacent A/B linear ColorTable diffuse RGB plus opaque alpha.
+    pub diffuse_ab_rgba_f32: Vec<[f32; 4]>,
     pub specular_rgba: Vec<u8>,
+    /// Linear ColorTable specular RGB plus unclamped Anisotropy alpha.
+    pub specular_rgba_f32: Vec<[f32; 4]>,
+    pub specular_ab_rgba: Vec<u8>,
+    /// Adjacent A/B linear specular RGB plus unclamped Anisotropy alpha.
+    pub specular_ab_rgba_f32: Vec<[f32; 4]>,
     pub material_rgba: Vec<u8>,
+    pub material_rgba_f32: Vec<[f32; 4]>,
+    pub material_ab_rgba: Vec<u8>,
+    pub material_ab_rgba_f32: Vec<[f32; 4]>,
     pub tile_properties_rgba: Vec<u8>,
+    /// TileIndex/TileAlpha A and B ramps packed as two horizontal texels per
+    /// source index pixel. The third channel stores the original index-texture
+    /// G value; the runtime shader derives the A-to-B interpolation factor as
+    /// `1 - G`.
+    pub tile_properties_ab_rgba: Vec<u8>,
     pub sheen_properties_rgba: Vec<u8>,
+    pub sheen_properties_rgba_f32: Vec<[f32; 4]>,
+    pub sheen_properties_ab_rgba: Vec<u8>,
+    pub sheen_properties_ab_rgba_f32: Vec<[f32; 4]>,
     pub sphere_properties_rgba: Vec<u8>,
+    pub sphere_properties_rgba_f32: Vec<[f32; 4]>,
+    pub sphere_properties_ab_rgba: Vec<u8>,
+    pub sphere_properties_ab_rgba_f32: Vec<[f32; 4]>,
     pub tile_matrix_rgba: Vec<u8>,
     pub tile_matrix_rgba_f32: Vec<[f32; 4]>,
+    /// TileMatrix A and B ramps packed as two horizontal texels per source
+    /// index pixel, preserving the non-linear array sampling order.
+    pub tile_matrix_ab_rgba: Vec<u8>,
+    pub tile_matrix_ab_rgba_f32: Vec<[f32; 4]>,
     /// 所有行 emissive 全黑时为 None
     pub emissive_rgba: Option<Vec<u8>>,
+    /// Linear emissive RGB preserving values above display white.
+    pub emissive_rgba_f32: Option<Vec<[f32; 4]>>,
+    pub emissive_ab_rgba: Option<Vec<u8>>,
+    /// Adjacent A/B linear emissive RGB preserving HDR values.
+    pub emissive_ab_rgba_f32: Option<Vec<[f32; 4]>>,
 }
 
 /// 按 `_id.tex` 逐像素查 ColorTable 烘焙 diffuse / emissive 贴图。
 ///
 /// MeddleTools 的 ColorTable ramp 语义按偶/奇行拆成 A/B ramp；这里用 R 通道选择行对，
-/// 行对 i 对应表中第 2i 与 2i+1 行，G 通道在两行之间线性混合。
+/// 行对 i 对应表中第 2i 与 2i+1 行；DXBC 使用 `1 - G` 作为从偶数 A 行
+/// 到奇数 B 行的线性插值因子。
 /// Dawntrail 通常是 32 行、16 个行对，R 通道以 17 为步长；Legacy 是 16 行、8 个行对。
 /// `rows` 为 ColorTable 全部行；`id_rgba` 为索引贴图 RGBA8 数据。
 pub fn bake_color_table_maps(
@@ -1246,20 +3025,45 @@ pub fn bake_color_table_maps(
     let pair_count = rows.len() / 2;
     let pixel_count = id_rgba.len() / 4;
     let mut diffuse_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut diffuse_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut diffuse_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut diffuse_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut specular_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut specular_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut specular_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut specular_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut material_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut material_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut material_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut material_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut tile_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut tile_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
     let mut sheen_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sheen_properties_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut sheen_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut sheen_properties_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut sphere_properties_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut sphere_properties_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut sphere_properties_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut sphere_properties_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut tile_matrix_rgba = Vec::with_capacity(pixel_count * 4);
     let mut tile_matrix_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut tile_matrix_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut tile_matrix_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut emissive_rgba = Vec::with_capacity(pixel_count * 4);
+    let mut emissive_rgba_f32 = Vec::with_capacity(pixel_count);
+    let mut emissive_ab_rgba = Vec::with_capacity(pixel_count * 8);
+    let mut emissive_ab_rgba_f32 = Vec::with_capacity(pixel_count * 2);
     let mut has_emissive = false;
 
     for pixel in id_rgba.chunks_exact(4) {
         let pair = ((pixel[0] as f32 / 255.0) * (pair_count - 1) as f32).round() as usize;
         let pair = pair.min(pair_count - 1);
-        let blend = pixel[1] as f32 / 255.0;
+        let source_blend = pixel[1] as f32 / 255.0;
+        // Installed character/legacy DXBC samples the even row at A and the
+        // odd row at B, then uses `1 - index.G` as the A-to-B interpolation
+        // factor.
+        let blend = 1.0 - source_blend;
         let row_a = rows[pair * 2];
         let row_b = rows[pair * 2 + 1];
 
@@ -1284,38 +3088,135 @@ pub fn bake_color_table_maps(
         }
 
         push_srgb_pixel(&mut diffuse_rgba, diffuse, 1.0);
+        diffuse_rgba_f32.push([diffuse[0], diffuse[1], diffuse[2], 1.0]);
+        push_srgb_pixel(&mut diffuse_ab_rgba, row_a.diffuse, 1.0);
+        push_srgb_pixel(&mut diffuse_ab_rgba, row_b.diffuse, 1.0);
+        diffuse_ab_rgba_f32.push([row_a.diffuse[0], row_a.diffuse[1], row_a.diffuse[2], 1.0]);
+        diffuse_ab_rgba_f32.push([row_b.diffuse[0], row_b.diffuse[1], row_b.diffuse[2], 1.0]);
         push_srgb_pixel(&mut specular_rgba, specular, anisotropy);
+        specular_rgba_f32.push([specular[0], specular[1], specular[2], anisotropy]);
+        push_srgb_pixel(&mut specular_ab_rgba, row_a.specular, row_a.anisotropy);
+        push_srgb_pixel(&mut specular_ab_rgba, row_b.specular, row_b.anisotropy);
+        specular_ab_rgba_f32.push([
+            row_a.specular[0],
+            row_a.specular[1],
+            row_a.specular[2],
+            row_a.anisotropy,
+        ]);
+        specular_ab_rgba_f32.push([
+            row_b.specular[0],
+            row_b.specular[1],
+            row_b.specular[2],
+            row_b.anisotropy,
+        ]);
         push_unorm_pixel(
             &mut material_rgba,
             [metalness, roughness, gloss_strength, specular_strength],
         );
+        material_rgba_f32.push([metalness, roughness, gloss_strength, specular_strength]);
+        push_unorm_pixel(
+            &mut material_ab_rgba,
+            [
+                row_a.metalness,
+                row_a.roughness,
+                row_a.gloss_strength,
+                row_a.specular_strength,
+            ],
+        );
+        material_ab_rgba_f32.push([
+            row_a.metalness,
+            row_a.roughness,
+            row_a.gloss_strength,
+            row_a.specular_strength,
+        ]);
+        push_unorm_pixel(
+            &mut material_ab_rgba,
+            [
+                row_b.metalness,
+                row_b.roughness,
+                row_b.gloss_strength,
+                row_b.specular_strength,
+            ],
+        );
+        material_ab_rgba_f32.push([
+            row_b.metalness,
+            row_b.roughness,
+            row_b.gloss_strength,
+            row_b.specular_strength,
+        ]);
         push_unorm_pixel(
             &mut tile_properties_rgba,
             [tile_index / 64.0, tile_alpha, 1.0, 1.0],
         );
         push_unorm_pixel(
-            &mut sheen_properties_rgba,
-            [sheen_rate, sheen_tint, sheen_aperture, 1.0],
+            &mut tile_properties_ab_rgba,
+            [row_a.tile_index / 64.0, row_a.tile_alpha, source_blend, 1.0],
         );
         push_unorm_pixel(
-            &mut sphere_properties_rgba,
-            [sphere_index / 255.0, sphere_mask, 1.0, 1.0],
+            &mut tile_properties_ab_rgba,
+            [row_b.tile_index / 64.0, row_b.tile_alpha, source_blend, 1.0],
         );
+        let sheen_properties = [sheen_rate, sheen_tint, sheen_aperture, 1.0];
+        sheen_properties_rgba_f32.push(sheen_properties);
+        push_unorm_pixel(&mut sheen_properties_rgba, sheen_properties);
+        for row in [row_a, row_b] {
+            let properties = [row.sheen_rate, row.sheen_tint, row.sheen_aperture, 1.0];
+            sheen_properties_ab_rgba_f32.push(properties);
+            push_unorm_pixel(&mut sheen_properties_ab_rgba, properties);
+        }
+        let sphere_properties = [sphere_index / 255.0, sphere_mask, 1.0, 1.0];
+        sphere_properties_rgba_f32.push(sphere_properties);
+        push_unorm_pixel(&mut sphere_properties_rgba, sphere_properties);
+        for row in [row_a, row_b] {
+            let properties = [row.sphere_index / 255.0, row.sphere_mask, 1.0, 1.0];
+            sphere_properties_ab_rgba_f32.push(properties);
+            push_unorm_pixel(&mut sphere_properties_ab_rgba, properties);
+        }
         tile_matrix_rgba_f32.push(tile_matrix);
         push_unorm_pixel(&mut tile_matrix_rgba, tile_matrix);
+        tile_matrix_ab_rgba_f32.push(row_a.tile_matrix);
+        tile_matrix_ab_rgba_f32.push(row_b.tile_matrix);
+        push_unorm_pixel(&mut tile_matrix_ab_rgba, row_a.tile_matrix);
+        push_unorm_pixel(&mut tile_matrix_ab_rgba, row_b.tile_matrix);
         push_srgb_pixel(&mut emissive_rgba, emissive, 1.0);
+        emissive_rgba_f32.push([emissive[0], emissive[1], emissive[2], 1.0]);
+        push_srgb_pixel(&mut emissive_ab_rgba, row_a.emissive, 1.0);
+        push_srgb_pixel(&mut emissive_ab_rgba, row_b.emissive, 1.0);
+        emissive_ab_rgba_f32.push([row_a.emissive[0], row_a.emissive[1], row_a.emissive[2], 1.0]);
+        emissive_ab_rgba_f32.push([row_b.emissive[0], row_b.emissive[1], row_b.emissive[2], 1.0]);
     }
 
     Some(BakedColorTableMaps {
         diffuse_rgba,
+        diffuse_rgba_f32,
+        diffuse_ab_rgba,
+        diffuse_ab_rgba_f32,
         specular_rgba,
+        specular_rgba_f32,
+        specular_ab_rgba,
+        specular_ab_rgba_f32,
         material_rgba,
+        material_rgba_f32,
+        material_ab_rgba,
+        material_ab_rgba_f32,
         tile_properties_rgba,
+        tile_properties_ab_rgba,
         sheen_properties_rgba,
+        sheen_properties_rgba_f32,
+        sheen_properties_ab_rgba,
+        sheen_properties_ab_rgba_f32,
         sphere_properties_rgba,
+        sphere_properties_rgba_f32,
+        sphere_properties_ab_rgba,
+        sphere_properties_ab_rgba_f32,
         tile_matrix_rgba,
         tile_matrix_rgba_f32,
+        tile_matrix_ab_rgba,
+        tile_matrix_ab_rgba_f32,
         emissive_rgba: has_emissive.then_some(emissive_rgba),
+        emissive_rgba_f32: has_emissive.then_some(emissive_rgba_f32),
+        emissive_ab_rgba: has_emissive.then_some(emissive_ab_rgba),
+        emissive_ab_rgba_f32: has_emissive.then_some(emissive_ab_rgba_f32),
     })
 }
 
@@ -1382,7 +3283,7 @@ pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
         }
     }
 
-    body_ids
+    let mut candidates = body_ids
         .into_iter()
         .map(|body_id| {
             format!(
@@ -1390,7 +3291,21 @@ pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
                 model_id = model.model_id,
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if is_equipment_style_glove_model(model) {
+        push_unique_path(
+            &mut candidates,
+            format!(
+                "chara/equipment/e{set_id:04}/model/c0101e{set_id:04}_glv.mdl",
+                set_id = model.model_id,
+            ),
+        );
+    }
+    candidates
+}
+
+pub fn is_equipment_style_glove_model(model: PackedModelId) -> bool {
+    model.model_id >= 8_000 && model.body_id != 0 && model.variant_id == 0
 }
 
 pub fn weapon_material_candidate_paths(
@@ -1437,6 +3352,12 @@ pub fn weapon_material_candidate_paths(
             ),
         );
     }
+    if let Some((race_id, body_id)) = human_body_ids_from_material_file(material_file) {
+        push_unique_path(
+            &mut material_roots,
+            format!("chara/human/c{race_id:04}/obj/body/b{body_id:04}/material"),
+        );
+    }
 
     let mut versions = Vec::new();
     for version in [model.variant_id, model.body_id, 1, 101, 201] {
@@ -1463,6 +3384,14 @@ fn weapon_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> {
     let tail = tail.strip_prefix('b')?;
     let (body_id, _) = tail.split_at_checked(4)?;
     Some((model_id.parse().ok()?, body_id.parse().ok()?))
+}
+
+fn human_body_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> {
+    let tail = material_file.strip_prefix("mt_c")?;
+    let (race_id, tail) = tail.split_at_checked(4)?;
+    let tail = tail.strip_prefix('b')?;
+    let (body_id, _) = tail.split_at_checked(4)?;
+    Some((race_id.parse().ok()?, body_id.parse().ok()?))
 }
 
 pub fn weapon_slot_label(category: u32) -> &'static str {
@@ -1557,6 +3486,30 @@ mod color_table_bake_tests {
     use super::*;
 
     #[test]
+    fn weapon_meshes_are_assigned_to_distinct_main_and_sub_components() {
+        let mut primary = test_model_mesh(Some("normal"), 0);
+        primary.path = "chara/weapon/w1801/obj/body/b0123/model/w1801b0123.mdl".to_string();
+        let mut secondary = test_model_mesh(Some("normal"), 0);
+        secondary.path = "chara/weapon/w1851/obj/body/b0123/model/w1851b0123.mdl".to_string();
+        let model = WeaponModelData {
+            item_id: 45056,
+            item_name: "聚餐之幻梦".to_string(),
+            model_main: PackedModelId::from_raw(0x0000_0001_007B_0709),
+            model_sub: Some(PackedModelId::from_raw(0x0000_0001_007B_073B)),
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: vec![primary, secondary],
+        };
+
+        assert_eq!(model.mesh_component_index(0), 0);
+        assert_eq!(model.mesh_component_index(1), 1);
+    }
+
+    #[test]
     fn mesh_draw_role_maps_mdl_categories_to_render_decisions() {
         assert_eq!(
             mesh_draw_role_for_category(Some("normal")),
@@ -1584,11 +3537,11 @@ mod color_table_bake_tests {
         );
         assert_eq!(
             mesh_draw_role_for_category(Some("materialChange")),
-            ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::MaterialChange
         );
         assert_eq!(
             mesh_draw_role_for_category(Some("crestChange")),
-            ModelMeshDrawRole::DebugVisible
+            ModelMeshDrawRole::CrestChange
         );
         assert_eq!(mesh_draw_role_for_category(None), ModelMeshDrawRole::Normal);
     }
@@ -1643,6 +3596,99 @@ mod color_table_bake_tests {
             ),
             PreparedRenderPass::AdditiveLightShaft
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Mask,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::LightShaft
+            ),
+            PreparedRenderPass::AdditiveLightShaft
+        );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::CrestChange
+            ),
+            PreparedRenderPass::Transparent
+        );
+    }
+
+    #[test]
+    fn prepared_character_alpha_policy_uses_shader_family_inputs() {
+        let mut material = test_material();
+        material.shader_package_name = Some("characterglass.shpk".to_string());
+        material.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Glass);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalBlue
+        );
+        assert_eq!(
+            prepared.alpha_policy.draw_depth_mode,
+            MaterialDrawDepthMode::Dither
+        );
+        assert!(prepared.alpha_policy.lighting_enabled);
+
+        material.shader_package_name = Some("charactertransparency.shpk".to_string());
+        material.lighting_mode = MaterialLightingMode::Disabled;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalBlue
+        );
+        assert!(!prepared.alpha_policy.lighting_enabled);
+
+        material.shader_package_name = Some("characterstockings.shpk".to_string());
+        material.alpha_mode = MaterialAlphaMode::Blend;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
+        assert_eq!(prepared.alpha_policy.source, PreparedAlphaSource::Opaque);
+
+        material.alpha_mode = MaterialAlphaMode::Mask;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
+        assert!(prepared.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        material.alpha_mode = MaterialAlphaMode::Blend;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::NormalAlpha
+        );
+        assert!(prepared.unsupported_inputs.runtime_option_color);
+        assert!(prepared.unsupported_inputs.runtime_decal_color);
+    }
+
+    #[test]
+    fn prepared_water_uses_material_transparency_and_primary_wave_binding() {
+        let mut material = test_material();
+        material.shader_package_name = Some("water.shpk".to_string());
+        material.transparency = 0.4;
+        material.water_wave_texture = Some(7);
+        material.water_wave1_texture = Some(8);
+        material.water_whitecap_texture = Some(9);
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Transparent);
+        assert_eq!(prepared.shader_family, MaterialShaderFamily::Water);
+        assert_eq!(
+            prepared.alpha_policy.source,
+            PreparedAlphaSource::MaterialTransparency
+        );
+        assert_eq!(prepared.texture_bindings.water_wave, Some(7));
+        assert_eq!(prepared.texture_bindings.water_wave1, Some(8));
+        assert_eq!(prepared.texture_bindings.water_whitecap, Some(9));
+
+        material.transparency = 1.0;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal).render_pass,
+            PreparedRenderPass::Opaque
+        );
     }
 
     #[test]
@@ -1656,10 +3702,27 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Character,
+                flow_mode: MaterialFlowMode::Standard,
+                value_mode: MaterialValueMode::Single,
+                value_mode_raw: None,
+                sub_color_mode: MaterialSubColorMode::None,
+                decal_color_mode: MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
+                skin_value_mode: MaterialSkinValueMode::None,
+                lightshaft_type: MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
+                alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
-                feature_flags: PreparedMaterialFeatureFlags::default(),
+                feature_flags: PreparedMaterialFeatureFlags {
+                    uses_toon: true,
+                    ..PreparedMaterialFeatureFlags::default()
+                },
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: false,
             }
         );
@@ -1668,10 +3731,24 @@ mod color_table_bake_tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
+                value_mode: MaterialValueMode::Single,
+                value_mode_raw: None,
+                sub_color_mode: MaterialSubColorMode::None,
+                decal_color_mode: MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
+                skin_value_mode: MaterialSkinValueMode::None,
+                lightshaft_type: MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
+                alpha_policy: PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             }
         );
@@ -1703,52 +3780,98 @@ mod color_table_bake_tests {
         material.base_color_texture = Some(1);
         material.normal_texture = Some(2);
         material.mask_texture = Some(3);
+        material.skin_diffuse_texture = Some(22);
+        material.skin_normal_texture = Some(23);
+        material.skin_mask_texture = Some(24);
         material.material_map_texture = Some(4);
         material.multi_map_texture = Some(5);
         material.specular_texture = Some(6);
         material.emissive_texture = Some(7);
+        material.environment_texture = Some(21);
         material.material_properties_texture = Some(8);
         material.tile_properties_texture = Some(9);
         material.sheen_properties_texture = Some(10);
         material.sphere_properties_texture = Some(11);
         material.tile_matrix_texture = Some(12);
         material.index_texture = Some(13);
+        material.texture_arrays.tile_normal = Some(14);
+        material.texture_arrays.tile_orb = Some(15);
+        material.texture_arrays.detail_diffuse = Some(16);
+        material.texture_arrays.detail_normal = Some(17);
+        material.water_wave_texture = Some(18);
+        material.water_wave1_texture = Some(19);
+        material.water_whitecap_texture = Some(20);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .texture_bindings,
             PreparedTextureBindings {
                 base_color: Some(1),
+                secondary_base_color: None,
                 normal: Some(2),
+                secondary_normal: None,
                 mask: Some(3),
+                skin_diffuse: Some(22),
+                skin_normal: Some(23),
+                skin_mask: Some(24),
                 material_map: Some(4),
                 multi_map: Some(5),
                 specular: Some(6),
+                secondary_specular: None,
                 emissive: Some(7),
+                environment: Some(21),
                 material_properties: Some(8),
                 tile_properties: Some(9),
                 sheen_properties: Some(10),
                 sphere_properties: Some(11),
                 tile_matrix: Some(12),
                 index: Some(13),
+                water_wave: Some(18),
+                water_wave1: Some(19),
+                water_whitecap: Some(20),
+                tile_normal_array: Some(14),
+                tile_orb_array: Some(15),
+                detail_diffuse_array: Some(16),
+                detail_normal_array: Some(17),
             }
         );
         assert_eq!(
             prepared_texture_bindings(None),
             PreparedTextureBindings::default()
         );
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            prepared.uv_sources.textures.base_color,
+            PreparedUvSource::Uv0
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_diffuse,
+            PreparedUvSource::Uv2
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_normal,
+            PreparedUvSource::Uv2
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.skin_mask,
+            PreparedUvSource::Uv2
+        );
+        assert!(prepared.unsupported_inputs.skin_sampler_composition);
     }
 
     #[test]
     fn prepared_material_reports_material_feature_flags() {
         let mut material = test_material();
         material.apply_vertex_color = true;
+        material.has_color_dye_table = true;
         material.material_properties_texture = Some(8);
         material.tile_properties_texture = Some(9);
         material.multi_map_texture = Some(10);
         material.detail_id = 3.0;
         material.detail_color_uv_scale = [8.0, 4.0, 4.0, 4.0];
         material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        material.outline_width = 0.01;
+        material.shader_package_name = Some("character.shpk".to_string());
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
@@ -1758,10 +3881,39 @@ mod color_table_bake_tests {
                 uses_color_table: true,
                 uses_tile: true,
                 uses_detail: true,
-                uses_scroll: true,
+                uses_scroll: false,
                 uses_flow: false,
-                uses_dye: false,
+                uses_dye: true,
+                uses_outline: true,
+                uses_toon: true,
+                uses_secondary_maps: false,
+                uses_environment_map: false,
             }
+        );
+
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_outline
+        );
+
+        material = test_material();
+        material.color_dye_table = Some(ModelColorDyeTable::Opaque);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_dye);
+        assert!(!prepared.unsupported_inputs.dye_application);
+
+        material.staining_application = Some(ModelStainingApplication {
+            stain_ids: [1, 0],
+            template_path: String::new(),
+            report: StainingApplicationReport::default(),
+            error: Some("opaque ColorDyeTable cannot be applied".to_string()),
+        });
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .dye_application
         );
 
         material = test_material();
@@ -1770,17 +3922,39 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
                 .feature_flags,
             PreparedMaterialFeatureFlags {
-                uses_scroll: true,
+                uses_toon: true,
                 ..PreparedMaterialFeatureFlags::default()
             }
         );
+        material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
+        );
         material = test_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.base_color_texture = Some(1);
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
+        );
+        material.uv_scroll = [-1.0, 2.0, 0.0, 0.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .feature_flags
+                .uses_scroll
+        );
+        material = test_material();
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
         material.lightshaft_tex_anim = [0.5, 0.0, 0.0, 0.0];
+        material.secondary_base_color_texture = Some(1);
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft)
                 .feature_flags,
             PreparedMaterialFeatureFlags {
-                uses_scroll: true,
+                uses_secondary_maps: true,
                 ..PreparedMaterialFeatureFlags::default()
             }
         );
@@ -1788,6 +3962,729 @@ mod color_table_bake_tests {
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).feature_flags,
             PreparedMaterialFeatureFlags::default()
         );
+    }
+
+    #[test]
+    fn prepared_material_reports_unsupported_runtime_inputs() {
+        let mut material = test_material();
+        material.has_color_dye_table = true;
+        material.index_texture = Some(4);
+        material.tile_index = 3.0;
+        material.multi_map_texture = Some(5);
+        material.shader_package_name = Some("characterReflection.shpk".to_string());
+        material.staining_application = Some(ModelStainingApplication {
+            stain_ids: [1, 0],
+            template_path: "chara/base_material/stainingtemplate_gud.stm".to_string(),
+            report: StainingApplicationReport {
+                rows_skipped_missing_template: 1,
+                ..StainingApplicationReport::default()
+            },
+            error: None,
+        });
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange)
+                .unsupported_inputs,
+            PreparedMaterialUnsupportedInputs {
+                dye_application: true,
+                runtime_color_table: true,
+                decal_or_crest: true,
+                runtime_material_change: false,
+                runtime_option_color: false,
+                runtime_decal_color: false,
+                runtime_decal_texture: false,
+                runtime_skin_color: false,
+                runtime_skin_material: false,
+                skin_sampler_composition: false,
+                runtime_sub_color: false,
+                tile_array: true,
+                detail_array: true,
+                detail_composition: false,
+                incomplete_shader_family_logic: true,
+                secondary_map_blend: false,
+                environment_mapping: false,
+                multi_map_interpretation: true,
+                multi_color_composition: false,
+                character_reflection: true,
+                character_scroll_variant: false,
+                glass_shader_parameters: false,
+                ambient_occlusion_mask: false,
+                ssao_mask: false,
+                sheen_lighting: false,
+                sphere_lighting: false,
+                toon_lighting: false,
+                lightshaft_clip: false,
+                decal_color_mode: false,
+                alpha_multi_values: false,
+                alpha_shaping: false,
+                vertex_color_composition: false,
+                specular_color_mask_composition: false,
+                outline_composition: false,
+                legacy_specular_type: false,
+                legacy_gloss_composition: false,
+                tile_mip_bias_offset: false,
+                vertex_movement_parameters: false,
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange)
+                .runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                on_render_material_output: true,
+                gpu_color_table_texture: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::MaterialChange)
+                .unsupported_inputs,
+            PreparedMaterialUnsupportedInputs {
+                dye_application: true,
+                runtime_color_table: true,
+                decal_or_crest: false,
+                runtime_material_change: false,
+                runtime_option_color: false,
+                runtime_decal_color: false,
+                runtime_decal_texture: false,
+                runtime_skin_color: false,
+                runtime_skin_material: false,
+                skin_sampler_composition: false,
+                runtime_sub_color: false,
+                tile_array: true,
+                detail_array: true,
+                detail_composition: false,
+                incomplete_shader_family_logic: true,
+                secondary_map_blend: false,
+                environment_mapping: false,
+                multi_map_interpretation: true,
+                multi_color_composition: false,
+                character_reflection: true,
+                character_scroll_variant: false,
+                glass_shader_parameters: false,
+                ambient_occlusion_mask: false,
+                ssao_mask: false,
+                sheen_lighting: false,
+                sphere_lighting: false,
+                toon_lighting: false,
+                lightshaft_clip: false,
+                decal_color_mode: false,
+                alpha_multi_values: false,
+                alpha_shaping: false,
+                vertex_color_composition: false,
+                specular_color_mask_composition: false,
+                outline_composition: false,
+                legacy_specular_type: false,
+                legacy_gloss_composition: false,
+                tile_mip_bias_offset: false,
+                vertex_movement_parameters: false,
+            }
+        );
+
+        material = test_material();
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        let tattoo = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(tattoo.unsupported_inputs.runtime_option_color);
+        assert!(tattoo.unsupported_inputs.runtime_decal_color);
+        assert!(!tattoo.unsupported_inputs.runtime_decal_texture);
+        assert!(!tattoo.unsupported_inputs.decal_color_mode);
+        assert!(!tattoo.unsupported_inputs.runtime_skin_material);
+        assert_eq!(
+            tattoo.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+
+        material.shader_package_name = Some("characterstockings.shpk".to_string());
+        let stockings = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!stockings.unsupported_inputs.runtime_option_color);
+        assert!(!stockings.unsupported_inputs.runtime_decal_color);
+        assert!(stockings.unsupported_inputs.runtime_skin_material);
+        assert_eq!(
+            stockings.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                on_render_material_output: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+
+        material.shader_package_name = Some("skin.shpk".to_string());
+        let skin = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(skin.shader_family, MaterialShaderFamily::Skin);
+        assert!(skin.unsupported_inputs.runtime_skin_color);
+        assert!(!skin.unsupported_inputs.runtime_decal_color);
+        assert!(!skin.unsupported_inputs.runtime_decal_texture);
+        assert!(!skin.unsupported_inputs.decal_color_mode);
+        assert!(!skin.unsupported_inputs.runtime_skin_material);
+        assert!(skin.unsupported_inputs.incomplete_shader_family_logic);
+        assert_eq!(
+            skin.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+
+        material.decal_color_mode = MaterialDecalColorMode::Alpha;
+        material.decal_color_mode_raw = Some(0x5842_65DD);
+        let skin_decal = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(skin_decal.decal_color_mode, MaterialDecalColorMode::Alpha);
+        assert_eq!(skin_decal.decal_color_mode_raw, Some(0x5842_65DD));
+        assert!(skin_decal.unsupported_inputs.runtime_decal_color);
+        assert!(skin_decal.unsupported_inputs.runtime_decal_texture);
+        assert!(skin_decal.unsupported_inputs.decal_color_mode);
+        assert_eq!(
+            skin_decal.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                character_instance_state: true,
+                on_render_material_output: true,
+                resolved_resource_handles: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+
+        material.shader_package_name = Some("crystal.shpk".to_string());
+        material.environment_texture = Some(9);
+        let crystal = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(crystal.shader_family, MaterialShaderFamily::Crystal);
+        assert!(crystal.feature_flags.uses_environment_map);
+        assert!(crystal.unsupported_inputs.environment_mapping);
+        assert!(crystal.unsupported_inputs.incomplete_shader_family_logic);
+
+        material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.sub_color_mode = MaterialSubColorMode::Face;
+        let sub_color = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(sub_color.sub_color_mode, MaterialSubColorMode::Face);
+        assert!(sub_color.unsupported_inputs.runtime_sub_color);
+
+        material.sub_color_mode = MaterialSubColorMode::None;
+        material.shader_package_name = Some("characterocclusion.shpk".to_string());
+        let occlusion = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(occlusion.unsupported_inputs.runtime_sub_color);
+
+        material.shader_package_name = Some("characterreflection.shpk".to_string());
+        let reflection = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(reflection.unsupported_inputs.character_reflection);
+        assert!(reflection.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("characterglass.shpk".to_string());
+        let glass = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(glass.unsupported_inputs.glass_shader_parameters);
+        assert!(glass.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("characterscroll.shpk".to_string());
+        let scroll = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(scroll.unsupported_inputs.character_scroll_variant);
+        assert!(scroll.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
+        material.lightshaft_type = MaterialLightShaftType::Type1;
+        material.lightshaft_type_raw = Some(0xC601_7195);
+        material.lightshaft_angle_clip = 0.4;
+        material.lightshaft_near_clip = 1.25;
+        let lightshaft =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft);
+        assert_eq!(lightshaft.lightshaft_type, MaterialLightShaftType::Type1);
+        assert_eq!(lightshaft.lightshaft_type_raw, Some(0xC601_7195));
+        assert!(lightshaft.unsupported_inputs.lightshaft_clip);
+        assert!(lightshaft.unsupported_inputs.incomplete_shader_family_logic);
+
+        material.ambient_occlusion_mask = Some(0.5);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .ambient_occlusion_mask
+        );
+
+        material.ssao_mask = 0.9;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .ssao_mask
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.toon_index = 3.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+        material.toon_index = 0.0;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+        material.shader_package_name = Some("bg.shpk".to_string());
+        material.toon_index = 3.0;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .toon_lighting
+        );
+
+        assert_eq!(
+            prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).unsupported_inputs,
+            PreparedMaterialUnsupportedInputs::default()
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_latent_legacy_constant_inputs() {
+        let mut material = test_material();
+        let unsupported =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs;
+        assert!(!unsupported.legacy_specular_type);
+        assert!(!unsupported.legacy_gloss_composition);
+        assert!(!unsupported.tile_mip_bias_offset);
+        assert!(!unsupported.vertex_movement_parameters);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        material.specular_type_raw = Some(0xA02F_4828);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        material.value_mode = MaterialValueMode::Compatibility;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_gloss_composition
+        );
+        material.color_table_rows = Some(vec![ColorTableRowColors::default()]);
+        let legacy = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(legacy.unsupported_inputs.legacy_gloss_composition);
+        assert_eq!(
+            legacy.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                material_dynamic_emissive_color: true,
+                instance_mul_color: true,
+                instance_camera_light_parameters: true,
+                model_wetness_parameters: true,
+                scene_ambient_parameters: true,
+                reflection_array_texture: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+        let mut modern = material.clone();
+        modern.shader_package_name = Some("character.shpk".to_string());
+        let modern = prepare_material_for_draw_role(Some(&modern), ModelMeshDrawRole::Normal);
+        assert!(!modern.unsupported_inputs.legacy_gloss_composition);
+        assert_eq!(
+            modern.runtime_input_requirements,
+            PreparedMaterialRuntimeInputRequirements {
+                material_dynamic_emissive_color: true,
+                instance_mul_color: true,
+                instance_camera_light_parameters: true,
+                ..PreparedMaterialRuntimeInputRequirements::default()
+            }
+        );
+        material.value_mode = MaterialValueMode::MultiMaterial;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+        material.value_mode = MaterialValueMode::Single;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.specular_type = MaterialSpecularType::Unknown;
+        material.specular_type_raw = Some(0xDEAD_BEEF);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .legacy_specular_type
+        );
+
+        material.specular_type = MaterialSpecularType::Default;
+        material.specular_type_raw = None;
+        material.tile_mip_bias_offset = 0.25;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .tile_mip_bias_offset
+        );
+
+        material.tile_mip_bias_offset = 0.0;
+        material.vertex_movement_scale = 0.5;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_movement_parameters
+        );
+
+        material.vertex_movement_scale = 1.0;
+        material.vertex_movement_max_length = 2.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_movement_parameters
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_shared_array_availability_and_runtime_fallbacks() {
+        let mut material = test_material();
+        material.texture_arrays.tile_normal = Some(1);
+        material.texture_arrays.tile_orb = Some(2);
+        material.texture_arrays.detail_diffuse = Some(3);
+
+        let prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::CrestChange);
+        assert_eq!(
+            prepared.resource_availability,
+            PreparedMaterialResourceAvailability {
+                tile_array_complete: true,
+                detail_array_complete: false,
+                tile_array: PreparedTextureArrayResource {
+                    status: PreparedTextureArrayStatus::Unvalidated,
+                    layer_count: None,
+                },
+                detail_array: PreparedTextureArrayResource::default(),
+            }
+        );
+        assert_eq!(
+            prepared.runtime_fallbacks,
+            PreparedMaterialRuntimeFallbacks {
+                decal_or_crest: PreparedRuntimeFallback::TransparentTexture,
+                material_change: PreparedRuntimeFallback::NotRequired,
+            }
+        );
+
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::MaterialChange)
+                .runtime_fallbacks,
+            PreparedMaterialRuntimeFallbacks {
+                decal_or_crest: PreparedRuntimeFallback::NotRequired,
+                material_change: PreparedRuntimeFallback::BaseMaterial,
+            }
+        );
+
+        material.texture_arrays.detail_normal = Some(4);
+        material.multi_map_texture = Some(5);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!prepared.unsupported_inputs.tile_array);
+        assert!(!prepared.unsupported_inputs.detail_array);
+        assert!(prepared.unsupported_inputs.multi_map_interpretation);
+    }
+
+    #[test]
+    fn prepared_model_validates_texture_array_resources() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.tile_properties_texture = Some(4);
+        material.multi_map_texture = Some(5);
+        material.texture_arrays.tile_normal = Some(0);
+        material.texture_arrays.tile_orb = Some(1);
+        material.texture_arrays.detail_diffuse = Some(2);
+        material.texture_arrays.detail_normal = Some(3);
+        let textures = vec![
+            test_array_texture(ModelTextureKind::TileNormalArray, 4),
+            test_array_texture(ModelTextureKind::TileOrbArray, 4),
+            test_array_texture(ModelTextureKind::DetailDiffuseArray, 8),
+            test_array_texture(ModelTextureKind::DetailNormalArray, 8),
+        ];
+        let prepare = |material: ModelMaterial, textures: Vec<ModelTexture>| {
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures,
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+        };
+
+        let prepared = prepare(material.clone(), textures.clone());
+        assert_eq!(
+            prepared.resource_availability.tile_array,
+            PreparedTextureArrayResource {
+                status: PreparedTextureArrayStatus::Ready,
+                layer_count: Some(4),
+            }
+        );
+        assert_eq!(
+            prepared.resource_availability.detail_array,
+            PreparedTextureArrayResource {
+                status: PreparedTextureArrayStatus::Ready,
+                layer_count: Some(8),
+            }
+        );
+        assert!(!prepared.unsupported_inputs.tile_array);
+        assert!(!prepared.unsupported_inputs.detail_array);
+
+        let mut missing_material = material.clone();
+        missing_material.texture_arrays.tile_normal = Some(99);
+        let prepared = prepare(missing_material, textures.clone());
+        assert_eq!(
+            prepared.resource_availability.tile_array.status,
+            PreparedTextureArrayStatus::MissingTexture
+        );
+        assert!(prepared.unsupported_inputs.tile_array);
+
+        let mut wrong_kind = textures.clone();
+        wrong_kind[0].kind = ModelTextureKind::BaseColor;
+        assert_eq!(
+            prepare(material.clone(), wrong_kind)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::WrongTextureKind
+        );
+
+        let mut invalid_layout = textures.clone();
+        invalid_layout[0].rgba.pop();
+        assert_eq!(
+            prepare(material.clone(), invalid_layout)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::InvalidLayout
+        );
+
+        let mut incompatible_pair = textures.clone();
+        incompatible_pair[1] = test_array_texture(ModelTextureKind::TileOrbArray, 3);
+        assert_eq!(
+            prepare(material.clone(), incompatible_pair)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::IncompatiblePair
+        );
+
+        let mut non_canonical = textures.clone();
+        non_canonical.extend([textures[0].clone(), textures[1].clone()]);
+        material.texture_arrays.tile_normal = Some(4);
+        material.texture_arrays.tile_orb = Some(5);
+        assert_eq!(
+            prepare(material, non_canonical)
+                .resource_availability
+                .tile_array
+                .status,
+            PreparedTextureArrayStatus::NonCanonicalBinding
+        );
+    }
+
+    #[test]
+    fn prepared_specular_color_space_separates_baked_ramp_from_packed_map() {
+        let specular_texture = |path: &str| ModelTexture {
+            path: path.to_string(),
+            kind: ModelTextureKind::Specular,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: vec![128; 4],
+            rgba_f32: None,
+        };
+        let prepare = |texture: ModelTexture| {
+            let mut material = test_material();
+            material.shader_package_name = Some("character.shpk".to_string());
+            material.specular_texture = Some(0);
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures: vec![texture],
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+        };
+
+        let baked = prepare(specular_texture("baked://test.mtrl#colorset-specular"));
+        assert_eq!(
+            baked.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::Srgb,
+            "baked ColorTable specular ramps carry sRGB RGB and need GPU sRGB decoding"
+        );
+
+        let packed = prepare(specular_texture(
+            "chara/weapon/w0101/obj/body/b0001/texture/w01b0001b_s.tex",
+        ));
+        assert_eq!(
+            packed.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::NonColor,
+            "packed g_SamplerSpecularMap0 data is Non-Color"
+        );
+
+        let mut wrong_kind = specular_texture("baked://test.mtrl#colorset-specular");
+        wrong_kind.kind = ModelTextureKind::MaterialProperties;
+        assert_eq!(
+            prepare(wrong_kind).texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::NonColor
+        );
+    }
+
+    #[test]
+    fn prepared_model_exposes_nonzero_unverified_extra_lighting_inputs() {
+        let extra_texture = |kind| ModelTexture {
+            path: "baked://test.mtrl#colorset-extra".to_string(),
+            kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: vec![0, 0, 0, 255],
+            rgba_f32: None,
+        };
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.sheen_properties_texture = Some(0);
+        material.sphere_properties_texture = Some(1);
+        let prepare = |material: ModelMaterial, textures: Vec<ModelTexture>| {
+            prepare_model_for_render(&ModelData {
+                bounds: ModelBounds::default(),
+                materials: vec![material],
+                textures,
+                meshes: vec![test_model_mesh(Some("normal"), 0)],
+            })
+            .meshes[0]
+                .prepared_material
+                .unsupported_inputs
+        };
+        let neutral = vec![
+            extra_texture(ModelTextureKind::SheenProperties),
+            extra_texture(ModelTextureKind::SphereProperties),
+        ];
+        let unsupported = prepare(material.clone(), neutral.clone());
+        assert!(!unsupported.sheen_lighting);
+        assert!(!unsupported.sphere_lighting);
+
+        let mut active_sheen = neutral.clone();
+        active_sheen[0].rgba[0] = 1;
+        let unsupported = prepare(material.clone(), active_sheen);
+        assert!(unsupported.sheen_lighting);
+        assert!(!unsupported.sphere_lighting);
+
+        let mut active_sphere = neutral.clone();
+        active_sphere[1].rgba[1] = 1;
+        let unsupported = prepare(material.clone(), active_sphere);
+        assert!(!unsupported.sheen_lighting);
+        assert!(unsupported.sphere_lighting);
+
+        material.sheen_rate = 0.25;
+        material.sphere_map_index = 2.0;
+        let unsupported = prepare(material, neutral);
+        assert!(unsupported.sheen_lighting);
+        assert!(unsupported.sphere_lighting);
+    }
+
+    #[test]
+    fn prepared_texture_sampling_covers_every_texture_kind() {
+        let expected = [
+            (ModelTextureKind::BaseColor, PreparedTextureColorSpace::Srgb),
+            (
+                ModelTextureKind::SecondaryBaseColor,
+                PreparedTextureColorSpace::Srgb,
+            ),
+            (
+                ModelTextureKind::Normal,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SecondaryNormal,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Mask, PreparedTextureColorSpace::NonColor),
+            (
+                ModelTextureKind::MaterialMap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::MultiMap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::Specular,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SecondarySpecular,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Emissive, PreparedTextureColorSpace::Srgb),
+            (
+                ModelTextureKind::Environment,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::MaterialProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SheenProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::SphereProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileMatrixProperties,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Index, PreparedTextureColorSpace::NonColor),
+            (
+                ModelTextureKind::TileNormalArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::TileOrbArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::DetailDiffuseArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::DetailNormalArray,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWave,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWaveSecondary,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (
+                ModelTextureKind::WaterWhitecap,
+                PreparedTextureColorSpace::NonColor,
+            ),
+            (ModelTextureKind::Other, PreparedTextureColorSpace::NonColor),
+        ];
+        for (kind, color_space) in expected {
+            let sampling = prepared_texture_sampling_for_kind(kind);
+            assert_eq!(
+                sampling.color_space, color_space,
+                "{kind:?} must keep its documented sampling color space"
+            );
+        }
     }
 
     #[test]
@@ -1806,23 +4703,31 @@ mod color_table_bake_tests {
     #[test]
     fn prepared_material_reports_texture_and_scroll_uv_sources() {
         let mut material = test_material();
-        material.shader_package_name = Some("characterScroll.shpk".to_string());
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
         material.base_color_texture = Some(1);
         material.normal_texture = Some(2);
         material.multi_map_texture = Some(3);
         material.material_properties_texture = Some(4);
+        material.specular_texture = Some(5);
 
         assert_eq!(
             prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal).uv_sources,
             PreparedMaterialUvSources {
                 textures: PreparedTextureUvSources {
                     base_color: PreparedUvSource::Uv0,
+                    secondary_base_color: PreparedUvSource::Uv1,
                     normal: PreparedUvSource::Uv0,
+                    secondary_normal: PreparedUvSource::Uv1,
                     mask: PreparedUvSource::Uv0,
+                    skin_diffuse: PreparedUvSource::Uv2,
+                    skin_normal: PreparedUvSource::Uv2,
+                    skin_mask: PreparedUvSource::Uv2,
                     material_map: PreparedUvSource::Uv0,
                     multi_map: PreparedUvSource::Uv0,
                     specular: PreparedUvSource::Uv0,
+                    secondary_specular: PreparedUvSource::Uv1,
                     emissive: PreparedUvSource::Uv0,
+                    environment: PreparedUvSource::Uv0,
                     material_properties: PreparedUvSource::Uv0,
                     tile_properties: PreparedUvSource::Uv0,
                     sheen_properties: PreparedUvSource::Uv0,
@@ -1831,6 +4736,12 @@ mod color_table_bake_tests {
                     index: PreparedUvSource::Uv0,
                     other: PreparedUvSource::Uv0,
                 },
+                scroll: PreparedTextureScrollSet {
+                    base_color: true,
+                    normal: true,
+                    specular: true,
+                    ..PreparedTextureScrollSet::default()
+                },
                 uv0_scroll: PreparedUvSource::Uv0,
                 uv1_scroll: PreparedUvSource::Uv1,
             }
@@ -1838,6 +4749,258 @@ mod color_table_bake_tests {
         assert_eq!(
             prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal).uv_sources,
             PreparedMaterialUvSources::default()
+        );
+    }
+
+    #[test]
+    fn prepared_bguvscroll_routes_secondary_maps_to_uv1_scroll() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(6);
+        material.secondary_normal_texture = Some(7);
+        material.secondary_specular_texture = Some(8);
+        material.uv_scroll = [0.0, 0.0, -0.5, 0.25];
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert!(prepared.feature_flags.uses_scroll);
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_base_color,
+            PreparedUvSource::Uv1
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_normal,
+            PreparedUvSource::Uv1
+        );
+        assert_eq!(
+            prepared.uv_sources.textures.secondary_specular,
+            PreparedUvSource::Uv1
+        );
+        assert!(prepared.uv_sources.scroll.secondary_base_color);
+        assert!(prepared.uv_sources.scroll.secondary_normal);
+        assert!(prepared.uv_sources.scroll.secondary_specular);
+        assert!(!prepared.unsupported_inputs.secondary_map_blend);
+
+        for (mode, raw) in [
+            (MaterialValueMode::AlphaMulti, 0x9418_20BE),
+            (MaterialValueMode::AlphaMulti2, 0xE49A_D72B),
+            (MaterialValueMode::AlphaMulti3, 0x939D_E7BD),
+        ] {
+            material.value_mode = mode;
+            material.value_mode_raw = Some(raw);
+            let unsupported =
+                prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+            assert_eq!(unsupported.value_mode, mode);
+            assert_eq!(unsupported.value_mode_raw, Some(raw));
+            assert!(!unsupported.feature_flags.uses_secondary_maps);
+            assert!(!unsupported.feature_flags.uses_scroll);
+            assert!(unsupported.unsupported_inputs.secondary_map_blend);
+            assert!(unsupported.unsupported_inputs.alpha_multi_values);
+        }
+
+        material.value_mode = MaterialValueMode::Single;
+        material.value_mode_raw = Some(0x669A_451B);
+        let single = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!single.unsupported_inputs.alpha_multi_values);
+
+        material.secondary_base_color_texture = None;
+        material.secondary_normal_texture = None;
+        material.secondary_specular_texture = None;
+        material.value_mode = MaterialValueMode::AlphaMulti3;
+        material.value_mode_raw = Some(0x939D_E7BD);
+        let alpha_multi_without_map1 =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(
+            alpha_multi_without_map1
+                .unsupported_inputs
+                .alpha_multi_values
+        );
+        assert!(
+            !alpha_multi_without_map1
+                .unsupported_inputs
+                .secondary_map_blend
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_multi_color_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition
+        );
+
+        material.shader_multi_diffuse_color = [0.25, 0.5, 1.0, 1.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition
+        );
+
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(6);
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition,
+            "verified BG Map0/Map1 diffuse mix may consume g_MultiDiffuseColor"
+        );
+
+        material.shader_multi_emissive_color = [1.0, 0.2, 0.1, 1.0];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .multi_color_composition,
+            "g_MultiEmissiveColor has no implemented secondary emissive composition"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_bg_detail_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition
+        );
+
+        material.detail_id = 2.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "non-default BG detail inputs need an explicit composition diagnostic"
+        );
+
+        material.detail_id = 0.0;
+        material.texture_arrays.detail_diffuse = Some(7);
+        material.texture_arrays.detail_normal = Some(8);
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "ready BG detail arrays remain inspectable but their Final influence is unverified"
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .detail_composition,
+            "the BG composition boundary must not be generalized to character materials"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_alpha_shaping() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_aperture = 1.0;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_aperture = 2.0;
+        material.alpha_offset = 0.05;
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping
+        );
+
+        material.alpha_offset = f32::NAN;
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .alpha_shaping,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_vertex_color_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("bg.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_color_composition
+        );
+
+        material.apply_vertex_color = true;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_vertex_color);
+        assert!(prepared.unsupported_inputs.vertex_color_composition);
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .vertex_color_composition,
+            "an unexpected key on another family must remain visible instead of enabling a generic tint"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_specular_color_mask_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition
+        );
+
+        material.specular_color_mask = [0.25, 0.5, 0.75, 0.125];
+        assert!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition
+        );
+
+        material.specular_color_mask = [f32::NAN, 1.0, 1.0, 1.0];
+        assert!(
+            !prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .unsupported_inputs
+                .specular_color_mask_composition,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
+        );
+    }
+
+    #[test]
+    fn prepared_material_reports_unverified_outline_composition() {
+        let mut material = test_material();
+        material.shader_package_name = Some("character.shpk".to_string());
+        let default = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!default.feature_flags.uses_outline);
+        assert!(!default.unsupported_inputs.outline_composition);
+
+        material.outline_width = 0.02;
+        material.outline_color = [0.1, 0.2, 0.3, 1.0];
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(prepared.feature_flags.uses_outline);
+        assert!(prepared.unsupported_inputs.outline_composition);
+
+        material.outline_width = f32::NAN;
+        material.outline_color = [f32::NAN, 0.0, 0.0, 1.0];
+        let non_finite = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert!(!non_finite.feature_flags.uses_outline);
+        assert!(
+            !non_finite.unsupported_inputs.outline_composition,
+            "non-finite values fall back during uniform encoding and must not create false diagnostics"
         );
     }
 
@@ -1860,6 +5023,13 @@ mod color_table_bake_tests {
 
         let prepared = prepare_model_for_render(&model);
         assert_eq!(prepared.meshes.len(), 3);
+        assert_eq!(
+            prepared.runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                enabled_attribute_mask: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
         assert_eq!(prepared.meshes[0].mesh_index, 0);
         assert_eq!(prepared.meshes[0].material_slot, 0);
         assert_eq!(prepared.meshes[0].draw_role, ModelMeshDrawRole::Normal);
@@ -1924,6 +5094,11 @@ mod color_table_bake_tests {
             &model,
             PreparedModelOptions::default().with_enabled_attribute_mask(0x0000_0005),
         );
+        assert!(
+            !prepared
+                .runtime_geometry_requirements
+                .enabled_attribute_mask
+        );
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
             prepared.meshes[0].visibility,
@@ -1964,6 +5139,15 @@ mod color_table_bake_tests {
 
         let prepared = prepare_model_for_render(&model);
 
+        assert_eq!(
+            prepared.runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                shape_name_id_mapping: true,
+                enabled_shape_mask: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
+
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
             prepared.meshes[0].shape_influences,
@@ -1983,6 +5167,8 @@ mod color_table_bake_tests {
             &model,
             PreparedModelOptions::default().with_enabled_shape_mask(0x0000_0001),
         );
+        assert!(prepared.runtime_geometry_requirements.shape_name_id_mapping);
+        assert!(!prepared.runtime_geometry_requirements.enabled_shape_mask);
 
         assert!(prepared.meshes[0].renders_in_main_pass);
         assert_eq!(
@@ -1997,6 +5183,80 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn shape_targets_add_active_position_and_normal_deltas() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.vertices = vec![test_model_vertex()];
+        mesh.shape_targets = vec![
+            ModelShapeTarget {
+                shape: test_shape_info(0),
+                vertex_deltas: vec![ModelShapeVertexDelta {
+                    vertex_index: 0,
+                    position: [1.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, -1.0],
+                }],
+            },
+            ModelShapeTarget {
+                shape: test_shape_info(1),
+                vertex_deltas: vec![ModelShapeVertexDelta {
+                    vertex_index: 0,
+                    position: [0.0, 2.0, 0.0],
+                    normal: [1.0, 0.0, 0.0],
+                }],
+            },
+        ];
+
+        assert_eq!(
+            model_mesh_vertices_with_shape_mask(&mesh, None)[0].position,
+            [0.0, 0.0, 0.0]
+        );
+        let first = model_mesh_vertices_with_shape_mask(&mesh, Some(0x1));
+        assert_eq!(first[0].position, [1.0, 0.0, 0.0]);
+        assert_eq!(first[0].normal, [0.0, 2.0, -1.0]);
+
+        let both = model_mesh_vertices_with_shape_mask(&mesh, Some(0x3));
+        assert_eq!(both[0].position, [1.0, 2.0, 0.0]);
+        assert_eq!(both[0].normal, [1.0, 2.0, -1.0]);
+    }
+
+    #[test]
+    fn prepared_model_reports_skinning_pose_and_equipment_deformer_requirements() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.path = "chara/equipment/e0001/model/c0101e0001_glv.mdl".to_string();
+        mesh.bone_table = Some(ModelBoneTable {
+            index: 0,
+            bone_count: 1,
+            bone_indices: vec![0],
+            bone_names: vec![Some("n_hara".to_string())],
+        });
+        let mut vertex = test_model_vertex();
+        vertex.blend_weights = Some(ModelBlendWeights {
+            count: 1,
+            values: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        vertex.blend_indices = Some(ModelBlendIndices {
+            count: 1,
+            values: [0; 8],
+        });
+        mesh.vertices = vec![vertex];
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        assert_eq!(
+            prepare_model_for_render(&model).runtime_geometry_requirements,
+            PreparedModelRuntimeGeometryRequirements {
+                skeleton_pose: true,
+                skinning_matrices: true,
+                race_deformer: true,
+                ..PreparedModelRuntimeGeometryRequirements::default()
+            }
+        );
+    }
+
+    #[test]
     fn prepared_model_reports_mesh_level_flow_feature_flags() {
         let mut plain_mesh = test_model_mesh(None, 0);
         plain_mesh.vertices = vec![test_model_vertex()];
@@ -2004,17 +5264,53 @@ mod color_table_bake_tests {
         let mut flow_vertex = test_model_vertex();
         flow_vertex.flow0 = Some([0.25, 0.5, 0.75, 1.0]);
         flow_mesh.vertices = vec![flow_vertex];
+        let mut material = test_material();
+        material.flow_mode = MaterialFlowMode::Flow;
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
-            materials: vec![test_material()],
+            materials: vec![material],
             textures: Vec::new(),
-            meshes: vec![plain_mesh, flow_mesh],
+            meshes: vec![plain_mesh, flow_mesh.clone()],
         };
 
         let prepared = prepare_model_for_render(&model);
 
         assert!(!prepared.meshes[0].prepared_material.feature_flags.uses_flow);
         assert!(prepared.meshes[1].prepared_material.feature_flags.uses_flow);
+
+        let mut standard_material = test_material();
+        standard_material.flow_mode = MaterialFlowMode::Standard;
+        let standard_model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![standard_material],
+            textures: Vec::new(),
+            meshes: vec![flow_mesh],
+        };
+        assert!(
+            !prepare_model_for_render(&standard_model).meshes[0]
+                .prepared_material
+                .feature_flags
+                .uses_flow
+        );
+
+        let mut secondary_only_mesh = test_model_mesh(None, 0);
+        let mut secondary_only_vertex = test_model_vertex();
+        secondary_only_vertex.flow1 = Some([0.25, 0.5, 0.75, 1.0]);
+        secondary_only_mesh.vertices = vec![secondary_only_vertex];
+        let mut flow_material = test_material();
+        flow_material.flow_mode = MaterialFlowMode::Flow;
+        let secondary_only_model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![flow_material],
+            textures: Vec::new(),
+            meshes: vec![secondary_only_mesh],
+        };
+        assert!(
+            !prepare_model_for_render(&secondary_only_model).meshes[0]
+                .prepared_material
+                .feature_flags
+                .uses_flow
+        );
     }
 
     #[test]
@@ -2030,7 +5326,27 @@ mod color_table_bake_tests {
         assert_eq!(
             prepared_texture_sampling_for_kind(ModelTextureKind::Specular),
             PreparedTextureSampling {
-                color_space: PreparedTextureColorSpace::Srgb,
+                color_space: PreparedTextureColorSpace::NonColor,
+                filter: PreparedTextureFilter::Linear,
+                address_mode: PreparedTextureAddressMode::Repeat,
+            }
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryBaseColor),
+            prepared_texture_sampling_for_kind(ModelTextureKind::BaseColor)
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondaryNormal),
+            prepared_texture_sampling_for_kind(ModelTextureKind::Normal)
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::SecondarySpecular),
+            prepared_texture_sampling_for_kind(ModelTextureKind::Specular)
+        );
+        assert_eq!(
+            prepared_texture_sampling_for_kind(ModelTextureKind::Environment),
+            PreparedTextureSampling {
+                color_space: PreparedTextureColorSpace::NonColor,
                 filter: PreparedTextureFilter::Linear,
                 address_mode: PreparedTextureAddressMode::Repeat,
             }
@@ -2075,6 +5391,66 @@ mod color_table_bake_tests {
                 address_mode: PreparedTextureAddressMode::Repeat,
             }
         );
+        let array_sampling = PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Nearest,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        };
+        let sampling_set = PreparedTextureSamplingSet::default();
+        let water_sampling = PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::NonColor,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::Repeat,
+        };
+        assert_eq!(sampling_set.water_wave, water_sampling);
+        assert_eq!(sampling_set.water_wave1, water_sampling);
+        assert_eq!(sampling_set.water_whitecap, water_sampling);
+        assert_eq!(sampling_set.tile_normal_array, array_sampling);
+        assert_eq!(sampling_set.tile_orb_array, array_sampling);
+        assert_eq!(sampling_set.detail_diffuse_array, array_sampling);
+        assert_eq!(sampling_set.detail_normal_array, array_sampling);
+    }
+
+    #[test]
+    fn prepared_skin_face_clamps_only_base_color_sampling() {
+        let mut material = test_material();
+        material.shader_package_name = Some("skin.shpk".to_string());
+        material.skin_value_mode = MaterialSkinValueMode::Face;
+
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+
+        assert_eq!(prepared.skin_value_mode, MaterialSkinValueMode::Face);
+        assert_eq!(
+            prepared.texture_sampling.base_color.address_mode,
+            PreparedTextureAddressMode::ClampToEdge
+        );
+        assert_eq!(
+            prepared.texture_sampling.normal.address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+        assert_eq!(
+            prepared.texture_sampling.index.address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+
+        material.skin_value_mode = MaterialSkinValueMode::Body;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .texture_sampling
+                .base_color
+                .address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.skin_value_mode = MaterialSkinValueMode::Face;
+        assert_eq!(
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal)
+                .texture_sampling
+                .base_color
+                .address_mode,
+            PreparedTextureAddressMode::Repeat
+        );
     }
 
     #[test]
@@ -2086,6 +5462,10 @@ mod color_table_bake_tests {
         assert_eq!(
             material_shader_family(Some("characterlegacy.shpk")),
             MaterialShaderFamily::Character
+        );
+        assert_eq!(
+            material_shader_family(Some("skin.shpk")),
+            MaterialShaderFamily::Skin
         );
         assert_eq!(
             material_shader_family(Some("chara/weapon/test/CHARACTERSTOCKINGS.SHPK")),
@@ -2110,6 +5490,14 @@ mod color_table_bake_tests {
         assert_eq!(
             material_shader_family(Some("bg.shpk")),
             MaterialShaderFamily::Bg
+        );
+        assert_eq!(
+            material_shader_family(Some("meddle crystal.shpk")),
+            MaterialShaderFamily::Crystal
+        );
+        assert_eq!(
+            material_shader_family(Some("bguvscroll.shpk")),
+            MaterialShaderFamily::BgUvScroll
         );
         assert_eq!(
             material_shader_family(Some("lightshaft.shpk")),
@@ -2151,11 +5539,36 @@ mod color_table_bake_tests {
             material_index: 0,
             name: "test".to_string(),
             path: None,
+            reference_fallback: None,
             shader_package_name: None,
             render_mode: MaterialRenderMode::Opaque,
             alpha_mode: MaterialAlphaMode::Opaque,
             alpha_threshold: 0.0,
+            draw_depth_mode: MaterialDrawDepthMode::None,
+            lighting_mode: MaterialLightingMode::Default,
+            specular_type: MaterialSpecularType::Default,
+            specular_type_raw: None,
+            flow_mode: MaterialFlowMode::Standard,
+            value_mode: MaterialValueMode::Single,
+            value_mode_raw: None,
+            sub_color_mode: MaterialSubColorMode::None,
+            decal_color_mode: MaterialDecalColorMode::Off,
+            decal_color_mode_raw: None,
+            skin_value_mode: MaterialSkinValueMode::None,
+            character_scroll_variant: MaterialCharacterScrollVariant::None,
+            character_scroll_variant_raw: None,
+            lightshaft_type: MaterialLightShaftType::None,
+            lightshaft_type_raw: None,
             transparency: 0.0,
+            water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+            water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+            water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
+            alpha_aperture: 2.0,
+            alpha_offset: 0.0,
+            vertex_alpha_to_one: 0.0,
+            shadow_alpha_threshold: 0.5,
+            glass_ior: 1.0,
+            glass_thickness_max: 0.01,
             normal_scale: 1.0,
             multi_normal_scale: 1.0,
             detail_normal_scale: 1.0,
@@ -2163,8 +5576,33 @@ mod color_table_bake_tests {
             tile_index: 0.0,
             tile_alpha: 1.0,
             tile_scale: [16.0, 16.0],
+            toon_index: 0.0,
+            toon_light_scale: 2.0,
+            toon_light_spec_aperture: 50.0,
+            toon_reflection_scale: 2.5,
+            toon_spec_index: 4.0e-45,
+            sheen_rate: 0.0,
+            sheen_tint_rate: 0.0,
+            sheen_aperture: 1.0,
+            sphere_map_index: 0.0,
             detail_id: 0.0,
             multi_detail_id: 0.0,
+            detail_color: [0.5, 0.5, 0.5, 1.0],
+            multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+            shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+            shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+            shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+            shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+            outline_color: [0.0, 0.0, 0.0, 1.0],
+            outline_width: 0.0,
+            specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+            ssao_mask: 1.0,
+            ambient_occlusion_mask: None,
+            texture_mip_bias: 0.0,
+            tile_mip_bias_offset: 0.0,
+            shadow_pos_offset: 0.0,
+            vertex_movement_scale: 1.0,
+            vertex_movement_max_length: 1.0,
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -2173,9 +5611,16 @@ mod color_table_bake_tests {
             lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
             lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
             lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
+            lightshaft_angle_clip: 0.0,
+            lightshaft_near_clip: 0.25,
             opacity: 1.0,
             render_backfaces: true,
             apply_vertex_color: false,
+            has_color_dye_table: false,
+            color_dye_table: None,
+            color_table_rows: None,
+            staining_application: None,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],
             specular_color: [1.0, 1.0, 1.0],
@@ -2184,18 +5629,28 @@ mod color_table_bake_tests {
             metalness: 0.0,
             texture_indices: Vec::new(),
             base_color_texture: None,
+            secondary_base_color_texture: None,
             normal_texture: None,
+            secondary_normal_texture: None,
             mask_texture: None,
+            skin_diffuse_texture: None,
+            skin_normal_texture: None,
+            skin_mask_texture: None,
             material_map_texture: None,
             multi_map_texture: None,
             specular_texture: None,
+            secondary_specular_texture: None,
             emissive_texture: None,
+            environment_texture: None,
             material_properties_texture: None,
             tile_properties_texture: None,
             sheen_properties_texture: None,
             sphere_properties_texture: None,
             tile_matrix_texture: None,
             index_texture: None,
+            water_wave_texture: None,
+            water_wave1_texture: None,
+            water_whitecap_texture: None,
         }
     }
 
@@ -2206,6 +5661,7 @@ mod color_table_bake_tests {
             mesh_category: category.map(str::to_string),
             submesh: None,
             shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
             material_index: material_slot as u16,
             material_slot,
             material_name: "test".to_string(),
@@ -2213,6 +5669,20 @@ mod color_table_bake_tests {
             bone_table: None,
             vertices: Vec::new(),
             indices: Vec::new(),
+        }
+    }
+
+    fn test_array_texture(kind: ModelTextureKind, array_size: u16) -> ModelTexture {
+        ModelTexture {
+            path: "array.tex".to_string(),
+            kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: array_size,
+            array_size,
+            array_layer_height: 1,
+            rgba: vec![128; usize::from(array_size) * 4],
+            rgba_f32: None,
         }
     }
 
@@ -2292,12 +5762,12 @@ mod color_table_bake_tests {
 
     #[test]
     fn bake_selects_row_pair_from_red_channel() {
-        // 两个像素: R=0 → 行对 0, R=255 → 行对 1；G=0 → 不混合
+        // 两个像素: R=0 → 行对 0, R=255 → 行对 1；G=0 → 插值因子 1，完全取 B 行
         let id_rgba = [0, 0, 0, 255, 255, 0, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
 
-        // 像素 0: 纯红 (sRGB 255,0,0)
-        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
+        // 像素 0: 行对 0 的 B 行，纯绿
+        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
         // 像素 1: 纯蓝
         assert_eq!(&baked.diffuse_rgba[4..8], &[0, 0, 255, 255]);
         // 行对 1 有 emissive → 生成 emissive 贴图
@@ -2306,11 +5776,11 @@ mod color_table_bake_tests {
     }
 
     #[test]
-    fn bake_blends_rows_with_green_channel() {
-        // R=0 → 行对 0；G=255 → 完全取第二行 (纯绿)
+    fn bake_uses_inverted_green_as_ab_interpolation_factor() {
+        // R=0 → 行对 0；G=255 → 插值因子 0，完全取偶数 A 行 (纯红)
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows_with_two_pairs(), &id_rgba).expect("bake");
-        assert_eq!(&baked.diffuse_rgba[0..4], &[0, 255, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
         // 全部像素 emissive 为 0 → 无 emissive 贴图
         assert!(baked.emissive_rgba.is_none());
     }
@@ -2342,8 +5812,36 @@ mod color_table_bake_tests {
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(baked.specular_rgba[3], 64);
-        assert_eq!(baked.material_rgba[3], 191);
+        assert_eq!(baked.specular_rgba[3], 26);
+        assert_eq!(baked.material_rgba[3], 51);
+    }
+
+    #[test]
+    fn bake_preserves_hdr_material_properties_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                metalness: 1.0,
+                roughness: 0.5,
+                gloss_strength: 193.375,
+                specular_strength: 100.0,
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                metalness: 0.25,
+                roughness: 0.75,
+                gloss_strength: 2.0,
+                specular_strength: 4.0,
+                ..Default::default()
+            },
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(baked.material_rgba, vec![255, 128, 255, 255]);
+        assert_eq!(baked.material_rgba_f32, vec![[1.0, 0.5, 193.375, 100.0]]);
+        assert_eq!(
+            baked.material_ab_rgba_f32,
+            vec![[1.0, 0.5, 193.375, 100.0], [0.25, 0.75, 2.0, 4.0]]
+        );
     }
 
     #[test]
@@ -2375,10 +5873,98 @@ mod color_table_bake_tests {
         let id_rgba = [0, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(&baked.tile_properties_rgba[0..4], &[64, 191, 255, 255]);
-        assert_eq!(&baked.sheen_properties_rgba[0..4], &[64, 128, 191, 255]);
-        assert_eq!(&baked.sphere_properties_rgba[0..4], &[128, 64, 255, 255]);
-        assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 191, 128, 64]);
+        assert_eq!(&baked.tile_properties_rgba[0..4], &[32, 64, 255, 255]);
+        assert_eq!(
+            baked.tile_properties_ab_rgba,
+            vec![32, 64, 255, 255, 64, 191, 255, 255]
+        );
+        assert_eq!(&baked.sheen_properties_rgba[0..4], &[26, 51, 77, 255]);
+        assert_eq!(baked.sheen_properties_rgba_f32, vec![[0.1, 0.2, 0.3, 1.0]]);
+        assert_eq!(&baked.sphere_properties_rgba[0..4], &[32, 102, 255, 255]);
+        assert_eq!(
+            baked.sphere_properties_rgba_f32,
+            vec![[32.0 / 255.0, 0.4, 1.0, 1.0]]
+        );
+        assert_eq!(&baked.tile_matrix_rgba[0..4], &[26, 51, 77, 102]);
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![[0.1, 0.2, 0.3, 0.4], [1.0, 0.75, 0.5, 0.25]]
+        );
+    }
+
+    #[test]
+    fn bake_preserves_hdr_sheen_aptitude_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                sheen_aperture: 4.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(&baked.sheen_properties_rgba[0..4], &[0, 0, 255, 255]);
+        assert_eq!(baked.sheen_properties_rgba_f32, vec![[0.0, 0.0, 4.0, 1.0]]);
+    }
+
+    #[test]
+    fn bake_preserves_hdr_diffuse_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                diffuse: [6.7929688, 2.0, 0.5],
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 188, 255]);
+        assert_eq!(baked.diffuse_rgba_f32, vec![[6.7929688, 2.0, 0.5, 1.0]]);
+        assert_eq!(
+            baked.diffuse_ab_rgba_f32,
+            vec![[6.7929688, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]]
+        );
+    }
+
+    #[test]
+    fn bake_preserves_hdr_anisotropy_in_specular_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                specular: [0.25, 0.5, 0.75],
+                anisotropy: 7.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(baked.specular_rgba[3], 255);
+        assert_eq!(baked.specular_rgba_f32, vec![[0.25, 0.5, 0.75, 7.0]]);
+        assert_eq!(
+            baked.specular_ab_rgba_f32,
+            vec![[0.25, 0.5, 0.75, 7.0], [0.0, 0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn bake_preserves_hdr_emissive_in_float_payload() {
+        let rows = vec![
+            ColorTableRowColors {
+                emissive: [61.46875, 2.0, 0.5],
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let baked = bake_color_table_maps(&rows, &[0, 255, 0, 255]).expect("bake");
+
+        assert_eq!(
+            baked.emissive_rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0]])
+        );
+        assert_eq!(
+            baked.emissive_ab_rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
     }
 
     #[test]
@@ -2393,12 +5979,52 @@ mod color_table_bake_tests {
                 ..Default::default()
             },
         ];
-        let id_rgba = [0, 0, 0, 255];
+        let id_rgba = [0, 255, 0, 255];
 
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
         assert_eq!(&baked.tile_matrix_rgba[0..4], &[255, 0, 64, 255]);
         assert_eq!(baked.tile_matrix_rgba_f32, vec![[2.0, -0.5, 0.25, 1.5]]);
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![[2.0, -0.5, 0.25, 1.5], [0.0; 4]]
+        );
+    }
+
+    #[test]
+    fn bake_packs_tile_ramp_ab_texels_per_source_pixel() {
+        let rows = vec![
+            ColorTableRowColors {
+                tile_index: 8.0,
+                tile_alpha: 0.25,
+                tile_matrix: [1.0, 2.0, 3.0, 4.0],
+                ..Default::default()
+            },
+            ColorTableRowColors {
+                tile_index: 16.0,
+                tile_alpha: 0.75,
+                tile_matrix: [5.0, 6.0, 7.0, 8.0],
+                ..Default::default()
+            },
+        ];
+        let baked =
+            bake_color_table_maps(&rows, &[0, 0, 0, 255, 0, 255, 0, 255]).expect("two-pixel bake");
+
+        assert_eq!(
+            baked.tile_properties_ab_rgba,
+            vec![
+                32, 64, 0, 255, 64, 191, 0, 255, 32, 64, 255, 255, 64, 191, 255, 255,
+            ]
+        );
+        assert_eq!(
+            baked.tile_matrix_ab_rgba_f32,
+            vec![
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+            ]
+        );
     }
 
     #[test]
@@ -2449,8 +6075,8 @@ mod color_table_bake_tests {
         let id_rgba = [255, 0, 0, 255, 255, 255, 0, 255];
         let baked = bake_color_table_maps(&rows, &id_rgba).expect("bake");
 
-        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 255, 255, 255]);
-        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 0, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&baked.diffuse_rgba[4..8], &[255, 255, 255, 255]);
     }
 
     #[test]
@@ -2471,6 +6097,22 @@ mod color_table_bake_tests {
                 .first()
                 .map(String::as_str),
             Some("chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl")
+        );
+    }
+
+    #[test]
+    fn equipment_style_fist_adds_default_human_glove_candidate() {
+        let model = PackedModelId::from_raw(0x0000_0000_0001_2276);
+
+        assert!(is_equipment_style_glove_model(model));
+        assert_eq!(model.model_id, 8_822);
+        assert_eq!(model.body_id, 1);
+        assert_eq!(model.variant_id, 0);
+        assert_eq!(
+            weapon_model_candidate_paths(model)
+                .last()
+                .map(String::as_str),
+            Some("chara/equipment/e8822/model/c0101e8822_glv.mdl")
         );
     }
 
@@ -2496,5 +6138,19 @@ mod color_table_bake_tests {
         assert!(candidates.contains(
             &"chara/weapon/w0337/obj/body/b0001/material/v0001/mt_w0337b0001_a.mtrl".to_string()
         ));
+    }
+
+    #[test]
+    fn equipment_glove_material_candidates_include_human_body_root() {
+        let model = PackedModelId::from_raw(0x0000_0000_0001_2276);
+        let candidates = weapon_material_candidate_paths(
+            model,
+            "chara/equipment/e8822/model/c0101e8822_glv.mdl",
+            "/mt_c0101b0001_a.mtrl",
+        );
+
+        assert!(candidates.iter().any(|path| {
+            path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+        }));
     }
 }

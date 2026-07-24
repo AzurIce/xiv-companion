@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "name": "phantom-weapons",
   "description": "Render correctness cases for all Chinese item names matching xx之幻梦.",
   "source": "assets/craft-data.json item names containing 之幻梦",
@@ -64,6 +64,30 @@
       "icon": 32484,
       "route": "#/weapon-models?item=45052",
       "focus": ["depth", "occlusion"]
+    },
+    {
+      "caseId": "phantom-45052-stain-1",
+      "priority": "P0",
+      "itemId": 45052,
+      "name": "奶油之幻梦",
+      "itemUiCategory": 9,
+      "icon": 32484,
+      "route": "#/weapon-models?item=45052&stain0=1",
+      "stainIds": [1, 0],
+      "expectedRowsChanged": 2,
+      "focus": ["staining", "color-table-bake", "depth", "occlusion"]
+    },
+    {
+      "caseId": "phantom-45052-stain1-metallic-gold",
+      "priority": "P0",
+      "itemId": 45052,
+      "name": "奶油之幻梦",
+      "itemUiCategory": 9,
+      "icon": 32484,
+      "route": "#/weapon-models?item=45052&stain1=113",
+      "stainIds": [0, 113],
+      "expectedRowsChanged": 2,
+      "focus": ["staining", "second-channel", "metallic", "color-table-bake", "depth", "occlusion"]
     },
     {
       "caseId": "phantom-45053",

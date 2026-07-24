@@ -1,13 +1,35 @@
+use half::f16;
 use wgpu::util::DeviceExt;
+use xiv_companion_data::MaterialSpecularType;
 
 use crate::{
-    MaterialAlphaMode, MaterialRenderMode, ModelMaterial, ModelMeshDrawRole, ModelRenderData,
-    PreparedMaterial, PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureFilter,
-    PreparedTextureSampling, PreparedUvSource, prepare_model_for_render,
+    MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
+    MaterialRenderMode, MaterialShaderFamily, MaterialValueMode, ModelMaterial, ModelMeshDrawRole,
+    ModelRenderData, ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial,
+    PreparedMaterialUnsupportedInputs, PreparedModelOptions, PreparedRenderPass,
+    PreparedTextureAddressMode, PreparedTextureColorSpace, PreparedTextureFilter,
+    PreparedTextureSampling, PreparedUvSource, model_mesh_vertices_with_shape_mask,
+    prepare_model_for_render_with_options,
 };
 
-const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+// HDR intermediate format for the scene/bloom attachments. `Rgba16Float`
+// is color-renderable, blendable, and filterable in core WebGPU, and keeps
+// metal highlights and emissive values above 1.0 intact until tone mapping.
+const POST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEFAULT_BLOOM_STRENGTH: f32 = 0.68;
+const DEFAULT_EXPOSURE: f32 = 1.0;
+/// Scene-linear bloom threshold: only HDR highlights (above display white)
+/// contribute to the bright pass.
+const BLOOM_THRESHOLD: f32 = 1.0;
+
+// Stable camera-relative preview-lighting contract. These coefficients define
+// the key direction in the camera basis and intentionally live outside
+// material semantics: shader/material fixes must not compensate by silently
+// moving the preview light. The matching color/intensity/environment constants
+// are centralized as `PREVIEW_*` constants in `model.wgsl`.
+const PREVIEW_KEY_RIGHT: f32 = -0.45;
+const PREVIEW_KEY_UP: f32 = 0.65;
+const PREVIEW_KEY_VIEW: f32 = 0.65;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelDebugMode {
@@ -33,6 +55,21 @@ pub enum ModelDebugMode {
     SheenProperties,
     SphereProperties,
     TileMatrix,
+    TileNormalArray,
+    TileOrbArray,
+    DetailDiffuseArray,
+    DetailNormalArray,
+    VertexColor1,
+    SecondaryNormal,
+    Flow0,
+    Flow1,
+    /// Paints each material with a diagnostic color derived from
+    /// `PreparedMaterialUnsupportedInputs`, so known-incomplete shader
+    /// families stop passing silently as fully supported renders.
+    UnsupportedInputs,
+    /// Encodes the per-fragment world-space direction to the camera as
+    /// `view * 0.5 + 0.5`, useful for auditing perspective Fresnel/normals.
+    ViewDirection,
 }
 
 impl ModelDebugMode {
@@ -59,8 +96,29 @@ impl ModelDebugMode {
             ModelDebugMode::SheenProperties => 18.0,
             ModelDebugMode::SphereProperties => 19.0,
             ModelDebugMode::TileMatrix => 20.0,
+            ModelDebugMode::TileNormalArray => 21.0,
+            ModelDebugMode::TileOrbArray => 22.0,
+            ModelDebugMode::DetailDiffuseArray => 23.0,
+            ModelDebugMode::DetailNormalArray => 24.0,
+            ModelDebugMode::VertexColor1 => 25.0,
+            ModelDebugMode::SecondaryNormal => 26.0,
+            ModelDebugMode::Flow0 => 27.0,
+            ModelDebugMode::Flow1 => 28.0,
+            ModelDebugMode::UnsupportedInputs => 29.0,
+            ModelDebugMode::ViewDirection => 30.0,
         }
     }
+}
+
+fn lightshaft_uses_dedicated_pipeline(debug_mode: ModelDebugMode) -> bool {
+    matches!(debug_mode, ModelDebugMode::Final)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelGlassBlendMode {
+    #[default]
+    Alpha,
+    Additive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,7 +128,11 @@ pub struct ModelRenderOptions {
     pub bloom: bool,
     pub bloom_strength: f32,
     pub uv_scroll_time: f32,
+    /// Runtime material dynamic emissive multiplier. The preview default is
+    /// the identity; the shader consumes it only for ColorTable emissive.
+    pub dynamic_emissive_color: [f32; 3],
     pub debug_mode: ModelDebugMode,
+    pub glass_blend_mode: ModelGlassBlendMode,
 }
 
 impl Default for ModelRenderOptions {
@@ -81,7 +143,9 @@ impl Default for ModelRenderOptions {
             bloom: true,
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
+            dynamic_emissive_color: [1.0; 3],
             debug_mode: ModelDebugMode::Final,
+            glass_blend_mode: ModelGlassBlendMode::Alpha,
         }
     }
 }
@@ -98,7 +162,11 @@ impl ModelRenderOptions {
             } else {
                 0.0
             },
+            dynamic_emissive_color: self
+                .dynamic_emissive_color
+                .map(|value| if value.is_finite() { value } else { 1.0 }),
             debug_mode: self.debug_mode,
+            glass_blend_mode: self.glass_blend_mode,
         }
     }
 
@@ -119,19 +187,26 @@ pub struct ModelRenderer {
     culled_pipeline: wgpu::RenderPipeline,
     cutout_pipeline: wgpu::RenderPipeline,
     cutout_culled_pipeline: wgpu::RenderPipeline,
+    dither_depth_pipeline: wgpu::RenderPipeline,
+    dither_depth_culled_pipeline: wgpu::RenderPipeline,
+    outline_pipeline: wgpu::RenderPipeline,
     transparent_pipeline: wgpu::RenderPipeline,
     transparent_culled_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
     glass_culled_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     additive_culled_pipeline: wgpu::RenderPipeline,
+    lightshaft_pipeline: wgpu::RenderPipeline,
+    lightshaft_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    transparent_index_buffer: wgpu::Buffer,
     draw_batches: Vec<DrawBatch>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    material_bind_group_layout: wgpu::BindGroupLayout,
     material_bind_groups: Vec<wgpu::BindGroup>,
     post_sampler: wgpu::Sampler,
     compose_uniform_buffer: wgpu::Buffer,
@@ -149,6 +224,22 @@ impl ModelRenderer {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
         model: &M,
+    ) -> Self {
+        Self::new_with_prepared_options(
+            device,
+            queue,
+            format,
+            model,
+            PreparedModelOptions::default(),
+        )
+    }
+
+    pub fn new_with_prepared_options<M: ModelRenderData + ?Sized>(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        model: &M,
+        prepared_options: PreparedModelOptions,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model shader"),
@@ -196,7 +287,7 @@ impl ModelRenderer {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -310,7 +401,7 @@ impl ModelRenderer {
                         binding: 12,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -319,7 +410,7 @@ impl ModelRenderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 13,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
@@ -350,6 +441,98 @@ impl ModelRenderer {
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 18,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 19,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 20,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 21,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 22,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 23,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 24,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 25,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 26,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 27,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 28,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 29,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 30,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -493,6 +676,28 @@ impl ModelRenderer {
             ModelPipelineBlend::Opaque,
             true,
         );
+        let dither_depth_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon dither depth pipeline",
+            ModelPipelineBlend::DitherDepth,
+            false,
+        );
+        let dither_depth_culled_pipeline = create_model_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon dither depth culled pipeline",
+            ModelPipelineBlend::DitherDepth,
+            true,
+        );
+        let outline_pipeline = create_outline_pipeline(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon outline pipeline",
+        );
         let transparent_pipeline = create_model_pipeline(
             &device,
             &shader,
@@ -541,6 +746,24 @@ impl ModelRenderer {
             ModelPipelineBlend::Additive,
             true,
         );
+        let lightshaft_pipeline = create_model_pipeline_with_fragment_entry(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon lightshaft pipeline",
+            ModelPipelineBlend::Additive,
+            "fs_lightshaft",
+            false,
+        );
+        let lightshaft_culled_pipeline = create_model_pipeline_with_fragment_entry(
+            &device,
+            &shader,
+            &pipeline_layout,
+            "weapon lightshaft culled pipeline",
+            ModelPipelineBlend::Additive,
+            "fs_lightshaft",
+            true,
+        );
 
         let blur_pipeline = create_post_pipeline(
             &device,
@@ -559,7 +782,9 @@ impl ModelRenderer {
             format,
         );
 
-        let (vertices, indices, draw_batches) = flatten_model(model);
+        let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
+        let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
+            .unwrap_or((model.bounds().center, model.bounds().radius));
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon vertex buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -569,6 +794,17 @@ impl ModelRenderer {
             label: Some("weapon index buffer"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
+        });
+        let transparent_index_count = draw_batches
+            .iter()
+            .map(|batch| batch.transparent_triangles.len() * 3)
+            .sum::<usize>();
+        let transparent_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon transparent index buffer"),
+            size: (transparent_index_count.max(1) * std::mem::size_of::<u32>())
+                as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let material_bind_groups = create_material_bind_groups(
             &device,
@@ -590,7 +826,7 @@ impl ModelRenderer {
         let compose_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon compose uniform"),
             contents: bytemuck::bytes_of(&PostUniform {
-                params: [DEFAULT_BLOOM_STRENGTH, 0.0, 0.0, 0.0],
+                params: compose_post_params(DEFAULT_BLOOM_STRENGTH, format),
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -602,19 +838,26 @@ impl ModelRenderer {
             culled_pipeline,
             cutout_pipeline,
             cutout_culled_pipeline,
+            dither_depth_pipeline,
+            dither_depth_culled_pipeline,
+            outline_pipeline,
             transparent_pipeline,
             transparent_culled_pipeline,
             glass_pipeline,
             glass_culled_pipeline,
             additive_pipeline,
             additive_culled_pipeline,
+            lightshaft_pipeline,
+            lightshaft_culled_pipeline,
             blur_pipeline,
             compose_pipeline,
             vertex_buffer,
             index_buffer,
+            transparent_index_buffer,
             draw_batches,
             camera_buffer,
             camera_bind_group,
+            material_bind_group_layout,
             material_bind_groups,
             post_sampler,
             compose_uniform_buffer,
@@ -622,9 +865,19 @@ impl ModelRenderer {
             compose_bind_group_layout,
             post_process: None,
             format,
-            bounds_center: model.bounds().center,
-            bounds_radius: model.bounds().radius,
+            bounds_center,
+            bounds_radius,
         }
+    }
+
+    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
+        self.material_bind_groups = create_material_bind_groups(
+            &self.device,
+            &self.queue,
+            &self.material_bind_group_layout,
+            model,
+            &self.draw_batches,
+        );
     }
 
     pub fn render_to(
@@ -654,9 +907,17 @@ impl ModelRenderer {
             &self.compose_uniform_buffer,
             0,
             bytemuck::bytes_of(&PostUniform {
-                params: [options.bloom_strength(), 0.0, 0.0, 0.0],
+                params: compose_post_params(options.bloom_strength(), self.format),
             }),
         );
+        let sorted_transparent = sorted_transparent_triangles(&self.draw_batches, yaw, pitch);
+        if !sorted_transparent.indices.is_empty() {
+            self.queue.write_buffer(
+                &self.transparent_index_buffer,
+                0,
+                bytemuck::cast_slice(&sorted_transparent.indices),
+            );
+        }
         let viewport = [viewport[0].max(1), viewport[1].max(1)];
         self.ensure_post_process_targets(viewport);
         let post = self
@@ -673,31 +934,20 @@ impl ModelRenderer {
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("weapon scene render pass"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &post.scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.055,
-                                g: 0.061,
-                                b: 0.067,
-                                a: 1.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &post.bright_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                ],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &post.scene_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.055,
+                            g: 0.061,
+                            b: 0.067,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -741,11 +991,42 @@ impl ModelRenderer {
                 draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
             }
 
-            let sorted_transparent_batches =
-                sorted_transparent_batches(&self.draw_batches, yaw, pitch);
-            for batch in sorted_transparent_batches {
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.uses_dither_depth_prepass())
+            {
+                render_pass.set_pipeline(if batch.render_backfaces() {
+                    &self.dither_depth_pipeline
+                } else {
+                    &self.dither_depth_culled_pipeline
+                });
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            render_pass.set_pipeline(&self.outline_pipeline);
+            for batch in self
+                .draw_batches
+                .iter()
+                .filter(|batch| batch.uses_outline_pass())
+            {
+                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+            }
+
+            render_pass.set_index_buffer(
+                self.transparent_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            for draw in &sorted_transparent.draws {
+                let batch = &self.draw_batches[draw.batch_index];
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
-                    if batch.render_backfaces() {
+                    if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
+                        if batch.render_backfaces() {
+                            &self.additive_pipeline
+                        } else {
+                            &self.additive_culled_pipeline
+                        }
+                    } else if batch.render_backfaces() {
                         &self.glass_pipeline
                     } else {
                         &self.glass_culled_pipeline
@@ -756,15 +1037,27 @@ impl ModelRenderer {
                     &self.transparent_culled_pipeline
                 };
                 render_pass.set_pipeline(pipeline);
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch_range(
+                    &mut render_pass,
+                    &self.material_bind_groups,
+                    batch,
+                    draw.index_start,
+                    draw.index_count,
+                );
             }
 
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in self
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.pass().uses_additive_pipeline())
             {
-                render_pass.set_pipeline(if batch.render_backfaces() {
+                let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
+                render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
+                    &self.lightshaft_pipeline
+                } else if dedicated {
+                    &self.lightshaft_culled_pipeline
+                } else if batch.render_backfaces() {
                     &self.additive_pipeline
                 } else {
                     &self.additive_culled_pipeline
@@ -791,7 +1084,7 @@ impl ModelRenderer {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&self.blur_pipeline);
-            render_pass.set_bind_group(0, &post.blur_bright_bind_group, &[]);
+            render_pass.set_bind_group(0, &post.blur_scene_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
@@ -875,16 +1168,22 @@ impl ModelRenderer {
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
     }
+
+    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+    pub(crate) fn hdr_scene_texture(&self) -> Option<&wgpu::Texture> {
+        self.post_process.as_ref().map(|post| &post.scene_texture)
+    }
 }
 
 struct PostProcessState {
     width: u32,
     height: u32,
+    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+    scene_texture: wgpu::Texture,
     scene_view: wgpu::TextureView,
-    bright_view: wgpu::TextureView,
     blur_a_view: wgpu::TextureView,
     blur_b_view: wgpu::TextureView,
-    blur_bright_bind_group: wgpu::BindGroup,
+    blur_scene_bind_group: wgpu::BindGroup,
     blur_a_bind_group: wgpu::BindGroup,
     compose_bind_group: wgpu::BindGroup,
 }
@@ -899,15 +1198,21 @@ impl PostProcessState {
         width: u32,
         height: u32,
     ) -> Self {
-        let scene_view = create_post_texture_view(device, "weapon scene texture", width, height);
-        let bright_view = create_post_texture_view(device, "weapon bright texture", width, height);
+        let scene_texture = create_post_texture(
+            device,
+            "weapon scene texture",
+            width,
+            height,
+            wgpu::TextureUsages::COPY_SRC,
+        );
+        let scene_view = scene_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let blur_a_view = create_post_texture_view(device, "weapon-bloom-pass a", width, height);
         let blur_b_view = create_post_texture_view(device, "weapon-bloom-pass b", width, height);
 
         let blur_horizontal_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weapon-bloom-pass horizontal uniform"),
             contents: bytemuck::bytes_of(&PostUniform {
-                params: [1.0 / width as f32, 0.0, 0.0, 0.0],
+                params: [1.0 / width as f32, 0.0, BLOOM_THRESHOLD, 1.0],
             }),
             usage: wgpu::BufferUsages::UNIFORM,
         });
@@ -919,14 +1224,14 @@ impl PostProcessState {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        let blur_bright_bind_group = create_post_bind_group(
+        let blur_scene_bind_group = create_post_bind_group(
             device,
             blur_layout,
-            &bright_view,
+            &scene_view,
             sampler,
             &blur_horizontal_buffer,
-            &bright_view,
-            "weapon-bloom-pass bright bind group",
+            &scene_view,
+            "weapon-bloom-pass scene bind group",
         );
         let blur_a_bind_group = create_post_bind_group(
             device,
@@ -950,25 +1255,36 @@ impl PostProcessState {
         Self {
             width,
             height,
+            #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+            scene_texture,
             scene_view,
-            bright_view,
             blur_a_view,
             blur_b_view,
-            blur_bright_bind_group,
+            blur_scene_bind_group,
             blur_a_bind_group,
             compose_bind_group,
         }
     }
 }
 
+#[cfg(test)]
 fn flatten_model<M: ModelRenderData + ?Sized>(
     model: &M,
+) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
+    flatten_model_with_options(model, PreparedModelOptions::default())
+}
+
+fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
+    model: &M,
+    prepared_options: PreparedModelOptions,
 ) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
 
-    let prepared_model = prepare_model_for_render(model);
+    let prepared_model = prepare_model_for_render_with_options(model, prepared_options);
+    let component_offsets =
+        model_component_preview_offsets(model, &prepared_model, prepared_options);
     for prepared_mesh in &prepared_model.meshes {
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
@@ -982,10 +1298,31 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             continue;
         };
 
+        let mesh_vertices =
+            model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask);
+        let component_offset = component_offsets
+            .get(prepared_mesh.mesh_index)
+            .copied()
+            .unwrap_or([0.0; 3]);
         let base = vertices.len() as u32;
-        vertices.extend(mesh.vertices.iter().map(GpuVertex::from_model_vertex));
+        vertices.extend(mesh_vertices.iter().map(|vertex| {
+            let mut vertex = GpuVertex::from_model_vertex(vertex);
+            for (position, offset) in vertex.position.iter_mut().zip(component_offset) {
+                *position += offset;
+            }
+            vertex
+        }));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
+        let transparent_triangles = if prepared_mesh
+            .prepared_material
+            .render_pass
+            .sorts_back_to_front()
+        {
+            transparent_triangles(&mesh_vertices, &mesh.indices, base, component_offset)
+        } else {
+            Vec::new()
+        };
         draw_batches.push(DrawBatch {
             material_slot: prepared_mesh.material_slot,
             material_bind_group_index: draw_batches.len(),
@@ -993,48 +1330,210 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
             index_start,
             index_count: mesh.indices.len() as u32,
             prepared_material: prepared_mesh.prepared_material,
-            center: mesh_bounds_center(mesh),
+            transparent_triangles,
         });
     }
 
     (vertices, indices, draw_batches)
 }
 
-fn mesh_bounds_center(mesh: &crate::ModelMesh) -> [f32; 3] {
+fn model_component_preview_offsets<M: ModelRenderData + ?Sized>(
+    model: &M,
+    prepared_model: &crate::PreparedModel,
+    prepared_options: PreparedModelOptions,
+) -> Vec<[f32; 3]> {
+    let mut offsets = vec![[0.0; 3]; model.meshes().len()];
+    let Some(max_component) = prepared_model
+        .meshes
+        .iter()
+        .map(|mesh| model.mesh_component_index(mesh.mesh_index) as usize)
+        .max()
+    else {
+        return offsets;
+    };
+    if max_component == 0 {
+        return offsets;
+    }
+
+    let mut minimums = vec![[f32::INFINITY; 3]; max_component + 1];
+    let mut maximums = vec![[f32::NEG_INFINITY; 3]; max_component + 1];
+    let mut present = vec![false; max_component + 1];
+    for prepared_mesh in &prepared_model.meshes {
+        if !prepared_mesh.renders_in_main_pass
+            && !prepared_mesh
+                .prepared_material
+                .render_pass
+                .uses_additive_pipeline()
+        {
+            continue;
+        }
+        let Some(mesh) = model.meshes().get(prepared_mesh.mesh_index) else {
+            continue;
+        };
+        let component = model.mesh_component_index(prepared_mesh.mesh_index) as usize;
+        for vertex in
+            model_mesh_vertices_with_shape_mask(mesh, prepared_options.enabled_shape_mask).iter()
+        {
+            present[component] = true;
+            for axis in 0..3 {
+                minimums[component][axis] = minimums[component][axis].min(vertex.position[axis]);
+                maximums[component][axis] = maximums[component][axis].max(vertex.position[axis]);
+            }
+        }
+    }
+
+    let components = present
+        .iter()
+        .enumerate()
+        .filter_map(|(component, present)| present.then_some(component))
+        .collect::<Vec<_>>();
+    if components.len() < 2 {
+        return offsets;
+    }
+
+    let largest_extent = components
+        .iter()
+        .flat_map(|component| {
+            (0..3).map(|axis| maximums[*component][axis] - minimums[*component][axis])
+        })
+        .fold(0.0_f32, f32::max);
+    let gap = (largest_extent * 0.16).max(0.04);
+    let total_width = components
+        .iter()
+        .map(|component| maximums[*component][0] - minimums[*component][0])
+        .sum::<f32>()
+        + gap * (components.len().saturating_sub(1) as f32);
+    let mut cursor = -total_width * 0.5;
+    let mut component_offsets = vec![0.0_f32; max_component + 1];
+    for component in components {
+        let width = maximums[component][0] - minimums[component][0];
+        let source_center = (minimums[component][0] + maximums[component][0]) * 0.5;
+        let target_center = cursor + width * 0.5;
+        component_offsets[component] = target_center - source_center;
+        cursor += width + gap;
+    }
+
+    for (mesh_index, offset) in offsets.iter_mut().enumerate() {
+        let component = model.mesh_component_index(mesh_index) as usize;
+        offset[0] = component_offsets
+            .get(component)
+            .copied()
+            .unwrap_or_default();
+    }
+    offsets
+}
+
+fn gpu_vertices_bounds(vertices: &[GpuVertex]) -> Option<([f32; 3], f32)> {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in &mesh.vertices {
+    for vertex in vertices {
         for axis in 0..3 {
             min[axis] = min[axis].min(vertex.position[axis]);
             max[axis] = max[axis].max(vertex.position[axis]);
         }
     }
-
     if min.iter().any(|value| !value.is_finite()) || max.iter().any(|value| !value.is_finite()) {
-        return [0.0; 3];
+        return None;
     }
-
-    [
+    let center = [
         (min[0] + max[0]) * 0.5,
         (min[1] + max[1]) * 0.5,
         (min[2] + max[2]) * 0.5,
-    ]
+    ];
+    let radius = vertices
+        .iter()
+        .map(|vertex| {
+            let x = vertex.position[0] - center[0];
+            let y = vertex.position[1] - center[1];
+            let z = vertex.position[2] - center[2];
+            (x * x + y * y + z * z).sqrt()
+        })
+        .fold(0.0_f32, f32::max)
+        .max(0.0001);
+    Some((center, radius))
 }
 
-fn sorted_transparent_batches(draw_batches: &[DrawBatch], yaw: f32, pitch: f32) -> Vec<&DrawBatch> {
+fn transparent_triangles(
+    vertices: &[crate::ModelVertex],
+    indices: &[u32],
+    vertex_base: u32,
+    offset: [f32; 3],
+) -> Vec<TransparentTriangle> {
+    indices
+        .chunks_exact(3)
+        .map(|triangle| {
+            let center = (|| {
+                let positions = [
+                    vertices.get(triangle[0] as usize)?.position,
+                    vertices.get(triangle[1] as usize)?.position,
+                    vertices.get(triangle[2] as usize)?.position,
+                ];
+                Some([
+                    (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0 + offset[0],
+                    (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0 + offset[1],
+                    (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0 + offset[2],
+                ])
+            })()
+            .unwrap_or([0.0; 3]);
+            TransparentTriangle {
+                indices: [
+                    vertex_base + triangle[0],
+                    vertex_base + triangle[1],
+                    vertex_base + triangle[2],
+                ],
+                center,
+            }
+        })
+        .collect()
+}
+
+fn sorted_transparent_triangles(
+    draw_batches: &[DrawBatch],
+    yaw: f32,
+    pitch: f32,
+) -> SortedTransparentDraws {
     let sort_dir = transparent_sort_direction(yaw, pitch);
-    let mut batches = draw_batches
+    let mut triangles = draw_batches
         .iter()
-        .filter(|batch| batch.pass().sorts_back_to_front())
+        .enumerate()
+        .filter(|(_, batch)| batch.pass().sorts_back_to_front())
+        .flat_map(|(batch_index, batch)| {
+            batch
+                .transparent_triangles
+                .iter()
+                .map(move |triangle| (batch_index, triangle))
+        })
         .collect::<Vec<_>>();
-    batches.sort_by(|left, right| {
+    triangles.sort_by(|(_, left), (_, right)| {
         let left_depth = glam::Vec3::from(left.center).dot(sort_dir);
         let right_depth = glam::Vec3::from(right.center).dot(sort_dir);
         right_depth
             .partial_cmp(&left_depth)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    batches
+
+    let mut sorted = SortedTransparentDraws {
+        indices: Vec::with_capacity(triangles.len() * 3),
+        draws: Vec::new(),
+    };
+    for (batch_index, triangle) in triangles {
+        let index_start = sorted.indices.len() as u32;
+        sorted.indices.extend_from_slice(&triangle.indices);
+        if let Some(draw) = sorted
+            .draws
+            .last_mut()
+            .filter(|draw| draw.batch_index == batch_index)
+        {
+            draw.index_count += 3;
+        } else {
+            sorted.draws.push(SortedTransparentDraw {
+                batch_index,
+                index_start,
+                index_count: 3,
+            });
+        }
+    }
+    sorted
 }
 
 fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
@@ -1052,16 +1551,28 @@ fn draw_model_batch<'a>(
     material_bind_groups: &'a [wgpu::BindGroup],
     batch: &DrawBatch,
 ) {
+    draw_model_batch_range(
+        render_pass,
+        material_bind_groups,
+        batch,
+        batch.index_start,
+        batch.index_count,
+    );
+}
+
+fn draw_model_batch_range<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    material_bind_groups: &'a [wgpu::BindGroup],
+    batch: &DrawBatch,
+    index_start: u32,
+    index_count: u32,
+) {
     if let Some(bind_group) = material_bind_groups
         .get(batch.material_bind_group_index)
         .or_else(|| material_bind_groups.first())
     {
         render_pass.set_bind_group(1, bind_group, &[]);
-        render_pass.draw_indexed(
-            batch.index_start..batch.index_start + batch.index_count,
-            0,
-            0..1,
-        );
+        render_pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
     }
 }
 
@@ -1071,6 +1582,26 @@ fn create_model_pipeline(
     layout: &wgpu::PipelineLayout,
     label: &str,
     blend_mode: ModelPipelineBlend,
+    cull_backfaces: bool,
+) -> wgpu::RenderPipeline {
+    create_model_pipeline_with_fragment_entry(
+        device,
+        shader,
+        layout,
+        label,
+        blend_mode,
+        blend_mode.fragment_entry(),
+        cull_backfaces,
+    )
+}
+
+fn create_model_pipeline_with_fragment_entry(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+    blend_mode: ModelPipelineBlend,
+    fragment_entry: &str,
     cull_backfaces: bool,
 ) -> wgpu::RenderPipeline {
     let blend = blend_mode.blend_state();
@@ -1085,19 +1616,12 @@ fn create_model_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
+            entry_point: Some(fragment_entry),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: POST_FORMAT,
+                blend,
+                write_mask: blend_mode.color_write_mask(),
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
@@ -1122,9 +1646,57 @@ fn create_model_pipeline(
     })
 }
 
+fn create_outline_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_outline"),
+            buffers: &[GpuVertex::layout()],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_outline"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: POST_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Front),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelPipelineBlend {
     Opaque,
+    DitherDepth,
     Alpha,
     Additive,
 }
@@ -1132,7 +1704,7 @@ enum ModelPipelineBlend {
 impl ModelPipelineBlend {
     fn blend_state(self) -> Option<wgpu::BlendState> {
         match self {
-            ModelPipelineBlend::Opaque => None,
+            ModelPipelineBlend::Opaque | ModelPipelineBlend::DitherDepth => None,
             ModelPipelineBlend::Alpha => Some(wgpu::BlendState::ALPHA_BLENDING),
             ModelPipelineBlend::Additive => Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -1150,7 +1722,24 @@ impl ModelPipelineBlend {
     }
 
     fn writes_depth(self) -> bool {
-        matches!(self, ModelPipelineBlend::Opaque)
+        matches!(
+            self,
+            ModelPipelineBlend::Opaque | ModelPipelineBlend::DitherDepth
+        )
+    }
+
+    fn fragment_entry(self) -> &'static str {
+        match self {
+            ModelPipelineBlend::DitherDepth => "fs_dither_depth",
+            _ => "fs_main",
+        }
+    }
+
+    fn color_write_mask(self) -> wgpu::ColorWrites {
+        match self {
+            ModelPipelineBlend::DitherDepth => wgpu::ColorWrites::empty(),
+            _ => wgpu::ColorWrites::ALL,
+        }
     }
 }
 
@@ -1203,22 +1792,33 @@ fn create_post_texture_view(
     width: u32,
     height: u32,
 ) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: POST_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
+    create_post_texture(device, label, width, height, wgpu::TextureUsages::empty())
         .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+fn create_post_texture(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+    extra_usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: POST_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | extra_usage,
+        view_formats: &[],
+    })
 }
 
 fn create_post_bind_group(
@@ -1261,6 +1861,40 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     model: &M,
     draw_batches: &[DrawBatch],
 ) -> Vec<wgpu::BindGroup> {
+    // Pair related atlases horizontally to stay below common WebGPU per-stage texture limits.
+    let tile_array_pair_texture = create_array_pair_texture(
+        device,
+        queue,
+        "weapon tile array pair",
+        model_texture_pair_for_kinds(
+            model,
+            ModelTextureKind::TileNormalArray,
+            ModelTextureKind::TileOrbArray,
+        ),
+        RgbaMipSemantic::PackedNormalRg,
+        RgbaMipSemantic::LinearData,
+        [128, 128, 255, 255],
+        [255, 128, 255, 255],
+    );
+    let tile_array_pair_view =
+        tile_array_pair_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let detail_array_pair_texture = create_array_pair_texture(
+        device,
+        queue,
+        "weapon detail array pair",
+        model_texture_pair_for_kinds(
+            model,
+            ModelTextureKind::DetailDiffuseArray,
+            ModelTextureKind::DetailNormalArray,
+        ),
+        RgbaMipSemantic::LinearData,
+        RgbaMipSemantic::PackedNormalRg,
+        [128, 128, 128, 255],
+        [128, 128, 255, 255],
+    );
+    let detail_array_pair_view =
+        detail_array_pair_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
     draw_batches
         .iter()
         .map(|batch| {
@@ -1277,6 +1911,8 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
                 model,
                 batch.prepared_material,
                 batch.draw_role,
+                &tile_array_pair_view,
+                &detail_array_pair_view,
             )
         })
         .collect()
@@ -1290,9 +1926,14 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_material: PreparedMaterial,
     draw_role: ModelMeshDrawRole,
+    tile_array_pair_view: &wgpu::TextureView,
+    detail_array_pair_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
+    let effective_normal_texture = effective_normal_texture(material, prepared_material);
     let uv_sources = material_uv_source_params(prepared_material);
+    let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
+    let sheen_sphere_params = material_sheen_sphere_params(material, prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -1323,8 +1964,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
             material.metalness,
-            material
-                .normal_texture
+            effective_normal_texture
                 .and_then(|index| model.textures().get(index))
                 .map(|_| 1.0)
                 .unwrap_or(0.0),
@@ -1349,7 +1989,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             } else {
                 0.0
             },
-            0.0,
+            material_legacy_specular_mode(material),
         ],
         render: [
             render_mode_value(material.render_mode),
@@ -1357,10 +1997,30 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             alpha_mode_value(material.alpha_mode),
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
-        extra_properties: material_extra_texture_flags(material, model),
+        alpha_params: material_alpha_params(material),
+        alpha_policy_params: material_alpha_policy_params(prepared_material),
+        alpha_composition_params: material_alpha_composition_params(material),
+        water_deep_color: material_water_deep_color(material),
+        water_refraction_color: material_water_refraction_color(material),
+        water_whitecap_color: material_water_whitecap_color(material),
+        extra_properties: material_extra_texture_flags(material, model, prepared_material),
         shader_params: material_shader_params(material),
         tile_params: material_tile_params(material),
-        detail_params: material_detail_params(material),
+        toon_sheen_params: material_toon_sheen_params(material),
+        toon_params: material_toon_params(material, prepared_material),
+        sheen_sphere_params,
+        detail_params: material_detail_params(material, prepared_material),
+        array_params: material_array_params(prepared_material),
+        tile_lod_params: material_tile_lod_params(material, model, prepared_material),
+        detail_color: material_detail_color(material),
+        multi_detail_color: material_multi_detail_color(material),
+        shader_diffuse_color: material_shader_diffuse_color(material),
+        shader_multi_diffuse_color: material_shader_multi_diffuse_color(material),
+        shader_emissive_color: material_shader_emissive_color(material),
+        shader_multi_emissive_color: material_shader_multi_emissive_color(material),
+        outline_params: material_outline_params(material),
+        specular_color_mask: material_specular_color_mask(material),
+        surface_params: material_surface_params(material, prepared_material),
         detail_color_uv_scale: material_detail_color_uv_scale(material),
         detail_normal_uv_scale: material_detail_normal_uv_scale(material),
         uv_scroll: material_uv_scroll(material),
@@ -1373,8 +2033,16 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         uv_sources1: uv_sources.1,
         uv_sources2: uv_sources.2,
         uv_sources3: uv_sources.3,
+        uv_scroll_masks0: uv_scroll_masks.0,
+        uv_scroll_masks1: uv_scroll_masks.1,
+        uv_scroll_masks2: uv_scroll_masks.2,
+        uv_scroll_masks3: uv_scroll_masks.3,
+        feature_params: material_feature_params(prepared_material),
+        family_params: material_family_params(material),
+        secondary_map_params: material_secondary_map_params(material, model, prepared_material),
         draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
+        unsupported_color: unsupported_inputs_diagnostic_color(prepared_material),
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1386,50 +2054,57 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .base_color_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            )
+            let label = format!("weapon texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.base_color.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon white texture",
                 1,
                 1,
                 &[255, 255, 255, 255],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
     let mask_texture_view = effective_mask_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon mask texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral mask texture",
                 1,
                 1,
                 &[255, 128, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1437,51 +2112,63 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .emissive_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon emissive texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            )
+            let label = format!("weapon emissive texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(
+                    device,
+                    queue,
+                    &label,
+                    Some(texture),
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.emissive.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon black emissive texture",
                 1,
                 1,
                 &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::SrgbColor,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let normal_texture_view = material
-        .normal_texture
+    let normal_texture_view = effective_normal_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 &format!("weapon normal texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::PackedNormalRg,
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon flat normal texture",
                 1,
                 1,
                 &[128, 128, 255, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::PackedNormalRg,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1489,18 +2176,29 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .material_properties_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon material properties texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
+            let label = format!("weapon material properties texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(
+                    device,
+                    queue,
+                    &label,
+                    Some(texture),
+                    [0.0, 1.0, 1.0, 1.0],
+                )
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    RgbaMipSemantic::LinearData,
+                )
+            }
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral material properties texture",
@@ -1512,7 +2210,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                     255,
                     255,
                 ],
-                wgpu::TextureFormat::Rgba8Unorm,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1520,137 +2218,194 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         .specular_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon specular texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            )
+            let label = format!("weapon specular texture {}", texture.path);
+            if texture.rgba_f32.is_some() {
+                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+            } else {
+                create_mipped_rgba_texture(
+                    device,
+                    queue,
+                    &label,
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    mip_semantic_for_color_space(
+                        prepared_material.texture_sampling.specular.color_space,
+                    ),
+                )
+            }
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
+            create_mipped_rgba_texture(
                 device,
                 queue,
                 "weapon neutral specular texture",
                 1,
                 1,
                 &[
-                    srgb_byte(material.specular_color[0]),
-                    srgb_byte(material.specular_color[1]),
-                    srgb_byte(material.specular_color[2]),
+                    unorm_byte(material.specular_color[0]),
+                    unorm_byte(material.specular_color[1]),
+                    unorm_byte(material.specular_color[2]),
                     255,
                 ],
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                RgbaMipSemantic::LinearData,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let tile_properties_texture_view = material
-        .tile_properties_texture
+    let uses_secondary_maps = prepared_material.feature_flags.uses_secondary_maps;
+    let tile_binding_texture = if uses_secondary_maps {
+        material.secondary_base_color_texture
+    } else {
+        material.tile_properties_texture
+    };
+    let tile_binding_format = texture_format_for_color_space(if uses_secondary_maps {
+        prepared_material
+            .texture_sampling
+            .secondary_base_color
+            .color_space
+    } else {
+        prepared_material
+            .texture_sampling
+            .tile_properties
+            .color_space
+    });
+    let tile_properties_texture_view = tile_binding_texture
         .and_then(|index| model.textures().get(index))
         .map(|texture| {
             create_rgba_texture(
                 device,
                 queue,
-                &format!("weapon tile properties texture {}", texture.path),
+                &format!("weapon tile/secondary color texture {}", texture.path),
                 texture.width.max(1) as u32,
                 texture.height.max(1) as u32,
                 &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+                tile_binding_format,
             )
         })
         .unwrap_or_else(|| {
             create_rgba_texture(
                 device,
                 queue,
-                "weapon neutral tile properties texture",
+                "weapon neutral tile/secondary color texture",
                 1,
                 1,
-                &[0, 255, 255, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+                if uses_secondary_maps {
+                    &[255, 255, 255, 255]
+                } else {
+                    &[0, 255, 255, 255]
+                },
+                tile_binding_format,
             )
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let sheen_properties_texture_view = material
-        .sheen_properties_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon sheen properties texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral sheen properties texture",
-                1,
-                1,
-                &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let sphere_properties_texture_view = material
-        .sphere_properties_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon sphere properties texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral sphere properties texture",
-                1,
-                1,
-                &[0, 0, 255, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let tile_matrix_texture_view = material
+    let sheen_binding_texture = if uses_secondary_maps {
+        material.secondary_normal_texture
+    } else {
+        material.sheen_properties_texture
+    };
+    let sheen_binding_texture = sheen_binding_texture.and_then(|index| model.textures().get(index));
+    let sheen_properties_texture_view = if uses_secondary_maps {
+        sheen_binding_texture.map_or_else(
+            || {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    "weapon neutral secondary normal texture",
+                    1,
+                    1,
+                    &[128, 128, 255, 255],
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+            |texture| {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    &format!("weapon secondary normal texture {}", texture.path),
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+        )
+    } else {
+        create_float_ramp_texture(
+            device,
+            queue,
+            sheen_binding_texture
+                .map(|texture| format!("weapon sheen texture {}", texture.path))
+                .as_deref()
+                .unwrap_or("weapon neutral sheen texture"),
+            sheen_binding_texture,
+            [0.0, 0.0, 0.0, 1.0],
+        )
+    }
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let sphere_binding_texture = if uses_secondary_maps {
+        material.secondary_specular_texture
+    } else {
+        material.sphere_properties_texture
+    };
+    let sphere_binding_texture =
+        sphere_binding_texture.and_then(|index| model.textures().get(index));
+    let sphere_properties_texture_view = if uses_secondary_maps {
+        sphere_binding_texture.map_or_else(
+            || {
+                let neutral_pixels = [
+                    unorm_byte(material.specular_color[0]),
+                    unorm_byte(material.specular_color[1]),
+                    unorm_byte(material.specular_color[2]),
+                    255,
+                ];
+                create_rgba_texture(
+                    device,
+                    queue,
+                    "weapon neutral secondary specular texture",
+                    1,
+                    1,
+                    &neutral_pixels,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+            |texture| {
+                create_rgba_texture(
+                    device,
+                    queue,
+                    &format!("weapon secondary specular texture {}", texture.path),
+                    texture.width.max(1) as u32,
+                    texture.height.max(1) as u32,
+                    &texture.rgba,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            },
+        )
+    } else {
+        create_float_ramp_texture(
+            device,
+            queue,
+            sphere_binding_texture
+                .map(|texture| format!("weapon sphere texture {}", texture.path))
+                .as_deref()
+                .unwrap_or("weapon neutral sphere texture"),
+            sphere_binding_texture,
+            [0.0, 0.0, 1.0, 1.0],
+        )
+    }
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let tile_matrix_texture = material
         .tile_matrix_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon tile matrix texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral tile matrix texture",
-                1,
-                1,
-                &[255, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        .and_then(|index| model.textures().get(index));
+    let tile_matrix_texture_view = create_tile_matrix_texture(
+        device,
+        queue,
+        tile_matrix_texture
+            .map(|texture| format!("weapon tile matrix texture {}", texture.path))
+            .as_deref()
+            .unwrap_or("weapon neutral tile matrix texture"),
+        tile_matrix_texture,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let index_texture_view = material
         .index_texture
         .and_then(|index| model.textures().get(index))
@@ -1730,20 +2485,92 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let color_sampler = create_sampler_for_sampling(
+    let base_color_sampler = create_sampler_for_sampling(
         device,
-        "weapon material color sampler",
-        material_color_sampler_policy(prepared_material),
+        "weapon base color sampler",
+        prepared_material.texture_sampling.base_color,
     );
-    let data_sampler = create_sampler_for_sampling(
+    let normal_sampler = create_sampler_for_sampling(
         device,
-        "weapon material data sampler",
-        material_data_sampler_policy(prepared_material),
+        "weapon normal sampler",
+        prepared_material.texture_sampling.normal,
     );
-    let nearest_data_sampler = create_sampler_for_sampling(
+    let tile_matrix_sampler = create_sampler_for_sampling(
         device,
-        "weapon material nearest data sampler",
-        material_nearest_sampler_policy(prepared_material),
+        "weapon tile matrix sampler",
+        prepared_material.texture_sampling.tile_matrix,
+    );
+    let mask_sampler = create_sampler_for_sampling(
+        device,
+        "weapon mask sampler",
+        prepared_material.texture_sampling.mask,
+    );
+    let emissive_sampler = create_sampler_for_sampling(
+        device,
+        "weapon emissive sampler",
+        prepared_material.texture_sampling.emissive,
+    );
+    let material_properties_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material properties sampler",
+        prepared_material.texture_sampling.material_properties,
+    );
+    let specular_sampler = create_sampler_for_sampling(
+        device,
+        "weapon specular sampler",
+        prepared_material.texture_sampling.specular,
+    );
+    let tile_sampler = create_sampler_for_sampling(
+        device,
+        "weapon tile or secondary color sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_base_color
+        } else {
+            prepared_material.texture_sampling.tile_properties
+        },
+    );
+    let sheen_sampler = create_sampler_for_sampling(
+        device,
+        "weapon sheen or secondary normal sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_normal
+        } else {
+            prepared_material.texture_sampling.sheen_properties
+        },
+    );
+    let sphere_sampler = create_sampler_for_sampling(
+        device,
+        "weapon sphere or secondary specular sampler",
+        if uses_secondary_maps {
+            prepared_material.texture_sampling.secondary_specular
+        } else {
+            prepared_material.texture_sampling.sphere_properties
+        },
+    );
+    let index_sampler = create_sampler_for_sampling(
+        device,
+        "weapon ColorTable index sampler",
+        prepared_material.texture_sampling.index,
+    );
+    let material_map_sampler = create_sampler_for_sampling(
+        device,
+        "weapon material map sampler",
+        prepared_material.texture_sampling.material_map,
+    );
+    let multi_map_sampler = create_sampler_for_sampling(
+        device,
+        "weapon multi map sampler",
+        prepared_material.texture_sampling.multi_map,
+    );
+    let tile_array_sampler = create_sampler_for_sampling(
+        device,
+        "weapon tile array pair sampler",
+        prepared_material.texture_sampling.tile_normal_array,
+    );
+    let detail_array_sampler = create_sampler_for_sampling(
+        device,
+        "weapon detail array pair sampler",
+        prepared_material.texture_sampling.detail_diffuse_array,
     );
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1760,7 +2587,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&color_sampler),
+                resource: wgpu::BindingResource::Sampler(&base_color_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -1784,7 +2611,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 8,
-                resource: wgpu::BindingResource::Sampler(&data_sampler),
+                resource: wgpu::BindingResource::Sampler(&normal_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 9,
@@ -1804,7 +2631,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 13,
-                resource: wgpu::BindingResource::Sampler(&nearest_data_sampler),
+                resource: wgpu::BindingResource::Sampler(&tile_matrix_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 14,
@@ -1818,20 +2645,64 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 binding: 16,
                 resource: wgpu::BindingResource::TextureView(&multi_map_texture_view),
             },
+            wgpu::BindGroupEntry {
+                binding: 17,
+                resource: wgpu::BindingResource::TextureView(tile_array_pair_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 18,
+                resource: wgpu::BindingResource::TextureView(detail_array_pair_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 19,
+                resource: wgpu::BindingResource::Sampler(&mask_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 20,
+                resource: wgpu::BindingResource::Sampler(&emissive_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 21,
+                resource: wgpu::BindingResource::Sampler(&material_properties_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 22,
+                resource: wgpu::BindingResource::Sampler(&specular_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 23,
+                resource: wgpu::BindingResource::Sampler(&tile_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 24,
+                resource: wgpu::BindingResource::Sampler(&sheen_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 25,
+                resource: wgpu::BindingResource::Sampler(&sphere_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 26,
+                resource: wgpu::BindingResource::Sampler(&index_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 27,
+                resource: wgpu::BindingResource::Sampler(&material_map_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 28,
+                resource: wgpu::BindingResource::Sampler(&multi_map_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 29,
+                resource: wgpu::BindingResource::Sampler(&tile_array_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 30,
+                resource: wgpu::BindingResource::Sampler(&detail_array_sampler),
+            },
         ],
     })
-}
-
-fn material_color_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.base_color
-}
-
-fn material_data_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.normal
-}
-
-fn material_nearest_sampler_policy(prepared_material: PreparedMaterial) -> PreparedTextureSampling {
-    prepared_material.texture_sampling.index
 }
 
 fn create_sampler_for_sampling(
@@ -1855,7 +2726,10 @@ fn sampler_descriptor_for_sampling(
         address_mode_w: address_mode,
         mag_filter: filter_mode,
         min_filter: filter_mode,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        mipmap_filter: match sampling.filter {
+            PreparedTextureFilter::Linear => wgpu::MipmapFilterMode::Linear,
+            PreparedTextureFilter::Nearest => wgpu::MipmapFilterMode::Nearest,
+        },
         ..Default::default()
     }
 }
@@ -1874,6 +2748,554 @@ fn sampler_filter_mode(filter: PreparedTextureFilter) -> wgpu::FilterMode {
         PreparedTextureFilter::Linear => wgpu::FilterMode::Linear,
         PreparedTextureFilter::Nearest => wgpu::FilterMode::Nearest,
     }
+}
+
+fn material_array_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let tile = prepared_material.resource_availability.tile_array;
+    let detail = prepared_material.resource_availability.detail_array;
+    let tile_ready = matches!(tile.status, crate::PreparedTextureArrayStatus::Ready);
+    let detail_ready = matches!(detail.status, crate::PreparedTextureArrayStatus::Ready);
+    [
+        tile.layer_count.map(f32::from).unwrap_or(1.0),
+        detail.layer_count.map(f32::from).unwrap_or(1.0),
+        if tile_ready { 1.0 } else { 0.0 },
+        if detail_ready { 1.0 } else { 0.0 },
+    ]
+}
+
+fn material_tile_lod_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let tile_ready = matches!(
+        prepared_material.resource_availability.tile_array.status,
+        crate::PreparedTextureArrayStatus::Ready
+    );
+    let has_packed_color_table = material_baked_color_table_ramps_are_ab(material, model);
+    let has_packed_tile = material_baked_color_table_tile_ramps_are_ab(material, model);
+    [
+        if tile_ready {
+            finite_or(material.tile_mip_bias_offset, 0.0).clamp(-16.0, 15.99)
+        } else {
+            0.0
+        },
+        if has_packed_color_table { 1.0 } else { 0.0 },
+        if has_packed_color_table
+            && material
+                .shader_package_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("character.shpk"))
+        {
+            1.0
+        } else {
+            0.0
+        },
+        if has_packed_tile { 1.0 } else { 0.0 },
+    ]
+}
+
+fn material_baked_color_table_ramps_are_ab<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> bool {
+    let has_layout = |index: Option<usize>, expected_kind, expected_layout| {
+        index
+            .and_then(|index| model.textures().get(index))
+            .is_some_and(|texture| {
+                texture.kind == expected_kind && texture.texel_layout == expected_layout
+            })
+    };
+    let generic = crate::ModelTextureTexelLayout::ColorTableRampAb;
+    has_layout(
+        material.base_color_texture,
+        crate::ModelTextureKind::BaseColor,
+        generic,
+    ) && has_layout(
+        material.specular_texture,
+        crate::ModelTextureKind::Specular,
+        generic,
+    ) && has_layout(
+        material.material_properties_texture,
+        crate::ModelTextureKind::MaterialProperties,
+        generic,
+    ) && has_layout(
+        material.sheen_properties_texture,
+        crate::ModelTextureKind::SheenProperties,
+        generic,
+    ) && has_layout(
+        material.sphere_properties_texture,
+        crate::ModelTextureKind::SphereProperties,
+        generic,
+    )
+}
+
+fn material_baked_color_table_tile_ramps_are_ab<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> bool {
+    let has_layout = |index: Option<usize>, expected_kind| {
+        index
+            .and_then(|index| model.textures().get(index))
+            .is_some_and(|texture| {
+                texture.kind == expected_kind
+                    && texture.texel_layout == crate::ModelTextureTexelLayout::ColorTableTileRampAb
+            })
+    };
+    has_layout(
+        material.tile_properties_texture,
+        crate::ModelTextureKind::TileProperties,
+    ) && has_layout(
+        material.tile_matrix_texture,
+        crate::ModelTextureKind::TileMatrixProperties,
+    )
+}
+
+fn model_texture_pair_for_kinds<M: ModelRenderData + ?Sized>(
+    model: &M,
+    first_kind: ModelTextureKind,
+    second_kind: ModelTextureKind,
+) -> Option<(&ModelTexture, &ModelTexture)> {
+    let first = model
+        .textures()
+        .iter()
+        .find(|texture| texture.kind == first_kind)?;
+    let second = model
+        .textures()
+        .iter()
+        .find(|texture| texture.kind == second_kind)?;
+    texture_array_pair_is_compatible(first, second).then_some((first, second))
+}
+
+fn texture_array_pair_is_compatible(first: &ModelTexture, second: &ModelTexture) -> bool {
+    texture_array_layout_is_valid(first)
+        && texture_array_layout_is_valid(second)
+        && first.width == second.width
+        && first.height == second.height
+        && first.array_size == second.array_size
+        && first.array_layer_height == second.array_layer_height
+}
+
+fn texture_array_layout_is_valid(texture: &ModelTexture) -> bool {
+    texture.width != 0
+        && texture.array_size > 1
+        && texture.array_layer_height != 0
+        && u32::from(texture.height)
+            == u32::from(texture.array_size) * u32::from(texture.array_layer_height)
+        && texture.rgba.len() == usize::from(texture.width) * usize::from(texture.height) * 4
+}
+
+fn create_array_pair_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    pair: Option<(&ModelTexture, &ModelTexture)>,
+    first_semantic: RgbaMipSemantic,
+    second_semantic: RgbaMipSemantic,
+    fallback_first: [u8; 4],
+    fallback_second: [u8; 4],
+) -> wgpu::Texture {
+    let Some((first, second)) = pair else {
+        let rgba = [
+            fallback_first[0],
+            fallback_first[1],
+            fallback_first[2],
+            fallback_first[3],
+            fallback_second[0],
+            fallback_second[1],
+            fallback_second[2],
+            fallback_second[3],
+        ];
+        return create_rgba_texture(
+            device,
+            queue,
+            label,
+            2,
+            1,
+            &rgba,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+    };
+
+    let levels = array_pair_mip_chain(first, second, first_semantic, second_semantic);
+    let base = levels
+        .first()
+        .expect("array pair mip chain has a base level");
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: base.width,
+            height: base.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip_level, level) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip_level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.rgba,
+            if level.height == 1 {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }
+            } else {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.width * 4),
+                    rows_per_image: Some(level.height),
+                }
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    texture
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RgbaMipSemantic {
+    SrgbColor,
+    LinearData,
+    /// Normal XY are packed in RG; B/A remain independent scalar payloads such as alpha masks.
+    PackedNormalRg,
+}
+
+/// Maps a prepared sampling color space to the mip/upload semantic of the
+/// bound texture. `Srgb` uploads decode RGB on the GPU (`Rgba8UnormSrgb`,
+/// alpha stays linear); `NonColor` stays raw linear data. This is the single
+/// place where the prepared policy becomes a GPU format decision; special
+/// textures (packed normals, float ramps, pair atlases, neutral fallbacks)
+/// stay explicit at their call sites instead of being inferred here.
+fn mip_semantic_for_color_space(color_space: PreparedTextureColorSpace) -> RgbaMipSemantic {
+    match color_space {
+        PreparedTextureColorSpace::Srgb => RgbaMipSemantic::SrgbColor,
+        PreparedTextureColorSpace::NonColor => RgbaMipSemantic::LinearData,
+    }
+}
+
+fn texture_format_for_color_space(color_space: PreparedTextureColorSpace) -> wgpu::TextureFormat {
+    match color_space {
+        PreparedTextureColorSpace::Srgb => wgpu::TextureFormat::Rgba8UnormSrgb,
+        PreparedTextureColorSpace::NonColor => wgpu::TextureFormat::Rgba8Unorm,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RgbaMipLevel {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+fn array_pair_mip_chain(
+    first: &ModelTexture,
+    second: &ModelTexture,
+    first_semantic: RgbaMipSemantic,
+    second_semantic: RgbaMipSemantic,
+) -> Vec<RgbaMipLevel> {
+    debug_assert!(texture_array_pair_is_compatible(first, second));
+    let layer_count = u32::from(first.array_size).max(1);
+    let mut layer_width = u32::from(first.width).max(1);
+    let mut layer_height = u32::from(first.array_layer_height).max(1);
+    let width = layer_width * 2;
+    let height = layer_height * layer_count;
+    let mut base = vec![0; width as usize * height as usize * 4];
+    for y in 0..height as usize {
+        let source_offset = y * layer_width as usize * 4;
+        let target_offset = y * width as usize * 4;
+        let row_bytes = layer_width as usize * 4;
+        base[target_offset..target_offset + row_bytes]
+            .copy_from_slice(&first.rgba[source_offset..source_offset + row_bytes]);
+        base[target_offset + row_bytes..target_offset + row_bytes * 2]
+            .copy_from_slice(&second.rgba[source_offset..source_offset + row_bytes]);
+    }
+
+    let mut levels = vec![RgbaMipLevel {
+        width,
+        height,
+        rgba: base,
+    }];
+    while layer_width > 1 && layer_height > 1 && layer_width % 2 == 0 && layer_height % 2 == 0 {
+        let source = levels
+            .last()
+            .expect("array pair mip chain has a base level");
+        let target_layer_width = layer_width / 2;
+        let target_layer_height = layer_height / 2;
+        let target_width = target_layer_width * 2;
+        let target_height = target_layer_height * layer_count;
+        let mut target = vec![0; target_width as usize * target_height as usize * 4];
+
+        for (side, semantic) in [first_semantic, second_semantic].into_iter().enumerate() {
+            let source_side_x = side as u32 * layer_width;
+            let target_side_x = side as u32 * target_layer_width;
+            for layer in 0..layer_count {
+                let source_layer_y = layer * layer_height;
+                let target_layer_y = layer * target_layer_height;
+                for target_y in 0..target_layer_height {
+                    let source_y_start =
+                        source_layer_y + target_y * layer_height / target_layer_height;
+                    let source_y_end = source_layer_y
+                        + ((target_y + 1) * layer_height / target_layer_height)
+                            .max(target_y * layer_height / target_layer_height + 1);
+                    for target_x in 0..target_layer_width {
+                        let source_x_start =
+                            source_side_x + target_x * layer_width / target_layer_width;
+                        let source_x_end = source_side_x
+                            + ((target_x + 1) * layer_width / target_layer_width)
+                                .max(target_x * layer_width / target_layer_width + 1);
+                        let output_x = target_side_x + target_x;
+                        let output_y = target_layer_y + target_y;
+                        let target_offset = ((output_y * target_width + output_x) * 4) as usize;
+                        downsample_rgba_texel(
+                            source,
+                            source_x_start,
+                            source_x_end,
+                            source_y_start,
+                            source_y_end,
+                            semantic,
+                            &mut target[target_offset..target_offset + 4],
+                        );
+                    }
+                }
+            }
+        }
+
+        levels.push(RgbaMipLevel {
+            width: target_width,
+            height: target_height,
+            rgba: target,
+        });
+        layer_width = target_layer_width;
+        layer_height = target_layer_height;
+    }
+    levels
+}
+
+fn create_mipped_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    semantic: RgbaMipSemantic,
+) -> wgpu::Texture {
+    let levels = rgba_mip_chain(width, height, rgba, semantic);
+    let format = match semantic {
+        RgbaMipSemantic::SrgbColor => wgpu::TextureFormat::Rgba8UnormSrgb,
+        RgbaMipSemantic::LinearData | RgbaMipSemantic::PackedNormalRg => {
+            wgpu::TextureFormat::Rgba8Unorm
+        }
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip_level, level) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip_level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.rgba,
+            if level.height == 1 {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }
+            } else {
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.width * 4),
+                    rows_per_image: Some(level.height),
+                }
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    texture
+}
+
+fn rgba_mip_chain(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    semantic: RgbaMipSemantic,
+) -> Vec<RgbaMipLevel> {
+    let width = width.max(1);
+    let height = height.max(1);
+    let expected_len = width as usize * height as usize * 4;
+    let mut base = vec![0; expected_len];
+    let copy_len = expected_len.min(rgba.len());
+    base[..copy_len].copy_from_slice(&rgba[..copy_len]);
+    let mut levels = vec![RgbaMipLevel {
+        width,
+        height,
+        rgba: base,
+    }];
+
+    while levels
+        .last()
+        .is_some_and(|level| level.width > 1 || level.height > 1)
+    {
+        let source = levels.last().expect("mip chain has a base level");
+        let target_width = (source.width / 2).max(1);
+        let target_height = (source.height / 2).max(1);
+        let mut target = vec![0; target_width as usize * target_height as usize * 4];
+        for target_y in 0..target_height {
+            let source_y_start = target_y * source.height / target_height;
+            let source_y_end =
+                ((target_y + 1) * source.height / target_height).max(source_y_start + 1);
+            for target_x in 0..target_width {
+                let source_x_start = target_x * source.width / target_width;
+                let source_x_end =
+                    ((target_x + 1) * source.width / target_width).max(source_x_start + 1);
+                let target_offset = ((target_y * target_width + target_x) * 4) as usize;
+                downsample_rgba_texel(
+                    source,
+                    source_x_start,
+                    source_x_end,
+                    source_y_start,
+                    source_y_end,
+                    semantic,
+                    &mut target[target_offset..target_offset + 4],
+                );
+            }
+        }
+        levels.push(RgbaMipLevel {
+            width: target_width,
+            height: target_height,
+            rgba: target,
+        });
+    }
+    levels
+}
+
+fn downsample_rgba_texel(
+    source: &RgbaMipLevel,
+    x_start: u32,
+    x_end: u32,
+    y_start: u32,
+    y_end: u32,
+    semantic: RgbaMipSemantic,
+    target: &mut [u8],
+) {
+    let sample_count = ((x_end - x_start) * (y_end - y_start)) as f32;
+    let mut sums = [0.0; 5];
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let offset = ((y * source.width + x) * 4) as usize;
+            let pixel = &source.rgba[offset..offset + 4];
+            match semantic {
+                RgbaMipSemantic::SrgbColor => {
+                    for channel in 0..3 {
+                        sums[channel] += srgb_to_linear(pixel[channel]);
+                    }
+                    sums[3] += f32::from(pixel[3]) / 255.0;
+                }
+                RgbaMipSemantic::LinearData => {
+                    for channel in 0..4 {
+                        sums[channel] += f32::from(pixel[channel]) / 255.0;
+                    }
+                }
+                RgbaMipSemantic::PackedNormalRg => {
+                    let x = f32::from(pixel[0]) / 127.5 - 1.0;
+                    let y = f32::from(pixel[1]) / 127.5 - 1.0;
+                    sums[0] += x;
+                    sums[1] += y;
+                    sums[2] += (1.0 - x * x - y * y).max(0.0).sqrt();
+                    sums[3] += f32::from(pixel[2]) / 255.0;
+                    sums[4] += f32::from(pixel[3]) / 255.0;
+                }
+            }
+        }
+    }
+
+    match semantic {
+        RgbaMipSemantic::SrgbColor => {
+            for channel in 0..3 {
+                target[channel] = linear_to_srgb_byte(sums[channel] / sample_count);
+            }
+        }
+        RgbaMipSemantic::LinearData => {
+            for channel in 0..3 {
+                target[channel] = unorm_byte(sums[channel] / sample_count);
+            }
+        }
+        RgbaMipSemantic::PackedNormalRg => {
+            let averaged = [
+                sums[0] / sample_count,
+                sums[1] / sample_count,
+                sums[2] / sample_count,
+            ];
+            let length =
+                (averaged[0] * averaged[0] + averaged[1] * averaged[1] + averaged[2] * averaged[2])
+                    .sqrt();
+            let xy = if length > 1.0e-6 {
+                [averaged[0] / length, averaged[1] / length]
+            } else {
+                [0.0, 0.0]
+            };
+            target[0] = unorm_byte(xy[0] * 0.5 + 0.5);
+            target[1] = unorm_byte(xy[1] * 0.5 + 0.5);
+            target[2] = unorm_byte(sums[3] / sample_count);
+            target[3] = unorm_byte(sums[4] / sample_count);
+        }
+    }
+    if semantic != RgbaMipSemantic::PackedNormalRg {
+        target[3] = unorm_byte(sums[3] / sample_count);
+    }
+}
+
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = f32::from(value) / 255.0;
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_byte(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let encoded = if value <= 0.0031308 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    unorm_byte(encoded)
 }
 
 fn create_rgba_texture(
@@ -1933,18 +3355,188 @@ fn create_rgba_texture(
     texture
 }
 
-fn unorm_byte(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+fn create_tile_matrix_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    source: Option<&ModelTexture>,
+) -> wgpu::Texture {
+    let (width, height, pixels) = tile_matrix_texture_pixels(source);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&pixels),
+        if height == 1 {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            }
+        } else {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 16),
+                rows_per_image: Some(height),
+            }
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
 }
 
-fn srgb_byte(linear: f32) -> u8 {
-    let value = linear.clamp(0.0, 1.0);
-    let srgb = if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
+fn create_float_ramp_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    source: Option<&ModelTexture>,
+    neutral: [f32; 4],
+) -> wgpu::Texture {
+    let (width, height, pixels) = float_ramp_texture_pixels(source, neutral);
+    let mut bytes = Vec::with_capacity(pixels.len() * 8);
+    for pixel in pixels {
+        for channel in pixel {
+            bytes.extend_from_slice(&f16::from_f32(channel).to_bits().to_le_bytes());
+        }
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &bytes,
+        if height == 1 {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            }
+        } else {
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 8),
+                rows_per_image: Some(height),
+            }
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
+fn float_ramp_texture_pixels(
+    source: Option<&ModelTexture>,
+    neutral: [f32; 4],
+) -> (u32, u32, Vec<[f32; 4]>) {
+    let Some(source) = source.filter(|texture| texture.width != 0 && texture.height != 0) else {
+        return (1, 1, vec![neutral]);
     };
-    unorm_byte(srgb)
+    let width = u32::from(source.width);
+    let height = u32::from(source.height);
+    let pixel_count = usize::from(source.width) * usize::from(source.height);
+    let float_pixels = source
+        .rgba_f32
+        .as_deref()
+        .filter(|pixels| pixels.len() == pixel_count);
+    let unorm_pixels = (source.rgba.len() >= pixel_count * 4).then_some(source.rgba.as_slice());
+    let pixels = (0..pixel_count)
+        .map(|pixel_index| {
+            let mut fallback = neutral;
+            if let Some(unorm_pixels) = unorm_pixels {
+                for channel in 0..4 {
+                    fallback[channel] = f32::from(unorm_pixels[pixel_index * 4 + channel]) / 255.0;
+                }
+            }
+            let Some(float_pixel) = float_pixels.map(|pixels| pixels[pixel_index]) else {
+                return fallback;
+            };
+            for channel in 0..4 {
+                if float_pixel[channel].is_finite() {
+                    fallback[channel] = float_pixel[channel];
+                }
+            }
+            fallback
+        })
+        .collect();
+    (width, height, pixels)
+}
+
+fn tile_matrix_texture_pixels(source: Option<&ModelTexture>) -> (u32, u32, Vec<[f32; 4]>) {
+    let Some(source) = source.filter(|texture| texture.width != 0 && texture.height != 0) else {
+        return (1, 1, vec![[1.0, 0.0, 0.0, 1.0]]);
+    };
+    let width = u32::from(source.width);
+    let height = u32::from(source.height);
+    let pixel_count = usize::from(source.width) * usize::from(source.height);
+    let float_pixels = source
+        .rgba_f32
+        .as_deref()
+        .filter(|pixels| pixels.len() == pixel_count);
+    let unorm_pixels = (source.rgba.len() >= pixel_count * 4).then_some(source.rgba.as_slice());
+    let pixels = (0..pixel_count)
+        .map(|pixel_index| {
+            let mut fallback = [1.0, 0.0, 0.0, 1.0];
+            if let Some(unorm_pixels) = unorm_pixels {
+                for channel in 0..4 {
+                    fallback[channel] = f32::from(unorm_pixels[pixel_index * 4 + channel]) / 255.0;
+                }
+            }
+            let Some(float_pixel) = float_pixels.map(|pixels| pixels[pixel_index]) else {
+                return fallback;
+            };
+            for channel in 0..4 {
+                if float_pixel[channel].is_finite() {
+                    fallback[channel] = float_pixel[channel];
+                }
+            }
+            fallback
+        })
+        .collect();
+    (width, height, pixels)
+}
+
+fn unorm_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn fallback_material() -> ModelMaterial {
@@ -1953,11 +3545,34 @@ fn fallback_material() -> ModelMaterial {
         material_index: 0,
         name: "fallback".to_string(),
         path: None,
+        reference_fallback: None,
         shader_package_name: None,
         render_mode: MaterialRenderMode::Opaque,
         alpha_mode: MaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        draw_depth_mode: MaterialDrawDepthMode::None,
+        lighting_mode: MaterialLightingMode::Default,
+        specular_type: MaterialSpecularType::Default,
+        specular_type_raw: None,
+        flow_mode: MaterialFlowMode::Standard,
+        value_mode: crate::MaterialValueMode::Single,
+        value_mode_raw: None,
+        sub_color_mode: crate::MaterialSubColorMode::None,
+        decal_color_mode: crate::MaterialDecalColorMode::Off,
+        decal_color_mode_raw: None,
+        skin_value_mode: crate::MaterialSkinValueMode::None,
+        character_scroll_variant: crate::MaterialCharacterScrollVariant::None,
+        character_scroll_variant_raw: None,
         transparency: 0.0,
+        water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+        water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+        water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
+        alpha_aperture: 2.0,
+        alpha_offset: 0.0,
+        vertex_alpha_to_one: 0.0,
+        shadow_alpha_threshold: 0.5,
+        glass_ior: 1.0,
+        glass_thickness_max: 0.01,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
@@ -1965,8 +3580,33 @@ fn fallback_material() -> ModelMaterial {
         tile_index: 0.0,
         tile_alpha: 1.0,
         tile_scale: [16.0, 16.0],
+        toon_index: 0.0,
+        toon_light_scale: 2.0,
+        toon_light_spec_aperture: 50.0,
+        toon_reflection_scale: 2.5,
+        toon_spec_index: 4.0e-45,
+        sheen_rate: 0.0,
+        sheen_tint_rate: 0.0,
+        sheen_aperture: 1.0,
+        sphere_map_index: 0.0,
         detail_id: 0.0,
         multi_detail_id: 0.0,
+        detail_color: [0.5, 0.5, 0.5, 1.0],
+        multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+        shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        outline_color: [0.0, 0.0, 0.0, 1.0],
+        outline_width: 0.0,
+        specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+        ssao_mask: 1.0,
+        ambient_occlusion_mask: None,
+        texture_mip_bias: 0.0,
+        tile_mip_bias_offset: 0.0,
+        shadow_pos_offset: 0.0,
+        vertex_movement_scale: 1.0,
+        vertex_movement_max_length: 1.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -1975,9 +3615,18 @@ fn fallback_material() -> ModelMaterial {
         lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
         lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
         lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_type: crate::MaterialLightShaftType::None,
+        lightshaft_type_raw: None,
+        lightshaft_angle_clip: 0.0,
+        lightshaft_near_clip: 0.25,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
+        has_color_dye_table: false,
+        color_dye_table: None,
+        color_table_rows: None,
+        staining_application: None,
+        texture_arrays: crate::ModelMaterialTextureArrays::default(),
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
         specular_color: [0.35, 0.35, 0.35],
@@ -1986,18 +3635,28 @@ fn fallback_material() -> ModelMaterial {
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        secondary_base_color_texture: None,
         normal_texture: None,
+        secondary_normal_texture: None,
         mask_texture: None,
+        skin_diffuse_texture: None,
+        skin_normal_texture: None,
+        skin_mask_texture: None,
         material_map_texture: None,
         multi_map_texture: None,
         specular_texture: None,
+        secondary_specular_texture: None,
         emissive_texture: None,
+        environment_texture: None,
         material_properties_texture: None,
         tile_properties_texture: None,
         sheen_properties_texture: None,
         sphere_properties_texture: None,
         tile_matrix_texture: None,
         index_texture: None,
+        water_wave_texture: None,
+        water_wave1_texture: None,
+        water_whitecap_texture: None,
     }
 }
 
@@ -2005,10 +3664,25 @@ fn effective_mask_texture(material: &ModelMaterial) -> Option<usize> {
     material.mask_texture
 }
 
+fn effective_normal_texture(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> Option<usize> {
+    if matches!(prepared_material.shader_family, MaterialShaderFamily::Water) {
+        material.water_wave_texture.or(material.normal_texture)
+    } else {
+        material.normal_texture
+    }
+}
+
 fn material_extra_texture_flags<M: ModelRenderData + ?Sized>(
     material: &ModelMaterial,
     model: &M,
+    prepared_material: PreparedMaterial,
 ) -> [f32; 4] {
+    if prepared_material.feature_flags.uses_secondary_maps {
+        return [0.0; 4];
+    }
     [
         texture_presence_flag(model, material.tile_properties_texture),
         texture_presence_flag(model, material.sheen_properties_texture),
@@ -2025,6 +3699,81 @@ fn texture_presence_flag<M: ModelRenderData + ?Sized>(
         .and_then(|index| model.textures().get(index))
         .map(|_| 1.0)
         .unwrap_or(0.0)
+}
+
+fn material_water_deep_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.water_deep_color, [0.3529, 0.372_549, 0.3921, 1.0])
+}
+
+fn material_water_refraction_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(
+        material.water_refraction_color,
+        [0.4117, 0.4313, 0.4509, 1.0],
+    )
+}
+
+fn material_water_whitecap_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.water_whitecap_color, [0.4509, 0.4705, 0.4901, 0.3])
+}
+
+fn material_alpha_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.alpha_aperture, 2.0),
+        finite_or(material.alpha_offset, 0.0),
+        finite_or(material.shadow_alpha_threshold, 0.5).clamp(0.0, 1.0),
+        finite_or(material.transparency, 0.0).clamp(0.0, 1.0),
+    ]
+}
+
+fn material_alpha_policy_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let source = match prepared_material.alpha_policy.source {
+        PreparedAlphaSource::Opaque => 0.0,
+        PreparedAlphaSource::BaseColorAlpha => 1.0,
+        PreparedAlphaSource::NormalBlue => 2.0,
+        PreparedAlphaSource::MaterialTransparency => 3.0,
+        PreparedAlphaSource::NormalAlpha => 4.0,
+    };
+    let pass = match prepared_material.render_pass {
+        PreparedRenderPass::Transparent => 1.0,
+        PreparedRenderPass::Glass => 2.0,
+        _ => 0.0,
+    };
+    [
+        source,
+        if prepared_material.alpha_policy.lighting_enabled {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(
+            prepared_material.alpha_policy.draw_depth_mode,
+            MaterialDrawDepthMode::Dither
+        ) {
+            1.0
+        } else {
+            0.0
+        },
+        pass,
+    ]
+}
+
+fn material_alpha_composition_params(material: &ModelMaterial) -> [f32; 4] {
+    let package_consumes_vertex_alpha =
+        material.shader_package_name.as_deref().is_some_and(|name| {
+            name.eq_ignore_ascii_case("character.shpk")
+                || name.eq_ignore_ascii_case("characterlegacy.shpk")
+                || name.eq_ignore_ascii_case("characterglass.shpk")
+        });
+    [
+        finite_or(material.vertex_alpha_to_one, 0.0),
+        if package_consumes_vertex_alpha {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+    ]
 }
 
 fn material_shader_params(material: &ModelMaterial) -> [f32; 4] {
@@ -2045,12 +3794,150 @@ fn material_tile_params(material: &ModelMaterial) -> [f32; 4] {
     ]
 }
 
-fn material_detail_params(material: &ModelMaterial) -> [f32; 4] {
+fn material_toon_sheen_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        finite_or(material.toon_index, 0.0),
+        finite_or(material.toon_light_scale, 2.0),
+        finite_or(material.sheen_rate, 0.0),
+        finite_or(material.sheen_tint_rate, 0.0),
+    ]
+}
+
+fn material_toon_params(material: &ModelMaterial, prepared_material: PreparedMaterial) -> [f32; 4] {
+    [
+        finite_or(material.toon_light_spec_aperture, 50.0),
+        finite_or(material.toon_reflection_scale, 2.5),
+        finite_or(material.toon_spec_index, 4.0e-45),
+        if prepared_material.feature_flags.uses_toon {
+            1.0
+        } else {
+            0.0
+        },
+    ]
+}
+
+fn material_sheen_sphere_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    [
+        finite_or(material.sheen_aperture, 1.0),
+        finite_or(material.sphere_map_index, 0.0),
+        if matches!(
+            prepared_material.texture_sampling.specular.color_space,
+            PreparedTextureColorSpace::Srgb
+        ) {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+    ]
+}
+
+fn material_detail_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let uses_multi_blend = matches!(prepared_material.value_mode, MaterialValueMode::Multi)
+        && matches!(
+            prepared_material.shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        );
     [
         finite_or(material.detail_id, 0.0),
         finite_or(material.multi_detail_id, 0.0),
+        if uses_multi_blend { 1.0 } else { 0.0 },
         0.0,
-        0.0,
+    ]
+}
+
+fn material_detail_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.detail_color, [0.5, 0.5, 0.5, 1.0])
+}
+
+fn material_multi_detail_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.multi_detail_color, [0.5, 0.5, 0.5, 1.0])
+}
+
+fn material_shader_diffuse_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_diffuse_color, [1.0; 4])
+}
+
+fn material_shader_multi_diffuse_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_multi_diffuse_color, [1.0; 4])
+}
+
+fn material_shader_emissive_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_emissive_color, [0.0, 0.0, 0.0, 1.0])
+}
+
+fn material_shader_multi_emissive_color(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.shader_multi_emissive_color, [0.0, 0.0, 0.0, 1.0])
+}
+
+fn material_outline_params(material: &ModelMaterial) -> [f32; 4] {
+    let color = finite_vec4_or(material.outline_color, [0.0, 0.0, 0.0, 1.0]);
+    [
+        color[0],
+        color[1],
+        color[2],
+        finite_or(material.outline_width, 0.0),
+    ]
+}
+
+fn material_specular_color_mask(material: &ModelMaterial) -> [f32; 4] {
+    finite_vec4_or(material.specular_color_mask, [1.0; 4])
+}
+
+fn material_legacy_specular_mode(material: &ModelMaterial) -> f32 {
+    let uses_legacy_compatibility = material_is_character_legacy(material)
+        && matches!(material.value_mode, crate::MaterialValueMode::Compatibility);
+    if !uses_legacy_compatibility {
+        return 0.0;
+    }
+    match material.specular_type {
+        MaterialSpecularType::Default => 1.0,
+        MaterialSpecularType::Mask => 2.0,
+        MaterialSpecularType::Unknown => 0.0,
+    }
+}
+
+fn material_is_character_legacy(material: &ModelMaterial) -> bool {
+    material
+        .shader_package_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
+}
+
+fn material_has_character_colortable_final(material: &ModelMaterial) -> bool {
+    material.color_table_rows.is_some()
+        && material.shader_package_name.as_deref().is_some_and(|name| {
+            name.eq_ignore_ascii_case("character.shpk")
+                || name.eq_ignore_ascii_case("characterlegacy.shpk")
+        })
+}
+
+fn material_surface_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    let uses_texture_mip_bias = matches!(
+        prepared_material.shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterReflection
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    );
+    [
+        finite_or(material.ssao_mask, 1.0),
+        finite_or(material.texture_mip_bias, 0.0),
+        finite_or(material.shadow_pos_offset, 0.0),
+        if uses_texture_mip_bias { 1.0 } else { 0.0 },
     ]
 }
 
@@ -2103,12 +3990,21 @@ fn material_uv_source_params(
             prepared_uv_source_value(uv_sources.emissive),
             prepared_uv_source_value(uv_sources.material_properties),
         ],
-        [
-            prepared_uv_source_value(uv_sources.tile_properties),
-            prepared_uv_source_value(uv_sources.sheen_properties),
-            prepared_uv_source_value(uv_sources.sphere_properties),
-            prepared_uv_source_value(uv_sources.tile_matrix),
-        ],
+        if prepared_material.feature_flags.uses_secondary_maps {
+            [
+                prepared_uv_source_value(uv_sources.secondary_base_color),
+                prepared_uv_source_value(uv_sources.secondary_normal),
+                prepared_uv_source_value(uv_sources.secondary_specular),
+                prepared_uv_source_value(uv_sources.tile_matrix),
+            ]
+        } else {
+            [
+                prepared_uv_source_value(uv_sources.tile_properties),
+                prepared_uv_source_value(uv_sources.sheen_properties),
+                prepared_uv_source_value(uv_sources.sphere_properties),
+                prepared_uv_source_value(uv_sources.tile_matrix),
+            ]
+        },
         [
             prepared_uv_source_value(uv_sources.index),
             prepared_uv_source_value(uv_sources.other),
@@ -2116,6 +4012,115 @@ fn material_uv_source_params(
             0.0,
         ],
     )
+}
+
+fn material_uv_scroll_mask_params(
+    prepared_material: PreparedMaterial,
+) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    let scroll = prepared_material.uv_sources.scroll;
+    let value = |enabled| if enabled { 1.0 } else { 0.0 };
+    (
+        [
+            value(scroll.base_color),
+            value(scroll.normal),
+            value(scroll.mask),
+            value(scroll.material_map),
+        ],
+        [
+            value(scroll.multi_map),
+            value(scroll.specular),
+            value(scroll.emissive),
+            value(scroll.material_properties),
+        ],
+        if prepared_material.feature_flags.uses_secondary_maps {
+            [
+                value(scroll.secondary_base_color),
+                value(scroll.secondary_normal),
+                value(scroll.secondary_specular),
+                value(scroll.tile_matrix),
+            ]
+        } else {
+            [
+                value(scroll.tile_properties),
+                value(scroll.sheen_properties),
+                value(scroll.sphere_properties),
+                value(scroll.tile_matrix),
+            ]
+        },
+        [value(scroll.index), value(scroll.other), 0.0, 0.0],
+    )
+}
+
+fn material_feature_params(prepared_material: PreparedMaterial) -> [f32; 4] {
+    [
+        if prepared_material.feature_flags.uses_flow {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(prepared_material.shader_family, MaterialShaderFamily::Water) {
+            1.0
+        } else {
+            0.0
+        },
+        if prepared_material.feature_flags.uses_secondary_maps {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(
+            prepared_material.shader_family,
+            MaterialShaderFamily::Bg | MaterialShaderFamily::BgUvScroll
+        ) {
+            1.0
+        } else {
+            0.0
+        },
+    ]
+}
+
+fn material_family_params(material: &ModelMaterial) -> [f32; 4] {
+    [
+        if material_is_character_legacy(material) {
+            1.0
+        } else {
+            0.0
+        },
+        if material_has_character_colortable_final(material) {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
+        0.0,
+    ]
+}
+
+fn material_secondary_map_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+    prepared_material: PreparedMaterial,
+) -> [f32; 4] {
+    if matches!(
+        prepared_material.shader_family,
+        MaterialShaderFamily::LightShaft
+    ) {
+        return [
+            texture_presence_flag(model, material.secondary_base_color_texture),
+            0.0,
+            0.0,
+            0.0,
+        ];
+    }
+    if !prepared_material.feature_flags.uses_secondary_maps {
+        return [0.0; 4];
+    }
+    [
+        texture_presence_flag(model, material.secondary_base_color_texture),
+        texture_presence_flag(model, material.secondary_normal_texture),
+        texture_presence_flag(model, material.secondary_specular_texture),
+        1.0,
+    ]
 }
 
 fn prepared_uv_source_value(source: PreparedUvSource) -> f32 {
@@ -2134,8 +4139,105 @@ fn draw_role_debug_color(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         ModelMeshDrawRole::LightShaft => [1.0, 0.82, 0.22, 1.0],
         ModelMeshDrawRole::ShadowOnly => [0.18, 0.18, 0.22, 1.0],
         ModelMeshDrawRole::Ignored => [0.55, 0.55, 0.55, 1.0],
-        ModelMeshDrawRole::DebugVisible => [1.0, 0.34, 0.76, 1.0],
+        ModelMeshDrawRole::MaterialChange => [1.0, 0.34, 0.76, 1.0],
+        ModelMeshDrawRole::CrestChange => [1.0, 0.62, 0.2, 1.0],
     }
+}
+
+/// Diagnostic color for the `UnsupportedInputs` debug view. Known-incomplete
+/// shader families and other unsupported inputs get distinct hues so silently
+/// approximated materials become visible instead of passing as fully
+/// supported. Priority goes to the visible weapon families (lightshaft,
+/// crystal environment maps, character reflection/scroll/glass), then any
+/// other known-incomplete family, then material-semantics gaps with installed
+/// coverage (AlphaMulti, unverified vertex-color/Toon/Sheen/Sphere lighting,
+/// AO/SSAO, legacy specular, tile LOD, vertex movement), then any remaining
+/// runtime-only input.
+fn unsupported_inputs_diagnostic_color(prepared_material: PreparedMaterial) -> [f32; 4] {
+    let unsupported = prepared_material.unsupported_inputs;
+    let rgb = if unsupported.lightshaft_clip {
+        [1.0, 0.82, 0.2]
+    } else if unsupported.environment_mapping {
+        [0.25, 0.5, 1.0]
+    } else if unsupported.character_reflection {
+        [1.0, 0.3, 0.75]
+    } else if unsupported.character_scroll_variant {
+        [1.0, 0.55, 0.1]
+    } else if unsupported.glass_shader_parameters {
+        [0.15, 0.85, 0.9]
+    } else if unsupported.incomplete_shader_family_logic {
+        [0.95, 0.2, 0.2]
+    } else if unsupported.alpha_multi_values {
+        [0.68, 0.28, 1.0]
+    } else if unsupported.multi_color_composition {
+        [0.92, 0.36, 0.16]
+    } else if unsupported.detail_composition {
+        [0.72, 0.52, 0.96]
+    } else if unsupported.alpha_shaping {
+        [0.94, 0.44, 0.78]
+    } else if unsupported.vertex_color_composition {
+        [0.18, 0.76, 0.54]
+    } else if unsupported.specular_color_mask_composition {
+        [0.84, 0.28, 0.62]
+    } else if unsupported.outline_composition {
+        [0.46, 0.82, 0.94]
+    } else if unsupported.toon_lighting {
+        [0.88, 0.64, 0.22]
+    } else if unsupported.sheen_lighting {
+        [0.95, 0.48, 0.62]
+    } else if unsupported.sphere_lighting {
+        [0.34, 0.7, 0.92]
+    } else if unsupported.ambient_occlusion_mask || unsupported.ssao_mask {
+        [0.58, 0.72, 0.16]
+    } else if unsupported.legacy_gloss_composition {
+        [0.76, 0.3, 0.9]
+    } else if unsupported.legacy_specular_type {
+        [0.58, 0.38, 0.88]
+    } else if unsupported.tile_mip_bias_offset {
+        [0.78, 0.4, 0.12]
+    } else if unsupported.vertex_movement_parameters {
+        [0.32, 0.88, 0.28]
+    } else if has_any_unsupported_inputs(unsupported) {
+        [0.6, 0.6, 0.6]
+    } else {
+        [0.05, 0.22, 0.1]
+    };
+    [rgb[0], rgb[1], rgb[2], 1.0]
+}
+
+fn has_any_unsupported_inputs(unsupported: PreparedMaterialUnsupportedInputs) -> bool {
+    unsupported.dye_application
+        || unsupported.runtime_color_table
+        || unsupported.decal_or_crest
+        || unsupported.runtime_material_change
+        || unsupported.runtime_option_color
+        || unsupported.runtime_decal_color
+        || unsupported.runtime_decal_texture
+        || unsupported.runtime_skin_color
+        || unsupported.runtime_skin_material
+        || unsupported.skin_sampler_composition
+        || unsupported.runtime_sub_color
+        || unsupported.tile_array
+        || unsupported.detail_array
+        || unsupported.detail_composition
+        || unsupported.secondary_map_blend
+        || unsupported.multi_map_interpretation
+        || unsupported.multi_color_composition
+        || unsupported.ambient_occlusion_mask
+        || unsupported.ssao_mask
+        || unsupported.sheen_lighting
+        || unsupported.sphere_lighting
+        || unsupported.toon_lighting
+        || unsupported.decal_color_mode
+        || unsupported.alpha_multi_values
+        || unsupported.alpha_shaping
+        || unsupported.vertex_color_composition
+        || unsupported.specular_color_mask_composition
+        || unsupported.outline_composition
+        || unsupported.legacy_gloss_composition
+        || unsupported.legacy_specular_type
+        || unsupported.tile_mip_bias_offset
+        || unsupported.vertex_movement_parameters
 }
 
 fn draw_role_params(draw_role: ModelMeshDrawRole) -> [f32; 4] {
@@ -2145,8 +4247,16 @@ fn draw_role_params(draw_role: ModelMeshDrawRole) -> [f32; 4] {
         } else {
             0.0
         },
-        0.0,
-        0.0,
+        if matches!(draw_role, ModelMeshDrawRole::CrestChange) {
+            1.0
+        } else {
+            0.0
+        },
+        if matches!(draw_role, ModelMeshDrawRole::MaterialChange) {
+            1.0
+        } else {
+            0.0
+        },
         0.0,
     ]
 }
@@ -2224,16 +4334,25 @@ fn camera_uniform(
         0.01,
         distance + radius * 6.0,
     );
-    let light = glam::Vec3::new(-0.4, 0.7, 0.55).normalize();
+    let light =
+        (right * PREVIEW_KEY_RIGHT + up * PREVIEW_KEY_UP + view_dir * PREVIEW_KEY_VIEW).normalize();
 
     CameraUniform {
         view_proj: (projection * view).to_cols_array_2d(),
         light_dir: [light.x, light.y, light.z, 0.0],
+        view_dir: [view_dir.x, view_dir.y, view_dir.z, 0.0],
+        camera_position: [eye.x, eye.y, eye.z, 1.0],
         options: [
             if options.normal_mapping { 1.0 } else { 0.0 },
             options.normal_y_sign,
             options.uv_scroll_time,
             options.debug_mode.shader_value(),
+        ],
+        dynamic_emissive_color: [
+            options.dynamic_emissive_color[0],
+            options.dynamic_emissive_color[1],
+            options.dynamic_emissive_color[2],
+            0.0,
         ],
     }
 }
@@ -2243,7 +4362,10 @@ fn camera_uniform(
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
+    view_dir: [f32; 4],
+    camera_position: [f32; 4],
     options: [f32; 4],
+    dynamic_emissive_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -2255,10 +4377,30 @@ struct MaterialUniform {
     params: [f32; 4],
     properties: [f32; 4],
     render: [f32; 4],
+    alpha_params: [f32; 4],
+    alpha_policy_params: [f32; 4],
+    alpha_composition_params: [f32; 4],
+    water_deep_color: [f32; 4],
+    water_refraction_color: [f32; 4],
+    water_whitecap_color: [f32; 4],
     extra_properties: [f32; 4],
     shader_params: [f32; 4],
     tile_params: [f32; 4],
+    toon_sheen_params: [f32; 4],
+    toon_params: [f32; 4],
+    sheen_sphere_params: [f32; 4],
     detail_params: [f32; 4],
+    array_params: [f32; 4],
+    tile_lod_params: [f32; 4],
+    detail_color: [f32; 4],
+    multi_detail_color: [f32; 4],
+    shader_diffuse_color: [f32; 4],
+    shader_multi_diffuse_color: [f32; 4],
+    shader_emissive_color: [f32; 4],
+    shader_multi_emissive_color: [f32; 4],
+    outline_params: [f32; 4],
+    specular_color_mask: [f32; 4],
+    surface_params: [f32; 4],
     detail_color_uv_scale: [f32; 4],
     detail_normal_uv_scale: [f32; 4],
     uv_scroll: [f32; 4],
@@ -2271,8 +4413,16 @@ struct MaterialUniform {
     uv_sources1: [f32; 4],
     uv_sources2: [f32; 4],
     uv_sources3: [f32; 4],
+    uv_scroll_masks0: [f32; 4],
+    uv_scroll_masks1: [f32; 4],
+    uv_scroll_masks2: [f32; 4],
+    uv_scroll_masks3: [f32; 4],
+    feature_params: [f32; 4],
+    family_params: [f32; 4],
+    secondary_map_params: [f32; 4],
     draw_role_params: [f32; 4],
     debug_color: [f32; 4],
+    unsupported_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -2281,7 +4431,20 @@ struct PostUniform {
     params: [f32; 4],
 }
 
-#[derive(Copy, Clone, Debug)]
+/// Compose uniform: bloom strength, exposure, and whether the shader must
+/// encode sRGB itself because the target surface is not an sRGB format.
+/// sRGB targets encode on write, so the shader must skip its own encode to
+/// keep output encoding happening exactly once.
+fn compose_post_params(bloom_strength: f32, target_format: wgpu::TextureFormat) -> [f32; 4] {
+    [
+        bloom_strength,
+        DEFAULT_EXPOSURE,
+        if target_format.is_srgb() { 0.0 } else { 1.0 },
+        0.0,
+    ]
+}
+
+#[derive(Clone, Debug)]
 struct DrawBatch {
     material_slot: usize,
     material_bind_group_index: usize,
@@ -2289,7 +4452,26 @@ struct DrawBatch {
     index_start: u32,
     index_count: u32,
     prepared_material: PreparedMaterial,
+    transparent_triangles: Vec<TransparentTriangle>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct TransparentTriangle {
+    indices: [u32; 3],
     center: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SortedTransparentDraws {
+    indices: Vec<u32>,
+    draws: Vec<SortedTransparentDraw>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct SortedTransparentDraw {
+    batch_index: usize,
+    index_start: u32,
+    index_count: u32,
 }
 
 impl DrawBatch {
@@ -2299,6 +4481,33 @@ impl DrawBatch {
 
     fn render_backfaces(&self) -> bool {
         self.prepared_material.render_backfaces
+    }
+
+    fn uses_dither_depth_prepass(&self) -> bool {
+        self.pass().sorts_back_to_front()
+            && matches!(
+                self.prepared_material.alpha_policy.draw_depth_mode,
+                MaterialDrawDepthMode::Dither
+            )
+    }
+
+    fn uses_additive_glass_pipeline(&self, glass_blend_mode: ModelGlassBlendMode) -> bool {
+        self.pass() == PreparedRenderPass::Glass
+            && matches!(glass_blend_mode, ModelGlassBlendMode::Additive)
+    }
+
+    fn uses_outline_pass(&self) -> bool {
+        self.prepared_material.feature_flags.uses_outline
+            && !self
+                .prepared_material
+                .unsupported_inputs
+                .outline_composition
+            && matches!(
+                self.draw_role,
+                ModelMeshDrawRole::Normal
+                    | ModelMeshDrawRole::Glass
+                    | ModelMeshDrawRole::MaterialChange
+            )
     }
 }
 
@@ -2424,14 +4633,750 @@ mod tests {
     use super::*;
     use crate::{
         MaterialShaderFamily, ModelMeshDrawRole, PreparedMaterialFeatureFlags,
+        PreparedMaterialResourceAvailability, PreparedMaterialRuntimeFallbacks,
+        PreparedMaterialRuntimeInputRequirements, PreparedMaterialUnsupportedInputs,
         PreparedMaterialUvSources, PreparedTextureAddressMode, PreparedTextureBindings,
         PreparedTextureColorSpace, PreparedTextureFilter, PreparedTextureSampling,
-        PreparedTextureSamplingSet, PreparedTextureUvSources, PreparedUvSource,
-        prepare_material_for_draw_role,
+        PreparedTextureSamplingSet, PreparedTextureScrollSet, PreparedTextureUvSources,
+        PreparedUvSource, prepare_material_for_draw_role,
     };
 
+    struct ComponentTestModel {
+        data: crate::ModelData,
+        components: Vec<u16>,
+    }
+
+    impl ModelRenderData for ComponentTestModel {
+        fn bounds(&self) -> &crate::ModelBounds {
+            &self.data.bounds
+        }
+
+        fn materials(&self) -> &[crate::ModelMaterial] {
+            &self.data.materials
+        }
+
+        fn textures(&self) -> &[crate::ModelTexture] {
+            &self.data.textures
+        }
+
+        fn meshes(&self) -> &[crate::ModelMesh] {
+            &self.data.meshes
+        }
+
+        fn mesh_component_index(&self, mesh_index: usize) -> u16 {
+            self.components.get(mesh_index).copied().unwrap_or_default()
+        }
+    }
+
     #[test]
-    fn transparent_batches_sort_back_to_front_without_moving_opaque() {
+    fn model_shader_keeps_surface_pipeline_stages_separate() {
+        let shader = include_str!("model.wgsl");
+        let fs_main = shader
+            .split_once("fn fs_main")
+            .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
+            .map(|(entry, _)| entry)
+            .expect("fs_main surface entry section");
+
+        for stage in [
+            "resolve_surface_samples(input, color_table_blend)",
+            "resolve_surface_state(",
+            "resolve_surface_output(",
+        ] {
+            assert!(fs_main.contains(stage), "fs_main must dispatch {stage}");
+        }
+        for implementation_detail in ["textureSample(", "smoothstep"] {
+            assert!(
+                !fs_main.contains(implementation_detail),
+                "fs_main must not inline {implementation_detail}"
+            );
+        }
+        assert!(
+            fs_main.lines().count() < 70,
+            "fs_main grew back into a monolith"
+        );
+        for unsupported_glass_formula in ["glass_params", "glass_tint", "resolve_glass_factors"] {
+            assert!(
+                !shader.contains(unsupported_glass_formula),
+                "shader reintroduced unsupported glass formula {unsupported_glass_formula}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_keeps_modern_colortable_shaping_explicit() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("let base_weight = 1.0 - clamp(source_blend, 0.0, 1.0);"),
+            "ColorTable blend must retain the installed inverted index weight"
+        );
+        assert!(
+            shader
+                .contains("let view_term = clamp(1.0 - abs(dot(primary_world, view)), 0.0, 1.0);"),
+            "modern shaping must use the primary world-normal/view term"
+        );
+        assert!(
+            shader.contains("(1.0 - pow(view_term, 1.0 / shaping_anisotropy)) * base_weight"),
+            "modern shaping must preserve the installed anisotropy exponent"
+        );
+        assert!(
+            shader.contains(
+                "let shaping_anisotropy = max(load_packed_specular(specular_uv, 0u).a, 0.0);",
+            ) && shader.contains("1.0 / shaping_anisotropy"),
+            "modern shaping exponent must come from installed A-row specular alpha"
+        );
+        assert!(
+            shader.contains("material.tile_lod_params.z <= 0.5"),
+            "modern shaping must remain an explicit material/package capability"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_vertex_rgb_out_of_surface_composition() {
+        let shader = include_str!("model.wgsl");
+        let surface_state = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
+            .map(|(section, _)| section)
+            .expect("surface-state section");
+
+        assert!(
+            !surface_state.contains("input.color.rgb"),
+            "ApplyVertexColor lacks a verified RGB composition formula and must not tint Final"
+        );
+        assert!(
+            shader.contains("color = input.color.rgb;"),
+            "direct VertexColor debug must remain available"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_specular_color_mask_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("specular_color_mask: vec4<f32>"),
+            "the parsed constant must remain available in the material uniform"
+        );
+        assert!(
+            !shader.contains("material.specular_color_mask"),
+            "neither RGB multiplication nor a fabricated Alpha scalar has verified composition evidence"
+        );
+    }
+
+    #[test]
+    fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
+        let shader = include_str!("model.wgsl");
+        let samples = shader
+            .split_once("fn resolve_surface_samples")
+            .and_then(|(_, rest)| rest.split_once("struct SurfaceState"))
+            .map(|(section, _)| section)
+            .expect("surface sample section");
+        let dither = shader
+            .split_once("fn fs_dither_depth")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_main"))
+            .map(|(section, _)| section)
+            .expect("dither depth section");
+        let lightshaft = shader
+            .split_once("fn fs_lightshaft")
+            .and_then(|(_, rest)| rest.split_once("fn debug_fragment_output"))
+            .map(|(section, _)| section)
+            .expect("lightshaft section");
+        let properties = shader
+            .split_once("fn resolve_material_properties")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_specular_mask_factor"))
+            .map(|(section, _)| section)
+            .expect("material properties section");
+
+        for required in [
+            "out.normal = textureSampleBias(normal_texture",
+            "return textureSampleBias(base_color_texture",
+            "return textureSampleBias(mask_texture",
+            "return select(\n        0.0,\n        clamp(material.surface_params.y, -16.0, 15.99)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "verified character mip-bias path must preserve {required}"
+            );
+        }
+        for unverified in [
+            "out.secondary_normal = textureSampleBias",
+            "out.specular = textureSampleBias",
+            "out.secondary_specular = textureSampleBias",
+            "out.secondary_base = textureSampleBias",
+            "out.emissive = textureSampleBias",
+        ] {
+            assert!(
+                !samples.contains(unverified),
+                "g_TextureMipBias must not expand to unverified sampler role {unverified}"
+            );
+        }
+        assert!(!dither.contains("sampled_secondary_base = textureSampleBias"));
+        assert!(!lightshaft.contains("textureSampleBias"));
+        assert!(!properties.contains("textureSampleBias"));
+    }
+
+    #[test]
+    fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
+        let shader = include_str!("model.wgsl");
+        let tile = shader
+            .split_once("fn resolve_tile_array")
+            .and_then(|(_, rest)| rest.split_once("fn tile_array_layer"))
+            .map(|(section, _)| section)
+            .expect("tile array section");
+        let detail = shader
+            .split_once("fn resolve_detail_array")
+            .and_then(|(_, rest)| rest.split_once("struct PairAtlasCoordinates"))
+            .map(|(section, _)| section)
+            .expect("detail array section");
+
+        for required in [
+            "min(length(tile_matrix.xz), length(tile_matrix.yw)) * 0.0078125",
+            "max(log2(max(matrix_scale, 1.0e-8)), 0.0)",
+            "matrix_bias + material.tile_lod_params.x",
+            "normal_coordinates_a.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_a))",
+            "normal_coordinates_b.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_b))",
+            "orb_coordinates_a.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_a))",
+            "orb_coordinates_b.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_b))",
+            "out.normal = normalize(mix(normal_a, normal_b, ramp_blend))",
+            "out.orb = mix(",
+        ] {
+            assert!(
+                shader.contains(required),
+                "verified TileMipBiasOffset path must preserve {required}"
+            );
+        }
+        assert!(tile.contains("textureSampleGrad"));
+        assert!(
+            !detail.contains("resolve_tile_lod_bias")
+                && !detail.contains("material.tile_lod_params"),
+            "TileMipBiasOffset must not expand to the BG detail array samplers"
+        );
+    }
+
+    #[test]
+    fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+
+        for required in [
+            "let view = resolve_view_direction(input.world_position);",
+            "let f0 = mix(dielectric_f0",
+            "* (1.0 - metalness)",
+            "studio_environment(reflection, roughness)",
+            "hemisphere_irradiance(normal, view)",
+        ] {
+            assert!(
+                surface_output.contains(required),
+                "surface lighting must preserve {required}"
+            );
+        }
+        assert!(
+            !surface_output.contains("light + vec3<f32>(0.0, 0.0, 1.0)"),
+            "surface lighting must not use a fixed camera direction"
+        );
+    }
+
+    #[test]
+    fn model_shader_applies_normal_light_once_per_direct_term() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        let direct_diffuse = surface_output
+            .split_once("let direct_diffuse")
+            .and_then(|(_, rest)| rest.split_once("let ggx_direct_specular"))
+            .map(|(section, _)| section)
+            .expect("direct diffuse section");
+        let direct_specular = surface_output
+            .split_once("let ggx_direct_specular")
+            .and_then(|(_, rest)| rest.split_once("let ambient_diffuse"))
+            .map(|(section, _)| section)
+            .expect("direct specular section");
+        assert_eq!(
+            direct_diffuse.matches("normal_light").count(),
+            1,
+            "direct diffuse must consume NdotL exactly once"
+        );
+        assert_eq!(
+            direct_specular.matches("normal_light").count(),
+            1,
+            "direct specular must multiply the GGX BRDF by NdotL exactly once"
+        );
+    }
+
+    #[test]
+    fn model_shader_consumes_only_baked_specular_alpha_as_anisotropy() {
+        let shader = include_str!("model.wgsl");
+        for required in [
+            "specular: vec4<f32>",
+            "clamp(samples.specular.a, 0.0, 1.0)",
+            "material.sheen_sphere_params.z > 0.5",
+            "fn ggx_anisotropic_distribution",
+            "let anisotropy_frame = resolve_anisotropy_frame(input, normal);",
+        ] {
+            assert!(
+                shader.contains(required),
+                "anisotropy path must preserve {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !surface_output.contains("material.surface_params.x")
+                && !surface_output.contains("ambient_visibility"),
+            "g_SSAOMask has no verified MeddleTools/runtime SSAO composition and must not silently darken Final shading"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !shader.contains("fn resolve_extra_lighting")
+                && !surface_output.contains("extra.sheen")
+                && !surface_output.contains("extra.sphere"),
+            "MeddleTools leaves Sheen/Sphere at a dead-end interface, so Final must not invent a lighting formula"
+        );
+        assert!(
+            shader.contains("extra.sheen = textureSample")
+                && shader.contains("extra.sphere = textureSample"),
+            "Sheen/Sphere bindings must remain available to their dedicated debug views"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_toon_lighting() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        assert!(
+            !shader.contains("fn resolve_toon_lighting")
+                && !surface_output.contains("toon_sheen_params")
+                && !surface_output.contains("toon_params"),
+            "MeddleTools has no Toon node semantics, so Final must not invent banding or reflection formulas"
+        );
+        for invented_formula in ["0.6180339", "toon_diffuse", "toon_specular", "spec_band"] {
+            assert!(
+                !shader.contains(invented_formula),
+                "shader reintroduced unsupported Toon formula {invented_formula}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_composes_colortable_lighting_fields_independently() {
+        let shader = include_str!("model.wgsl");
+        let surface_output = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+
+        // MeddleTools character topology keeps modern Roughness independent
+        // of GlossStrength. Installed Legacy DXBC separately proves its MRT
+        // exp2(-Gloss/15) parameterization. Installed character/legacy DXBC
+        // consumes raw SpecularStrength through a direct mul, so it must not
+        // be clamped before composition; the final physical F0 is bounded
+        // separately.
+        assert!(
+            !surface_output.contains("mix(1.0, 0.68, gloss_strength)"),
+            "roughness must not be scaled by GlossStrength"
+        );
+        assert!(
+            !surface_output.contains("mix(0.025, 0.10, specular_strength)"),
+            "SpecularStrength must not remap to an arbitrary F0 range"
+        );
+        for required in [
+            "let legacy_gloss_roughness = exp2(-max(surface.properties.z, 0.0) / 15.0);",
+            "let roughness_source = select(",
+            "surface.properties.y,\n        legacy_gloss_roughness,",
+            "material.properties.x > 0.5 && material.family_params.x > 0.5,",
+            "let roughness = clamp(roughness_source, 0.06, 1.0);",
+            "let specular_strength = max(surface.properties.w, 0.0);",
+            "let specular_weight = specular_strength",
+            "let preview_f0_specular_weight = select(",
+            "specular_weight,\n        1.0,\n        uses_legacy_colortable,",
+            "let uses_colortable_specular_mask = material.properties.x > 0.5",
+            "&& legacy_specular_mode < 0.5;",
+            "clamp(surface.mask.r, 0.0, 1.0),\n        uses_colortable_specular_mask,",
+            "surface.material_specular * (0.08 * preview_f0_specular_weight)",
+            "let specular_mask = clamp(resolve_specular_mask_factor(surface.mask.r), 0.0, 1.35);",
+        ] {
+            assert!(
+                surface_output.contains(required),
+                "surface lighting must preserve the verified composition: {required}"
+            );
+        }
+        assert!(
+            !surface_output.contains("clamp(surface.properties.w, 0.0, 1.0)"),
+            "installed raw SpecularStrength must survive until the final F0 bound"
+        );
+        let material_properties = shader
+            .split_once("fn resolve_material_properties")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_specular_mask_factor"))
+            .map(|(section, _)| section)
+            .expect("material properties section");
+        assert!(
+            !material_properties.contains("mask.r * 1.35"),
+            "specular strength must compose with mask.R directly, without an empirical factor"
+        );
+        assert!(
+            material_properties
+                .contains("let specular_strength = mix(1.0, mask.r, material.params.w);"),
+            "mask fallback must keep the verified specular strength composition"
+        );
+        let specular_mask_factor = shader
+            .split_once("fn resolve_specular_mask_factor")
+            .and_then(|(_, rest)| rest.split_once("struct TileArraySample"))
+            .map(|(section, _)| section)
+            .expect("specular mask factor section");
+        assert!(
+            specular_mask_factor.contains("return mask_red * mask_red;")
+                && specular_mask_factor.contains("return 1.0;")
+                && !specular_mask_factor.contains("1.35")
+                && !specular_mask_factor.contains("material.params.w"),
+            "only verified legacy Compatibility Mask may add a second mask-R factor"
+        );
+        assert!(
+            !surface_output.contains(
+                "select(\n            resolve_specular_mask_factor(surface.mask.r),\n            1.0,\n            material.properties.x > 0.5,"
+            ),
+            "ColorTable properties must not disable the verified legacy Default/Mask permutation"
+        );
+    }
+
+    #[test]
+    fn model_shader_uses_proven_legacy_camera_reflection_lobe() {
+        let shader = include_str!("model.wgsl");
+        let lobe = shader
+            .split_once("fn legacy_camera_reflection_lobe")
+            .and_then(|(_, rest)| rest.split_once("fn ggx_anisotropic_distribution"))
+            .map(|(section, _)| section)
+            .expect("Legacy camera-reflection lobe section");
+        for required in [
+            "+ vec3<f32>(0.0, 0.2, 0.0);",
+            "let reflected_view = reflect(-view, normal);",
+            "let normal_light = clamp(dot(normal, light), 0.0, 1.0);",
+            "let visibility = min(3.0 - 3.0 * one_minus_light * one_minus_light, 1.0);",
+            "let reflection_light = clamp(dot(reflected_view, light), 0.0, 1.0);",
+            "return visibility * pow(reflection_light, max(gloss_strength, 0.0));",
+        ] {
+            assert!(
+                lobe.contains(required),
+                "Legacy lobe must retain installed DXBC formula: {required}"
+            );
+        }
+        assert!(shader.contains("material.properties.x > 0.5 && material.family_params.x > 0.5,"));
+    }
+
+    #[test]
+    fn model_shader_uses_emissive_texture_or_fallback_without_empirical_gates() {
+        let shader = include_str!("model.wgsl");
+        let emissive = shader
+            .split_once("fn resolve_emissive")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_shader_diffuse_tint"))
+            .map(|(section, _)| section)
+            .expect("emissive resolve section");
+        for required in [
+            "let material_emissive = material.emissive_color.rgb;",
+            "let shader_emissive = material.shader_emissive_color.rgb * material.shader_emissive_color.a;",
+            "let texture_presence = material.emissive_color.a;",
+            "let texture_emissive = emissive_tex * texture_presence;",
+            "let fallback_emissive = material_emissive * (1.0 - texture_presence);",
+            "return texture_emissive + fallback_emissive + shader_emissive;",
+        ] {
+            assert!(
+                emissive.contains(required),
+                "emissive source boundary must preserve {required}"
+            );
+        }
+        for unsupported_formula in [
+            "smoothstep",
+            "mask.b",
+            "vertex_alpha",
+            "shader_multi_emissive",
+            "texture_luma",
+            "clamp",
+        ] {
+            assert!(
+                !emissive.contains(unsupported_formula),
+                "emissive must not reintroduce empirical gate {unsupported_formula}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_output")
+            .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
+            .map(|(section, _)| section)
+            .expect("surface output section");
+        for required in [
+            "samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb",
+            "let uses_character_colortable_emissive_scale = material.properties.x > 0.5",
+            "&& material.family_params.y > 0.5;",
+            "let lit_luminance = dot(lit, vec3<f32>(0.298910, 0.586610, 0.114480));",
+            "max(lit_luminance, 1.0),",
+            "let unscaled_emissive = surface.emissive - surface.color_table_emissive;",
+            "+ surface.color_table_emissive * color_table_emissive_scale;",
+        ] {
+            assert!(
+                shader.contains(required) || surface.contains(required),
+                "Character ColorTable emissive must retain installed Final formula: {required}"
+            );
+        }
+        assert!(
+            !surface.contains("surface.emissive * color_table_emissive_scale"),
+            "static/shader emissive must not inherit the ColorTable-only luminance scale"
+        );
+    }
+
+    #[test]
+    fn model_shader_does_not_invent_generic_multi_diffuse_mask_blending() {
+        let shader = include_str!("model.wgsl");
+        let generic_tint = shader
+            .split_once("fn resolve_shader_diffuse_tint")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_lightshaft_color"))
+            .map(|(section, _)| section)
+            .expect("generic shader tint section");
+        assert!(
+            generic_tint.contains("return material.shader_diffuse_color.rgb;")
+                && !generic_tint.contains("shader_multi_diffuse_color")
+                && !generic_tint.contains("clamp")
+                && !generic_tint.contains("smoothstep")
+                && !generic_tint.contains("mask.r")
+                && !generic_tint.contains("0.35"),
+            "generic Final must not invent a mask-R formula for g_MultiDiffuseColor"
+        );
+        assert!(
+            shader.contains("samples.secondary_base.rgb * material.shader_multi_diffuse_color.rgb"),
+            "verified BG secondary-base mix must retain g_MultiDiffuseColor"
+        );
+    }
+
+    #[test]
+    fn model_shader_preserves_verified_water_deep_color_as_linear_hdr() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
+            .map(|(section, _)| section)
+            .expect("surface state section");
+        assert!(
+            surface.contains("material.water_deep_color.rgb,")
+                && !surface.contains("clamp(material.water_deep_color"),
+            "verified water deep color must not be clipped by a preview-only range"
+        );
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_detail_composition_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        let surface = shader
+            .split_once("fn resolve_surface_state")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_surface_output"))
+            .map(|(section, _)| section)
+            .expect("surface state section");
+        let normal = shader
+            .split_once("fn resolve_normal")
+            .and_then(|(_, rest)| rest.split_once("fn resolve_uv"))
+            .map(|(section, _)| section)
+            .expect("normal resolution section");
+
+        assert!(
+            !surface.contains("detail_array")
+                && !surface.contains("detail_color")
+                && !normal.contains("detail_array")
+                && !shader.contains("fn resolve_detail_tint")
+                && !shader.contains("fn resolve_single_detail_tint"),
+            "unverified BG detail tint/normal composition must not affect Final"
+        );
+        for empirical_constant in ["* 0.22", "* 0.14", "0.32", "0.073", "0.65"] {
+            assert!(
+                !shader.contains(empirical_constant),
+                "detail composition must not restore empirical constant {empirical_constant}"
+            );
+        }
+        for debug_sample in [
+            "color = detail_array.diffuse",
+            "color = detail_array.normal",
+        ] {
+            assert!(
+                shader.contains(debug_sample),
+                "detail array sampling must remain directly inspectable via {debug_sample}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_shader_keeps_unverified_alpha_shaping_out_of_final() {
+        let shader = include_str!("model.wgsl");
+        let alpha = shader
+            .split_once("fn resolve_surface_alpha")
+            .and_then(|(_, rest)| rest.split_once("fn ordered_dither_threshold"))
+            .map(|(section, _)| section)
+            .expect("surface alpha section");
+        assert!(
+            !shader.contains("fn resolve_alpha_shaping")
+                && !alpha.contains("material.alpha_params.x")
+                && !alpha.contains("material.alpha_params.y")
+                && !alpha.contains("pow("),
+            "g_AlphaAperture/g_AlphaOffset must not alter Final without a verified formula"
+        );
+    }
+
+    #[test]
+    fn model_shader_orients_two_sided_normals_toward_the_viewer() {
+        let shader = include_str!("model.wgsl");
+        let resolve_normal = shader
+            .split_once("fn resolve_normal")
+            .and_then(|(_, rest)| rest.split_once("\nfn resolve_uv"))
+            .map(|(section, _)| section)
+            .expect("resolve_normal section");
+
+        assert!(
+            !resolve_normal.contains("front_facing"),
+            "resolve_normal must not derive two-sided orientation from triangle winding"
+        );
+        assert!(
+            !resolve_normal.contains("face_sign"),
+            "resolve_normal must not keep a winding-based face sign"
+        );
+        for required in [
+            "orient_geometric_normal_toward_viewer(input.normal, view)",
+            "orient_geometric_normal_toward_viewer(input.normal1, view)",
+        ] {
+            assert!(
+                resolve_normal.contains(required),
+                "every world-space normal path must apply {required}"
+            );
+        }
+        for required in [
+            "fn resolve_view_direction(world_position: vec3<f32>) -> vec3<f32>",
+            "camera.camera_position.xyz - world_position",
+            "vertex_normal: vec3<f32>,\n    view: vec3<f32>",
+            "select(-1.0, 1.0, dot(normal, view) >= 0.0)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "two-sided orientation helper must contain {required}"
+            );
+        }
+        let fs_main = shader
+            .split_once("fn fs_main")
+            .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
+            .map(|(entry, _)| entry)
+            .expect("fs_main surface entry section");
+        assert!(
+            !fs_main.contains("front_facing"),
+            "fs_main must not plumb triangle winding into surface state"
+        );
+    }
+
+    #[test]
+    fn post_pipeline_uses_hdr_intermediates_and_tone_mapped_compose() {
+        assert_eq!(
+            POST_FORMAT,
+            wgpu::TextureFormat::Rgba16Float,
+            "scene/bright intermediates must keep HDR values above 1.0 until composition"
+        );
+
+        let shader = include_str!("postprocess.wgsl");
+        let compose = shader
+            .split_once("fn compose_fs")
+            .and_then(|(_, rest)| rest.split_once("fn tonemap_pbr_neutral"))
+            .map(|(section, _)| section)
+            .expect("compose section");
+        for required in [
+            "let exposure = post.params.y;",
+            "tonemap_pbr_neutral(color)",
+            "if post.params.z > 0.5",
+        ] {
+            assert!(
+                compose.contains(required),
+                "compose pass must contain {required}"
+            );
+        }
+        let encode_call_count = compose.matches("linear_to_srgb_channel(color.").count();
+        assert_eq!(
+            encode_call_count, 3,
+            "compose must encode RGB exactly once inside the non-sRGB branch"
+        );
+        assert!(
+            shader.contains("fn tonemap_pbr_neutral(input_color: vec3<f32>) -> vec3<f32>"),
+            "compose must use the documented Khronos PBR Neutral operator"
+        );
+    }
+
+    #[test]
+    fn bloom_uses_scene_linear_threshold_in_the_post_pass() {
+        assert_eq!(
+            BLOOM_THRESHOLD, 1.0,
+            "bloom threshold is defined in scene-linear units (display white)"
+        );
+        let shader = include_str!("postprocess.wgsl");
+        for required in [
+            "fn bloom_contribution(color: vec3<f32>, threshold: f32) -> vec3<f32>",
+            "smoothstep(threshold, threshold + BLOOM_KNEE, luma)",
+            "mix(color, bloom_contribution(color, post.params.z), post.params.w)",
+        ] {
+            assert!(
+                shader.contains(required),
+                "bloom pass must contain {required}"
+            );
+        }
+        let model_shader = include_str!("model.wgsl");
+        assert!(
+            !model_shader.contains("bright"),
+            "material shader must not own bright-pass extraction anymore"
+        );
+        assert!(
+            !model_shader.contains("highlight"),
+            "material shader must not embed highlight extraction constants"
+        );
+    }
+
+    #[test]
+    fn compose_post_params_encode_exactly_once_for_the_target_format() {
+        let srgb = compose_post_params(0.68, wgpu::TextureFormat::Rgba8UnormSrgb);
+        assert_eq!(
+            srgb,
+            [0.68, DEFAULT_EXPOSURE, 0.0, 0.0],
+            "sRGB targets encode on write; the shader must not encode again"
+        );
+        let linear = compose_post_params(0.68, wgpu::TextureFormat::Rgba8Unorm);
+        assert_eq!(
+            linear,
+            [0.68, DEFAULT_EXPOSURE, 1.0, 0.0],
+            "non-sRGB targets need the shader-side sRGB encode"
+        );
+    }
+
+    #[test]
+    fn transparent_triangles_sort_back_to_front_without_moving_opaque() {
         let batches = vec![
             test_batch(0, PreparedRenderPass::Opaque, [0.0, 0.0, 100.0]),
             test_batch(1, PreparedRenderPass::Transparent, [0.0, 0.0, -2.0]),
@@ -2440,14 +5385,101 @@ mod tests {
             test_batch(4, PreparedRenderPass::AdditiveLightShaft, [0.0, 0.0, 200.0]),
         ];
 
-        let sorted = sorted_transparent_batches(&batches, 0.0, 0.0);
+        let sorted = sorted_transparent_triangles(&batches, 0.0, 0.0);
 
         assert_eq!(
             sorted
+                .draws
                 .iter()
-                .map(|batch| batch.material_slot)
+                .map(|draw| batches[draw.batch_index].material_slot)
                 .collect::<Vec<_>>(),
             vec![1, 2]
+        );
+        assert_eq!(sorted.indices, vec![3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn transparent_triangles_reverse_order_with_the_camera() {
+        let mut batch = test_batch(0, PreparedRenderPass::Transparent, [0.0; 3]);
+        batch.transparent_triangles = vec![
+            TransparentTriangle {
+                indices: [0, 1, 2],
+                center: [0.0, 0.0, 3.0],
+            },
+            TransparentTriangle {
+                indices: [3, 4, 5],
+                center: [0.0, 0.0, -2.0],
+            },
+        ];
+
+        let front = sorted_transparent_triangles(std::slice::from_ref(&batch), 0.0, 0.0);
+        let back =
+            sorted_transparent_triangles(std::slice::from_ref(&batch), std::f32::consts::PI, 0.0);
+
+        assert_eq!(front.indices, vec![3, 4, 5, 0, 1, 2]);
+        assert_eq!(back.indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(front.draws.len(), 1);
+        assert_eq!(front.draws[0].index_count, 6);
+    }
+
+    #[test]
+    fn transparent_sort_merges_only_adjacent_batch_runs() {
+        let mut first = test_batch(0, PreparedRenderPass::Transparent, [0.0; 3]);
+        first.transparent_triangles = vec![
+            TransparentTriangle {
+                indices: [0, 1, 2],
+                center: [0.0, 0.0, -3.0],
+            },
+            TransparentTriangle {
+                indices: [6, 7, 8],
+                center: [0.0, 0.0, 3.0],
+            },
+        ];
+        let mut second = test_batch(1, PreparedRenderPass::Glass, [0.0; 3]);
+        second.transparent_triangles = vec![TransparentTriangle {
+            indices: [3, 4, 5],
+            center: [0.0, 0.0, 0.0],
+        }];
+
+        let sorted = sorted_transparent_triangles(&[first, second], 0.0, 0.0);
+
+        assert_eq!(sorted.indices, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            sorted.draws,
+            vec![
+                SortedTransparentDraw {
+                    batch_index: 0,
+                    index_start: 0,
+                    index_count: 3,
+                },
+                SortedTransparentDraw {
+                    batch_index: 1,
+                    index_start: 3,
+                    index_count: 3,
+                },
+                SortedTransparentDraw {
+                    batch_index: 0,
+                    index_start: 6,
+                    index_count: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn transparent_triangle_metadata_uses_global_indices_and_centroids() {
+        let vertices = vec![
+            test_vertex([0.0, 0.0, 0.0]),
+            test_vertex([3.0, 0.0, 0.0]),
+            test_vertex([0.0, 6.0, 0.0]),
+        ];
+
+        assert_eq!(
+            transparent_triangles(&vertices, &[0, 1, 2], 10, [0.0; 3]),
+            vec![TransparentTriangle {
+                indices: [10, 11, 12],
+                center: [1.0, 2.0, 0.0],
+            }]
         );
     }
 
@@ -2509,6 +5541,22 @@ mod tests {
             ),
             PreparedRenderPass::AdditiveLightShaft
         );
+        assert_eq!(
+            test_prepared_render_pass(
+                MaterialAlphaMode::Opaque,
+                MaterialRenderMode::Opaque,
+                ModelMeshDrawRole::CrestChange
+            ),
+            PreparedRenderPass::Transparent
+        );
+
+        let mut stockings = fallback_material();
+        stockings.shader_package_name = Some("characterstockings.shpk".to_string());
+        stockings.alpha_mode = MaterialAlphaMode::Blend;
+        stockings.render_mode = MaterialRenderMode::Transparent;
+        let prepared = prepare_material_for_draw_role(Some(&stockings), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.render_pass, PreparedRenderPass::Opaque);
+        assert!(prepared.render_pass.uses_opaque_pipeline());
     }
 
     #[test]
@@ -2518,10 +5566,24 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
+                value_mode_raw: None,
+                sub_color_mode: crate::MaterialSubColorMode::None,
+                decal_color_mode: crate::MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
+                skin_value_mode: crate::MaterialSkinValueMode::None,
+                lightshaft_type: crate::MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             }
         );
@@ -2551,6 +5613,22 @@ mod tests {
     fn model_pipeline_blend_modes_report_blend_and_depth_policy() {
         assert_eq!(ModelPipelineBlend::Opaque.blend_state(), None);
         assert!(ModelPipelineBlend::Opaque.writes_depth());
+        assert_eq!(ModelPipelineBlend::Opaque.fragment_entry(), "fs_main");
+        assert_eq!(
+            ModelPipelineBlend::Opaque.color_write_mask(),
+            wgpu::ColorWrites::ALL
+        );
+
+        assert_eq!(ModelPipelineBlend::DitherDepth.blend_state(), None);
+        assert!(ModelPipelineBlend::DitherDepth.writes_depth());
+        assert_eq!(
+            ModelPipelineBlend::DitherDepth.fragment_entry(),
+            "fs_dither_depth"
+        );
+        assert_eq!(
+            ModelPipelineBlend::DitherDepth.color_write_mask(),
+            wgpu::ColorWrites::empty()
+        );
         assert_eq!(
             ModelPipelineBlend::Alpha.blend_state(),
             Some(wgpu::BlendState::ALPHA_BLENDING)
@@ -2569,6 +5647,66 @@ mod tests {
     }
 
     #[test]
+    fn dither_depth_prepass_only_selects_dithered_transparent_batches() {
+        let mut glass = test_batch(0, PreparedRenderPass::Glass, [0.0; 3]);
+        glass.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(glass.uses_dither_depth_prepass());
+
+        let mut transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
+        assert!(!transparent.uses_dither_depth_prepass());
+        transparent.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(transparent.uses_dither_depth_prepass());
+
+        let mut opaque = test_batch(2, PreparedRenderPass::Opaque, [0.0; 3]);
+        opaque.prepared_material.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::Dither;
+        assert!(!opaque.uses_dither_depth_prepass());
+    }
+
+    #[test]
+    fn glass_blend_mode_only_switches_glass_batches_to_additive() {
+        assert_eq!(
+            ModelRenderOptions::default().glass_blend_mode,
+            ModelGlassBlendMode::Alpha
+        );
+
+        let glass = test_batch(0, PreparedRenderPass::Glass, [0.0; 3]);
+        assert!(!glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Alpha));
+        assert!(glass.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
+
+        let transparent = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
+        assert!(!transparent.uses_additive_glass_pipeline(ModelGlassBlendMode::Additive));
+    }
+
+    #[test]
+    fn outline_pass_only_selects_eligible_surface_batches() {
+        let mut normal = test_batch(0, PreparedRenderPass::Opaque, [0.0; 3]);
+        normal.prepared_material.feature_flags.uses_outline = true;
+        normal
+            .prepared_material
+            .unsupported_inputs
+            .outline_composition = true;
+        assert!(
+            !normal.uses_outline_pass(),
+            "unverified static outline inputs must not automatically alter Final"
+        );
+        normal
+            .prepared_material
+            .unsupported_inputs
+            .outline_composition = false;
+        assert!(normal.uses_outline_pass());
+
+        let mut lightshaft = test_batch(1, PreparedRenderPass::AdditiveLightShaft, [0.0; 3]);
+        lightshaft.prepared_material.feature_flags.uses_outline = true;
+        lightshaft.draw_role = ModelMeshDrawRole::LightShaft;
+        assert!(!lightshaft.uses_outline_pass());
+
+        let mut crest = test_batch(2, PreparedRenderPass::Transparent, [0.0; 3]);
+        crest.prepared_material.feature_flags.uses_outline = true;
+        crest.draw_role = ModelMeshDrawRole::CrestChange;
+        assert!(!crest.uses_outline_pass());
+    }
+
+    #[test]
     fn camera_uniform_preserves_finite_uv_scroll_time() {
         let mut options = ModelRenderOptions {
             uv_scroll_time: 12.5,
@@ -2583,6 +5721,112 @@ mod tests {
         let uniform = camera_uniform([0.0; 3], 1.0, [128, 64], 0.0, 0.0, 2.0, [0.0; 2], options);
         assert_eq!(uniform.options[2], 0.0);
         assert_eq!(uniform.options[3], 3.0);
+    }
+
+    #[test]
+    fn camera_uniform_carries_dynamic_emissive_with_identity_and_finite_fallbacks() {
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 64],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions {
+                dynamic_emissive_color: [2.0, 0.5, 3.0],
+                ..ModelRenderOptions::default()
+            },
+        );
+        assert_eq!(uniform.dynamic_emissive_color, [2.0, 0.5, 3.0, 0.0]);
+
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 64],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions {
+                dynamic_emissive_color: [f32::NAN, f32::INFINITY, 0.25],
+                ..ModelRenderOptions::default()
+            },
+        );
+        assert_eq!(uniform.dynamic_emissive_color, [1.0, 1.0, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn camera_uniform_rotates_view_and_studio_key_light_together() {
+        let front = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let back = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            std::f32::consts::PI,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let light_view_dot = |uniform: &CameraUniform| {
+            uniform.light_dir[0] * uniform.view_dir[0]
+                + uniform.light_dir[1] * uniform.view_dir[1]
+                + uniform.light_dir[2] * uniform.view_dir[2]
+        };
+
+        assert!(front.view_dir[2] > 0.99);
+        assert!(back.view_dir[2] < -0.99);
+        assert!(light_view_dot(&front) > 0.5);
+        assert!(light_view_dot(&back) > 0.5);
+    }
+
+    #[test]
+    fn preview_lighting_contract_is_explicit_and_stable() {
+        let uniform = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let expected =
+            glam::Vec3::new(PREVIEW_KEY_RIGHT, PREVIEW_KEY_UP, PREVIEW_KEY_VIEW).normalize();
+        let actual = glam::Vec3::from_array([
+            uniform.light_dir[0],
+            uniform.light_dir[1],
+            uniform.light_dir[2],
+        ]);
+        assert!(actual.abs_diff_eq(expected, 1.0e-6));
+
+        let shader = include_str!("model.wgsl");
+        for constant in [
+            "PREVIEW_KEY_COLOR",
+            "PREVIEW_DIRECT_DIFFUSE_SCALE",
+            "PREVIEW_DIRECT_SPECULAR_SCALE",
+            "PREVIEW_AMBIENT_GROUND",
+            "PREVIEW_AMBIENT_SKY",
+            "PREVIEW_ENV_GROUND",
+            "PREVIEW_ENV_SKY",
+            "PREVIEW_RIM_SCALE",
+        ] {
+            assert!(
+                shader.contains(constant),
+                "preview lighting parameter {constant} must stay named and auditable"
+            );
+        }
     }
 
     #[test]
@@ -2608,21 +5852,215 @@ mod tests {
         assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 18.0);
         assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 19.0);
         assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 20.0);
+        assert_eq!(ModelDebugMode::TileNormalArray.shader_value(), 21.0);
+        assert_eq!(ModelDebugMode::TileOrbArray.shader_value(), 22.0);
+        assert_eq!(ModelDebugMode::DetailDiffuseArray.shader_value(), 23.0);
+        assert_eq!(ModelDebugMode::DetailNormalArray.shader_value(), 24.0);
+        assert_eq!(ModelDebugMode::VertexColor1.shader_value(), 25.0);
+        assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 26.0);
+        assert_eq!(ModelDebugMode::Flow0.shader_value(), 27.0);
+        assert_eq!(ModelDebugMode::Flow1.shader_value(), 28.0);
+        assert_eq!(ModelDebugMode::UnsupportedInputs.shader_value(), 29.0);
+        assert_eq!(ModelDebugMode::ViewDirection.shader_value(), 30.0);
     }
 
     #[test]
-    fn material_sampler_groups_use_prepared_sampling_roles() {
-        let color_sampling = test_sampling(
+    fn unsupported_inputs_diagnostic_color_prioritizes_visible_families() {
+        let prepared = |patch: &dyn Fn(&mut PreparedMaterialUnsupportedInputs)| {
+            let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+            patch(&mut prepared.unsupported_inputs);
+            prepared
+        };
+
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|_| {})),
+            [0.05, 0.22, 0.1, 1.0],
+            "fully supported materials must not look like unsupported ones"
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.lightshaft_clip = true;
+            })),
+            [1.0, 0.82, 0.2, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.environment_mapping = true;
+            })),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.character_reflection = true;
+            })),
+            [1.0, 0.3, 0.75, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.character_scroll_variant = true;
+            })),
+            [1.0, 0.55, 0.1, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.glass_shader_parameters = true;
+                inputs.incomplete_shader_family_logic = true;
+            })),
+            [0.15, 0.85, 0.9, 1.0],
+            "family-specific flags must win over the generic incomplete-family hue"
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.incomplete_shader_family_logic = true;
+            })),
+            [0.95, 0.2, 0.2, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.alpha_multi_values = true;
+            })),
+            [0.68, 0.28, 1.0, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.multi_color_composition = true;
+            })),
+            [0.92, 0.36, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.detail_composition = true;
+            })),
+            [0.72, 0.52, 0.96, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.alpha_shaping = true;
+            })),
+            [0.94, 0.44, 0.78, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.vertex_color_composition = true;
+            })),
+            [0.18, 0.76, 0.54, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.specular_color_mask_composition = true;
+            })),
+            [0.84, 0.28, 0.62, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.outline_composition = true;
+            })),
+            [0.46, 0.82, 0.94, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.toon_lighting = true;
+            })),
+            [0.88, 0.64, 0.22, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.sheen_lighting = true;
+            })),
+            [0.95, 0.48, 0.62, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.sphere_lighting = true;
+            })),
+            [0.34, 0.7, 0.92, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.ambient_occlusion_mask = true;
+            })),
+            [0.58, 0.72, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.ssao_mask = true;
+            })),
+            [0.58, 0.72, 0.16, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.legacy_gloss_composition = true;
+            })),
+            [0.76, 0.3, 0.9, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.legacy_specular_type = true;
+            })),
+            [0.58, 0.38, 0.88, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.tile_mip_bias_offset = true;
+            })),
+            [0.78, 0.4, 0.12, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.vertex_movement_parameters = true;
+            })),
+            [0.32, 0.88, 0.28, 1.0]
+        );
+        assert_eq!(
+            unsupported_inputs_diagnostic_color(prepared(&|inputs| {
+                inputs.runtime_color_table = true;
+            })),
+            [0.6, 0.6, 0.6, 1.0],
+            "any other unsupported input must still surface as unsupported"
+        );
+    }
+
+    #[test]
+    fn model_shader_exposes_unsupported_inputs_debug_view() {
+        let shader = include_str!("model.wgsl");
+        assert!(
+            shader.contains("unsupported_color: vec4<f32>"),
+            "material uniform must carry the unsupported-input diagnostic color"
+        );
+        let debug_output = shader
+            .split_once("fn debug_fragment_output")
+            .map(|(_, rest)| rest)
+            .expect("debug fragment output section");
+        assert!(
+            debug_output.contains("color = material.unsupported_color.rgb;"),
+            "debug output must route the unsupported-input mode to the diagnostic color"
+        );
+    }
+
+    #[test]
+    fn lightshaft_dedicated_pipeline_is_only_used_for_final_rendering() {
+        assert!(lightshaft_uses_dedicated_pipeline(ModelDebugMode::Final));
+        assert!(!lightshaft_uses_dedicated_pipeline(
+            ModelDebugMode::BaseColor
+        ));
+        assert!(!lightshaft_uses_dedicated_pipeline(
+            ModelDebugMode::MeshRole
+        ));
+    }
+
+    #[test]
+    fn material_sampler_roles_keep_independent_prepared_policies() {
+        let base_sampling = test_sampling(
+            PreparedTextureColorSpace::Srgb,
+            PreparedTextureFilter::Linear,
+            PreparedTextureAddressMode::ClampToEdge,
+        );
+        let emissive_sampling = test_sampling(
             PreparedTextureColorSpace::Srgb,
             PreparedTextureFilter::Linear,
             PreparedTextureAddressMode::Repeat,
         );
-        let data_sampling = test_sampling(
-            PreparedTextureColorSpace::NonColor,
-            PreparedTextureFilter::Linear,
-            PreparedTextureAddressMode::Clip,
-        );
-        let nearest_sampling = test_sampling(
+        let index_sampling = test_sampling(
             PreparedTextureColorSpace::NonColor,
             PreparedTextureFilter::Nearest,
             PreparedTextureAddressMode::Repeat,
@@ -2630,21 +6068,39 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
+            value_mode_raw: None,
+            sub_color_mode: crate::MaterialSubColorMode::None,
+            decal_color_mode: crate::MaterialDecalColorMode::Off,
+            decal_color_mode_raw: None,
+            skin_value_mode: crate::MaterialSkinValueMode::None,
+            lightshaft_type: crate::MaterialLightShaftType::None,
+            lightshaft_type_raw: None,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet {
-                base_color: color_sampling,
-                normal: data_sampling,
-                index: nearest_sampling,
+                base_color: base_sampling,
+                emissive: emissive_sampling,
+                index: index_sampling,
                 ..PreparedTextureSamplingSet::default()
             },
             uv_sources: PreparedMaterialUvSources::default(),
             feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
             render_backfaces: true,
         };
 
-        assert_eq!(material_color_sampler_policy(prepared), color_sampling);
-        assert_eq!(material_data_sampler_policy(prepared), data_sampling);
-        assert_eq!(material_nearest_sampler_policy(prepared), nearest_sampling);
+        let base = sampler_descriptor_for_sampling("base", prepared.texture_sampling.base_color);
+        let emissive =
+            sampler_descriptor_for_sampling("emissive", prepared.texture_sampling.emissive);
+        let index = sampler_descriptor_for_sampling("index", prepared.texture_sampling.index);
+        assert_eq!(base.address_mode_u, wgpu::AddressMode::ClampToEdge);
+        assert_eq!(emissive.address_mode_u, wgpu::AddressMode::Repeat);
+        assert_eq!(index.mag_filter, wgpu::FilterMode::Nearest);
     }
 
     #[test]
@@ -2659,6 +6115,7 @@ mod tests {
         );
         assert_eq!(linear_repeat.mag_filter, wgpu::FilterMode::Linear);
         assert_eq!(linear_repeat.min_filter, wgpu::FilterMode::Linear);
+        assert_eq!(linear_repeat.mipmap_filter, wgpu::MipmapFilterMode::Linear);
         assert_eq!(linear_repeat.address_mode_u, wgpu::AddressMode::Repeat);
         assert_eq!(linear_repeat.address_mode_v, wgpu::AddressMode::Repeat);
 
@@ -2672,8 +6129,31 @@ mod tests {
         );
         assert_eq!(nearest_clip.mag_filter, wgpu::FilterMode::Nearest);
         assert_eq!(nearest_clip.min_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(nearest_clip.mipmap_filter, wgpu::MipmapFilterMode::Nearest);
         assert_eq!(nearest_clip.address_mode_u, wgpu::AddressMode::ClampToEdge);
         assert_eq!(nearest_clip.address_mode_v, wgpu::AddressMode::ClampToEdge);
+    }
+
+    #[test]
+    fn texture_formats_follow_prepared_color_space() {
+        assert_eq!(
+            mip_semantic_for_color_space(PreparedTextureColorSpace::Srgb),
+            RgbaMipSemantic::SrgbColor,
+            "sRGB-sampled textures need sRGB GPU decoding with linear alpha"
+        );
+        assert_eq!(
+            mip_semantic_for_color_space(PreparedTextureColorSpace::NonColor),
+            RgbaMipSemantic::LinearData,
+            "Non-Color textures must stay raw linear data"
+        );
+        assert_eq!(
+            texture_format_for_color_space(PreparedTextureColorSpace::Srgb),
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            texture_format_for_color_space(PreparedTextureColorSpace::NonColor),
+            wgpu::TextureFormat::Rgba8Unorm
+        );
     }
 
     #[test]
@@ -2687,8 +6167,12 @@ mod tests {
             [0.66, 0.92, 1.0, 1.0]
         );
         assert_eq!(
-            draw_role_debug_color(ModelMeshDrawRole::DebugVisible),
+            draw_role_debug_color(ModelMeshDrawRole::MaterialChange),
             [1.0, 0.34, 0.76, 1.0]
+        );
+        assert_eq!(
+            draw_role_debug_color(ModelMeshDrawRole::CrestChange),
+            [1.0, 0.62, 0.2, 1.0]
         );
     }
 
@@ -2708,10 +6192,24 @@ mod tests {
             PreparedMaterial {
                 render_pass: PreparedRenderPass::Opaque,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
+                value_mode_raw: None,
+                sub_color_mode: crate::MaterialSubColorMode::None,
+                decal_color_mode: crate::MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
+                skin_value_mode: crate::MaterialSkinValueMode::None,
+                lightshaft_type: crate::MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: false,
             }
         );
@@ -2758,6 +6256,111 @@ mod tests {
     }
 
     #[test]
+    fn effective_normal_texture_uses_primary_water_wave_only_for_water() {
+        let mut material = fallback_material();
+        material.normal_texture = Some(2);
+        material.water_wave_texture = Some(7);
+        material.water_wave1_texture = Some(8);
+        material.water_whitecap_texture = Some(9);
+
+        let regular = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(effective_normal_texture(&material, regular), Some(2));
+
+        material.shader_package_name = Some("water.shpk".to_string());
+        let water = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(effective_normal_texture(&material, water), Some(7));
+
+        material.water_wave_texture = None;
+        assert_eq!(effective_normal_texture(&material, water), Some(2));
+    }
+
+    #[test]
+    fn rgba_mip_chain_downsamples_each_texture_semantic() {
+        let alternating = [
+            0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0,
+        ];
+        let srgb = rgba_mip_chain(2, 2, &alternating, RgbaMipSemantic::SrgbColor);
+        let linear = rgba_mip_chain(2, 2, &alternating, RgbaMipSemantic::LinearData);
+        assert_eq!(srgb.len(), 2);
+        assert_eq!(srgb[1].rgba, [188, 188, 188, 128]);
+        assert_eq!(linear[1].rgba, [128, 128, 128, 128]);
+
+        let normals = [
+            255, 128, 128, 0, 128, 255, 128, 255, 255, 128, 128, 0, 128, 255, 128, 255,
+        ];
+        let normal = rgba_mip_chain(2, 2, &normals, RgbaMipSemantic::PackedNormalRg);
+        assert_eq!(normal[1].rgba, [218, 218, 128, 128]);
+    }
+
+    #[test]
+    fn array_pair_mips_preserve_halves_layers_and_packed_normal_payloads() {
+        let texture = |kind, rgba| crate::ModelTexture {
+            path: format!("synthetic/{kind:?}.tex"),
+            kind,
+            texel_layout: crate::ModelTextureTexelLayout::Standard,
+            width: 2,
+            height: 4,
+            array_size: 2,
+            array_layer_height: 2,
+            rgba,
+            rgba_f32: None,
+        };
+        let first = texture(
+            crate::ModelTextureKind::TileNormalArray,
+            vec![
+                128, 128, 0, 0, 128, 128, 64, 0, 128, 128, 128, 255, 128, 128, 255, 255, 128, 128,
+                200, 64, 128, 128, 200, 64, 128, 128, 200, 64, 128, 128, 200, 64,
+            ],
+        );
+        let second = texture(
+            crate::ModelTextureKind::TileOrbArray,
+            vec![
+                10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255, 50, 0, 0, 255, 60, 0,
+                0, 255, 70, 0, 0, 255, 80, 0, 0, 255,
+            ],
+        );
+
+        let levels = array_pair_mip_chain(
+            &first,
+            &second,
+            RgbaMipSemantic::PackedNormalRg,
+            RgbaMipSemantic::LinearData,
+        );
+        assert_eq!(
+            levels
+                .iter()
+                .map(|level| (level.width, level.height))
+                .collect::<Vec<_>>(),
+            [(4, 4), (2, 2)]
+        );
+        assert_eq!(
+            levels[1]
+                .rgba
+                .chunks_exact(4)
+                .map(|pixel| pixel.to_vec())
+                .collect::<Vec<_>>(),
+            [
+                vec![128, 128, 112, 128],
+                vec![25, 0, 0, 255],
+                vec![128, 128, 200, 64],
+                vec![65, 0, 0, 255],
+            ]
+        );
+    }
+
+    #[test]
+    fn rgba_mip_chain_reaches_one_by_one_for_odd_dimensions() {
+        let levels = rgba_mip_chain(3, 5, &vec![255; 3 * 5 * 4], RgbaMipSemantic::LinearData);
+        assert_eq!(
+            levels
+                .iter()
+                .map(|level| (level.width, level.height))
+                .collect::<Vec<_>>(),
+            [(3, 5), (1, 2), (1, 1)]
+        );
+    }
+
+    #[test]
     fn material_extra_texture_flags_require_loaded_textures() {
         let mut material = fallback_material();
         material.tile_properties_texture = Some(0);
@@ -2776,8 +6379,172 @@ mod tests {
         };
 
         assert_eq!(
-            material_extra_texture_flags(&material, &model),
+            material_extra_texture_flags(
+                &material,
+                &model,
+                prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal),
+            ),
             [1.0, 1.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn material_array_params_encode_prepared_resources() {
+        let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+        prepared.resource_availability.tile_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(4),
+        };
+        prepared.resource_availability.detail_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(8),
+        };
+        assert_eq!(material_array_params(prepared), [4.0, 8.0, 1.0, 1.0]);
+
+        prepared.resource_availability.tile_array.status =
+            crate::PreparedTextureArrayStatus::InvalidLayout;
+        prepared.resource_availability.tile_array.layer_count = None;
+        assert_eq!(material_array_params(prepared), [1.0, 8.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn material_tile_lod_params_require_a_ready_tile_array() {
+        let mut material = fallback_material();
+        let mut model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: Vec::new(),
+        };
+        material.tile_mip_bias_offset = -1.0;
+        let mut prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0; 4]
+        );
+
+        prepared.resource_availability.tile_array = crate::PreparedTextureArrayResource {
+            status: crate::PreparedTextureArrayStatus::Ready,
+            layer_count: Some(64),
+        };
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [-1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.tile_mip_bias_offset = f32::INFINITY;
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0; 4]
+        );
+
+        material.tile_properties_texture = Some(0);
+        material.tile_matrix_texture = Some(1);
+        let mut tile = test_texture(crate::ModelTextureKind::TileProperties);
+        let mut matrix = test_texture(crate::ModelTextureKind::TileMatrixProperties);
+        tile.path = "renamed://tile-properties".to_string();
+        matrix.path = "renamed://tile-matrix".to_string();
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+
+        tile.texel_layout = crate::ModelTextureTexelLayout::ColorTableTileRampAb;
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+
+        matrix.texel_layout = crate::ModelTextureTexelLayout::ColorTableTileRampAb;
+        model.textures = vec![tile.clone(), matrix.clone()];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.base_color_texture = Some(2);
+        material.specular_texture = Some(3);
+        material.material_properties_texture = Some(4);
+        material.sheen_properties_texture = Some(5);
+        material.sphere_properties_texture = Some(6);
+        let generic_kinds = [
+            crate::ModelTextureKind::BaseColor,
+            crate::ModelTextureKind::Specular,
+            crate::ModelTextureKind::MaterialProperties,
+            crate::ModelTextureKind::SheenProperties,
+            crate::ModelTextureKind::SphereProperties,
+        ];
+        model.textures.extend(generic_kinds.into_iter().map(|kind| {
+            let mut texture = test_texture(kind);
+            texture.texel_layout = crate::ModelTextureTexelLayout::ColorTableRampAb;
+            texture
+        }));
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 1.0, 1.0, 1.0]
+        );
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 1.0, 0.0, 1.0]
+        );
+
+        matrix.kind = crate::ModelTextureKind::SheenProperties;
+        model.textures = vec![tile, matrix];
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn tile_matrix_texture_pixels_preserve_float_channels_and_fallbacks() {
+        let mut texture = test_texture(crate::ModelTextureKind::TileMatrixProperties);
+        texture.rgba = vec![255, 64, 128, 191];
+        texture.rgba_f32 = Some(vec![[2.0, -0.5, 0.25, 1.5]]);
+        assert_eq!(
+            tile_matrix_texture_pixels(Some(&texture)),
+            (1, 1, vec![[2.0, -0.5, 0.25, 1.5]])
+        );
+
+        texture.rgba_f32 = Some(vec![[f32::NAN, -0.5, f32::INFINITY, 1.5]]);
+        let (_, _, pixels) = tile_matrix_texture_pixels(Some(&texture));
+        assert_eq!(pixels[0], [1.0, -0.5, 128.0 / 255.0, 1.5]);
+
+        texture.rgba_f32 = Some(Vec::new());
+        let (_, _, pixels) = tile_matrix_texture_pixels(Some(&texture));
+        assert_eq!(pixels[0], [1.0, 64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0]);
+        assert_eq!(
+            tile_matrix_texture_pixels(None),
+            (1, 1, vec![[1.0, 0.0, 0.0, 1.0]])
+        );
+    }
+
+    #[test]
+    fn float_ramp_texture_pixels_preserve_hdr_channels_and_fallbacks() {
+        let mut texture = test_texture(crate::ModelTextureKind::SheenProperties);
+        texture.rgba = vec![26, 51, 255, 255];
+        texture.rgba_f32 = Some(vec![[0.1, 0.2, 4.0, 1.0]]);
+        assert_eq!(
+            float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]),
+            (1, 1, vec![[0.1, 0.2, 4.0, 1.0]])
+        );
+
+        texture.rgba_f32 = Some(vec![[f32::NAN, 0.2, f32::INFINITY, 1.0]]);
+        let (_, _, pixels) = float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixels[0], [26.0 / 255.0, 0.2, 1.0, 1.0]);
+
+        texture.rgba_f32 = Some(Vec::new());
+        let (_, _, pixels) = float_ramp_texture_pixels(Some(&texture), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixels[0], [26.0 / 255.0, 51.0 / 255.0, 1.0, 1.0]);
+        assert_eq!(
+            float_ramp_texture_pixels(None, [0.0, 0.0, 0.0, 1.0]),
+            (1, 1, vec![[0.0, 0.0, 0.0, 1.0]])
         );
     }
 
@@ -2816,17 +6583,226 @@ mod tests {
     }
 
     #[test]
+    fn material_toon_sheen_sphere_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [50.0, 2.5, 4.0e-45, 0.0]
+        );
+        assert_eq!(
+            material_sheen_sphere_params(&material, prepared),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.toon_index = 5.0;
+        material.toon_light_scale = 1.5;
+        material.toon_light_spec_aperture = 64.0;
+        material.toon_reflection_scale = 3.5;
+        material.toon_spec_index = 2.0;
+        material.sheen_rate = 0.25;
+        material.sheen_tint_rate = 0.35;
+        material.sheen_aperture = 0.8;
+        material.sphere_map_index = 3.0;
+        assert_eq!(
+            material_toon_sheen_params(&material),
+            [5.0, 1.5, 0.25, 0.35]
+        );
+        material.shader_package_name = Some("character.shpk".to_string());
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [64.0, 3.5, 2.0, 1.0]
+        );
+        assert_eq!(
+            material_sheen_sphere_params(&material, prepared),
+            [0.8, 3.0, 0.0, 0.0]
+        );
+
+        material.toon_index = f32::NAN;
+        material.toon_light_scale = f32::INFINITY;
+        material.toon_light_spec_aperture = f32::NAN;
+        material.toon_reflection_scale = f32::INFINITY;
+        material.toon_spec_index = f32::NEG_INFINITY;
+        material.sheen_rate = f32::NEG_INFINITY;
+        material.sheen_tint_rate = f32::NAN;
+        material.sheen_aperture = f32::INFINITY;
+        material.sphere_map_index = f32::NAN;
+        assert_eq!(material_toon_sheen_params(&material), [0.0, 2.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_toon_params(&material, prepared),
+            [50.0, 2.5, 4.0e-45, 1.0]
+        );
+        assert_eq!(
+            material_sheen_sphere_params(&material, prepared),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+
+        let mut baked_anisotropy = prepared;
+        baked_anisotropy.texture_sampling.specular.color_space = PreparedTextureColorSpace::Srgb;
+        assert_eq!(
+            material_sheen_sphere_params(&material, baked_anisotropy),
+            [1.0, 0.0, 1.0, 0.0],
+            "only a baked ColorTable specular ramp may expose alpha as anisotropy"
+        );
+    }
+
+    #[test]
+    fn material_alpha_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        assert_eq!(material_alpha_params(&material), [2.0, 0.0, 0.5, 0.0]);
+
+        material.alpha_aperture = 2.5;
+        material.alpha_offset = -0.2;
+        material.shadow_alpha_threshold = 0.35;
+        material.transparency = 0.6;
+        assert_eq!(material_alpha_params(&material), [2.5, -0.2, 0.35, 0.6]);
+
+        material.alpha_aperture = f32::NAN;
+        material.alpha_offset = f32::INFINITY;
+        material.shadow_alpha_threshold = 4.0;
+        material.transparency = -1.0;
+        assert_eq!(material_alpha_params(&material), [2.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn material_alpha_composition_params_scope_vertex_alpha_remap_to_dxbc_packages() {
+        let mut material = fallback_material();
+        material.vertex_alpha_to_one = 0.01;
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.01, 0.0, 0.0, 0.0]
+        );
+
+        for package in [
+            "character.shpk",
+            "characterlegacy.shpk",
+            "characterglass.shpk",
+        ] {
+            material.shader_package_name = Some(package.to_string());
+            assert_eq!(
+                material_alpha_composition_params(&material),
+                [0.01, 1.0, 0.0, 0.0]
+            );
+        }
+
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.01, 0.0, 0.0, 0.0]
+        );
+        material.vertex_alpha_to_one = f32::NAN;
+        assert_eq!(
+            material_alpha_composition_params(&material),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn material_alpha_policy_params_encode_prepared_shader_policy() {
+        let mut prepared = PreparedMaterial {
+            render_pass: PreparedRenderPass::Transparent,
+            shader_family: MaterialShaderFamily::CharacterTransparency,
+            flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
+            value_mode_raw: None,
+            sub_color_mode: crate::MaterialSubColorMode::None,
+            decal_color_mode: crate::MaterialDecalColorMode::Off,
+            decal_color_mode_raw: None,
+            skin_value_mode: crate::MaterialSkinValueMode::None,
+            lightshaft_type: crate::MaterialLightShaftType::None,
+            lightshaft_type_raw: None,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy {
+                source: PreparedAlphaSource::NormalBlue,
+                draw_depth_mode: MaterialDrawDepthMode::Dither,
+                lighting_enabled: false,
+            },
+            texture_bindings: PreparedTextureBindings::default(),
+            texture_sampling: PreparedTextureSamplingSet::default(),
+            uv_sources: PreparedMaterialUvSources::default(),
+            feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
+            render_backfaces: true,
+        };
+        assert_eq!(material_alpha_policy_params(prepared), [2.0, 0.0, 1.0, 1.0]);
+
+        prepared.render_pass = PreparedRenderPass::Glass;
+        prepared.alpha_policy.source = PreparedAlphaSource::BaseColorAlpha;
+        prepared.alpha_policy.draw_depth_mode = MaterialDrawDepthMode::None;
+        prepared.alpha_policy.lighting_enabled = true;
+        assert_eq!(material_alpha_policy_params(prepared), [1.0, 1.0, 0.0, 2.0]);
+
+        prepared.render_pass = PreparedRenderPass::Transparent;
+        prepared.alpha_policy.source = PreparedAlphaSource::MaterialTransparency;
+        assert_eq!(material_alpha_policy_params(prepared), [3.0, 1.0, 0.0, 1.0]);
+
+        prepared.alpha_policy.source = PreparedAlphaSource::NormalAlpha;
+        assert_eq!(material_alpha_policy_params(prepared), [4.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn material_water_colors_preserve_finite_shader_inputs() {
+        let mut material = fallback_material();
+        material.water_deep_color = [0.1, 0.2, 0.3, 0.4];
+        material.water_refraction_color = [0.5, 0.6, 0.7, 0.8];
+        material.water_whitecap_color = [0.9, 1.0, 1.1, 0.25];
+        assert_eq!(material_water_deep_color(&material), [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(
+            material_water_refraction_color(&material),
+            [0.5, 0.6, 0.7, 0.8]
+        );
+        assert_eq!(
+            material_water_whitecap_color(&material),
+            [0.9, 1.0, 1.1, 0.25]
+        );
+
+        material.water_deep_color = [f32::NAN, 0.2, f32::INFINITY, 0.4];
+        assert_eq!(
+            material_water_deep_color(&material),
+            [0.3529, 0.2, 0.3921, 0.4]
+        );
+    }
+
+    #[test]
     fn material_detail_params_preserve_detail_uv_values() {
         let mut material = fallback_material();
-        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(material_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(material_multi_detail_color(&material), [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(material_detail_color_uv_scale(&material), [4.0; 4]);
         assert_eq!(material_detail_normal_uv_scale(&material), [4.0; 4]);
 
         material.detail_id = 3.0;
         material.multi_detail_id = 5.0;
+        material.detail_color = [0.2, 0.4, 0.6, 0.8];
+        material.multi_detail_color = [0.1, 0.3, 0.5, 0.7];
         material.detail_color_uv_scale = [8.0, 6.0, 4.0, 2.0];
         material.detail_normal_uv_scale = [7.0, 5.0, 3.0, 1.0];
-        assert_eq!(material_detail_params(&material), [3.0, 5.0, 0.0, 0.0]);
+        material.shader_package_name = Some("bg.shpk".to_string());
+        material.value_mode = MaterialValueMode::Multi;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [3.0, 5.0, 1.0, 0.0]
+        );
+        material.value_mode = MaterialValueMode::Single;
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [3.0, 5.0, 0.0, 0.0]
+        );
+        material.value_mode = MaterialValueMode::Multi;
+        assert_eq!(material_detail_color(&material), [0.2, 0.4, 0.6, 0.8]);
+        assert_eq!(material_multi_detail_color(&material), [0.1, 0.3, 0.5, 0.7]);
         assert_eq!(
             material_detail_color_uv_scale(&material),
             [8.0, 6.0, 4.0, 2.0]
@@ -2838,9 +6814,17 @@ mod tests {
 
         material.detail_id = f32::NAN;
         material.multi_detail_id = f32::INFINITY;
+        material.detail_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
+        material.multi_detail_color = [f32::NEG_INFINITY, 0.3, 0.5, f32::NAN];
         material.detail_color_uv_scale = [1.0, f32::NAN, f32::INFINITY, 2.0];
         material.detail_normal_uv_scale = [f32::NEG_INFINITY, 3.0, 4.0, f32::NAN];
-        assert_eq!(material_detail_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_detail_params(&material, prepared),
+            [0.0, 0.0, 1.0, 0.0]
+        );
+        assert_eq!(material_detail_color(&material), [0.25, 0.5, 0.5, 0.5]);
+        assert_eq!(material_multi_detail_color(&material), [0.5, 0.3, 0.5, 1.0]);
         assert_eq!(
             material_detail_color_uv_scale(&material),
             [1.0, 4.0, 4.0, 2.0]
@@ -2849,6 +6833,134 @@ mod tests {
             material_detail_normal_uv_scale(&material),
             [4.0, 3.0, 4.0, 4.0]
         );
+    }
+
+    #[test]
+    fn material_shader_colors_preserve_material_constants() {
+        let mut material = fallback_material();
+        assert_eq!(material_shader_diffuse_color(&material), [1.0; 4]);
+        assert_eq!(material_shader_multi_diffuse_color(&material), [1.0; 4]);
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            material_shader_multi_emissive_color(&material),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        material.shader_diffuse_color = [0.8, 0.7, 0.6, 0.5];
+        material.shader_multi_diffuse_color = [0.6, 0.7, 0.8, 0.9];
+        material.shader_emissive_color = [0.1, 0.2, 0.3, 1.0];
+        material.shader_multi_emissive_color = [0.4, 0.5, 0.6, 1.0];
+        assert_eq!(
+            material_shader_diffuse_color(&material),
+            [0.8, 0.7, 0.6, 0.5]
+        );
+        assert_eq!(
+            material_shader_multi_diffuse_color(&material),
+            [0.6, 0.7, 0.8, 0.9]
+        );
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            material_shader_multi_emissive_color(&material),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+
+        material.shader_diffuse_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
+        material.shader_emissive_color = [f32::NEG_INFINITY, 0.2, 0.3, f32::NAN];
+        assert_eq!(
+            material_shader_diffuse_color(&material),
+            [0.25, 1.0, 1.0, 0.5]
+        );
+        assert_eq!(
+            material_shader_emissive_color(&material),
+            [0.0, 0.2, 0.3, 1.0]
+        );
+    }
+
+    #[test]
+    fn material_outline_specular_surface_params_preserve_shader_inputs() {
+        let mut material = fallback_material();
+        let unknown = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(material_outline_params(&material), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(material_specular_color_mask(&material), [1.0; 4]);
+        assert_eq!(
+            material_surface_params(&material, unknown),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        material.outline_color = [0.1, 0.2, 0.3, 0.4];
+        material.outline_width = 0.05;
+        material.specular_color_mask = [0.7, 0.8, 0.9, 1.0];
+        material.ssao_mask = 0.6;
+        material.texture_mip_bias = -0.75;
+        material.shadow_pos_offset = 0.125;
+        assert_eq!(material_outline_params(&material), [0.1, 0.2, 0.3, 0.05]);
+        assert_eq!(
+            material_specular_color_mask(&material),
+            [0.7, 0.8, 0.9, 1.0]
+        );
+        let character = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(
+            material_surface_params(&material, character),
+            [0.6, -0.75, 0.125, 1.0]
+        );
+
+        material.outline_color = [0.25, f32::NAN, f32::INFINITY, 0.5];
+        material.outline_width = f32::NEG_INFINITY;
+        material.specular_color_mask = [f32::NAN, 0.3, f32::INFINITY, 0.5];
+        material.ssao_mask = f32::INFINITY;
+        material.texture_mip_bias = f32::NAN;
+        material.shadow_pos_offset = f32::NEG_INFINITY;
+        assert_eq!(material_outline_params(&material), [0.25, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            material_specular_color_mask(&material),
+            [1.0, 0.3, 1.0, 0.5]
+        );
+        assert_eq!(
+            material_surface_params(&material, character),
+            [1.0, 0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn legacy_compatibility_specular_mode_is_key_aware() {
+        let mut material = fallback_material();
+        assert!(!material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [0.0; 4]);
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(!material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [0.0; 4]);
+        material.color_table_rows = Some(vec![crate::ColorTableRowColors::default()]);
+        assert_eq!(material_family_params(&material), [0.0, 1.0, 0.0, 0.0]);
+
+        material.shader_package_name = Some("characterlegacy.shpk".to_string());
+        assert!(material_is_character_legacy(&material));
+        assert_eq!(material_family_params(&material), [1.0, 1.0, 0.0, 0.0]);
+        material.value_mode = crate::MaterialValueMode::Compatibility;
+        assert_eq!(material_legacy_specular_mode(&material), 1.0);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        assert_eq!(material_legacy_specular_mode(&material), 2.0);
+
+        material.specular_type = MaterialSpecularType::Unknown;
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.specular_type = MaterialSpecularType::Mask;
+        material.value_mode = crate::MaterialValueMode::MultiMaterial;
+        assert_eq!(material_legacy_specular_mode(&material), 0.0);
+
+        material.shader_package_name = Some("CharacterLegacy.SHPK".to_string());
+        assert!(material_is_character_legacy(&material));
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert!(!material_is_character_legacy(&material));
     }
 
     #[test]
@@ -2876,6 +6988,14 @@ mod tests {
             draw_role_params(ModelMeshDrawRole::LightShaft),
             [1.0, 0.0, 0.0, 0.0]
         );
+        assert_eq!(
+            draw_role_params(ModelMeshDrawRole::CrestChange),
+            [0.0, 1.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            draw_role_params(ModelMeshDrawRole::MaterialChange),
+            [0.0, 0.0, 1.0, 0.0]
+        );
 
         material.lightshaft_color = [0.2, 0.4, 0.6, 0.8];
         material.lightshaft_tex_anim = [0.1, 0.2, 0.3, 0.4];
@@ -2902,17 +7022,34 @@ mod tests {
         let prepared = PreparedMaterial {
             render_pass: PreparedRenderPass::Opaque,
             shader_family: MaterialShaderFamily::Character,
+            flow_mode: MaterialFlowMode::Standard,
+            value_mode: crate::MaterialValueMode::Single,
+            value_mode_raw: None,
+            sub_color_mode: crate::MaterialSubColorMode::None,
+            decal_color_mode: crate::MaterialDecalColorMode::Off,
+            decal_color_mode_raw: None,
+            skin_value_mode: crate::MaterialSkinValueMode::None,
+            lightshaft_type: crate::MaterialLightShaftType::None,
+            lightshaft_type_raw: None,
+            alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
             texture_bindings: PreparedTextureBindings::default(),
             texture_sampling: PreparedTextureSamplingSet::default(),
             uv_sources: PreparedMaterialUvSources {
                 textures: PreparedTextureUvSources {
                     base_color: PreparedUvSource::Uv0,
+                    secondary_base_color: PreparedUvSource::Uv0,
                     normal: PreparedUvSource::Uv1,
+                    secondary_normal: PreparedUvSource::Uv0,
                     mask: PreparedUvSource::Uv2,
+                    skin_diffuse: PreparedUvSource::Uv2,
+                    skin_normal: PreparedUvSource::Uv2,
+                    skin_mask: PreparedUvSource::Uv2,
                     material_map: PreparedUvSource::Uv3,
                     multi_map: PreparedUvSource::Uv3,
                     specular: PreparedUvSource::Uv2,
+                    secondary_specular: PreparedUvSource::Uv0,
                     emissive: PreparedUvSource::Uv1,
+                    environment: PreparedUvSource::Uv0,
                     material_properties: PreparedUvSource::Uv0,
                     tile_properties: PreparedUvSource::Uv1,
                     sheen_properties: PreparedUvSource::Uv2,
@@ -2921,10 +7058,20 @@ mod tests {
                     index: PreparedUvSource::Uv1,
                     other: PreparedUvSource::Uv2,
                 },
+                scroll: PreparedTextureScrollSet {
+                    base_color: true,
+                    normal: true,
+                    specular: true,
+                    ..PreparedTextureScrollSet::default()
+                },
                 uv0_scroll: PreparedUvSource::Uv0,
                 uv1_scroll: PreparedUvSource::Uv1,
             },
             feature_flags: PreparedMaterialFeatureFlags::default(),
+            unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+            resource_availability: PreparedMaterialResourceAvailability::default(),
+            runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+            runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
             render_backfaces: true,
         };
 
@@ -2936,6 +7083,90 @@ mod tests {
                 [1.0, 2.0, 3.0, 0.0],
                 [1.0, 2.0, 0.0, 0.0]
             )
+        );
+        assert_eq!(
+            material_uv_scroll_mask_params(prepared),
+            (
+                [1.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0; 4],
+                [0.0; 4],
+            )
+        );
+    }
+
+    #[test]
+    fn material_feature_params_encode_prepared_flow_policy() {
+        let mut prepared = prepare_material_for_draw_role(None, ModelMeshDrawRole::Normal);
+        assert_eq!(material_feature_params(prepared), [0.0; 4]);
+
+        prepared.feature_flags.uses_flow = true;
+        assert_eq!(material_feature_params(prepared), [1.0, 0.0, 0.0, 0.0]);
+
+        prepared.shader_family = MaterialShaderFamily::Water;
+        assert_eq!(material_feature_params(prepared), [1.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn secondary_scroll_maps_reuse_extra_bindings_with_presence_flags() {
+        let mut material = fallback_material();
+        material.shader_package_name = Some("bguvscroll.shpk".to_string());
+        material.value_mode = crate::MaterialValueMode::Multi;
+        material.secondary_base_color_texture = Some(0);
+        material.secondary_normal_texture = Some(1);
+        material.secondary_specular_texture = Some(99);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: vec![
+                test_texture(crate::ModelTextureKind::SecondaryBaseColor),
+                test_texture(crate::ModelTextureKind::SecondaryNormal),
+            ],
+            meshes: Vec::new(),
+        };
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert_eq!(material_feature_params(prepared), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            material_secondary_map_params(&material, &model, prepared),
+            [1.0, 1.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            material_extra_texture_flags(&material, &model, prepared),
+            [0.0; 4]
+        );
+        assert_eq!(material_uv_source_params(prepared).2, [1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(
+            material_uv_scroll_mask_params(prepared).2,
+            [1.0, 1.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn lightshaft_sampler1_reuses_only_the_secondary_color_binding() {
+        let mut material = fallback_material();
+        material.shader_package_name = Some("lightshaft.shpk".to_string());
+        material.secondary_base_color_texture = Some(0);
+        material.secondary_normal_texture = Some(1);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material.clone()],
+            textures: vec![
+                test_texture(crate::ModelTextureKind::SecondaryBaseColor),
+                test_texture(crate::ModelTextureKind::SecondaryNormal),
+            ],
+            meshes: Vec::new(),
+        };
+        let prepared =
+            prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::LightShaft);
+
+        assert!(prepared.feature_flags.uses_secondary_maps);
+        assert!(!prepared.feature_flags.uses_scroll);
+        assert_eq!(material_feature_params(prepared), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(
+            material_secondary_map_params(&material, &model, prepared),
+            [1.0, 0.0, 0.0, 0.0]
         );
     }
 
@@ -3050,13 +7281,6 @@ mod tests {
         assert_eq!(vertices.len(), 12);
         assert_eq!(indices.len(), 12);
         assert_eq!(batches.len(), 4);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| batch.center[0])
-                .collect::<Vec<_>>(),
-            vec![0.5, 4.5, 5.5, 6.5]
-        );
         assert_eq!(batches[0].pass(), PreparedRenderPass::Opaque);
         assert_eq!(batches[1].pass(), PreparedRenderPass::AdditiveLightShaft);
         assert_eq!(batches[2].pass(), PreparedRenderPass::Opaque);
@@ -3069,7 +7293,7 @@ mod tests {
             vec![
                 ModelMeshDrawRole::Normal,
                 ModelMeshDrawRole::LightShaft,
-                ModelMeshDrawRole::DebugVisible,
+                ModelMeshDrawRole::MaterialChange,
                 ModelMeshDrawRole::Glass
             ]
         );
@@ -3110,6 +7334,72 @@ mod tests {
         assert_eq!(vertices[1].flow1, [0.0; 4]);
     }
 
+    #[test]
+    fn flatten_model_separates_independent_preview_components() {
+        let model = std::rc::Rc::new(ComponentTestModel {
+            data: crate::ModelData {
+                bounds: crate::ModelBounds::default(),
+                materials: vec![fallback_material()],
+                textures: Vec::new(),
+                meshes: vec![test_mesh("normal", 0.0), test_mesh("normal", 0.0)],
+            },
+            components: vec![0, 1],
+        });
+
+        let (vertices, _, _) = flatten_model(&model);
+        let primary_max = vertices[..3]
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let secondary_min = vertices[3..]
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::INFINITY, f32::min);
+
+        assert!(
+            secondary_min - primary_max >= 0.04,
+            "components must keep a visible preview gap"
+        );
+    }
+
+    #[test]
+    fn flatten_model_applies_only_explicitly_enabled_shape_targets() {
+        let mut mesh = test_mesh("normal", 0.0);
+        let shape = crate::ModelShapeInfo {
+            index: 0,
+            name: Some("shape_a".to_string()),
+            shape_index_mask: 1,
+            shape_index_mask_hex: "0x00000001".to_string(),
+            shape_mesh_index: 0,
+            shape_value_count: 1,
+        };
+        mesh.shape_influences.push(shape.clone());
+        mesh.shape_targets.push(crate::ModelShapeTarget {
+            shape,
+            vertex_deltas: vec![crate::ModelShapeVertexDelta {
+                vertex_index: 0,
+                position: [5.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 0.0],
+            }],
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+
+        let (base_vertices, _, _) = flatten_model(&model);
+        let (shaped_vertices, _, batches) = flatten_model_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_shape_mask(1),
+        );
+
+        assert_eq!(base_vertices[0].position, [0.0, 0.0, 0.0]);
+        assert_eq!(shaped_vertices[0].position, [5.0, 0.0, 0.0]);
+        assert_eq!(batches.len(), 1);
+    }
+
     fn test_prepared_render_pass(
         alpha_mode: MaterialAlphaMode,
         render_mode: MaterialRenderMode,
@@ -3128,6 +7418,14 @@ mod tests {
     }
 
     fn test_batch(material_slot: usize, pass: PreparedRenderPass, center: [f32; 3]) -> DrawBatch {
+        let transparent_triangles = pass.sorts_back_to_front().then(|| TransparentTriangle {
+            indices: [
+                material_slot as u32 * 3,
+                material_slot as u32 * 3 + 1,
+                material_slot as u32 * 3 + 2,
+            ],
+            center,
+        });
         DrawBatch {
             material_slot,
             material_bind_group_index: material_slot,
@@ -3137,13 +7435,27 @@ mod tests {
             prepared_material: PreparedMaterial {
                 render_pass: pass,
                 shader_family: MaterialShaderFamily::Unknown,
+                flow_mode: MaterialFlowMode::Standard,
+                value_mode: crate::MaterialValueMode::Single,
+                value_mode_raw: None,
+                sub_color_mode: crate::MaterialSubColorMode::None,
+                decal_color_mode: crate::MaterialDecalColorMode::Off,
+                decal_color_mode_raw: None,
+                skin_value_mode: crate::MaterialSkinValueMode::None,
+                lightshaft_type: crate::MaterialLightShaftType::None,
+                lightshaft_type_raw: None,
+                alpha_policy: crate::PreparedMaterialAlphaPolicy::default(),
                 texture_bindings: PreparedTextureBindings::default(),
                 texture_sampling: PreparedTextureSamplingSet::default(),
                 uv_sources: PreparedMaterialUvSources::default(),
                 feature_flags: PreparedMaterialFeatureFlags::default(),
+                unsupported_inputs: PreparedMaterialUnsupportedInputs::default(),
+                resource_availability: PreparedMaterialResourceAvailability::default(),
+                runtime_fallbacks: PreparedMaterialRuntimeFallbacks::default(),
+                runtime_input_requirements: PreparedMaterialRuntimeInputRequirements::default(),
                 render_backfaces: true,
             },
-            center,
+            transparent_triangles: transparent_triangles.into_iter().collect(),
         }
     }
 
@@ -3166,6 +7478,7 @@ mod tests {
             mesh_category: Some(category.to_string()),
             submesh: None,
             shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
             material_index: 0,
             material_slot: 0,
             material_name: "test".to_string(),
@@ -3204,8 +7517,11 @@ mod tests {
         crate::ModelTexture {
             path: "test.tex".to_string(),
             kind,
+            texel_layout: crate::ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
+            array_size: 1,
+            array_layer_height: 1,
             rgba: vec![0, 0, 0, 255],
             rgba_f32: None,
         }

@@ -4,11 +4,9 @@ use wasm_bindgen::JsCast;
 pub(crate) mod browser_sqpack;
 mod collection_bridge;
 mod collection_index;
-#[cfg(target_arch = "wasm32")]
 mod collection_state;
 mod data;
 mod icons;
-#[cfg(target_arch = "wasm32")]
 mod indexed_db_cache;
 mod inventory_bridge;
 #[cfg(target_arch = "wasm32")]

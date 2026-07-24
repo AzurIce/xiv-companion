@@ -4766,6 +4766,7 @@ name = "xiv-companion-data"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "half",
  "physis",
  "serde",
  "tsify",
@@ -4778,6 +4779,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "half",
  "image",
  "pollster",
  "wgpu",

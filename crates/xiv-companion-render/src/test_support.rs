@@ -4,8 +4,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use crate::ModelRenderData;
+use half::f16;
+
 use crate::renderer::{ModelRenderOptions, ModelRenderer};
+use crate::{ModelRenderData, PreparedModelOptions};
 
 #[derive(Clone, Debug)]
 pub struct WeaponModelSnapshotOptions {
@@ -17,9 +19,11 @@ pub struct WeaponModelSnapshotOptions {
     pub pitch: f32,
     pub zoom: f32,
     pub pan: [f32; 2],
+    pub prepared_model_options: PreparedModelOptions,
     pub render_options: ModelRenderOptions,
     pub power_preference: wgpu::PowerPreference,
     pub force_fallback_adapter: bool,
+    pub capture_hdr_scene: bool,
 }
 
 impl WeaponModelSnapshotOptions {
@@ -53,6 +57,24 @@ impl WeaponModelSnapshotOptions {
         self.render_options = render_options;
         self
     }
+
+    pub fn with_prepared_model_options(
+        mut self,
+        prepared_model_options: PreparedModelOptions,
+    ) -> Self {
+        self.prepared_model_options = prepared_model_options;
+        self
+    }
+
+    pub fn with_enabled_shape_mask(mut self, enabled_shape_mask: u32) -> Self {
+        self.prepared_model_options.enabled_shape_mask = Some(enabled_shape_mask);
+        self
+    }
+
+    pub fn with_hdr_scene_capture(mut self) -> Self {
+        self.capture_hdr_scene = true;
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -75,9 +97,11 @@ impl Default for WeaponModelSnapshotOptions {
             pitch: 0.35,
             zoom: 3.2,
             pan: [0.0, 0.0],
+            prepared_model_options: PreparedModelOptions::default(),
             render_options: ModelRenderOptions::default(),
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
+            capture_hdr_scene: false,
         }
     }
 }
@@ -89,6 +113,7 @@ pub struct WeaponModelSnapshot {
     pub height: u32,
     pub adapter_name: String,
     pub adapter_backend: wgpu::Backend,
+    pub hdr_scene_rgba: Option<Vec<[f32; 4]>>,
 }
 
 #[derive(Debug)]
@@ -233,7 +258,13 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     let depth = create_depth_texture(&device, options.width, options.height);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = ModelRenderer::new(device, queue, format, model);
+    let mut renderer = ModelRenderer::new_with_prepared_options(
+        device,
+        queue,
+        format,
+        model,
+        options.prepared_model_options,
+    );
     renderer.render_to(
         &target_view,
         &depth_view,
@@ -245,6 +276,19 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         options.render_options,
     );
 
+    let hdr_scene_rgba = if options.capture_hdr_scene {
+        let scene_texture = renderer
+            .hdr_scene_texture()
+            .expect("post-process scene texture is initialized after render");
+        Some(read_texture_rgba16f(
+            &renderer,
+            scene_texture,
+            options.width,
+            options.height,
+        )?)
+    } else {
+        None
+    };
     let rgba = read_texture_rgba(&renderer, &target, options.width, options.height)?;
     write_png(&png_path, options.width, options.height, &rgba)?;
 
@@ -254,6 +298,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         height: options.height,
         adapter_name: adapter_info.name,
         adapter_backend: adapter_info.backend,
+        hdr_scene_rgba,
     })
 }
 
@@ -302,7 +347,34 @@ fn read_texture_rgba(
     width: u32,
     height: u32,
 ) -> Result<Vec<u8>, WeaponModelSnapshotError> {
-    let bytes_per_pixel = 4;
+    read_texture_bytes(renderer, texture, width, height, 4)
+}
+
+fn read_texture_rgba16f(
+    renderer: &ModelRenderer,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<[f32; 4]>, WeaponModelSnapshotError> {
+    let bytes = read_texture_bytes(renderer, texture, width, height, 8)?;
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|pixel| {
+            std::array::from_fn(|channel| {
+                let offset = channel * 2;
+                f16::from_bits(u16::from_le_bytes([pixel[offset], pixel[offset + 1]])).to_f32()
+            })
+        })
+        .collect())
+}
+
+fn read_texture_bytes(
+    renderer: &ModelRenderer,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+) -> Result<Vec<u8>, WeaponModelSnapshotError> {
     let unpadded_bytes_per_row = width * bytes_per_pixel;
     let padded_bytes_per_row = align_to(unpadded_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let output_buffer_size = padded_bytes_per_row as u64 * height as u64;

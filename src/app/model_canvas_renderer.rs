@@ -8,8 +8,8 @@ use raw_window_handle::{
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
-use xiv_companion::ModelRenderData;
 use xiv_companion::renderer::{ModelRenderOptions, ModelRenderer};
+use xiv_companion::{ModelRenderData, PreparedModelOptions};
 
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -29,6 +29,7 @@ impl WebModelCanvasRenderer {
     pub async fn from_canvas<M: ModelRenderData + ?Sized>(
         canvas: HtmlCanvasElement,
         model: &M,
+        prepared_options: PreparedModelOptions,
     ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -89,7 +90,13 @@ impl WebModelCanvasRenderer {
         };
         surface.configure(&device, &config);
         let depth_texture = create_depth_texture(&device, width, height);
-        let renderer = ModelRenderer::new(device, queue, config.format, model);
+        let renderer = ModelRenderer::new_with_prepared_options(
+            device,
+            queue,
+            config.format,
+            model,
+            prepared_options,
+        );
         let orbit = Rc::new(RefCell::new(OrbitState::default()));
         let (on_mouse_down, on_mouse_move, on_mouse_up, on_wheel, on_context_menu) =
             install_orbit_handlers(&canvas, orbit.clone())?;
@@ -137,6 +144,10 @@ impl WebModelCanvasRenderer {
             options,
         );
         output.present();
+    }
+
+    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
+        self.renderer.update_materials(model);
     }
 
     pub fn canvas_connected(&self) -> bool {

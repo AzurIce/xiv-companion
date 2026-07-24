@@ -1,18 +1,39 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialRenderMode, ModelBounds, ModelData,
-    ModelMaterial, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelSubmeshInfo, ModelTexture,
-    ModelTextureKind, ModelVertex, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
-    WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage, WeaponMaterialAlphaMode,
-    WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
-    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
-    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
-    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
-    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
+    MaterialDecalColorMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType,
+    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSpecularType,
+    MaterialSubColorMode, MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData,
+    ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
+    ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays,
+    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta,
+    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind,
+    ModelTextureTexelLayout, ModelVertex, PackedModelId, PreparedMeshVisibility,
+    PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem,
+    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
+    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
+    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
+    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
+    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
+    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
+    weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
 use std::collections::HashMap;
+
+#[cfg(feature = "game-data")]
+use crate::model::{MaterialShaderFamily, material_shader_family};
+
+#[cfg(feature = "game-data")]
+use crate::staining::{
+    DAWNTRAIL_STAINING_TEMPLATE_PATH, LEGACY_STAINING_TEMPLATE_PATH, MAX_STAIN_ID,
+    StainingTemplate, apply_staining_template_to_rows,
+};
+
+pub const CHARACTER_TILE_NORMAL_ARRAY_PATH: &str = "chara/common/texture/tile_norm_array.tex";
+pub const CHARACTER_TILE_ORB_ARRAY_PATH: &str = "chara/common/texture/tile_orb_array.tex";
+pub const BG_DETAIL_DIFFUSE_ARRAY_PATH: &str = "bgcommon/nature/detail/texture/detail_d_array.tex";
+pub const BG_DETAIL_NORMAL_ARRAY_PATH: &str = "bgcommon/nature/detail/texture/detail_n_array.tex";
 
 #[cfg(feature = "game-data")]
 const APPLY_ALPHA_TEST: u32 = 0xA9A3_EE25;
@@ -21,7 +42,103 @@ const APPLY_ALPHA_TEST_ON: u32 = 0x72AA_A9AE;
 #[cfg(feature = "game-data")]
 const G_ALPHA_THRESHOLD: u32 = 0x29AC_0223;
 #[cfg(feature = "game-data")]
+const G_ALPHA_APERTURE: u32 = 0xD62B_F368;
+#[cfg(feature = "game-data")]
+const G_ALPHA_OFFSET: u32 = 0xD07A_6A65;
+#[cfg(feature = "game-data")]
+const G_VERTEX_ALPHA_TO_ONE: u32 = 0xAD94_E254;
+#[cfg(feature = "game-data")]
+const G_SHADOW_ALPHA_THRESHOLD: u32 = 0xD925_FF32;
+#[cfg(feature = "game-data")]
 const G_TRANSPARENCY: u32 = 0x53E8_417B;
+#[cfg(feature = "game-data")]
+const G_WATER_DEEP_COLOR: u32 = 0xD315_E728;
+#[cfg(feature = "game-data")]
+const G_WATER_REFRACTION_COLOR: u32 = 0xBA16_3700;
+#[cfg(feature = "game-data")]
+const G_WATER_WHITECAP_COLOR: u32 = 0x29FA_2AC1;
+#[cfg(feature = "game-data")]
+const DRAW_DEPTH_MODE: u32 = 0xE8DA_5B62;
+#[cfg(feature = "game-data")]
+const DRAW_DEPTH_MODE_DITHER: u32 = 0x7B80_4D6E;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING: u32 = 0x0033_C8B5;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING_OFF: u32 = 0x93D6_C21A;
+#[cfg(feature = "game-data")]
+const ENABLE_LIGHTING_ON: u32 = 0xD1E6_0FD9;
+#[cfg(feature = "game-data")]
+const CATEGORY_FLOW_MAP_TYPE: u32 = 0x40D1_481E;
+#[cfg(feature = "game-data")]
+const FLOW_MAP_STANDARD: u32 = 0x337C_6BC4;
+#[cfg(feature = "game-data")]
+const FLOW_MAP_FLOW: u32 = 0x71AD_A939;
+#[cfg(feature = "game-data")]
+const CATEGORY_SPECULAR_TYPE: u32 = 0xC8BD_1DEF;
+#[cfg(feature = "game-data")]
+const SPECULAR_TYPE_DEFAULT: u32 = 0x198D_11CD;
+#[cfg(feature = "game-data")]
+const SPECULAR_TYPE_MASK: u32 = 0xA02F_4828;
+#[cfg(feature = "game-data")]
+const GET_VALUES: u32 = 0xB616_DC5A;
+#[cfg(feature = "game-data")]
+const GET_VALUES_TEXTURE_TYPE: u32 = 0x2877_1DF9;
+#[cfg(feature = "game-data")]
+const GET_VALUES_TEXTURE_TYPE_COMPATIBILITY: u32 = 0xCFC6_2513;
+#[cfg(feature = "game-data")]
+const GET_VALUES_MULTI: u32 = 0x1DF2_985C;
+#[cfg(feature = "game-data")]
+const GET_VALUES_MULTI_MATERIAL: u32 = 0x5CC6_05B5;
+#[cfg(feature = "game-data")]
+const GET_VALUES_COMPATIBILITY: u32 = 0x600E_F9DF;
+#[cfg(feature = "game-data")]
+const GET_VALUES_SINGLE: u32 = 0x669A_451B;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES: u32 = 0x9418_20BE;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES2: u32 = 0xE49A_D72B;
+#[cfg(feature = "game-data")]
+const GET_ALPHA_MULTI_VALUES3: u32 = 0x939D_E7BD;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR: u32 = 0x2482_6489;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR_FACE: u32 = 0x6E5B_8F10;
+#[cfg(feature = "game-data")]
+const GET_SUB_COLOR_HAIR: u32 = 0xF7B8_956E;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR: u32 = 0xD277_7173;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_OFF: u32 = 0x4242_B842;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_ALPHA: u32 = 0x5842_65DD;
+#[cfg(feature = "game-data")]
+const GET_DECAL_COLOR_RGBA: u32 = 0xF35F_5131;
+#[cfg(feature = "game-data")]
+const GET_MATERIAL_VALUE: u32 = 0x380C_AED0;
+#[cfg(feature = "game-data")]
+const GET_MATERIAL_VALUE_BODY: u32 = 0x2BDB_45F1;
+#[cfg(feature = "game-data")]
+const GET_MATERIAL_VALUE_BODY_JJM: u32 = 0x57FF_3B64;
+#[cfg(feature = "game-data")]
+const GET_MATERIAL_VALUE_FACE_EMISSIVE: u32 = 0x72E6_97CD;
+#[cfg(feature = "game-data")]
+const GET_MATERIAL_VALUE_FACE: u32 = 0xF567_3524;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT: u32 = 0xF886_E10E;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT_69EB4AE0: u32 = 0x69EB_4AE0;
+#[cfg(feature = "game-data")]
+const CHARACTER_SCROLL_VARIANT_9A8A46F5: u32 = 0x9A8A_46F5;
+#[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE: u32 = 0x0DA8_270B;
+#[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE_0: u32 = 0xB106_4103;
+#[cfg(feature = "game-data")]
+const LIGHTSHAFT_TYPE_1: u32 = 0xC601_7195;
+#[cfg(feature = "game-data")]
+const G_GLASS_IOR: u32 = 0x7801_E004;
+#[cfg(feature = "game-data")]
+const G_GLASS_THICKNESS_MAX: u32 = 0xC464_7F37;
 #[cfg(feature = "game-data")]
 const G_NORMAL_SCALE: u32 = 0xB554_5FBB;
 #[cfg(feature = "game-data")]
@@ -37,6 +154,24 @@ const G_TILE_INDEX: u32 = 0x4255_F2F4;
 #[cfg(feature = "game-data")]
 const G_TILE_SCALE: u32 = 0x2E60_B071;
 #[cfg(feature = "game-data")]
+const G_TOON_INDEX: u32 = 0xDF15_112D;
+#[cfg(feature = "game-data")]
+const G_TOON_LIGHT_SCALE: u32 = 0x3CCE_9E4C;
+#[cfg(feature = "game-data")]
+const G_TOON_LIGHT_SPEC_APERTURE: u32 = 0x7590_36EE;
+#[cfg(feature = "game-data")]
+const G_TOON_REFLECTION_SCALE: u32 = 0xD96F_AF7A;
+#[cfg(feature = "game-data")]
+const G_TOON_SPEC_INDEX: u32 = 0x00A6_80BC;
+#[cfg(feature = "game-data")]
+const G_SHEEN_APERTURE: u32 = 0xF490_F76E;
+#[cfg(feature = "game-data")]
+const G_SHEEN_RATE: u32 = 0x800E_E35F;
+#[cfg(feature = "game-data")]
+const G_SHEEN_TINT_RATE: u32 = 0x1F26_4897;
+#[cfg(feature = "game-data")]
+const G_SPHERE_MAP_INDEX: u32 = 0x0749_53E9;
+#[cfg(feature = "game-data")]
 const G_DETAIL_COLOR_UV_SCALE: u32 = 0xC63D_9716;
 #[cfg(feature = "game-data")]
 const G_DETAIL_ID: u32 = 0x8981_D4D9;
@@ -44,6 +179,38 @@ const G_DETAIL_ID: u32 = 0x8981_D4D9;
 const G_DETAIL_NORMAL_UV_SCALE: u32 = 0x025A_9BEE;
 #[cfg(feature = "game-data")]
 const G_MULTI_DETAIL_ID: u32 = 0xAC15_6136;
+#[cfg(feature = "game-data")]
+const G_DETAIL_COLOR: u32 = 0xDD93_D839;
+#[cfg(feature = "game-data")]
+const G_MULTI_DETAIL_COLOR: u32 = 0x11FD_4221;
+#[cfg(feature = "game-data")]
+const G_DIFFUSE_COLOR: u32 = 0x2C2A_34DD;
+#[cfg(feature = "game-data")]
+const G_MULTI_DIFFUSE_COLOR: u32 = 0x3F8A_C211;
+#[cfg(feature = "game-data")]
+const G_EMISSIVE_COLOR: u32 = 0x38A6_4362;
+#[cfg(feature = "game-data")]
+const G_MULTI_EMISSIVE_COLOR: u32 = 0xAA67_6D0F;
+#[cfg(feature = "game-data")]
+const G_OUTLINE_COLOR: u32 = 0x623C_C4FE;
+#[cfg(feature = "game-data")]
+const G_OUTLINE_WIDTH: u32 = 0x8870_C938;
+#[cfg(feature = "game-data")]
+const G_SPECULAR_COLOR_MASK: u32 = 0xCB03_38DC;
+#[cfg(feature = "game-data")]
+const G_SSAO_MASK: u32 = 0xB7FA_33E2;
+#[cfg(feature = "game-data")]
+const G_AMBIENT_OCCLUSION_MASK: u32 = 0x575A_BFB2;
+#[cfg(feature = "game-data")]
+const G_TEXTURE_MIP_BIAS: u32 = 0x3955_1220;
+#[cfg(feature = "game-data")]
+const G_TILE_MIP_BIAS_OFFSET: u32 = 0x6421_DD30;
+#[cfg(feature = "game-data")]
+const G_VERTEX_MOVEMENT_SCALE: u32 = 0x641E_0F22;
+#[cfg(feature = "game-data")]
+const G_VERTEX_MOVEMENT_MAX_LENGTH: u32 = 0xD26F_F0AE;
+#[cfg(feature = "game-data")]
+const G_SHADOW_POS_OFFSET: u32 = 0x5351_646E;
 #[cfg(feature = "game-data")]
 const G_UV_SCROLL_TIME: u32 = 0x9A69_6A17;
 #[cfg(feature = "game-data")]
@@ -56,6 +223,10 @@ const G_LIGHTSHAFT_TEX_V: u32 = 0xC02F_F1F9;
 const G_LIGHTSHAFT_RAY: u32 = 0x827B_DD09;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_COLOR: u32 = 0xD27C_58B9;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_ANGLE_CLIP: u32 = 0x71DB_DA81;
+#[cfg(feature = "game-data")]
+const G_LIGHTSHAFT_NEAR_CLIP: u32 = 0x17A5_2926;
 #[cfg(feature = "game-data")]
 #[cfg(test)]
 const APPLY_ALPHA_TEST_OFF: u32 = 0x5D14_6A23;
@@ -74,6 +245,7 @@ pub struct WeaponModelLoadRequest {
     pub item_name: String,
     pub model_main: u64,
     pub model_sub: u64,
+    pub stain_ids: [u8; 2],
 }
 
 #[cfg(feature = "game-data")]
@@ -85,6 +257,16 @@ impl WeaponModelLoadRequest {
     pub fn secondary_model(&self) -> Option<PackedModelId> {
         (self.model_sub != 0).then(|| PackedModelId::from_raw(self.model_sub))
     }
+
+    pub fn with_stain_ids(mut self, stain_ids: [u8; 2]) -> Self {
+        self.stain_ids = stain_ids;
+        self
+    }
+
+    fn normalized_stain_ids(&self) -> [u8; 2] {
+        self.stain_ids
+            .map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0))
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -95,8 +277,83 @@ impl From<&WeaponCatalogItem> for WeaponModelLoadRequest {
             item_name: item.name.clone(),
             model_main: item.model_main,
             model_sub: item.model_sub,
+            stain_ids: [0, 0],
         }
     }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, Default)]
+struct WeaponStainingTemplateLoad {
+    template: Option<StainingTemplate>,
+    error: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug)]
+pub struct WeaponStainingTemplates {
+    stain_ids: [u8; 2],
+    legacy: WeaponStainingTemplateLoad,
+    dawntrail: WeaponStainingTemplateLoad,
+}
+
+#[cfg(feature = "game-data")]
+impl WeaponStainingTemplates {
+    fn disabled(stain_ids: [u8; 2]) -> Self {
+        Self {
+            stain_ids,
+            legacy: WeaponStainingTemplateLoad::default(),
+            dawntrail: WeaponStainingTemplateLoad::default(),
+        }
+    }
+
+    pub fn from_load_results(
+        legacy: Result<Vec<u8>, String>,
+        dawntrail: Result<Vec<u8>, String>,
+    ) -> Self {
+        Self {
+            stain_ids: [0, 0],
+            legacy: staining_template_load_from_result(LEGACY_STAINING_TEMPLATE_PATH, legacy),
+            dawntrail: staining_template_load_from_result(
+                DAWNTRAIL_STAINING_TEMPLATE_PATH,
+                dawntrail,
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn staining_template_load_from_result(
+    path: &str,
+    result: Result<Vec<u8>, String>,
+) -> WeaponStainingTemplateLoad {
+    match result {
+        Ok(bytes) => match StainingTemplate::from_bytes(&bytes) {
+            Ok(template) => WeaponStainingTemplateLoad {
+                template: Some(template),
+                error: None,
+            },
+            Err(error) => WeaponStainingTemplateLoad {
+                template: None,
+                error: Some(format!("failed to parse {path}: {error:#}")),
+            },
+        },
+        Err(error) => WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to read {path}: {error}")),
+        },
+    }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone)]
+struct LoadedMaterialColorTable {
+    slot: usize,
+    material_index: u16,
+    name: String,
+    path: String,
+    rows: Vec<ColorTableRowColors>,
+    dye_table: Option<ModelColorDyeTable>,
 }
 
 #[cfg(feature = "game-data")]
@@ -108,6 +365,56 @@ pub trait AsyncGameResource {
 
     fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a>;
     fn platform(&self) -> physis::Platform;
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageSemanticDebug {
+    pub path: String,
+    pub name: String,
+    pub sampler_resources: Vec<ShaderPackageSamplerResourceDebug>,
+    pub material_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub system_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub scene_keys: Vec<ShaderPackageKeyDefaultDebug>,
+    pub material_constants: Vec<ShaderPackageMaterialConstantDebug>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageSamplerResourceDebug {
+    pub name: String,
+    pub crc: u32,
+    pub crc_hex: String,
+    pub slot: u16,
+    pub size: u16,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
+    pub kind: Option<WeaponModelTextureKind>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageKeyDefaultDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub default_value: u32,
+    pub default_value_hex: String,
+    pub default_value_name: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackageMaterialConstantDebug {
+    pub id: u32,
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub byte_offset: u16,
+    pub byte_size: u16,
+    pub default_values: Option<Vec<f32>>,
 }
 
 #[cfg(feature = "game-data")]
@@ -201,6 +508,7 @@ pub struct MaterialSamplerFlagSummaryDebug {
     pub texture_usage_name: Option<String>,
     pub flags: u32,
     pub flags_hex: String,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
     pub kind: Option<WeaponModelTextureKind>,
     pub kind_source: Option<String>,
 }
@@ -290,8 +598,56 @@ pub struct MaterialSamplerDebug {
     pub texture_usage_name: Option<String>,
     pub flags: u32,
     pub flags_hex: String,
+    pub logical_role: Option<MaterialSamplerLogicalRole>,
     pub kind: Option<WeaponModelTextureKind>,
     pub kind_source: Option<String>,
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialSamplerLogicalRole {
+    BaseColor,
+    SecondaryBaseColor,
+    Normal,
+    SecondaryNormal,
+    Mask,
+    SkinDiffuse,
+    SkinNormal,
+    SkinMask,
+    MaterialMap,
+    MultiMap,
+    Specular,
+    SecondarySpecular,
+    Emissive,
+    Index,
+    Environment,
+    WaterWave,
+    WaterWaveSecondary,
+    WaterWhitecap,
+}
+
+#[cfg(feature = "game-data")]
+impl MaterialSamplerLogicalRole {
+    fn texture_kind(self) -> WeaponModelTextureKind {
+        match self {
+            Self::BaseColor | Self::SkinDiffuse => WeaponModelTextureKind::BaseColor,
+            Self::SecondaryBaseColor => WeaponModelTextureKind::SecondaryBaseColor,
+            Self::Normal | Self::SkinNormal => WeaponModelTextureKind::Normal,
+            Self::SecondaryNormal => WeaponModelTextureKind::SecondaryNormal,
+            Self::Mask | Self::SkinMask => WeaponModelTextureKind::Mask,
+            Self::MaterialMap => WeaponModelTextureKind::MaterialMap,
+            Self::MultiMap => WeaponModelTextureKind::MultiMap,
+            Self::Specular => WeaponModelTextureKind::Specular,
+            Self::SecondarySpecular => WeaponModelTextureKind::SecondarySpecular,
+            Self::Emissive => WeaponModelTextureKind::Emissive,
+            Self::Index => WeaponModelTextureKind::Index,
+            Self::Environment => WeaponModelTextureKind::Environment,
+            Self::WaterWave => WeaponModelTextureKind::WaterWave,
+            Self::WaterWaveSecondary => WeaponModelTextureKind::WaterWaveSecondary,
+            Self::WaterWhitecap => WeaponModelTextureKind::WaterWhitecap,
+        }
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -444,6 +800,492 @@ fn model_load_candidate(
 }
 
 #[cfg(feature = "game-data")]
+fn load_weapon_staining_templates_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    stain_ids: [u8; 2],
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplates {
+    if !stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        return WeaponStainingTemplates::disabled(stain_ids);
+    }
+
+    WeaponStainingTemplates {
+        stain_ids,
+        legacy: load_staining_template_from_resource(
+            resource,
+            LEGACY_STAINING_TEMPLATE_PATH,
+            loaded_paths,
+        ),
+        dawntrail: load_staining_template_from_resource(
+            resource,
+            DAWNTRAIL_STAINING_TEMPLATE_PATH,
+            loaded_paths,
+        ),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn load_staining_template_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplateLoad {
+    let Some(bytes) = resource.read(path) else {
+        return WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to read {path}")),
+        };
+    };
+    match StainingTemplate::from_bytes(&bytes) {
+        Ok(template) => {
+            push_loaded_path(loaded_paths, path.to_string());
+            WeaponStainingTemplateLoad {
+                template: Some(template),
+                error: None,
+            }
+        }
+        Err(error) => WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to parse {path}: {error:#}")),
+        },
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_weapon_staining_templates_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    stain_ids: [u8; 2],
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplates {
+    if !stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        return WeaponStainingTemplates::disabled(stain_ids);
+    }
+
+    let legacy = load_staining_template_from_async_resource(
+        resource,
+        LEGACY_STAINING_TEMPLATE_PATH,
+        loaded_paths,
+    )
+    .await;
+    let dawntrail = load_staining_template_from_async_resource(
+        resource,
+        DAWNTRAIL_STAINING_TEMPLATE_PATH,
+        loaded_paths,
+    )
+    .await;
+    WeaponStainingTemplates {
+        stain_ids,
+        legacy,
+        dawntrail,
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_staining_template_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    path: &str,
+    loaded_paths: &mut Vec<String>,
+) -> WeaponStainingTemplateLoad {
+    let bytes = match resource.read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return WeaponStainingTemplateLoad {
+                template: None,
+                error: Some(format!("failed to read {path}: {error}")),
+            };
+        }
+    };
+    match StainingTemplate::from_bytes(&bytes) {
+        Ok(template) => {
+            push_loaded_path(loaded_paths, path.to_string());
+            WeaponStainingTemplateLoad {
+                template: Some(template),
+                error: None,
+            }
+        }
+        Err(error) => WeaponStainingTemplateLoad {
+            template: None,
+            error: Some(format!("failed to parse {path}: {error:#}")),
+        },
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn apply_weapon_staining(
+    rows: Option<&mut [ColorTableRowColors]>,
+    dye_table: Option<&ModelColorDyeTable>,
+    staining: &WeaponStainingTemplates,
+) -> Option<ModelStainingApplication> {
+    apply_weapon_staining_with_ids(rows, dye_table, staining.stain_ids, staining)
+}
+
+#[cfg(feature = "game-data")]
+fn apply_weapon_staining_with_ids(
+    rows: Option<&mut [ColorTableRowColors]>,
+    dye_table: Option<&ModelColorDyeTable>,
+    stain_ids: [u8; 2],
+    staining: &WeaponStainingTemplates,
+) -> Option<ModelStainingApplication> {
+    if !stain_ids.iter().any(|stain_id| *stain_id != 0) {
+        return None;
+    }
+    let dye_table = dye_table?;
+
+    let (template_path, template, load_error) = match dye_table {
+        ModelColorDyeTable::Legacy(_) => (
+            LEGACY_STAINING_TEMPLATE_PATH,
+            staining.legacy.template.as_ref(),
+            staining.legacy.error.clone(),
+        ),
+        ModelColorDyeTable::Dawntrail(_) => {
+            if let Some(template) = staining.dawntrail.template.as_ref() {
+                (DAWNTRAIL_STAINING_TEMPLATE_PATH, Some(template), None)
+            } else if let Some(template) = staining.legacy.template.as_ref() {
+                (LEGACY_STAINING_TEMPLATE_PATH, Some(template), None)
+            } else {
+                let error = [
+                    staining.dawntrail.error.as_deref(),
+                    staining.legacy.error.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; ");
+                (
+                    DAWNTRAIL_STAINING_TEMPLATE_PATH,
+                    None,
+                    (!error.is_empty()).then_some(error),
+                )
+            }
+        }
+        ModelColorDyeTable::Opaque => {
+            return Some(ModelStainingApplication {
+                stain_ids,
+                template_path: String::new(),
+                report: StainingApplicationReport::default(),
+                error: Some("opaque ColorDyeTable cannot be applied".to_string()),
+            });
+        }
+    };
+
+    let Some(rows) = rows else {
+        return Some(ModelStainingApplication {
+            stain_ids,
+            template_path: template_path.to_string(),
+            report: StainingApplicationReport::default(),
+            error: Some("material has no supported ColorTable rows".to_string()),
+        });
+    };
+    let Some(template) = template else {
+        return Some(ModelStainingApplication {
+            stain_ids,
+            template_path: template_path.to_string(),
+            report: StainingApplicationReport::default(),
+            error: load_error.or_else(|| Some(format!("{template_path} is unavailable"))),
+        });
+    };
+
+    Some(ModelStainingApplication {
+        stain_ids,
+        template_path: template_path.to_string(),
+        report: apply_staining_template_to_rows(rows, dye_table, &stain_ids, template),
+        error: None,
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn material_needs_tile_arrays(material: &ModelMaterial) -> bool {
+    let shader_family =
+        crate::model::material_shader_family(material.shader_package_name.as_deref());
+    if !matches!(
+        shader_family,
+        crate::model::MaterialShaderFamily::Character
+            | crate::model::MaterialShaderFamily::CharacterStockings
+            | crate::model::MaterialShaderFamily::CharacterGlass
+            | crate::model::MaterialShaderFamily::CharacterReflection
+            | crate::model::MaterialShaderFamily::CharacterTransparency
+            | crate::model::MaterialShaderFamily::CharacterScroll
+            | crate::model::MaterialShaderFamily::CharacterTattoo
+            | crate::model::MaterialShaderFamily::CharacterOcclusion
+    ) {
+        return false;
+    }
+    let bindings = crate::model::prepared_texture_bindings(Some(material));
+    crate::model::prepared_material_feature_flags(Some(material), shader_family, bindings).uses_tile
+}
+
+#[cfg(feature = "game-data")]
+fn material_needs_detail_arrays(material: &ModelMaterial) -> bool {
+    let shader_family =
+        crate::model::material_shader_family(material.shader_package_name.as_deref());
+    if !matches!(
+        shader_family,
+        crate::model::MaterialShaderFamily::Bg | crate::model::MaterialShaderFamily::BgUvScroll
+    ) {
+        return false;
+    }
+    let bindings = crate::model::prepared_texture_bindings(Some(material));
+    crate::model::prepared_material_feature_flags(Some(material), shader_family, bindings)
+        .uses_detail
+}
+
+#[cfg(feature = "game-data")]
+fn attach_shared_material_arrays_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    materials: &mut [ModelMaterial],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) {
+    let needs_tile = materials.iter().any(material_needs_tile_arrays);
+    let needs_detail = materials.iter().any(material_needs_detail_arrays);
+    let tile_normal = needs_tile.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            CHARACTER_TILE_NORMAL_ARRAY_PATH,
+            ModelTextureKind::TileNormalArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let tile_orb = needs_tile.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            CHARACTER_TILE_ORB_ARRAY_PATH,
+            ModelTextureKind::TileOrbArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let detail_diffuse = needs_detail.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            BG_DETAIL_DIFFUSE_ARRAY_PATH,
+            ModelTextureKind::DetailDiffuseArray,
+            textures,
+            loaded_paths,
+        )
+    });
+    let detail_normal = needs_detail.then(|| {
+        load_shared_texture_array_from_resource(
+            resource,
+            BG_DETAIL_NORMAL_ARRAY_PATH,
+            ModelTextureKind::DetailNormalArray,
+            textures,
+            loaded_paths,
+        )
+    });
+
+    for material in materials {
+        if material_needs_tile_arrays(material) {
+            apply_shared_array_result(material, &tile_normal, SharedArraySlot::TileNormal);
+            apply_shared_array_result(material, &tile_orb, SharedArraySlot::TileOrb);
+        }
+        if material_needs_detail_arrays(material) {
+            apply_shared_array_result(material, &detail_diffuse, SharedArraySlot::DetailDiffuse);
+            apply_shared_array_result(material, &detail_normal, SharedArraySlot::DetailNormal);
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy)]
+enum SharedArraySlot {
+    TileNormal,
+    TileOrb,
+    DetailDiffuse,
+    DetailNormal,
+}
+
+#[cfg(feature = "game-data")]
+fn apply_shared_array_result(
+    material: &mut ModelMaterial,
+    result: &Option<Result<usize, String>>,
+    slot: SharedArraySlot,
+) {
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(index) => {
+            let target = match slot {
+                SharedArraySlot::TileNormal => &mut material.texture_arrays.tile_normal,
+                SharedArraySlot::TileOrb => &mut material.texture_arrays.tile_orb,
+                SharedArraySlot::DetailDiffuse => &mut material.texture_arrays.detail_diffuse,
+                SharedArraySlot::DetailNormal => &mut material.texture_arrays.detail_normal,
+            };
+            *target = Some(*index);
+            add_unique_index(&mut material.texture_indices, *index);
+        }
+        Err(error) => {
+            if !material.texture_arrays.errors.contains(error) {
+                material.texture_arrays.errors.push(error.clone());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn load_shared_texture_array_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+    kind: ModelTextureKind,
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+        return Ok(index);
+    }
+    let bytes = resource
+        .read(path)
+        .ok_or_else(|| format!("failed to read shared texture array {path}"))?;
+    decode_and_push_shared_texture_array(
+        resource.platform(),
+        path,
+        kind,
+        &bytes,
+        textures,
+        loaded_paths,
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn decode_and_push_shared_texture_array(
+    platform: physis::Platform,
+    path: &str,
+    kind: ModelTextureKind,
+    bytes: &[u8],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    use physis::ReadableFile;
+
+    let mut texture = physis::tex::Texture::from_existing(platform, bytes)
+        .ok_or_else(|| format!("failed to parse shared texture array {path}"))?;
+    let decoded = crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, bytes)
+        .ok_or_else(|| format!("failed to decode shared texture array {path}"))?;
+    if decoded.array_size <= 1 {
+        return Err(format!("shared texture {path} is not a 2D array"));
+    }
+    let index = textures.len();
+    textures.push(ModelTexture {
+        path: path.to_string(),
+        kind,
+        texel_layout: ModelTextureTexelLayout::Standard,
+        width: decoded.width,
+        height: decoded.height,
+        array_size: decoded.array_size,
+        array_layer_height: decoded.array_layer_height,
+        rgba: decoded.rgba,
+        rgba_f32: None,
+    });
+    push_loaded_path(loaded_paths, path.to_string());
+    Ok(index)
+}
+
+#[cfg(feature = "game-data")]
+async fn attach_shared_material_arrays_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    materials: &mut [ModelMaterial],
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) {
+    let needs_tile = materials.iter().any(material_needs_tile_arrays);
+    let needs_detail = materials.iter().any(material_needs_detail_arrays);
+    let tile_normal = if needs_tile {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                CHARACTER_TILE_NORMAL_ARRAY_PATH,
+                ModelTextureKind::TileNormalArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let tile_orb = if needs_tile {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                CHARACTER_TILE_ORB_ARRAY_PATH,
+                ModelTextureKind::TileOrbArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let detail_diffuse = if needs_detail {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                BG_DETAIL_DIFFUSE_ARRAY_PATH,
+                ModelTextureKind::DetailDiffuseArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let detail_normal = if needs_detail {
+        Some(
+            load_shared_texture_array_from_async_resource(
+                resource,
+                BG_DETAIL_NORMAL_ARRAY_PATH,
+                ModelTextureKind::DetailNormalArray,
+                textures,
+                loaded_paths,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
+    for material in materials {
+        if material_needs_tile_arrays(material) {
+            apply_shared_array_result(material, &tile_normal, SharedArraySlot::TileNormal);
+            apply_shared_array_result(material, &tile_orb, SharedArraySlot::TileOrb);
+        }
+        if material_needs_detail_arrays(material) {
+            apply_shared_array_result(material, &detail_diffuse, SharedArraySlot::DetailDiffuse);
+            apply_shared_array_result(material, &detail_normal, SharedArraySlot::DetailNormal);
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+async fn load_shared_texture_array_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    path: &str,
+    kind: ModelTextureKind,
+    textures: &mut Vec<ModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Result<usize, String> {
+    if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+        return Ok(index);
+    }
+    let bytes = resource
+        .read(path)
+        .await
+        .map_err(|error| format!("failed to read shared texture array {path}: {error}"))?;
+    decode_and_push_shared_texture_array(
+        resource.platform(),
+        path,
+        kind,
+        &bytes,
+        textures,
+        loaded_paths,
+    )
+}
+
+#[cfg(feature = "game-data")]
 pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     resource: &mut R,
     request: &WeaponModelLoadRequest,
@@ -455,14 +1297,20 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     let mut materials = Vec::new();
     let mut textures = Vec::new();
     let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_resource(resource, stain_ids, &mut loaded_paths);
 
     load_weapon_model_meshes_from_resource(
         resource,
         model_main,
+        &staining,
         &mut loaded_paths,
         &mut materials,
         &mut textures,
         &mut meshes,
+        &mut color_table_sources,
     )
     .map_err(WeaponModelMeshLoadFailure::into_error)?;
 
@@ -471,15 +1319,24 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
             if let Err(failure) = load_weapon_model_meshes_from_resource(
                 resource,
                 model_sub,
+                &staining,
                 &mut loaded_paths,
                 &mut materials,
                 &mut textures,
                 &mut meshes,
+                &mut color_table_sources,
             ) {
                 load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
             }
         }
     }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
 
     if meshes.is_empty() {
         return Err(anyhow::anyhow!(
@@ -493,6 +1350,7 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        stain_ids,
         load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
@@ -518,15 +1376,25 @@ pub fn meshes_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<Vec<Wea
         let color = material_color(mesh.material_index);
         for range in mesh_index_ranges(mesh.indices.len(), &mesh.submeshes) {
             let raw_indices = &mesh.indices[range.start..range.end];
-            let Some((vertices, indices)) = remap_mesh_vertices(&mesh.vertices, raw_indices) else {
+            let Some((vertices, indices, shape_targets)) = remap_mesh_vertices_with_shapes(
+                &mesh.vertices,
+                raw_indices,
+                range.start,
+                &mesh.shape_targets,
+            ) else {
                 continue;
             };
+            let shape_influences = shape_targets
+                .iter()
+                .map(|target| target.shape.clone())
+                .collect();
             meshes.push(WeaponModelMesh {
                 path: mesh_path_with_submesh(path, mesh.mesh_index, range.submesh_index),
                 part_index: mesh.mesh_index as u32,
                 mesh_category: Some(mesh.category.clone()),
                 submesh: range.submesh.clone(),
-                shape_influences: mesh.shape_influences.clone(),
+                shape_influences,
+                shape_targets,
                 material_index: mesh.material_index,
                 material_slot: mesh.material_index as usize,
                 material_name: mesh.material_name.clone(),
@@ -642,47 +1510,188 @@ fn mesh_path_with_submesh(path: &str, part_index: usize, submesh_index: Option<u
 }
 
 #[cfg(feature = "game-data")]
+#[cfg(test)]
 fn remap_mesh_vertices(
     vertices: &[WeaponModelVertex],
     indices: &[u16],
 ) -> Option<(Vec<WeaponModelVertex>, Vec<u32>)> {
+    let (vertices, indices, _) = remap_mesh_vertices_with_shapes(vertices, indices, 0, &[])?;
+    Some((vertices, indices))
+}
+
+#[cfg(feature = "game-data")]
+fn remap_mesh_vertices_with_shapes(
+    vertices: &[WeaponModelVertex],
+    indices: &[u16],
+    index_position_offset: usize,
+    shape_targets: &[crate::mdl_geometry::MdlGeometryShapeTarget],
+) -> Option<(Vec<WeaponModelVertex>, Vec<u32>, Vec<ModelShapeTarget>)> {
     if indices.len() % 3 != 0 {
         return None;
     }
 
     let mut remapped_vertices = Vec::new();
-    let mut remap = HashMap::<u16, u32>::new();
+    let mut remap = HashMap::<(u16, Vec<(usize, usize)>), u32>::new();
     let mut remapped_indices = Vec::with_capacity(indices.len());
+    let mut replacements_by_position = HashMap::<usize, Vec<(usize, usize)>>::new();
+    for (target_index, target) in shape_targets.iter().enumerate() {
+        for replacement in &target.replacements {
+            if replacement.replacing_vertex_index >= vertices.len() {
+                continue;
+            }
+            replacements_by_position
+                .entry(replacement.base_indices_index)
+                .or_default()
+                .push((target_index, replacement.replacing_vertex_index));
+        }
+    }
+    for replacements in replacements_by_position.values_mut() {
+        replacements.sort_unstable();
+        replacements.dedup_by_key(|(target_index, _)| *target_index);
+    }
+    let mut target_deltas = vec![Vec::new(); shape_targets.len()];
 
-    for triangle in indices.chunks_exact(3) {
-        let a = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[0])?;
-        let b = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[1])?;
-        let c = remap_vertex_index(vertices, &mut remapped_vertices, &mut remap, triangle[2])?;
-        remapped_indices.extend([a, b, c]);
+    for (local_position, index) in indices.iter().copied().enumerate() {
+        let source_vertex = *vertices.get(usize::from(index))?;
+        let replacements = replacements_by_position
+            .get(&index_position_offset.saturating_add(local_position))
+            .cloned()
+            .unwrap_or_default();
+        let key = (index, replacements.clone());
+        let remapped_index = if let Some(remapped_index) = remap.get(&key) {
+            *remapped_index
+        } else {
+            let remapped_index = remapped_vertices.len() as u32;
+            remapped_vertices.push(source_vertex);
+            for (target_index, replacing_vertex_index) in &replacements {
+                let replacement = vertices[*replacing_vertex_index];
+                target_deltas[*target_index].push(ModelShapeVertexDelta {
+                    vertex_index: remapped_index,
+                    position: subtract_vec3(replacement.position, source_vertex.position),
+                    normal: subtract_vec3(replacement.normal, source_vertex.normal),
+                });
+            }
+            remap.insert(key, remapped_index);
+            remapped_index
+        };
+        remapped_indices.push(remapped_index);
     }
 
-    Some((remapped_vertices, remapped_indices))
+    let shape_targets = shape_targets
+        .iter()
+        .zip(target_deltas)
+        .filter_map(|(target, vertex_deltas)| {
+            (!vertex_deltas.is_empty()).then(|| ModelShapeTarget {
+                shape: target.info.clone(),
+                vertex_deltas,
+            })
+        })
+        .collect();
+
+    Some((remapped_vertices, remapped_indices, shape_targets))
 }
 
 #[cfg(feature = "game-data")]
-fn remap_vertex_index(
-    vertices: &[WeaponModelVertex],
-    remapped_vertices: &mut Vec<WeaponModelVertex>,
-    remap: &mut HashMap<u16, u32>,
-    index: u16,
-) -> Option<u32> {
-    if usize::from(index) >= vertices.len() {
-        return None;
-    }
+fn subtract_vec3(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
 
-    if let Some(remapped_index) = remap.get(&index) {
-        Some(*remapped_index)
-    } else {
-        let remapped_index = remapped_vertices.len() as u32;
-        remapped_vertices.push(vertices[usize::from(index)]);
-        remap.insert(index, remapped_index);
-        Some(remapped_index)
+#[cfg(feature = "game-data")]
+pub fn shader_package_semantic_debug_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    shader_package_name: &str,
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    use anyhow::anyhow;
+
+    let name = normalize_game_resource_path(shader_package_name);
+    if name.is_empty() {
+        return Err(anyhow!("shader package name is empty"));
     }
+    let path = if name.contains('/') {
+        name
+    } else {
+        format!("shader/sm5/shpk/{name}")
+    };
+    let bytes = resource
+        .read(&path)
+        .ok_or_else(|| anyhow!("failed to read shader package {path}"))?;
+
+    shader_package_semantic_debug_from_bytes_for_platform(&path, &bytes, resource.platform())
+}
+
+#[cfg(feature = "game-data")]
+pub fn shader_package_semantic_debug_from_shpk_bytes(
+    path: &str,
+    bytes: &[u8],
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    shader_package_semantic_debug_from_bytes_for_platform(path, bytes, physis::Platform::Win32)
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_semantic_debug_from_bytes_for_platform(
+    path: &str,
+    bytes: &[u8],
+    platform: physis::Platform,
+) -> anyhow::Result<ShaderPackageSemanticDebug> {
+    use anyhow::anyhow;
+    use physis::ReadableFile;
+
+    let path = normalize_game_resource_path(path);
+    let name = path.rsplit('/').next().unwrap_or_default().to_string();
+    let shader_package = physis::shpk::ShaderPackage::from_existing(platform, bytes)
+        .ok_or_else(|| anyhow!("failed to parse shader package {path}"))?;
+
+    Ok(ShaderPackageSemanticDebug {
+        path,
+        name,
+        sampler_resources: shader_package
+            .sampler_parameters
+            .iter()
+            .map(|parameter| {
+                let crc = physis::shpk::ShaderPackage::crc(&parameter.name);
+                let logical_role = classify_sampler_logical_role_name(&parameter.name);
+                ShaderPackageSamplerResourceDebug {
+                    name: parameter.name.clone(),
+                    crc,
+                    crc_hex: hex_u32(crc),
+                    slot: parameter.slot,
+                    size: parameter.size,
+                    logical_role,
+                    kind: logical_role.map(MaterialSamplerLogicalRole::texture_kind),
+                }
+            })
+            .collect(),
+        material_keys: shader_package_key_defaults_debug(&shader_package.material_keys),
+        system_keys: shader_package_key_defaults_debug(&shader_package.system_keys),
+        scene_keys: shader_package_key_defaults_debug(&shader_package.scene_keys),
+        material_constants: shader_package_material_parameters_for_platform(bytes, platform)
+            .into_iter()
+            .map(|parameter| ShaderPackageMaterialConstantDebug {
+                id: parameter.id,
+                id_hex: hex_u32(parameter.id),
+                name: known_material_constant_name(parameter.id),
+                byte_offset: parameter.byte_offset,
+                byte_size: parameter.byte_size,
+                default_values: parameter.default_values,
+            })
+            .collect(),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_key_defaults_debug(
+    keys: &[physis::shpk::Key],
+) -> Vec<ShaderPackageKeyDefaultDebug> {
+    keys.iter()
+        .map(|key| ShaderPackageKeyDefaultDebug {
+            id: key.id,
+            id_hex: hex_u32(key.id),
+            name: known_shader_label(key.id),
+            default_value: key.default_value,
+            default_value_hex: hex_u32(key.default_value),
+            default_value_name: known_shader_label(key.default_value),
+        })
+        .collect()
 }
 
 #[cfg(feature = "game-data")]
@@ -736,7 +1745,8 @@ fn material_debug_info_from_parsed_material(
 ) -> anyhow::Result<MaterialDebugInfo> {
     let sampler_records = parse_material_sampler_records(bytes, semantics);
     let shader_flags = parse_material_shader_flags(bytes);
-    let low_level = material_low_level_debug(bytes, &material.texture_paths);
+    let texture_paths = material_texture_paths_from_offsets(bytes, &material.texture_paths);
+    let low_level = material_low_level_debug(bytes, &texture_paths);
     let texture_offsets = low_level
         .as_ref()
         .map(|debug| debug.texture_offsets.clone())
@@ -756,12 +1766,13 @@ fn material_debug_info_from_parsed_material(
         .into_iter()
         .map(|record| MaterialSamplerDebug {
             texture_index: record.texture_index,
-            texture_path: material.texture_paths.get(record.texture_index).cloned(),
+            texture_path: texture_paths.get(record.texture_index).cloned(),
             texture_usage: record.texture_usage,
             texture_usage_hex: hex_u32(record.texture_usage),
             texture_usage_name: record.texture_usage_name,
             flags: record.flags,
             flags_hex: hex_u32(record.flags),
+            logical_role: record.logical_role,
             kind: record.kind,
             kind_source: record.kind_source.map(ToString::to_string),
         })
@@ -784,7 +1795,7 @@ fn material_debug_info_from_parsed_material(
             .and_then(|debug| debug.shader_header.clone()),
         shader_flags,
         shader_flags_hex: hex_u32(shader_flags),
-        texture_paths: material.texture_paths.clone(),
+        texture_paths,
         texture_offsets,
         uv_color_sets: low_level
             .as_ref()
@@ -884,6 +1895,7 @@ fn material_semantic_summary(
             texture_usage_name: sampler.texture_usage_name.clone(),
             flags: sampler.flags,
             flags_hex: sampler.flags_hex.clone(),
+            logical_role: sampler.logical_role,
             kind: sampler.kind,
             kind_source: sampler.kind_source.clone(),
         })
@@ -909,6 +1921,11 @@ fn known_material_constant_name(id: u32) -> Option<String> {
     if id == 0x9A69_6A17 {
         return Some("UvScrollMapping".to_string());
     }
+    if id == G_VERTEX_ALPHA_TO_ONE {
+        // Meddle still records this CRC as unknown. The descriptive label is
+        // based on the installed DXBC formula, not claimed as an official name.
+        return Some("VertexAlphaToOne".to_string());
+    }
     known_crc_label(
         id,
         &[
@@ -918,6 +1935,15 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_TileIndex",
             "g_TileAlpha",
             "g_TileScale",
+            "g_ToonIndex",
+            "g_ToonLightScale",
+            "g_ToonLightSpecAperture",
+            "g_ToonReflectionScale",
+            "g_ToonSpecIndex",
+            "g_SheenAperture",
+            "g_SheenRate",
+            "g_SheenTintRate",
+            "g_SphereMapIndex",
             "g_DetailID",
             "g_MultiDetailID",
             "g_DetailColorUvScale",
@@ -926,7 +1952,13 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_MultiDetailColor",
             "g_DetailNormalScale",
             "g_MultiDetailNormalScale",
+            "g_AlphaAperture",
+            "g_AlphaOffset",
+            "g_ShadowAlphaThreshold",
             "g_Transparency",
+            "g_WaterDeepColor",
+            "g_RefractionColor",
+            "g_WhitecapColor",
             "g_TexAnim",
             "g_TexU",
             "g_TexV",
@@ -936,24 +1968,60 @@ fn known_material_constant_name(id: u32) -> Option<String> {
             "g_EmissiveColor",
             "g_MultiDiffuseColor",
             "g_MultiEmissiveColor",
+            "g_OutlineColor",
+            "g_OutlineWidth",
+            "g_SpecularColorMask",
+            "g_SSAOMask",
+            "g_AmbientOcclusionMask",
+            "g_TextureMipBias",
+            "g_TileMipBiasOffset",
+            "g_VertexMovementScale",
+            "g_VertexMovementMaxLength",
+            "g_ShadowPosOffset",
+            "g_GlassIOR",
+            "g_GlassThicknessMax",
         ],
     )
 }
 
 #[cfg(feature = "game-data")]
 fn known_shader_label(id: u32) -> Option<String> {
+    let fixed_label = match id {
+        CATEGORY_FLOW_MAP_TYPE => Some("CategoryFlowMapType"),
+        FLOW_MAP_STANDARD => Some("Standard"),
+        FLOW_MAP_FLOW => Some("Flow"),
+        CATEGORY_SPECULAR_TYPE => Some("CategorySpecularType"),
+        SPECULAR_TYPE_DEFAULT => Some("Default"),
+        SPECULAR_TYPE_MASK => Some("Mask"),
+        _ => None,
+    };
+    if let Some(label) = fixed_label {
+        return Some(label.to_string());
+    }
     known_crc_label(
         id,
         &[
             "ApplyAlphaTest",
             "ApplyAlphaTestOn",
             "ApplyAlphaTestOff",
+            "ApplyAlphaClip",
+            "ApplyAlphaClipOn",
+            "ApplyAlphaClipOff",
             "ApplyVertexColor",
             "ApplyVertexColorOn",
             "ApplyVertexColorOff",
+            "ApplyVertexMovement",
+            "ApplyVertexMovementOff",
+            "ApplyVertexMovementOn",
+            "DrawDepthMode",
+            "DrawDepthMode_Dither",
+            "EnableLighting",
+            "EnableLightingOff",
+            "EnableLightingOn",
             "GetValues",
             "GetSingleValues",
             "GetMultiValues",
+            "GetValuesMultiMaterial",
             "GetAlphaMultiValues",
             "GetAlphaMultiValues2",
             "GetAlphaMultiValues3",
@@ -966,10 +2034,18 @@ fn known_shader_label(id: u32) -> Option<String> {
             "GetMaterialValueBodyJJM",
             "GetMaterialValueFaceEmissive",
             "GetDecalColor",
+            "GetDecalColorOff",
             "GetDecalColorAlpha",
+            "GetDecalColorRGBA",
             "GetSubColor",
             "GetSubColorFace",
             "GetSubColorHair",
+            "CategorySpecularType",
+            "Default",
+            "Mask",
+            "CategoryFlowMapType",
+            "Standard",
+            "Flow",
         ],
     )
 }
@@ -1004,6 +2080,58 @@ struct MaterialLowLevelDebug {
     data_set_size: usize,
     shader_value_list_size: usize,
     shader_value_count: usize,
+}
+
+#[cfg(feature = "game-data")]
+fn material_texture_paths_from_offsets(bytes: &[u8], fallback: &[String]) -> Vec<String> {
+    let Some(string_table_size) = read_u16_le(bytes, 8).map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(texture_count) = bytes.get(12).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(uv_set_count) = bytes.get(13).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+    let Some(color_set_count) = bytes.get(14).copied().map(usize::from) else {
+        return fallback.to_vec();
+    };
+
+    let mut texture_offsets = Vec::with_capacity(texture_count);
+    let mut offset = 16_usize;
+    for _ in 0..texture_count {
+        let Some(raw) = read_u32_le(bytes, offset) else {
+            return fallback.to_vec();
+        };
+        texture_offsets.push(raw as u16);
+        let Some(next) = checked_advance(offset, 4, bytes.len()) else {
+            return fallback.to_vec();
+        };
+        offset = next;
+    }
+
+    let named_set_bytes = uv_set_count
+        .checked_add(color_set_count)
+        .and_then(|count| count.checked_mul(4));
+    let Some(string_table_offset) =
+        named_set_bytes.and_then(|size| checked_advance(offset, size, bytes.len()))
+    else {
+        return fallback.to_vec();
+    };
+    let Some(string_table) = read_bytes(bytes, string_table_offset, string_table_size) else {
+        return fallback.to_vec();
+    };
+
+    let resolved = texture_offsets
+        .into_iter()
+        .enumerate()
+        .map(|(index, string_offset)| {
+            read_string_at(string_table, usize::from(string_offset))
+                .or_else(|| fallback.get(index).cloned())
+        })
+        .collect::<Option<Vec<_>>>();
+
+    resolved.unwrap_or_else(|| fallback.to_vec())
 }
 
 #[cfg(feature = "game-data")]
@@ -1257,68 +2385,62 @@ fn material_color_dye_table_kind(color_dye_table: &physis::mtrl::ColorDyeTable) 
 fn material_color_dye_table_debug(
     color_dye_table: Option<&physis::mtrl::ColorDyeTable>,
 ) -> Option<MaterialColorDyeTableDebug> {
-    match color_dye_table? {
-        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(table) => {
-            Some(MaterialColorDyeTableDebug {
-                kind: "Legacy".to_string(),
-                row_count: table.rows.len(),
-                rows: table
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
-                        index,
-                        template: row.template,
-                        channel: None,
-                        diffuse: row.diffuse,
-                        specular: row.specular,
-                        emissive: row.emissive,
-                        gloss: Some(row.gloss),
-                        specular_strength: Some(row.specular_strength),
-                        scalar3: None,
-                        metalness: None,
-                        roughness: None,
-                        sheen_rate: None,
-                        sheen_tint_rate: None,
-                        sheen_aperture: None,
-                        anisotropy: None,
-                        sphere_map_index: None,
-                        sphere_map_mask: None,
-                    })
-                    .collect(),
-            })
-        }
-        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(table) => {
-            Some(MaterialColorDyeTableDebug {
-                kind: "Dawntrail".to_string(),
-                row_count: table.rows.len(),
-                rows: table
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| MaterialColorDyeTableRowDebug {
-                        index,
-                        template: row.template,
-                        channel: Some(row.channel),
-                        diffuse: row.diffuse,
-                        specular: row.specular,
-                        emissive: row.emissive,
-                        gloss: None,
-                        specular_strength: None,
-                        scalar3: Some(row.scalar3),
-                        metalness: Some(row.metalness),
-                        roughness: Some(row.roughness),
-                        sheen_rate: Some(row.sheen_rate),
-                        sheen_tint_rate: Some(row.sheen_tint_rate),
-                        sheen_aperture: Some(row.sheen_aperture),
-                        anisotropy: Some(row.anisotropy),
-                        sphere_map_index: Some(row.sphere_map_index),
-                        sphere_map_mask: Some(row.sphere_map_mask),
-                    })
-                    .collect(),
-            })
-        }
-        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => Some(MaterialColorDyeTableDebug {
+    match model_color_dye_table(color_dye_table)? {
+        ModelColorDyeTable::Legacy(rows) => Some(MaterialColorDyeTableDebug {
+            kind: "Legacy".to_string(),
+            row_count: rows.len(),
+            rows: rows
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                    index,
+                    template: row.template,
+                    channel: None,
+                    diffuse: row.diffuse,
+                    specular: row.specular,
+                    emissive: row.emissive,
+                    gloss: Some(row.gloss),
+                    specular_strength: Some(row.specular_strength),
+                    scalar3: None,
+                    metalness: None,
+                    roughness: None,
+                    sheen_rate: None,
+                    sheen_tint_rate: None,
+                    sheen_aperture: None,
+                    anisotropy: None,
+                    sphere_map_index: None,
+                    sphere_map_mask: None,
+                })
+                .collect(),
+        }),
+        ModelColorDyeTable::Dawntrail(rows) => Some(MaterialColorDyeTableDebug {
+            kind: "Dawntrail".to_string(),
+            row_count: rows.len(),
+            rows: rows
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| MaterialColorDyeTableRowDebug {
+                    index,
+                    template: row.template,
+                    channel: Some(row.channel),
+                    diffuse: row.diffuse,
+                    specular: row.specular,
+                    emissive: row.emissive,
+                    gloss: None,
+                    specular_strength: None,
+                    scalar3: Some(row.scalar3),
+                    metalness: Some(row.metalness),
+                    roughness: Some(row.roughness),
+                    sheen_rate: Some(row.sheen_rate),
+                    sheen_tint_rate: Some(row.sheen_tint_rate),
+                    sheen_aperture: Some(row.sheen_aperture),
+                    anisotropy: Some(row.anisotropy),
+                    sphere_map_index: Some(row.sphere_map_index),
+                    sphere_map_mask: Some(row.sphere_map_mask),
+                })
+                .collect(),
+        }),
+        ModelColorDyeTable::Opaque => Some(MaterialColorDyeTableDebug {
             kind: "Opaque".to_string(),
             row_count: 0,
             rows: Vec::new(),
@@ -1327,13 +2449,64 @@ fn material_color_dye_table_debug(
 }
 
 #[cfg(feature = "game-data")]
+fn model_color_dye_table(
+    color_dye_table: Option<&physis::mtrl::ColorDyeTable>,
+) -> Option<ModelColorDyeTable> {
+    match color_dye_table? {
+        physis::mtrl::ColorDyeTable::LegacyColorDyeTable(table) => {
+            Some(ModelColorDyeTable::Legacy(
+                table
+                    .rows
+                    .iter()
+                    .map(|row| ModelLegacyColorDyeTableRow {
+                        template: row.template,
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        gloss: row.gloss,
+                        specular_strength: row.specular_strength,
+                    })
+                    .collect(),
+            ))
+        }
+        physis::mtrl::ColorDyeTable::DawntrailColorDyeTable(table) => {
+            Some(ModelColorDyeTable::Dawntrail(
+                table
+                    .rows
+                    .iter()
+                    .map(|row| ModelDawntrailColorDyeTableRow {
+                        template: row.template,
+                        channel: row.channel,
+                        diffuse: row.diffuse,
+                        specular: row.specular,
+                        emissive: row.emissive,
+                        scalar3: row.scalar3,
+                        metalness: row.metalness,
+                        roughness: row.roughness,
+                        sheen_rate: row.sheen_rate,
+                        sheen_tint_rate: row.sheen_tint_rate,
+                        sheen_aperture: row.sheen_aperture,
+                        anisotropy: row.anisotropy,
+                        sphere_map_index: row.sphere_map_index,
+                        sphere_map_mask: row.sphere_map_mask,
+                    })
+                    .collect(),
+            ))
+        }
+        physis::mtrl::ColorDyeTable::OpaqueColorDyeTable(_) => Some(ModelColorDyeTable::Opaque),
+    }
+}
+
+#[cfg(feature = "game-data")]
 fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
+    staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     meshes: &mut Vec<WeaponModelMesh>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) -> Result<(), WeaponModelMeshLoadFailure> {
     use anyhow::Context;
 
@@ -1366,10 +2539,12 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
             resource,
             model,
             &path,
+            staining,
             &mut path_meshes,
             materials,
             textures,
             loaded_paths,
+            color_table_sources,
         );
         meshes.append(&mut path_meshes);
         return Ok(());
@@ -1383,10 +2558,12 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) {
     let mut slots = Vec::<(u16, usize)>::new();
     let mut material_specs = Vec::<(u16, String)>::new();
@@ -1405,12 +2582,16 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
             resource,
             model,
             model_path,
+            staining,
             material_index,
             material_name,
             slot,
+            materials,
             textures,
             loaded_paths,
+            color_table_sources,
         );
+        let material = reuse_loaded_material_for_missing_reference(material, materials);
         materials.push(material);
         slots.push((material_index, slot));
     }
@@ -1430,11 +2611,14 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     material_index: u16,
     material_name: String,
     slot: usize,
+    loaded_materials: &[WeaponModelMaterial],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) -> WeaponModelMaterial {
     use physis::ReadableFile;
 
@@ -1448,10 +2632,35 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         else {
             continue;
         };
+        let texture_paths = material_texture_paths_from_offsets(&bytes, &material.texture_paths);
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
-        let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
+        let mut color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
+        let mut color_table_rows = material
+            .color_table
+            .as_ref()
+            .and_then(weapon_color_table_rows);
+        let reference_fallback = resolve_loaded_color_table_reference(
+            slot,
+            material_index,
+            &material_name,
+            &path,
+            &mut color_table_rows,
+            &mut color_dye_table,
+            color_table_sources,
+        );
+        let fallback_index_texture = loaded_color_table_reference_index_texture(
+            reference_fallback.as_ref(),
+            loaded_materials,
+        );
+        let base_color_table_rows = color_table_rows.clone();
+        let staining_application = apply_weapon_staining(
+            color_table_rows.as_deref_mut(),
+            color_dye_table.as_ref(),
+            staining,
+        );
+        let summary = summarize_material_colors(color_table_rows.as_deref(), fallback);
         let semantics = load_composed_material_semantics_from_resource(
             resource,
             &shader_package_name,
@@ -1465,7 +2674,32 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
-        let transparency = composed_material_transparency(&semantics);
+        let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
+        let lighting_mode = composed_material_lighting_mode(&semantics);
+        let flow_mode = composed_material_flow_mode(&semantics);
+        let (specular_type, specular_type_raw) = composed_material_specular_type(&semantics);
+        let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
+        let color_table_diffuse_composition = color_table_diffuse_composition(
+            material_shader_family(Some(&shader_package_name)),
+            composed_material_uses_compatibility_values(&semantics),
+        );
+        let sub_color_mode = composed_material_sub_color_mode(&semantics);
+        let (decal_color_mode, decal_color_mode_raw) =
+            composed_material_decal_color_mode(&semantics);
+        let skin_value_mode = composed_material_skin_value_mode(&semantics);
+        let (character_scroll_variant, character_scroll_variant_raw) =
+            composed_material_character_scroll_variant(&semantics);
+        let (lightshaft_type, lightshaft_type_raw) = composed_material_lightshaft_type(&semantics);
+        let transparency = composed_material_transparency(&semantics, &shader_package_name);
+        let water_deep_color = composed_material_water_deep_color(&semantics);
+        let water_refraction_color = composed_material_water_refraction_color(&semantics);
+        let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
+        let alpha_aperture = composed_material_alpha_aperture(&semantics);
+        let alpha_offset = composed_material_alpha_offset(&semantics);
+        let vertex_alpha_to_one = composed_material_vertex_alpha_to_one(&semantics);
+        let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
+        let glass_ior = composed_material_glass_ior(&semantics);
+        let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -1473,8 +2707,33 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let tile_index = composed_material_tile_index(&semantics);
         let tile_alpha = composed_material_tile_alpha(&semantics);
         let tile_scale = composed_material_tile_scale(&semantics);
+        let toon_index = composed_material_toon_index(&semantics);
+        let toon_light_scale = composed_material_toon_light_scale(&semantics);
+        let toon_light_spec_aperture = composed_material_toon_light_spec_aperture(&semantics);
+        let toon_reflection_scale = composed_material_toon_reflection_scale(&semantics);
+        let toon_spec_index = composed_material_toon_spec_index(&semantics);
+        let sheen_rate = composed_material_sheen_rate(&semantics);
+        let sheen_tint_rate = composed_material_sheen_tint_rate(&semantics);
+        let sheen_aperture = composed_material_sheen_aperture(&semantics);
+        let sphere_map_index = composed_material_sphere_map_index(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
+        let detail_color = composed_material_detail_color(&semantics);
+        let multi_detail_color = composed_material_multi_detail_color(&semantics);
+        let shader_diffuse_color = composed_material_shader_diffuse_color(&semantics);
+        let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
+        let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
+        let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
+        let outline_color = composed_material_outline_color(&semantics);
+        let outline_width = composed_material_outline_width(&semantics);
+        let specular_color_mask = composed_material_specular_color_mask(&semantics);
+        let ssao_mask = composed_material_ssao_mask(&semantics);
+        let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
+        let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let tile_mip_bias_offset = composed_material_tile_mip_bias_offset(&semantics);
+        let vertex_movement_scale = composed_material_vertex_movement_scale(&semantics);
+        let vertex_movement_max_length = composed_material_vertex_movement_max_length(&semantics);
+        let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -1483,11 +2742,16 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
         let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
         let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
+        let lightshaft_angle_clip = composed_material_lightshaft_angle_clip(&semantics);
+        let lightshaft_near_clip = composed_material_lightshaft_near_clip(&semantics);
         let texture_set = load_weapon_material_textures_from_resource(
             resource,
             &path,
-            &material,
+            &texture_paths,
+            color_table_rows.as_deref(),
             &sampler_roles,
+            color_table_diffuse_composition,
+            fallback_index_texture,
             textures,
             loaded_paths,
         );
@@ -1515,11 +2779,36 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             material_index,
             name: material_name,
             path: Some(path),
+            reference_fallback,
             shader_package_name: Some(shader_package_name),
             render_mode,
             alpha_mode,
             alpha_threshold,
+            draw_depth_mode,
+            lighting_mode,
+            flow_mode,
+            specular_type,
+            specular_type_raw,
+            value_mode,
+            value_mode_raw,
+            sub_color_mode,
+            decal_color_mode,
+            decal_color_mode_raw,
+            skin_value_mode,
+            character_scroll_variant,
+            character_scroll_variant_raw,
+            lightshaft_type,
+            lightshaft_type_raw,
             transparency,
+            water_deep_color,
+            water_refraction_color,
+            water_whitecap_color,
+            alpha_aperture,
+            alpha_offset,
+            vertex_alpha_to_one,
+            shadow_alpha_threshold,
+            glass_ior,
+            glass_thickness_max,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -1527,8 +2816,33 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             tile_index,
             tile_alpha,
             tile_scale,
+            toon_index,
+            toon_light_scale,
+            toon_light_spec_aperture,
+            toon_reflection_scale,
+            toon_spec_index,
+            sheen_rate,
+            sheen_tint_rate,
+            sheen_aperture,
+            sphere_map_index,
             detail_id,
             multi_detail_id,
+            detail_color,
+            multi_detail_color,
+            shader_diffuse_color,
+            shader_multi_diffuse_color,
+            shader_emissive_color,
+            shader_multi_emissive_color,
+            outline_color,
+            outline_width,
+            specular_color_mask,
+            ssao_mask,
+            ambient_occlusion_mask,
+            texture_mip_bias,
+            tile_mip_bias_offset,
+            vertex_movement_scale,
+            vertex_movement_max_length,
+            shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -1537,9 +2851,16 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             lightshaft_tex_u,
             lightshaft_tex_v,
             lightshaft_ray,
+            lightshaft_angle_clip,
+            lightshaft_near_clip,
             opacity,
             render_backfaces,
             apply_vertex_color,
+            has_color_dye_table: color_dye_table.is_some(),
+            color_dye_table,
+            color_table_rows: base_color_table_rows,
+            staining_application,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -1548,18 +2869,28 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
+            secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
+            skin_diffuse_texture: texture_set.skin_diffuse,
+            skin_normal_texture: texture_set.skin_normal,
+            skin_mask_texture: texture_set.skin_mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
+            secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
+            environment_texture: texture_set.environment,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
             sheen_properties_texture: texture_set.sheen_properties,
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
             index_texture: texture_set.index,
+            water_wave_texture: texture_set.water_wave,
+            water_wave1_texture: texture_set.water_wave1,
+            water_whitecap_texture: texture_set.water_whitecap,
         };
     }
 
@@ -1570,14 +2901,18 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
 fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     material_path: &str,
-    material: &physis::mtrl::Material,
+    texture_paths: &[String],
+    color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
+    color_table_diffuse_composition: ColorTableDiffuseComposition,
+    fallback_index_texture: Option<usize>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
-    for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+    for (texture_order, raw_texture_path) in texture_paths.iter().enumerate() {
+        let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
+        let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_resource(
             resource,
@@ -1593,74 +2928,31 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
-        match textures[texture_index].kind {
-            WeaponModelTextureKind::BaseColor => {
-                set.base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::Normal => {
-                set.normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Mask => {
-                set.mask.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialMap => {
-                set.material_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MultiMap => {
-                set.multi_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Specular => {
-                set.specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Emissive => {
-                set.emissive.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialProperties => {
-                set.material_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileProperties => {
-                set.tile_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SheenProperties => {
-                set.sheen_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SphereProperties => {
-                set.sphere_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileMatrixProperties => {
-                set.tile_matrix.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Index => {
-                set.index.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Other => {}
-        }
+        assign_weapon_texture_slot(
+            &mut set,
+            texture_index,
+            &textures[texture_index],
+            sampler_role.map(|role| role.logical_role),
+        );
     }
+    apply_color_table_index_fallback(&mut set, fallback_index_texture, textures);
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
-        material.color_table.as_ref(),
+        color_table_rows,
         set.index,
         set.emissive.is_none(),
-        shader_opacity_override(&material.shader_package_name),
         textures,
     ) {
-        if let Some(base_color) = set.base_color {
-            if let Some(combined) = combine_base_with_colorset_texture(
-                material_path,
-                base_color,
-                baked.base_color,
-                textures,
-            ) {
-                set.base_color = Some(combined);
-                add_unique_index(&mut set.indices, combined);
-            }
-        } else {
-            set.base_color = Some(baked.base_color);
-            add_unique_index(&mut set.indices, baked.base_color);
+        if let Some(base_color) = resolve_color_table_base_texture(
+            material_path,
+            set.base_color,
+            baked.base_color,
+            color_table_diffuse_composition,
+            textures,
+        ) {
+            set.base_color = Some(base_color);
+            add_unique_index(&mut set.indices, base_color);
         }
 
         if set.emissive.is_none() {
@@ -1715,19 +3007,25 @@ fn load_weapon_texture_from_resource<R: physis::resource::Resource>(
         let Some(bytes) = resource.read(&path) else {
             continue;
         };
-        let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
             continue;
         };
-        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
             continue;
         };
         let index = textures.len();
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
-            width: texture.width,
-            height: texture.height,
-            rgba,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
             rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
@@ -1749,14 +3047,21 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
     let mut materials = Vec::new();
     let mut textures = Vec::new();
     let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_async_resource(resource, stain_ids, &mut loaded_paths)
+            .await;
 
     load_weapon_model_meshes_from_async_resource(
         resource,
         model_main,
+        &staining,
         &mut loaded_paths,
         &mut materials,
         &mut textures,
         &mut meshes,
+        &mut color_table_sources,
     )
     .await
     .map_err(WeaponModelMeshLoadFailure::into_error)?;
@@ -1766,10 +3071,12 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
             if let Err(failure) = load_weapon_model_meshes_from_async_resource(
                 resource,
                 model_sub,
+                &staining,
                 &mut loaded_paths,
                 &mut materials,
                 &mut textures,
                 &mut meshes,
+                &mut color_table_sources,
             )
             .await
             {
@@ -1777,6 +3084,14 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
             }
         }
     }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
 
     if meshes.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1790,6 +3105,7 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        stain_ids,
         load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
@@ -1800,13 +3116,203 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
 }
 
 #[cfg(feature = "game-data")]
+pub fn apply_weapon_model_stains(
+    base: &WeaponModelData,
+    stain_ids: [u8; 2],
+    staining: &WeaponStainingTemplates,
+) -> WeaponModelData {
+    let stain_ids =
+        stain_ids.map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0));
+    let mut model = base.clone();
+    model.stain_ids = stain_ids;
+
+    let (materials, textures) = (&mut model.materials, &mut model.textures);
+    for material in materials {
+        let mut rows = material.color_table_rows.clone();
+        material.staining_application = apply_weapon_staining_with_ids(
+            rows.as_deref_mut(),
+            material.color_dye_table.as_ref(),
+            stain_ids,
+            staining,
+        );
+
+        let Some(rows) = rows.as_deref() else {
+            continue;
+        };
+        let Some(material_path) = material.path.clone() else {
+            continue;
+        };
+        let bake_emissive = material
+            .emissive_texture
+            .and_then(|index| textures.get(index))
+            .is_none_or(|texture| is_color_table_derived_texture_path(&texture.path));
+        let Some(baked) = bake_weapon_color_table_textures(
+            &material_path,
+            Some(rows),
+            material.index_texture,
+            bake_emissive,
+            textures,
+        ) else {
+            continue;
+        };
+
+        refresh_stained_material_textures(material, &material_path, baked, textures);
+        let summary = summarize_material_colors(Some(rows), material.fallback_color);
+        material.diffuse_color = if material.base_color_texture.is_some() {
+            [1.0, 1.0, 1.0]
+        } else {
+            summary.diffuse
+        };
+        material.specular_color = summary.specular;
+        material.emissive_color = preview_emissive_color_for_material(summary.emissive, material);
+        material.roughness = summary.roughness;
+        material.metalness = summary.metalness;
+    }
+
+    model
+}
+
+#[cfg(feature = "game-data")]
+fn refresh_stained_material_textures(
+    material: &mut WeaponModelMaterial,
+    material_path: &str,
+    baked: BakedWeaponTextureIndices,
+    textures: &mut Vec<WeaponModelTexture>,
+) {
+    let previous_base = material.base_color_texture;
+    let previous_base_is_composited = previous_base
+        .and_then(|index| textures.get(index))
+        .is_some_and(|texture| texture.path.ends_with("#base-times-colorset"));
+    let base_color = if previous_base_is_composited {
+        find_unbaked_base_color_texture(material, textures)
+            .and_then(|base_index| {
+                combine_base_with_colorset_texture(
+                    material_path,
+                    base_index,
+                    baked.base_color,
+                    textures,
+                )
+            })
+            .unwrap_or(baked.base_color)
+    } else {
+        baked.base_color
+    };
+    material.base_color_texture = Some(base_color);
+    add_unique_index(&mut material.texture_indices, base_color);
+
+    replace_color_table_derived_slot(&mut material.specular_texture, baked.specular, textures);
+    replace_color_table_derived_slot(
+        &mut material.material_properties_texture,
+        baked.material_properties,
+        textures,
+    );
+    replace_color_table_derived_slot(
+        &mut material.tile_properties_texture,
+        baked.tile_properties,
+        textures,
+    );
+    replace_color_table_derived_slot(
+        &mut material.sheen_properties_texture,
+        baked.sheen_properties,
+        textures,
+    );
+    replace_color_table_derived_slot(
+        &mut material.sphere_properties_texture,
+        baked.sphere_properties,
+        textures,
+    );
+    replace_color_table_derived_slot(
+        &mut material.tile_matrix_texture,
+        baked.tile_matrix,
+        textures,
+    );
+    for index in [
+        baked.specular,
+        baked.material_properties,
+        baked.tile_properties,
+        baked.sheen_properties,
+        baked.sphere_properties,
+        baked.tile_matrix,
+    ] {
+        add_unique_index(&mut material.texture_indices, index);
+    }
+
+    let emissive_is_derived = material
+        .emissive_texture
+        .and_then(|index| textures.get(index))
+        .is_some_and(|texture| is_color_table_derived_texture_path(&texture.path));
+    match baked.emissive {
+        Some(emissive) if material.emissive_texture.is_none() || emissive_is_derived => {
+            material.emissive_texture = Some(emissive);
+            add_unique_index(&mut material.texture_indices, emissive);
+        }
+        None if emissive_is_derived => material.emissive_texture = None,
+        _ => {}
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn replace_color_table_derived_slot(
+    slot: &mut Option<usize>,
+    replacement: usize,
+    textures: &[WeaponModelTexture],
+) {
+    let replace = slot
+        .and_then(|index| textures.get(index))
+        .is_none_or(|texture| is_color_table_derived_texture_path(&texture.path));
+    if replace {
+        *slot = Some(replacement);
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn find_unbaked_base_color_texture(
+    material: &WeaponModelMaterial,
+    textures: &[WeaponModelTexture],
+) -> Option<usize> {
+    material.texture_indices.iter().copied().find(|index| {
+        textures.get(*index).is_some_and(|texture| {
+            texture.kind == WeaponModelTextureKind::BaseColor
+                && !is_color_table_derived_texture_path(&texture.path)
+        })
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn is_color_table_derived_texture_path(path: &str) -> bool {
+    path.starts_with("baked://")
+        && (path.contains("#colorset-") || path.ends_with("#base-times-colorset"))
+}
+
+#[cfg(feature = "game-data")]
+fn preview_emissive_color_for_material(
+    emissive: [f32; 3],
+    material: &WeaponModelMaterial,
+) -> [f32; 3] {
+    let scale = if material.emissive_texture.is_some() {
+        1.0
+    } else if material.mask_texture.is_some() {
+        0.25
+    } else {
+        0.0
+    };
+    [
+        emissive[0].clamp(0.0, 4.0) * scale,
+        emissive[1].clamp(0.0, 4.0) * scale,
+        emissive[2].clamp(0.0, 4.0) * scale,
+    ]
+}
+
+#[cfg(feature = "game-data")]
 async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
+    staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     meshes: &mut Vec<WeaponModelMesh>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) -> Result<(), WeaponModelMeshLoadFailure> {
     use anyhow::Context;
 
@@ -1842,10 +3348,12 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
             resource,
             model,
             &path,
+            staining,
             &mut path_meshes,
             materials,
             textures,
             loaded_paths,
+            color_table_sources,
         )
         .await;
         meshes.append(&mut path_meshes);
@@ -1860,10 +3368,12 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
     materials: &mut Vec<WeaponModelMaterial>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) {
     let mut slots = Vec::<(u16, usize)>::new();
     let mut material_specs = Vec::<(u16, String)>::new();
@@ -1882,13 +3392,17 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
             resource,
             model,
             model_path,
+            staining,
             material_index,
             material_name,
             slot,
+            materials,
             textures,
             loaded_paths,
+            color_table_sources,
         )
         .await;
+        let material = reuse_loaded_material_for_missing_reference(material, materials);
         materials.push(material);
         slots.push((material_index, slot));
     }
@@ -1908,11 +3422,14 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     model: PackedModelId,
     model_path: &str,
+    staining: &WeaponStainingTemplates,
     material_index: u16,
     material_name: String,
     slot: usize,
+    loaded_materials: &[WeaponModelMaterial],
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
+    color_table_sources: &mut HashMap<u16, LoadedMaterialColorTable>,
 ) -> WeaponModelMaterial {
     use physis::ReadableFile;
 
@@ -1926,10 +3443,35 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         else {
             continue;
         };
+        let texture_paths = material_texture_paths_from_offsets(&bytes, &material.texture_paths);
 
         push_loaded_path(loaded_paths, path.clone());
         let shader_package_name = material.shader_package_name.clone();
-        let summary = summarize_material_colors(material.color_table.as_ref(), fallback);
+        let mut color_dye_table = model_color_dye_table(material.color_dye_table.as_ref());
+        let mut color_table_rows = material
+            .color_table
+            .as_ref()
+            .and_then(weapon_color_table_rows);
+        let reference_fallback = resolve_loaded_color_table_reference(
+            slot,
+            material_index,
+            &material_name,
+            &path,
+            &mut color_table_rows,
+            &mut color_dye_table,
+            color_table_sources,
+        );
+        let fallback_index_texture = loaded_color_table_reference_index_texture(
+            reference_fallback.as_ref(),
+            loaded_materials,
+        );
+        let base_color_table_rows = color_table_rows.clone();
+        let staining_application = apply_weapon_staining(
+            color_table_rows.as_deref_mut(),
+            color_dye_table.as_ref(),
+            staining,
+        );
+        let summary = summarize_material_colors(color_table_rows.as_deref(), fallback);
         let semantics = load_composed_material_semantics_from_async_resource(
             resource,
             &shader_package_name,
@@ -1944,7 +3486,32 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let apply_vertex_color =
             semantics.has_material_key(APPLY_VERTEX_COLOR, APPLY_VERTEX_COLOR_ON);
         let material_alpha_threshold = composed_material_alpha_threshold(&semantics);
-        let transparency = composed_material_transparency(&semantics);
+        let draw_depth_mode = composed_material_draw_depth_mode(&semantics);
+        let lighting_mode = composed_material_lighting_mode(&semantics);
+        let flow_mode = composed_material_flow_mode(&semantics);
+        let (specular_type, specular_type_raw) = composed_material_specular_type(&semantics);
+        let (value_mode, value_mode_raw) = composed_material_value_mode(&semantics);
+        let color_table_diffuse_composition = color_table_diffuse_composition(
+            material_shader_family(Some(&shader_package_name)),
+            composed_material_uses_compatibility_values(&semantics),
+        );
+        let sub_color_mode = composed_material_sub_color_mode(&semantics);
+        let (decal_color_mode, decal_color_mode_raw) =
+            composed_material_decal_color_mode(&semantics);
+        let skin_value_mode = composed_material_skin_value_mode(&semantics);
+        let (character_scroll_variant, character_scroll_variant_raw) =
+            composed_material_character_scroll_variant(&semantics);
+        let (lightshaft_type, lightshaft_type_raw) = composed_material_lightshaft_type(&semantics);
+        let transparency = composed_material_transparency(&semantics, &shader_package_name);
+        let water_deep_color = composed_material_water_deep_color(&semantics);
+        let water_refraction_color = composed_material_water_refraction_color(&semantics);
+        let water_whitecap_color = composed_material_water_whitecap_color(&semantics);
+        let alpha_aperture = composed_material_alpha_aperture(&semantics);
+        let alpha_offset = composed_material_alpha_offset(&semantics);
+        let vertex_alpha_to_one = composed_material_vertex_alpha_to_one(&semantics);
+        let shadow_alpha_threshold = composed_material_shadow_alpha_threshold(&semantics);
+        let glass_ior = composed_material_glass_ior(&semantics);
+        let glass_thickness_max = composed_material_glass_thickness_max(&semantics);
         let normal_scale = composed_material_normal_scale(&semantics);
         let multi_normal_scale = composed_material_multi_normal_scale(&semantics);
         let detail_normal_scale = composed_material_detail_normal_scale(&semantics);
@@ -1952,8 +3519,33 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let tile_index = composed_material_tile_index(&semantics);
         let tile_alpha = composed_material_tile_alpha(&semantics);
         let tile_scale = composed_material_tile_scale(&semantics);
+        let toon_index = composed_material_toon_index(&semantics);
+        let toon_light_scale = composed_material_toon_light_scale(&semantics);
+        let toon_light_spec_aperture = composed_material_toon_light_spec_aperture(&semantics);
+        let toon_reflection_scale = composed_material_toon_reflection_scale(&semantics);
+        let toon_spec_index = composed_material_toon_spec_index(&semantics);
+        let sheen_rate = composed_material_sheen_rate(&semantics);
+        let sheen_tint_rate = composed_material_sheen_tint_rate(&semantics);
+        let sheen_aperture = composed_material_sheen_aperture(&semantics);
+        let sphere_map_index = composed_material_sphere_map_index(&semantics);
         let detail_id = composed_material_detail_id(&semantics);
         let multi_detail_id = composed_material_multi_detail_id(&semantics);
+        let detail_color = composed_material_detail_color(&semantics);
+        let multi_detail_color = composed_material_multi_detail_color(&semantics);
+        let shader_diffuse_color = composed_material_shader_diffuse_color(&semantics);
+        let shader_multi_diffuse_color = composed_material_shader_multi_diffuse_color(&semantics);
+        let shader_emissive_color = composed_material_shader_emissive_color(&semantics);
+        let shader_multi_emissive_color = composed_material_shader_multi_emissive_color(&semantics);
+        let outline_color = composed_material_outline_color(&semantics);
+        let outline_width = composed_material_outline_width(&semantics);
+        let specular_color_mask = composed_material_specular_color_mask(&semantics);
+        let ssao_mask = composed_material_ssao_mask(&semantics);
+        let ambient_occlusion_mask = composed_material_ambient_occlusion_mask(&semantics);
+        let texture_mip_bias = composed_material_texture_mip_bias(&semantics);
+        let tile_mip_bias_offset = composed_material_tile_mip_bias_offset(&semantics);
+        let vertex_movement_scale = composed_material_vertex_movement_scale(&semantics);
+        let vertex_movement_max_length = composed_material_vertex_movement_max_length(&semantics);
+        let shadow_pos_offset = composed_material_shadow_pos_offset(&semantics);
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
@@ -1962,11 +3554,16 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
         let lightshaft_tex_v = composed_material_lightshaft_tex_v(&semantics);
         let lightshaft_ray = composed_material_lightshaft_ray(&semantics);
+        let lightshaft_angle_clip = composed_material_lightshaft_angle_clip(&semantics);
+        let lightshaft_near_clip = composed_material_lightshaft_near_clip(&semantics);
         let texture_set = load_weapon_material_textures_from_async_resource(
             resource,
             &path,
-            &material,
+            &texture_paths,
+            color_table_rows.as_deref(),
             &sampler_roles,
+            color_table_diffuse_composition,
+            fallback_index_texture,
             textures,
             loaded_paths,
         )
@@ -1995,11 +3592,36 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             material_index,
             name: material_name,
             path: Some(path),
+            reference_fallback,
             shader_package_name: Some(shader_package_name),
             render_mode,
             alpha_mode,
             alpha_threshold,
+            draw_depth_mode,
+            lighting_mode,
+            flow_mode,
+            specular_type,
+            specular_type_raw,
+            value_mode,
+            value_mode_raw,
+            sub_color_mode,
+            decal_color_mode,
+            decal_color_mode_raw,
+            skin_value_mode,
+            character_scroll_variant,
+            character_scroll_variant_raw,
+            lightshaft_type,
+            lightshaft_type_raw,
             transparency,
+            water_deep_color,
+            water_refraction_color,
+            water_whitecap_color,
+            alpha_aperture,
+            alpha_offset,
+            vertex_alpha_to_one,
+            shadow_alpha_threshold,
+            glass_ior,
+            glass_thickness_max,
             normal_scale,
             multi_normal_scale,
             detail_normal_scale,
@@ -2007,8 +3629,33 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             tile_index,
             tile_alpha,
             tile_scale,
+            toon_index,
+            toon_light_scale,
+            toon_light_spec_aperture,
+            toon_reflection_scale,
+            toon_spec_index,
+            sheen_rate,
+            sheen_tint_rate,
+            sheen_aperture,
+            sphere_map_index,
             detail_id,
             multi_detail_id,
+            detail_color,
+            multi_detail_color,
+            shader_diffuse_color,
+            shader_multi_diffuse_color,
+            shader_emissive_color,
+            shader_multi_emissive_color,
+            outline_color,
+            outline_width,
+            specular_color_mask,
+            ssao_mask,
+            ambient_occlusion_mask,
+            texture_mip_bias,
+            tile_mip_bias_offset,
+            vertex_movement_scale,
+            vertex_movement_max_length,
+            shadow_pos_offset,
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
@@ -2017,9 +3664,16 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             lightshaft_tex_u,
             lightshaft_tex_v,
             lightshaft_ray,
+            lightshaft_angle_clip,
+            lightshaft_near_clip,
             opacity,
             render_backfaces,
             apply_vertex_color,
+            has_color_dye_table: color_dye_table.is_some(),
+            color_dye_table,
+            color_table_rows: base_color_table_rows,
+            staining_application,
+            texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
             specular_color: summary.specular,
@@ -2028,18 +3682,28 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
+            secondary_normal_texture: texture_set.secondary_normal,
             mask_texture: texture_set.mask,
+            skin_diffuse_texture: texture_set.skin_diffuse,
+            skin_normal_texture: texture_set.skin_normal,
+            skin_mask_texture: texture_set.skin_mask,
             material_map_texture: texture_set.material_map,
             multi_map_texture: texture_set.multi_map,
             specular_texture: texture_set.specular,
+            secondary_specular_texture: texture_set.secondary_specular,
             emissive_texture: texture_set.emissive,
+            environment_texture: texture_set.environment,
             material_properties_texture: texture_set.material_properties,
             tile_properties_texture: texture_set.tile_properties,
             sheen_properties_texture: texture_set.sheen_properties,
             sphere_properties_texture: texture_set.sphere_properties,
             tile_matrix_texture: texture_set.tile_matrix,
             index_texture: texture_set.index,
+            water_wave_texture: texture_set.water_wave,
+            water_wave1_texture: texture_set.water_wave1,
+            water_whitecap_texture: texture_set.water_whitecap,
         };
     }
 
@@ -2050,14 +3714,18 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
 async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     material_path: &str,
-    material: &physis::mtrl::Material,
+    texture_paths: &[String],
+    color_table_rows: Option<&[ColorTableRowColors]>,
     sampler_roles: &[MaterialSamplerRole],
+    color_table_diffuse_composition: ColorTableDiffuseComposition,
+    fallback_index_texture: Option<usize>,
     textures: &mut Vec<WeaponModelTexture>,
     loaded_paths: &mut Vec<String>,
 ) -> WeaponTextureSet {
     let mut set = WeaponTextureSet::default();
-    for (texture_order, raw_texture_path) in material.texture_paths.iter().enumerate() {
-        let sampler_kind = sampler_kind_for_texture(sampler_roles, texture_order);
+    for (texture_order, raw_texture_path) in texture_paths.iter().enumerate() {
+        let sampler_role = sampler_role_for_texture(sampler_roles, texture_order);
+        let sampler_kind = sampler_role.map(|role| role.kind);
         let kind = classify_weapon_texture(raw_texture_path, sampler_kind);
         let Some(texture_index) = load_weapon_texture_from_async_resource(
             resource,
@@ -2075,74 +3743,31 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         if !set.indices.contains(&texture_index) {
             set.indices.push(texture_index);
         }
-        match textures[texture_index].kind {
-            WeaponModelTextureKind::BaseColor => {
-                set.base_color.get_or_insert(texture_index);
-                if texture_alpha_affects_material_transparency(&textures[texture_index]) {
-                    set.has_alpha = true;
-                }
-            }
-            WeaponModelTextureKind::Normal => {
-                set.normal.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Mask => {
-                set.mask.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialMap => {
-                set.material_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MultiMap => {
-                set.multi_map.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Specular => {
-                set.specular.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Emissive => {
-                set.emissive.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::MaterialProperties => {
-                set.material_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileProperties => {
-                set.tile_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SheenProperties => {
-                set.sheen_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::SphereProperties => {
-                set.sphere_properties.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::TileMatrixProperties => {
-                set.tile_matrix.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Index => {
-                set.index.get_or_insert(texture_index);
-            }
-            WeaponModelTextureKind::Other => {}
-        }
+        assign_weapon_texture_slot(
+            &mut set,
+            texture_index,
+            &textures[texture_index],
+            sampler_role.map(|role| role.logical_role),
+        );
     }
+    apply_color_table_index_fallback(&mut set, fallback_index_texture, textures);
 
     if let Some(baked) = bake_weapon_color_table_textures(
         material_path,
-        material.color_table.as_ref(),
+        color_table_rows,
         set.index,
         set.emissive.is_none(),
-        shader_opacity_override(&material.shader_package_name),
         textures,
     ) {
-        if let Some(base_color) = set.base_color {
-            if let Some(combined) = combine_base_with_colorset_texture(
-                material_path,
-                base_color,
-                baked.base_color,
-                textures,
-            ) {
-                set.base_color = Some(combined);
-                add_unique_index(&mut set.indices, combined);
-            }
-        } else {
-            set.base_color = Some(baked.base_color);
-            add_unique_index(&mut set.indices, baked.base_color);
+        if let Some(base_color) = resolve_color_table_base_texture(
+            material_path,
+            set.base_color,
+            baked.base_color,
+            color_table_diffuse_composition,
+            textures,
+        ) {
+            set.base_color = Some(base_color);
+            add_unique_index(&mut set.indices, base_color);
         }
 
         if set.emissive.is_none() {
@@ -2197,19 +3822,25 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
         let Ok(bytes) = resource.read(&path).await else {
             continue;
         };
-        let Some(texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes) else {
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
             continue;
         };
-        let Some(rgba) = crate::texture_decode::decode_texture_rgba(&texture) else {
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
             continue;
         };
         let index = textures.len();
         textures.push(WeaponModelTexture {
             path: path.clone(),
             kind,
-            width: texture.width,
-            height: texture.height,
-            rgba,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
             rgba_f32: None,
         });
         push_loaded_path(loaded_paths, path);
@@ -2224,19 +3855,201 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
 struct WeaponTextureSet {
     indices: Vec<usize>,
     base_color: Option<usize>,
+    secondary_base_color: Option<usize>,
     normal: Option<usize>,
+    secondary_normal: Option<usize>,
     mask: Option<usize>,
+    skin_diffuse: Option<usize>,
+    skin_normal: Option<usize>,
+    skin_mask: Option<usize>,
     material_map: Option<usize>,
     multi_map: Option<usize>,
     specular: Option<usize>,
+    secondary_specular: Option<usize>,
     emissive: Option<usize>,
+    environment: Option<usize>,
     material_properties: Option<usize>,
     tile_properties: Option<usize>,
     sheen_properties: Option<usize>,
     sphere_properties: Option<usize>,
     tile_matrix: Option<usize>,
     index: Option<usize>,
+    water_wave: Option<usize>,
+    water_wave1: Option<usize>,
+    water_whitecap: Option<usize>,
     has_alpha: bool,
+}
+
+#[cfg(feature = "game-data")]
+fn apply_color_table_index_fallback(
+    set: &mut WeaponTextureSet,
+    fallback_index_texture: Option<usize>,
+    textures: &[WeaponModelTexture],
+) {
+    if set.index.is_some() {
+        return;
+    }
+    let Some(texture_index) = fallback_index_texture.filter(|texture_index| {
+        textures
+            .get(*texture_index)
+            .is_some_and(|texture| texture.kind == WeaponModelTextureKind::Index)
+    }) else {
+        return;
+    };
+
+    set.index = Some(texture_index);
+    add_unique_index(&mut set.indices, texture_index);
+}
+
+#[cfg(feature = "game-data")]
+fn assign_weapon_texture_slot(
+    set: &mut WeaponTextureSet,
+    texture_index: usize,
+    texture: &WeaponModelTexture,
+    logical_role: Option<MaterialSamplerLogicalRole>,
+) {
+    use MaterialSamplerLogicalRole as Role;
+
+    match logical_role {
+        Some(Role::BaseColor) => {
+            set.base_color.get_or_insert(texture_index);
+            set.has_alpha |= texture_has_alpha(texture);
+        }
+        Some(Role::SecondaryBaseColor) => {
+            set.secondary_base_color.get_or_insert(texture_index);
+            set.has_alpha |= texture_has_alpha(texture);
+        }
+        Some(Role::Normal) => {
+            set.normal.get_or_insert(texture_index);
+        }
+        Some(Role::SecondaryNormal) => {
+            set.secondary_normal.get_or_insert(texture_index);
+        }
+        Some(Role::Mask) => {
+            set.mask.get_or_insert(texture_index);
+        }
+        Some(Role::SkinDiffuse) => {
+            set.skin_diffuse.get_or_insert(texture_index);
+        }
+        Some(Role::SkinNormal) => {
+            set.skin_normal.get_or_insert(texture_index);
+        }
+        Some(Role::SkinMask) => {
+            set.skin_mask.get_or_insert(texture_index);
+        }
+        Some(Role::MaterialMap) => {
+            set.material_map.get_or_insert(texture_index);
+        }
+        Some(Role::MultiMap) => {
+            set.multi_map.get_or_insert(texture_index);
+        }
+        Some(Role::Specular) => {
+            set.specular.get_or_insert(texture_index);
+        }
+        Some(Role::SecondarySpecular) => {
+            set.secondary_specular.get_or_insert(texture_index);
+        }
+        Some(Role::Emissive) => {
+            set.emissive.get_or_insert(texture_index);
+        }
+        Some(Role::Index) => {
+            set.index.get_or_insert(texture_index);
+        }
+        Some(Role::Environment) => {
+            set.environment.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWave) => {
+            set.water_wave.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWaveSecondary) => {
+            set.water_wave1.get_or_insert(texture_index);
+        }
+        Some(Role::WaterWhitecap) => {
+            set.water_whitecap.get_or_insert(texture_index);
+        }
+        None => assign_weapon_texture_slot_from_kind(set, texture_index, texture),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn assign_weapon_texture_slot_from_kind(
+    set: &mut WeaponTextureSet,
+    texture_index: usize,
+    texture: &WeaponModelTexture,
+) {
+    match texture.kind {
+        WeaponModelTextureKind::BaseColor => {
+            set.base_color.get_or_insert(texture_index);
+            if texture_alpha_affects_material_transparency(texture) {
+                set.has_alpha = true;
+            }
+        }
+        WeaponModelTextureKind::SecondaryBaseColor => {
+            set.secondary_base_color.get_or_insert(texture_index);
+            if texture_alpha_affects_material_transparency(texture) {
+                set.has_alpha = true;
+            }
+        }
+        WeaponModelTextureKind::Normal => {
+            set.normal.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SecondaryNormal => {
+            set.secondary_normal.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Mask => {
+            set.mask.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MaterialMap => {
+            set.material_map.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MultiMap => {
+            set.multi_map.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Specular => {
+            set.specular.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SecondarySpecular => {
+            set.secondary_specular.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Emissive => {
+            set.emissive.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Environment => {
+            set.environment.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::MaterialProperties => {
+            set.material_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileProperties => {
+            set.tile_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SheenProperties => {
+            set.sheen_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::SphereProperties => {
+            set.sphere_properties.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileMatrixProperties => {
+            set.tile_matrix.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::Index => {
+            set.index.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWave => {
+            set.water_wave.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWaveSecondary => {
+            set.water_wave1.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::WaterWhitecap => {
+            set.water_whitecap.get_or_insert(texture_index);
+        }
+        WeaponModelTextureKind::TileNormalArray
+        | WeaponModelTextureKind::TileOrbArray
+        | WeaponModelTextureKind::DetailDiffuseArray
+        | WeaponModelTextureKind::DetailNormalArray
+        | WeaponModelTextureKind::Other => {}
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -2252,13 +4065,46 @@ struct BakedWeaponTextureIndices {
 }
 
 #[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorTableDiffuseComposition {
+    Replace,
+    Multiply,
+}
+
+#[cfg(feature = "game-data")]
+fn color_table_diffuse_composition(
+    shader_family: MaterialShaderFamily,
+    uses_compatibility_values: bool,
+) -> ColorTableDiffuseComposition {
+    // These are the packages MeddleTools maps to its character.shpk node group.
+    let uses_character_compatibility_gate = matches!(
+        shader_family,
+        MaterialShaderFamily::Character
+            | MaterialShaderFamily::CharacterStockings
+            | MaterialShaderFamily::CharacterGlass
+            | MaterialShaderFamily::CharacterTransparency
+            | MaterialShaderFamily::CharacterScroll
+    );
+    if uses_character_compatibility_gate && uses_compatibility_values {
+        ColorTableDiffuseComposition::Multiply
+    } else if uses_character_compatibility_gate {
+        ColorTableDiffuseComposition::Replace
+    } else {
+        ColorTableDiffuseComposition::Multiply
+    }
+}
+
+#[cfg(feature = "game-data")]
 fn texture_has_alpha(texture: &WeaponModelTexture) -> bool {
     texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 250)
 }
 
 #[cfg(feature = "game-data")]
 fn texture_alpha_affects_material_transparency(texture: &WeaponModelTexture) -> bool {
-    texture.kind == WeaponModelTextureKind::BaseColor && texture_has_alpha(texture)
+    matches!(
+        texture.kind,
+        WeaponModelTextureKind::BaseColor | WeaponModelTextureKind::SecondaryBaseColor
+    ) && texture_has_alpha(texture)
 }
 
 #[cfg(feature = "game-data")]
@@ -2266,13 +4112,18 @@ fn refresh_texture_set_alpha(set: &mut WeaponTextureSet, textures: &[WeaponModel
     set.has_alpha = set
         .base_color
         .and_then(|index| textures.get(index))
-        .is_some_and(texture_alpha_affects_material_transparency);
+        .is_some_and(texture_alpha_affects_material_transparency)
+        || set
+            .secondary_base_color
+            .and_then(|index| textures.get(index))
+            .is_some_and(texture_alpha_affects_material_transparency);
 }
 
 #[cfg(feature = "game-data")]
 #[derive(Clone, Copy, Debug)]
 struct MaterialSamplerRole {
     texture_index: usize,
+    logical_role: MaterialSamplerLogicalRole,
     kind: WeaponModelTextureKind,
 }
 
@@ -2283,6 +4134,7 @@ struct MaterialSamplerRecord {
     texture_usage: u32,
     texture_usage_name: Option<String>,
     flags: u32,
+    logical_role: Option<MaterialSamplerLogicalRole>,
     kind: Option<WeaponModelTextureKind>,
     kind_source: Option<&'static str>,
 }
@@ -2308,29 +4160,36 @@ impl ComposedMaterialSemantics {
         self.material_keys.get(&key).map(|entry| entry.value) == Some(value)
     }
 
+    fn material_key_value(&self, key: u32) -> Option<u32> {
+        self.material_keys.get(&key).map(|entry| entry.value)
+    }
+
     fn sampler_kind_resolution(&self, texture_usage: u32) -> MaterialSamplerKindResolution {
         if let Some(name) = self.resource_names.get(&texture_usage) {
-            let kind = classify_sampler_name(name);
+            let logical_role = classify_sampler_logical_role_name(name);
             return MaterialSamplerKindResolution {
                 texture_usage_name: Some(name.clone()),
-                kind,
-                kind_source: kind.map(|_| "shpkResourceName"),
+                logical_role,
+                kind: logical_role.map(MaterialSamplerLogicalRole::texture_kind),
+                kind_source: logical_role.map(|_| "shpkResourceName"),
             };
         }
 
-        if let Some((name, kind)) = known_sampler_names()
+        if let Some((name, logical_role)) = known_sampler_names()
             .iter()
             .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
         {
             return MaterialSamplerKindResolution {
                 texture_usage_name: Some((*name).to_string()),
-                kind: Some(*kind),
+                logical_role: Some(*logical_role),
+                kind: Some(logical_role.texture_kind()),
                 kind_source: Some("knownCrc"),
             };
         }
 
         MaterialSamplerKindResolution {
             texture_usage_name: None,
+            logical_role: None,
             kind: None,
             kind_source: None,
         }
@@ -2434,6 +4293,7 @@ impl ComposedMaterialSemantics {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MaterialSamplerKindResolution {
     texture_usage_name: Option<String>,
+    logical_role: Option<MaterialSamplerLogicalRole>,
     kind: Option<WeaponModelTextureKind>,
     kind_source: Option<&'static str>,
 }
@@ -2509,98 +4369,114 @@ fn add_unique_index(indices: &mut Vec<usize>, index: usize) {
 #[cfg(feature = "game-data")]
 fn bake_weapon_color_table_textures(
     material_path: &str,
-    color_table: Option<&physis::mtrl::ColorTable>,
+    rows: Option<&[ColorTableRowColors]>,
     index_texture: Option<usize>,
     bake_emissive: bool,
-    opacity_override: Option<f32>,
     textures: &mut Vec<WeaponModelTexture>,
 ) -> Option<BakedWeaponTextureIndices> {
-    let rows = weapon_color_table_rows(color_table?)?;
+    let rows = rows?;
     let index_texture = textures.get(index_texture?)?;
     let width = index_texture.width;
     let height = index_texture.height;
+    let tile_ramp_width = width.checked_mul(2)?;
     let id_rgba = index_texture.rgba.clone();
-    let mut baked = bake_color_table_maps(&rows, &id_rgba)?;
-    if let Some(opacity) = opacity_override {
-        apply_alpha_override(&mut baked.diffuse_rgba, opacity);
-    }
+    let baked = bake_color_table_maps(rows, &id_rgba)?;
     let material_key = normalize_game_resource_path(material_path);
 
     let base_path = format!("baked://{material_key}#colorset-diffuse");
-    let base_color = push_or_replace_baked_texture(
+    let base_color = push_or_replace_baked_texture_with_float_channels(
         textures,
         base_path,
         WeaponModelTextureKind::BaseColor,
-        width,
+        tile_ramp_width,
         height,
-        baked.diffuse_rgba,
+        baked.diffuse_ab_rgba,
+        Some(baked.diffuse_ab_rgba_f32),
     );
+    textures[base_color].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
-    let specular = push_or_replace_baked_texture(
+    let specular = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-specular"),
         WeaponModelTextureKind::Specular,
-        width,
+        tile_ramp_width,
         height,
-        baked.specular_rgba,
+        baked.specular_ab_rgba,
+        Some(baked.specular_ab_rgba_f32),
     );
+    textures[specular].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
-    let material_properties = push_or_replace_baked_texture(
+    let material_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-material-properties"),
         WeaponModelTextureKind::MaterialProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.material_rgba,
+        baked.material_ab_rgba,
+        Some(baked.material_ab_rgba_f32),
     );
+    textures[material_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
     let tile_properties = push_or_replace_baked_texture(
         textures,
-        format!("baked://{material_key}#colorset-tile-properties"),
+        format!("baked://{material_key}#colorset-tile-properties-ab"),
         WeaponModelTextureKind::TileProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.tile_properties_rgba,
+        baked.tile_properties_ab_rgba,
     );
+    textures[tile_properties].texel_layout = ModelTextureTexelLayout::ColorTableTileRampAb;
 
-    let sheen_properties = push_or_replace_baked_texture(
+    let sheen_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sheen-properties"),
         WeaponModelTextureKind::SheenProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.sheen_properties_rgba,
+        baked.sheen_properties_ab_rgba,
+        Some(baked.sheen_properties_ab_rgba_f32),
     );
+    textures[sheen_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
-    let sphere_properties = push_or_replace_baked_texture(
+    let sphere_properties = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_key}#colorset-sphere-properties"),
         WeaponModelTextureKind::SphereProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.sphere_properties_rgba,
+        baked.sphere_properties_ab_rgba,
+        Some(baked.sphere_properties_ab_rgba_f32),
     );
+    textures[sphere_properties].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
 
     let tile_matrix = push_or_replace_baked_texture_with_float_channels(
         textures,
-        format!("baked://{material_key}#colorset-tile-matrix"),
+        format!("baked://{material_key}#colorset-tile-matrix-ab"),
         WeaponModelTextureKind::TileMatrixProperties,
-        width,
+        tile_ramp_width,
         height,
-        baked.tile_matrix_rgba,
-        Some(baked.tile_matrix_rgba_f32),
+        baked.tile_matrix_ab_rgba,
+        Some(baked.tile_matrix_ab_rgba_f32),
     );
+    textures[tile_matrix].texel_layout = ModelTextureTexelLayout::ColorTableTileRampAb;
 
     let emissive = if bake_emissive {
         baked.emissive_rgba.map(|rgba| {
-            push_or_replace_baked_texture(
+            let float_channels = baked
+                .emissive_ab_rgba_f32
+                .clone()
+                .or_else(|| baked.emissive_rgba_f32.clone());
+            let index = push_or_replace_baked_texture_with_float_channels(
                 textures,
                 format!("baked://{material_key}#colorset-emissive"),
                 WeaponModelTextureKind::Emissive,
-                width,
+                tile_ramp_width,
                 height,
-                rgba,
-            )
+                baked.emissive_ab_rgba.clone().unwrap_or(rgba),
+                float_channels,
+            );
+            textures[index].texel_layout = ModelTextureTexelLayout::ColorTableRampAb;
+            index
         })
     } else {
         None
@@ -2640,6 +4516,8 @@ fn weapon_material_alpha_mode(
     let shader = shader_package_name.to_ascii_lowercase();
     if shader.contains("glass") {
         WeaponMaterialAlphaMode::Glass
+    } else if shader.contains("transparency") {
+        WeaponMaterialAlphaMode::Blend
     } else if shader_flags & ENABLE_TRANSLUCENCY != 0 {
         WeaponMaterialAlphaMode::Blend
     } else if alpha_test && apply_alpha_test_material_key_applies(&shader) {
@@ -2675,7 +4553,7 @@ fn weapon_material_opacity(mode: WeaponMaterialRenderMode) -> f32 {
     match mode {
         WeaponMaterialRenderMode::Opaque => 1.0,
         WeaponMaterialRenderMode::Transparent => 1.0,
-        WeaponMaterialRenderMode::Glass => 0.28,
+        WeaponMaterialRenderMode::Glass => 1.0,
     }
 }
 
@@ -2699,8 +4577,208 @@ fn composed_material_alpha_threshold(semantics: &ComposedMaterialSemantics) -> O
 }
 
 #[cfg(feature = "game-data")]
-fn composed_material_transparency(semantics: &ComposedMaterialSemantics) -> f32 {
-    composed_material_finite_constant(semantics, G_TRANSPARENCY, 0.0).clamp(0.0, 1.0)
+fn composed_material_transparency(
+    semantics: &ComposedMaterialSemantics,
+    shader_package_name: &str,
+) -> f32 {
+    let default = matches!(
+        crate::model::material_shader_family(Some(shader_package_name)),
+        crate::model::MaterialShaderFamily::Water
+    )
+    .then_some(1.0)
+    .unwrap_or(0.0);
+    composed_material_finite_constant(semantics, G_TRANSPARENCY, default).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_deep_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_DEEP_COLOR,
+        [0.3529, 0.372_549, 0.3921, 1.0],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_refraction_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_REFRACTION_COLOR,
+        [0.4117, 0.4313, 0.4509, 1.0],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_water_whitecap_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_WATER_WHITECAP_COLOR,
+        [0.4509, 0.4705, 0.4901, 0.3],
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_draw_depth_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> MaterialDrawDepthMode {
+    match semantics.material_key_value(DRAW_DEPTH_MODE) {
+        None => MaterialDrawDepthMode::None,
+        Some(DRAW_DEPTH_MODE_DITHER) => MaterialDrawDepthMode::Dither,
+        Some(_) => MaterialDrawDepthMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lighting_mode(semantics: &ComposedMaterialSemantics) -> MaterialLightingMode {
+    match semantics.material_key_value(ENABLE_LIGHTING) {
+        None => MaterialLightingMode::Default,
+        Some(ENABLE_LIGHTING_ON) => MaterialLightingMode::Enabled,
+        Some(ENABLE_LIGHTING_OFF) => MaterialLightingMode::Disabled,
+        Some(_) => MaterialLightingMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_flow_mode(semantics: &ComposedMaterialSemantics) -> MaterialFlowMode {
+    match semantics.material_key_value(CATEGORY_FLOW_MAP_TYPE) {
+        None | Some(FLOW_MAP_STANDARD) => MaterialFlowMode::Standard,
+        Some(FLOW_MAP_FLOW) => MaterialFlowMode::Flow,
+        Some(_) => MaterialFlowMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_specular_type(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialSpecularType, Option<u32>) {
+    let raw = semantics.material_key_value(CATEGORY_SPECULAR_TYPE);
+    let value = match raw {
+        None | Some(SPECULAR_TYPE_DEFAULT) => MaterialSpecularType::Default,
+        Some(SPECULAR_TYPE_MASK) => MaterialSpecularType::Mask,
+        Some(_) => MaterialSpecularType::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_value_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialValueMode, Option<u32>) {
+    let raw = semantics.material_key_value(GET_VALUES);
+    let value = match raw {
+        None | Some(GET_VALUES_SINGLE) => MaterialValueMode::Single,
+        Some(GET_VALUES_MULTI) => MaterialValueMode::Multi,
+        Some(GET_ALPHA_MULTI_VALUES) => MaterialValueMode::AlphaMulti,
+        Some(GET_ALPHA_MULTI_VALUES2) => MaterialValueMode::AlphaMulti2,
+        Some(GET_ALPHA_MULTI_VALUES3) => MaterialValueMode::AlphaMulti3,
+        Some(GET_VALUES_MULTI_MATERIAL) => MaterialValueMode::MultiMaterial,
+        Some(GET_VALUES_COMPATIBILITY) => MaterialValueMode::Compatibility,
+        Some(_) => MaterialValueMode::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_uses_compatibility_values(semantics: &ComposedMaterialSemantics) -> bool {
+    semantics.material_key_value(GET_VALUES) == Some(GET_VALUES_COMPATIBILITY)
+        || semantics.material_key_value(GET_VALUES_TEXTURE_TYPE)
+            == Some(GET_VALUES_TEXTURE_TYPE_COMPATIBILITY)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sub_color_mode(semantics: &ComposedMaterialSemantics) -> MaterialSubColorMode {
+    match semantics.material_key_value(GET_SUB_COLOR) {
+        None => MaterialSubColorMode::None,
+        Some(GET_SUB_COLOR_FACE) => MaterialSubColorMode::Face,
+        Some(GET_SUB_COLOR_HAIR) => MaterialSubColorMode::Hair,
+        Some(_) => MaterialSubColorMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_decal_color_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialDecalColorMode, Option<u32>) {
+    let raw = semantics.material_key_value(GET_DECAL_COLOR);
+    let value = match raw {
+        None | Some(GET_DECAL_COLOR_OFF) => MaterialDecalColorMode::Off,
+        Some(GET_DECAL_COLOR_ALPHA) => MaterialDecalColorMode::Alpha,
+        Some(GET_DECAL_COLOR_RGBA) => MaterialDecalColorMode::Rgba,
+        Some(_) => MaterialDecalColorMode::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_skin_value_mode(
+    semantics: &ComposedMaterialSemantics,
+) -> MaterialSkinValueMode {
+    match semantics.material_key_value(GET_MATERIAL_VALUE) {
+        None => MaterialSkinValueMode::None,
+        Some(GET_MATERIAL_VALUE_FACE) => MaterialSkinValueMode::Face,
+        Some(GET_MATERIAL_VALUE_BODY) => MaterialSkinValueMode::Body,
+        Some(GET_MATERIAL_VALUE_BODY_JJM) => MaterialSkinValueMode::BodyJjm,
+        Some(GET_MATERIAL_VALUE_FACE_EMISSIVE) => MaterialSkinValueMode::FaceEmissive,
+        Some(_) => MaterialSkinValueMode::Unknown,
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_character_scroll_variant(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialCharacterScrollVariant, Option<u32>) {
+    let raw = semantics.material_key_value(CHARACTER_SCROLL_VARIANT);
+    let variant = match raw {
+        None => MaterialCharacterScrollVariant::None,
+        Some(CHARACTER_SCROLL_VARIANT_69EB4AE0) => MaterialCharacterScrollVariant::Value69eb4ae0,
+        Some(CHARACTER_SCROLL_VARIANT_9A8A46F5) => MaterialCharacterScrollVariant::Value9a8a46f5,
+        Some(_) => MaterialCharacterScrollVariant::Unknown,
+    };
+    (variant, raw)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_type(
+    semantics: &ComposedMaterialSemantics,
+) -> (MaterialLightShaftType, Option<u32>) {
+    let raw = semantics.material_key_value(LIGHTSHAFT_TYPE);
+    let value = match raw {
+        None => MaterialLightShaftType::None,
+        Some(LIGHTSHAFT_TYPE_0) => MaterialLightShaftType::Type0,
+        Some(LIGHTSHAFT_TYPE_1) => MaterialLightShaftType::Type1,
+        Some(_) => MaterialLightShaftType::Unknown,
+    };
+    (value, raw)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_alpha_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_ALPHA_APERTURE, 2.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_alpha_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_ALPHA_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_alpha_to_one(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_ALPHA_TO_ONE, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shadow_alpha_threshold(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHADOW_ALPHA_THRESHOLD, 0.5).clamp(0.0, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_glass_ior(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_GLASS_IOR, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_glass_thickness_max(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_GLASS_THICKNESS_MAX, 0.01)
 }
 
 #[cfg(feature = "game-data")]
@@ -2759,6 +4837,51 @@ fn composed_material_tile_scale(semantics: &ComposedMaterialSemantics) -> [f32; 
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_toon_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_INDEX, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_toon_light_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_LIGHT_SCALE, 2.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_toon_light_spec_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_LIGHT_SPEC_APERTURE, 50.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_toon_reflection_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_REFLECTION_SCALE, 2.5)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_toon_spec_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TOON_SPEC_INDEX, 4.0e-45)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_rate(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_RATE, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_tint_rate(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_TINT_RATE, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sheen_aperture(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHEEN_APERTURE, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_sphere_map_index(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SPHERE_MAP_INDEX, 0.0)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_detail_id(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_DETAIL_ID, 0.0)
 }
@@ -2766,6 +4889,92 @@ fn composed_material_detail_id(semantics: &ComposedMaterialSemantics) -> f32 {
 #[cfg(feature = "game-data")]
 fn composed_material_multi_detail_id(semantics: &ComposedMaterialSemantics) -> f32 {
     composed_material_finite_constant(semantics, G_MULTI_DETAIL_ID, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_DETAIL_COLOR, [0.5, 0.5, 0.5, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_multi_detail_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_DETAIL_COLOR, [0.5, 0.5, 0.5, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_diffuse_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_DIFFUSE_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_multi_diffuse_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_DIFFUSE_COLOR, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_emissive_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_EMISSIVE_COLOR, [0.0, 0.0, 0.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shader_multi_emissive_color(
+    semantics: &ComposedMaterialSemantics,
+) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_MULTI_EMISSIVE_COLOR, [0.0, 0.0, 0.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_outline_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_OUTLINE_COLOR, [0.0, 0.0, 0.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_outline_width(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_OUTLINE_WIDTH, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_specular_color_mask(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_SPECULAR_COLOR_MASK, [1.0; 4])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_ssao_mask(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SSAO_MASK, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_ambient_occlusion_mask(semantics: &ComposedMaterialSemantics) -> Option<f32> {
+    semantics
+        .material_constant_f32_values(G_AMBIENT_OCCLUSION_MASK)
+        .and_then(|values| values.first())
+        .copied()
+        .filter(|value| value.is_finite())
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_texture_mip_bias(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TEXTURE_MIP_BIAS, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_tile_mip_bias_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_TILE_MIP_BIAS_OFFSET, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_movement_scale(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_MOVEMENT_SCALE, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_vertex_movement_max_length(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_VERTEX_MOVEMENT_MAX_LENGTH, 1.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_shadow_pos_offset(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_SHADOW_POS_OFFSET, 0.0)
 }
 
 #[cfg(feature = "game-data")]
@@ -2810,6 +5019,16 @@ fn composed_material_lightshaft_ray(semantics: &ComposedMaterialSemantics) -> [f
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_lightshaft_angle_clip(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_LIGHTSHAFT_ANGLE_CLIP, 0.0)
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_lightshaft_near_clip(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_constant(semantics, G_LIGHTSHAFT_NEAR_CLIP, 0.25)
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_finite_vec4_constant(
     semantics: &ComposedMaterialSemantics,
     constant_id: u32,
@@ -2839,22 +5058,6 @@ fn composed_material_finite_constant(
 }
 
 #[cfg(feature = "game-data")]
-fn shader_opacity_override(shader_package_name: &str) -> Option<f32> {
-    let alpha_mode =
-        weapon_material_alpha_mode(shader_package_name, 0, &WeaponTextureSet::default(), false);
-    let mode = weapon_material_render_mode(alpha_mode);
-    (mode == WeaponMaterialRenderMode::Glass).then_some(weapon_material_opacity(mode))
-}
-
-#[cfg(feature = "game-data")]
-fn apply_alpha_override(rgba: &mut [u8], opacity: f32) {
-    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel[3] = pixel[3].min(alpha);
-    }
-}
-
-#[cfg(feature = "game-data")]
 fn combine_base_with_colorset_texture(
     material_path: &str,
     base_index: usize,
@@ -2869,6 +5072,11 @@ fn combine_base_with_colorset_texture(
     let base_height = base.height.max(1) as usize;
 
     let mut rgba = Vec::with_capacity(colorset.rgba.len());
+    let mut rgba_f32 = colorset
+        .rgba_f32
+        .as_ref()
+        .filter(|pixels| pixels.len() == width * height)
+        .map(|_| Vec::with_capacity(width * height));
     for y in 0..height {
         let base_y = y * base_height / height;
         for x in 0..width {
@@ -2876,22 +5084,52 @@ fn combine_base_with_colorset_texture(
             let base_offset = (base_y * base_width + base_x) * 4;
             let colorset_offset = (y * width + x) * 4;
             let base = base.rgba.get(base_offset..base_offset + 4)?;
-            let colorset = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
-            rgba.push(multiply_srgb_channels(base[0], colorset[0]));
-            rgba.push(multiply_srgb_channels(base[1], colorset[1]));
-            rgba.push(multiply_srgb_channels(base[2], colorset[2]));
+            let colorset_bytes = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
+            rgba.push(multiply_srgb_channels(base[0], colorset_bytes[0]));
+            rgba.push(multiply_srgb_channels(base[1], colorset_bytes[1]));
+            rgba.push(multiply_srgb_channels(base[2], colorset_bytes[2]));
             rgba.push(base[3]);
+            if let (Some(colorset_pixels), Some(output)) =
+                (colorset.rgba_f32.as_ref(), rgba_f32.as_mut())
+            {
+                let colorset = colorset_pixels[colorset_offset / 4];
+                output.push([
+                    srgb_u8_to_linear(base[0]) * colorset[0],
+                    srgb_u8_to_linear(base[1]) * colorset[1],
+                    srgb_u8_to_linear(base[2]) * colorset[2],
+                    f32::from(base[3]) / 255.0,
+                ]);
+            }
         }
     }
 
-    Some(push_or_replace_baked_texture(
+    let index = push_or_replace_baked_texture_with_float_channels(
         textures,
         format!("baked://{material_path}#base-times-colorset"),
         WeaponModelTextureKind::BaseColor,
         colorset.width,
         colorset.height,
         rgba,
-    ))
+        rgba_f32,
+    );
+    textures[index].texel_layout = colorset.texel_layout;
+    Some(index)
+}
+
+#[cfg(feature = "game-data")]
+fn resolve_color_table_base_texture(
+    material_path: &str,
+    base_index: Option<usize>,
+    colorset_index: usize,
+    composition: ColorTableDiffuseComposition,
+    textures: &mut Vec<WeaponModelTexture>,
+) -> Option<usize> {
+    match (base_index, composition) {
+        (Some(base_index), ColorTableDiffuseComposition::Multiply) => {
+            combine_base_with_colorset_texture(material_path, base_index, colorset_index, textures)
+        }
+        _ => Some(colorset_index),
+    }
 }
 
 #[cfg(feature = "game-data")]
@@ -2948,8 +5186,11 @@ fn push_or_replace_baked_texture_with_float_channels(
         textures[index] = WeaponModelTexture {
             path,
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width,
             height,
+            array_size: 1,
+            array_layer_height: height,
             rgba,
             rgba_f32,
         };
@@ -2960,8 +5201,11 @@ fn push_or_replace_baked_texture_with_float_channels(
     textures.push(WeaponModelTexture {
         path,
         kind,
+        texel_layout: ModelTextureTexelLayout::Standard,
         width,
         height,
+        array_size: 1,
+        array_layer_height: height,
         rgba,
         rgba_f32,
     });
@@ -2981,6 +5225,7 @@ fn weapon_color_table_rows(
                     diffuse: row.diffuse_color,
                     specular: row.specular_color,
                     emissive: row.emissive_color,
+                    scalar3: row.unknown3,
                     // physis still exposes these Dawntrail fields with placeholder names.
                     // Meddle names them GlossStrength and SpecularStrength respectively.
                     gloss_strength: row.unknown1,
@@ -2993,7 +5238,7 @@ fn weapon_color_table_rows(
                     sheen_rate: row.sheen_rate,
                     sheen_tint: row.sheen_tint,
                     sheen_aperture: row.sheen_aperture,
-                    sphere_index: f32::from(row.sphere_index),
+                    sphere_index: dawntrail_sphere_index(row.sphere_index),
                     sphere_mask: row.sphere_mask,
                     tile_matrix: [
                         row.material_repeat[0],
@@ -3032,6 +5277,11 @@ fn weapon_color_table_rows(
 #[cfg(feature = "game-data")]
 fn dawntrail_tile_index(tile_set: u16) -> f32 {
     half_to_f32(tile_set) * 64.0
+}
+
+#[cfg(feature = "game-data")]
+fn dawntrail_sphere_index(sphere_index: u16) -> f32 {
+    half_to_f32(sphere_index)
 }
 
 #[cfg(feature = "game-data")]
@@ -3094,7 +5344,7 @@ fn preview_emissive_color(emissive: [f32; 3], texture_set: &WeaponTextureSet) ->
 
 #[cfg(feature = "game-data")]
 fn summarize_material_colors(
-    color_table: Option<&physis::mtrl::ColorTable>,
+    rows: Option<&[ColorTableRowColors]>,
     fallback: [f32; 3],
 ) -> MaterialColorSummary {
     let mut diffuse = ColorAccumulator::default();
@@ -3104,27 +5354,15 @@ fn summarize_material_colors(
     let mut metalness_total = 0.0;
     let mut physical_rows = 0_u32;
 
-    match color_table {
-        Some(physis::mtrl::ColorTable::LegacyColorTable(table)) => {
-            for row in &table.rows {
-                diffuse.add_nonzero(row.diffuse_color);
-                specular.add_nonzero(row.specular_color);
-                emissive = brighter_color(emissive, row.emissive_color);
-            }
+    for row in rows.unwrap_or_default() {
+        diffuse.add_nonzero(row.diffuse);
+        specular.add_nonzero(row.specular);
+        emissive = brighter_color(emissive, row.emissive);
+        if row.roughness.is_finite() && row.metalness.is_finite() {
+            roughness_total += row.roughness.clamp(0.0, 1.0);
+            metalness_total += row.metalness.clamp(0.0, 1.0);
+            physical_rows += 1;
         }
-        Some(physis::mtrl::ColorTable::DawntrailColorTable(table)) => {
-            for row in &table.rows {
-                diffuse.add_nonzero(row.diffuse_color);
-                specular.add_nonzero(row.specular_color);
-                emissive = brighter_color(emissive, row.emissive_color);
-                if row.roughness.is_finite() && row.metalness.is_finite() {
-                    roughness_total += row.roughness.clamp(0.0, 1.0);
-                    metalness_total += row.metalness.clamp(0.0, 1.0);
-                    physical_rows += 1;
-                }
-            }
-        }
-        Some(physis::mtrl::ColorTable::OpaqueColorTable(_)) | None => {}
     }
 
     MaterialColorSummary {
@@ -3185,11 +5423,36 @@ fn fallback_weapon_material(
         material_index,
         name,
         path: None,
+        reference_fallback: None,
         shader_package_name: None,
         render_mode: WeaponMaterialRenderMode::Opaque,
         alpha_mode: WeaponMaterialAlphaMode::Opaque,
         alpha_threshold: 0.0,
+        draw_depth_mode: MaterialDrawDepthMode::None,
+        lighting_mode: MaterialLightingMode::Default,
+        flow_mode: MaterialFlowMode::Standard,
+        specular_type: MaterialSpecularType::Default,
+        specular_type_raw: None,
+        value_mode: MaterialValueMode::Single,
+        value_mode_raw: None,
+        sub_color_mode: MaterialSubColorMode::None,
+        decal_color_mode: MaterialDecalColorMode::Off,
+        decal_color_mode_raw: None,
+        skin_value_mode: MaterialSkinValueMode::None,
+        character_scroll_variant: MaterialCharacterScrollVariant::None,
+        character_scroll_variant_raw: None,
+        lightshaft_type: MaterialLightShaftType::None,
+        lightshaft_type_raw: None,
         transparency: 0.0,
+        water_deep_color: [0.3529, 0.372_549, 0.3921, 1.0],
+        water_refraction_color: [0.4117, 0.4313, 0.4509, 1.0],
+        water_whitecap_color: [0.4509, 0.4705, 0.4901, 0.3],
+        alpha_aperture: 2.0,
+        alpha_offset: 0.0,
+        vertex_alpha_to_one: 0.0,
+        shadow_alpha_threshold: 0.5,
+        glass_ior: 1.0,
+        glass_thickness_max: 0.01,
         normal_scale: 1.0,
         multi_normal_scale: 1.0,
         detail_normal_scale: 1.0,
@@ -3197,8 +5460,33 @@ fn fallback_weapon_material(
         tile_index: 0.0,
         tile_alpha: 1.0,
         tile_scale: [16.0, 16.0],
+        toon_index: 0.0,
+        toon_light_scale: 2.0,
+        toon_light_spec_aperture: 50.0,
+        toon_reflection_scale: 2.5,
+        toon_spec_index: 4.0e-45,
+        sheen_rate: 0.0,
+        sheen_tint_rate: 0.0,
+        sheen_aperture: 1.0,
+        sphere_map_index: 0.0,
         detail_id: 0.0,
         multi_detail_id: 0.0,
+        detail_color: [0.5, 0.5, 0.5, 1.0],
+        multi_detail_color: [0.5, 0.5, 0.5, 1.0],
+        shader_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_multi_diffuse_color: [1.0, 1.0, 1.0, 1.0],
+        shader_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        shader_multi_emissive_color: [0.0, 0.0, 0.0, 1.0],
+        outline_color: [0.0, 0.0, 0.0, 1.0],
+        outline_width: 0.0,
+        specular_color_mask: [1.0, 1.0, 1.0, 1.0],
+        ssao_mask: 1.0,
+        ambient_occlusion_mask: None,
+        texture_mip_bias: 0.0,
+        tile_mip_bias_offset: 0.0,
+        vertex_movement_scale: 1.0,
+        vertex_movement_max_length: 1.0,
+        shadow_pos_offset: 0.0,
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
@@ -3207,9 +5495,16 @@ fn fallback_weapon_material(
         lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
         lightshaft_tex_v: [0.0, 1.0, 0.0, 0.0],
         lightshaft_ray: [0.0, 0.0, 0.0, 0.0],
+        lightshaft_angle_clip: 0.0,
+        lightshaft_near_clip: 0.25,
         opacity: 1.0,
         render_backfaces: true,
         apply_vertex_color: false,
+        has_color_dye_table: false,
+        color_dye_table: None,
+        color_table_rows: None,
+        staining_application: None,
+        texture_arrays: ModelMaterialTextureArrays::default(),
         fallback_color: fallback,
         diffuse_color: fallback,
         specular_color: [0.35, 0.35, 0.35],
@@ -3218,19 +5513,155 @@ fn fallback_weapon_material(
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        secondary_base_color_texture: None,
         normal_texture: None,
+        secondary_normal_texture: None,
         mask_texture: None,
+        skin_diffuse_texture: None,
+        skin_normal_texture: None,
+        skin_mask_texture: None,
         material_map_texture: None,
         multi_map_texture: None,
         specular_texture: None,
+        secondary_specular_texture: None,
         emissive_texture: None,
+        environment_texture: None,
         material_properties_texture: None,
         tile_properties_texture: None,
         sheen_properties_texture: None,
         sphere_properties_texture: None,
         tile_matrix_texture: None,
         index_texture: None,
+        water_wave_texture: None,
+        water_wave1_texture: None,
+        water_whitecap_texture: None,
     }
+}
+
+#[cfg(feature = "game-data")]
+fn reuse_loaded_material_for_missing_reference(
+    material: WeaponModelMaterial,
+    loaded_materials: &[WeaponModelMaterial],
+) -> WeaponModelMaterial {
+    if material.path.is_some() {
+        return material;
+    }
+    let Some(source) = loaded_materials.iter().find(|source| {
+        source.material_index == material.material_index
+            && source.path.is_some()
+            && source.reference_fallback.is_none()
+    }) else {
+        return material;
+    };
+
+    let reference_fallback = ModelMaterialReferenceFallback {
+        kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+        requested_name: material.name.clone(),
+        source_slot: source.slot,
+        source_material_index: source.material_index,
+        source_name: source.name.clone(),
+        source_path: source.path.clone().expect("filtered material path"),
+    };
+    let mut reused = source.clone();
+    reused.slot = material.slot;
+    reused.material_index = material.material_index;
+    reused.name = material.name;
+    reused.reference_fallback = Some(reference_fallback);
+    reused
+}
+
+#[cfg(feature = "game-data")]
+fn resolve_loaded_color_table_reference(
+    slot: usize,
+    material_index: u16,
+    material_name: &str,
+    material_path: &str,
+    rows: &mut Option<Vec<ColorTableRowColors>>,
+    dye_table: &mut Option<ModelColorDyeTable>,
+    sources: &mut HashMap<u16, LoadedMaterialColorTable>,
+) -> Option<ModelMaterialReferenceFallback> {
+    if rows
+        .as_deref()
+        .is_some_and(color_table_rows_are_neutral_placeholder)
+    {
+        if let Some(source) = sources.get(&material_index).cloned() {
+            *rows = Some(source.rows.clone());
+            *dye_table = source.dye_table.clone();
+            return Some(ModelMaterialReferenceFallback {
+                kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable,
+                requested_name: material_name.to_string(),
+                source_slot: source.slot,
+                source_material_index: source.material_index,
+                source_name: source.name,
+                source_path: source.path,
+            });
+        }
+    }
+
+    if let Some(rows) = rows
+        .as_ref()
+        .filter(|rows| color_table_rows_have_visible_values(rows))
+    {
+        sources
+            .entry(material_index)
+            .or_insert_with(|| LoadedMaterialColorTable {
+                slot,
+                material_index,
+                name: material_name.to_string(),
+                path: material_path.to_string(),
+                rows: rows.clone(),
+                dye_table: dye_table.clone(),
+            });
+    }
+    None
+}
+
+#[cfg(feature = "game-data")]
+fn loaded_color_table_reference_index_texture(
+    reference: Option<&ModelMaterialReferenceFallback>,
+    loaded_materials: &[WeaponModelMaterial],
+) -> Option<usize> {
+    let reference = reference?;
+    if !matches!(
+        reference.kind,
+        ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable
+    ) {
+        return None;
+    }
+
+    loaded_materials
+        .iter()
+        .find(|material| {
+            material.slot == reference.source_slot
+                && material.material_index == reference.source_material_index
+        })
+        .and_then(|material| material.index_texture)
+}
+
+#[cfg(feature = "game-data")]
+fn color_table_rows_are_neutral_placeholder(rows: &[ColorTableRowColors]) -> bool {
+    !rows.is_empty()
+        && rows.iter().all(|row| {
+            vec3_approximately(row.diffuse, [1.0; 3])
+                && vec3_approximately(row.specular, [1.0; 3])
+                && vec3_approximately(row.emissive, [0.0; 3])
+        })
+}
+
+#[cfg(feature = "game-data")]
+fn color_table_rows_have_visible_values(rows: &[ColorTableRowColors]) -> bool {
+    rows.iter().any(|row| {
+        !vec3_approximately(row.diffuse, [1.0; 3])
+            || !vec3_approximately(row.specular, [1.0; 3])
+            || !vec3_approximately(row.emissive, [0.0; 3])
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn vec3_approximately(left: [f32; 3], right: [f32; 3]) -> bool {
+    left.into_iter()
+        .zip(right)
+        .all(|(left, right)| (left - right).abs() <= 1.0e-4)
 }
 
 #[cfg(feature = "game-data")]
@@ -3251,11 +5682,13 @@ fn parse_material_sampler_roles(
 ) -> Vec<MaterialSamplerRole> {
     parse_material_sampler_records(bytes, semantics)
         .into_iter()
-        .filter_map(|record| {
-            record.kind.map(|kind| MaterialSamplerRole {
+        .filter_map(|record| match (record.logical_role, record.kind) {
+            (Some(logical_role), Some(kind)) => Some(MaterialSamplerRole {
                 texture_index: record.texture_index,
+                logical_role,
                 kind,
-            })
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -3288,6 +5721,7 @@ fn parse_material_sampler_records(
                 texture_usage,
                 texture_usage_name: resolution.texture_usage_name,
                 flags,
+                logical_role: resolution.logical_role,
                 kind: resolution.kind,
                 kind_source: resolution.kind_source,
             });
@@ -3413,40 +5847,74 @@ fn material_constant_debug(bytes: &[u8]) -> Vec<MaterialConstantDebug> {
 
 #[cfg(feature = "game-data")]
 fn shader_package_material_defaults(bytes: &[u8]) -> Vec<(u32, Vec<f32>)> {
-    let Some(layout) = shader_package_material_defaults_layout(bytes) else {
+    shader_package_material_parameters_for_platform(bytes, physis::Platform::Win32)
+        .into_iter()
+        .filter_map(|parameter| {
+            parameter
+                .default_values
+                .map(|values| (parameter.id, values))
+        })
+        .collect()
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+struct ShaderPackageMaterialParameter {
+    id: u32,
+    byte_offset: u16,
+    byte_size: u16,
+    default_values: Option<Vec<f32>>,
+}
+
+#[cfg(feature = "game-data")]
+fn shader_package_material_parameters_for_platform(
+    bytes: &[u8],
+    platform: physis::Platform,
+) -> Vec<ShaderPackageMaterialParameter> {
+    let Some(layout) = shader_package_material_defaults_layout(bytes, platform) else {
         return Vec::new();
     };
 
-    let mut constants = Vec::new();
+    let mut parameters = Vec::new();
     let mut parameter_offset = layout.parameter_offset;
     let defaults_offset = layout.defaults_offset;
 
     for _ in 0..layout.parameter_count {
-        let Some(id) = read_u32_le(bytes, parameter_offset) else {
-            return constants;
+        let Some(id) = read_shpk_u32(bytes, parameter_offset, platform) else {
+            return parameters;
         };
-        let Some(byte_offset) = read_u16_le(bytes, parameter_offset + 4).map(usize::from) else {
-            return constants;
+        let Some(byte_offset) = read_shpk_u16(bytes, parameter_offset + 4, platform) else {
+            return parameters;
         };
-        let Some(byte_size) = read_u16_le(bytes, parameter_offset + 6).map(usize::from) else {
-            return constants;
+        let Some(byte_size) = read_shpk_u16(bytes, parameter_offset + 6, platform) else {
+            return parameters;
         };
-        if byte_size >= 4 && byte_offset.saturating_add(byte_size) <= layout.defaults_size {
-            let value_start = match defaults_offset.checked_add(byte_offset) {
-                Some(value_start) => value_start,
-                None => return constants,
-            };
-            if let Some(values) = read_f32_values(bytes, value_start, byte_size / 4) {
-                constants.push((id, values));
-            }
-        }
+        let byte_offset_usize = usize::from(byte_offset);
+        let byte_size_usize = usize::from(byte_size);
+        let default_values = (layout.has_defaults
+            && byte_size_usize % 4 == 0
+            && byte_offset_usize.saturating_add(byte_size_usize) <= layout.defaults_size)
+            .then(|| {
+                defaults_offset
+                    .checked_add(byte_offset_usize)
+                    .and_then(|value_start| {
+                        read_shpk_f32_values(bytes, value_start, byte_size_usize / 4, platform)
+                    })
+            })
+            .flatten();
+        parameters.push(ShaderPackageMaterialParameter {
+            id,
+            byte_offset,
+            byte_size,
+            default_values,
+        });
         let Some(next) = checked_advance(parameter_offset, 8, bytes.len()) else {
-            return constants;
+            return parameters;
         };
         parameter_offset = next;
     }
 
-    constants
+    parameters
 }
 
 #[cfg(feature = "game-data")]
@@ -3456,23 +5924,25 @@ struct ShaderPackageMaterialDefaultsLayout {
     defaults_offset: usize,
     defaults_size: usize,
     parameter_count: usize,
+    has_defaults: bool,
 }
 
 #[cfg(feature = "game-data")]
 fn shader_package_material_defaults_layout(
     bytes: &[u8],
+    platform: physis::Platform,
 ) -> Option<ShaderPackageMaterialDefaultsLayout> {
     if bytes.get(0..4)? != b"ShPk" {
         return None;
     }
 
-    let version = read_u32_le(bytes, 4)?;
-    let vertex_shader_count = read_u32_usize(bytes, 24)?;
-    let pixel_shader_count = read_u32_usize(bytes, 28)?;
-    let defaults_size = read_u32_usize(bytes, 32)?;
-    let parameter_count = read_u16_le(bytes, 36).map(usize::from)?;
-    let has_defaults = read_u16_le(bytes, 38)? != 0;
-    if !has_defaults || defaults_size == 0 || parameter_count == 0 {
+    let version = read_shpk_u32(bytes, 4, platform)?;
+    let vertex_shader_count = usize::try_from(read_shpk_u32(bytes, 24, platform)?).ok()?;
+    let pixel_shader_count = usize::try_from(read_shpk_u32(bytes, 28, platform)?).ok()?;
+    let defaults_size = usize::try_from(read_shpk_u32(bytes, 32, platform)?).ok()?;
+    let parameter_count = usize::from(read_shpk_u16(bytes, 36, platform)?);
+    let has_defaults = read_shpk_u16(bytes, 38, platform)? != 0;
+    if parameter_count == 0 {
         return None;
     }
 
@@ -3485,7 +5955,7 @@ fn shader_package_material_defaults_layout(
     }
 
     for _ in 0..vertex_shader_count.saturating_add(pixel_shader_count) {
-        offset = shader_package_skip_shader(bytes, offset, version)?;
+        offset = shader_package_skip_shader(bytes, offset, version, platform)?;
     }
 
     let parameter_offset = offset;
@@ -3494,22 +5964,29 @@ fn shader_package_material_defaults_layout(
         parameter_count.saturating_mul(8),
         bytes.len(),
     )?;
-    checked_advance(defaults_offset, defaults_size, bytes.len())?;
+    let stored_defaults_size = if has_defaults { defaults_size } else { 0 };
+    checked_advance(defaults_offset, stored_defaults_size, bytes.len())?;
 
     Some(ShaderPackageMaterialDefaultsLayout {
         parameter_offset,
         defaults_offset,
         defaults_size,
         parameter_count,
+        has_defaults,
     })
 }
 
 #[cfg(feature = "game-data")]
-fn shader_package_skip_shader(bytes: &[u8], offset: usize, version: u32) -> Option<usize> {
-    let scalar_count = read_u16_le(bytes, offset + 8).map(usize::from)?;
-    let resource_count = read_u16_le(bytes, offset + 10).map(usize::from)?;
-    let uav_count = read_u16_le(bytes, offset + 12).map(usize::from)?;
-    let texture_count = read_u16_le(bytes, offset + 14).map(usize::from)?;
+fn shader_package_skip_shader(
+    bytes: &[u8],
+    offset: usize,
+    version: u32,
+    platform: physis::Platform,
+) -> Option<usize> {
+    let scalar_count = usize::from(read_shpk_u16(bytes, offset + 8, platform)?);
+    let resource_count = usize::from(read_shpk_u16(bytes, offset + 10, platform)?);
+    let uav_count = usize::from(read_shpk_u16(bytes, offset + 12, platform)?);
+    let texture_count = usize::from(read_shpk_u16(bytes, offset + 14, platform)?);
     let header_size = if version >= 0x0D01 { 20 } else { 16 };
     let parameter_count = scalar_count
         .saturating_add(resource_count)
@@ -3517,6 +5994,36 @@ fn shader_package_skip_shader(bytes: &[u8], offset: usize, version: u32) -> Opti
         .saturating_add(texture_count);
     let offset = checked_advance(offset, header_size, bytes.len())?;
     checked_advance(offset, parameter_count.saturating_mul(16), bytes.len())
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_u16(bytes: &[u8], offset: usize, platform: physis::Platform) -> Option<u16> {
+    let raw = bytes.get(offset..offset + 2)?.try_into().ok()?;
+    Some(match platform {
+        physis::Platform::PS3 => u16::from_be_bytes(raw),
+        _ => u16::from_le_bytes(raw),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_u32(bytes: &[u8], offset: usize, platform: physis::Platform) -> Option<u32> {
+    let raw = bytes.get(offset..offset + 4)?.try_into().ok()?;
+    Some(match platform {
+        physis::Platform::PS3 => u32::from_be_bytes(raw),
+        _ => u32::from_le_bytes(raw),
+    })
+}
+
+#[cfg(feature = "game-data")]
+fn read_shpk_f32_values(
+    bytes: &[u8],
+    offset: usize,
+    count: usize,
+    platform: physis::Platform,
+) -> Option<Vec<f32>> {
+    (0..count)
+        .map(|index| read_shpk_u32(bytes, offset + index * 4, platform).map(f32::from_bits))
+        .collect()
 }
 
 #[cfg(feature = "game-data")]
@@ -3607,14 +6114,14 @@ fn material_shader_table_layout(bytes: &[u8]) -> Option<MaterialShaderTableLayou
 }
 
 #[cfg(feature = "game-data")]
-fn sampler_kind_for_texture(
+fn sampler_role_for_texture(
     sampler_roles: &[MaterialSamplerRole],
     texture_index: usize,
-) -> Option<WeaponModelTextureKind> {
+) -> Option<MaterialSamplerRole> {
     sampler_roles
         .iter()
         .find(|role| role.texture_index == texture_index)
-        .map(|role| role.kind)
+        .copied()
 }
 
 #[cfg(feature = "game-data")]
@@ -3623,68 +6130,77 @@ fn classify_sampler_usage(texture_usage: u32) -> Option<WeaponModelTextureKind> 
     known_sampler_names()
         .iter()
         .find(|(name, _)| physis::shpk::ShaderPackage::crc(name) == texture_usage)
-        .map(|(_, kind)| *kind)
+        .map(|(_, logical_role)| logical_role.texture_kind())
 }
 
 #[cfg(feature = "game-data")]
+#[cfg(test)]
 fn classify_sampler_name(name: &str) -> Option<WeaponModelTextureKind> {
+    classify_sampler_logical_role_name(name).map(MaterialSamplerLogicalRole::texture_kind)
+}
+
+#[cfg(feature = "game-data")]
+fn classify_sampler_logical_role_name(name: &str) -> Option<MaterialSamplerLogicalRole> {
     known_sampler_names()
         .iter()
         .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-        .map(|(_, kind)| *kind)
+        .map(|(_, logical_role)| *logical_role)
 }
 
 #[cfg(feature = "game-data")]
-fn known_sampler_names() -> &'static [(&'static str, WeaponModelTextureKind)] {
+fn known_sampler_names() -> &'static [(&'static str, MaterialSamplerLogicalRole)] {
+    use MaterialSamplerLogicalRole as Role;
+
     &[
-        ("g_SamplerNormal", WeaponModelTextureKind::Normal),
-        ("g_NormalSampler", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap", WeaponModelTextureKind::Normal),
-        ("g_NormalMapSampler", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap0", WeaponModelTextureKind::Normal),
-        ("g_SamplerNormalMap1", WeaponModelTextureKind::Normal),
-        ("g_SamplerSkinNormal", WeaponModelTextureKind::Normal),
-        ("g_SamplerEmissive", WeaponModelTextureKind::Emissive),
-        ("g_EmissiveSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerEmission", WeaponModelTextureKind::Emissive),
-        ("g_EmissionSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerLight", WeaponModelTextureKind::Emissive),
-        ("g_LightSampler", WeaponModelTextureKind::Emissive),
-        ("g_SamplerIndex", WeaponModelTextureKind::Index),
-        ("g_IndexSampler", WeaponModelTextureKind::Index),
-        ("g_SamplerMask", WeaponModelTextureKind::Mask),
-        ("g_MaskSampler", WeaponModelTextureKind::Mask),
-        ("g_SamplerSkinMask", WeaponModelTextureKind::Mask),
-        ("g_SamplerMaterial", WeaponModelTextureKind::MaterialMap),
-        ("g_MaterialSampler", WeaponModelTextureKind::MaterialMap),
-        ("g_SamplerMulti", WeaponModelTextureKind::MultiMap),
-        ("g_MultiSampler", WeaponModelTextureKind::MultiMap),
-        ("g_SamplerSpecular", WeaponModelTextureKind::Specular),
-        ("g_SpecularSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerSpecularMap", WeaponModelTextureKind::Specular),
-        ("g_SpecularMapSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerSpecularMap0", WeaponModelTextureKind::Specular),
-        ("g_SamplerReflect", WeaponModelTextureKind::Specular),
-        ("g_ReflectSampler", WeaponModelTextureKind::Specular),
-        ("g_SamplerDiffuse", WeaponModelTextureKind::BaseColor),
-        ("g_DiffuseSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColor", WeaponModelTextureKind::BaseColor),
-        ("g_ColorSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap", WeaponModelTextureKind::BaseColor),
-        ("g_ColorMapSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap0", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerColorMap1", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerSkinDiffuse", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerAlbedo", WeaponModelTextureKind::BaseColor),
-        ("g_AlbedoSampler", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerBaseColor", WeaponModelTextureKind::BaseColor),
-        ("g_BaseColorSampler", WeaponModelTextureKind::BaseColor),
-        ("g_Sampler0", WeaponModelTextureKind::BaseColor),
-        ("g_Sampler1", WeaponModelTextureKind::BaseColor),
-        ("g_SamplerEnvMap", WeaponModelTextureKind::Other),
-        ("g_SamplerWaveMap", WeaponModelTextureKind::Other),
-        ("g_SamplerWaveMap1", WeaponModelTextureKind::Other),
-        ("g_SamplerWhitecapMap", WeaponModelTextureKind::Other),
+        ("g_SamplerNormal", Role::Normal),
+        ("g_NormalSampler", Role::Normal),
+        ("g_SamplerNormalMap", Role::Normal),
+        ("g_NormalMapSampler", Role::Normal),
+        ("g_SamplerNormalMap0", Role::Normal),
+        ("g_SamplerNormalMap1", Role::SecondaryNormal),
+        ("g_SamplerSkinNormal", Role::SkinNormal),
+        ("g_SamplerEmissive", Role::Emissive),
+        ("g_EmissiveSampler", Role::Emissive),
+        ("g_SamplerEmission", Role::Emissive),
+        ("g_EmissionSampler", Role::Emissive),
+        ("g_SamplerLight", Role::Emissive),
+        ("g_LightSampler", Role::Emissive),
+        ("g_SamplerIndex", Role::Index),
+        ("g_IndexSampler", Role::Index),
+        ("g_SamplerMask", Role::Mask),
+        ("g_MaskSampler", Role::Mask),
+        ("g_SamplerSkinMask", Role::SkinMask),
+        ("g_SamplerMaterial", Role::MaterialMap),
+        ("g_MaterialSampler", Role::MaterialMap),
+        ("g_SamplerMulti", Role::MultiMap),
+        ("g_MultiSampler", Role::MultiMap),
+        ("g_SamplerSpecular", Role::Specular),
+        ("g_SpecularSampler", Role::Specular),
+        ("g_SamplerSpecularMap", Role::Specular),
+        ("g_SpecularMapSampler", Role::Specular),
+        ("g_SamplerSpecularMap0", Role::Specular),
+        ("g_SamplerSpecularMap1", Role::SecondarySpecular),
+        ("g_SamplerReflect", Role::Specular),
+        ("g_ReflectSampler", Role::Specular),
+        ("g_SamplerDiffuse", Role::BaseColor),
+        ("g_DiffuseSampler", Role::BaseColor),
+        ("g_SamplerColor", Role::BaseColor),
+        ("g_ColorSampler", Role::BaseColor),
+        ("g_SamplerColorMap", Role::BaseColor),
+        ("g_ColorMapSampler", Role::BaseColor),
+        ("g_SamplerColorMap0", Role::BaseColor),
+        ("g_SamplerColorMap1", Role::SecondaryBaseColor),
+        ("g_SamplerSkinDiffuse", Role::SkinDiffuse),
+        ("g_SamplerAlbedo", Role::BaseColor),
+        ("g_AlbedoSampler", Role::BaseColor),
+        ("g_SamplerBaseColor", Role::BaseColor),
+        ("g_BaseColorSampler", Role::BaseColor),
+        ("g_Sampler0", Role::BaseColor),
+        ("g_Sampler1", Role::SecondaryBaseColor),
+        ("g_SamplerEnvMap", Role::Environment),
+        ("g_SamplerWaveMap", Role::WaterWave),
+        ("g_SamplerWaveMap1", Role::WaterWaveSecondary),
+        ("g_SamplerWhitecapMap", Role::WaterWhitecap),
     ]
 }
 
@@ -3789,11 +6305,6 @@ fn read_string_at(bytes: &[u8], offset: usize) -> Option<String> {
 }
 
 #[cfg(feature = "game-data")]
-fn read_u32_usize(bytes: &[u8], offset: usize) -> Option<usize> {
-    usize::try_from(read_u32_le(bytes, offset)?).ok()
-}
-
-#[cfg(feature = "game-data")]
 fn read_f32_le(bytes: &[u8], offset: usize) -> Option<f32> {
     let bytes = bytes.get(offset..offset + 4)?;
     Some(f32::from_le_bytes(bytes.try_into().ok()?))
@@ -3887,6 +6398,471 @@ mod weapon_material_tests {
     use super::*;
 
     #[test]
+    fn weapon_model_load_request_normalizes_stain_ids() {
+        let request = WeaponModelLoadRequest {
+            item_id: 1,
+            item_name: "test".to_string(),
+            model_main: 2,
+            model_sub: 3,
+            stain_ids: [MAX_STAIN_ID, u8::MAX],
+        };
+
+        assert_eq!(request.normalized_stain_ids(), [MAX_STAIN_ID, 0]);
+        assert_eq!(request.clone().with_stain_ids([17, 93]).stain_ids, [17, 93]);
+    }
+
+    #[test]
+    fn runtime_staining_reuses_base_rows_and_non_color_table_assets() {
+        let base_row = ColorTableRowColors {
+            diffuse: [0.1, 0.2, 0.3],
+            specular: [0.2, 0.3, 0.4],
+            ..ColorTableRowColors::default()
+        };
+        let dye_row = ModelLegacyColorDyeTableRow {
+            template: 42,
+            diffuse: true,
+            specular: false,
+            emissive: false,
+            gloss: false,
+            specular_strength: false,
+        };
+        let mut material = fallback_weapon_material(0, 0, "test.mtrl".to_string(), [0.5; 3]);
+        material.path = Some("chara/weapon/test.mtrl".to_string());
+        material.has_color_dye_table = true;
+        material.color_dye_table = Some(ModelColorDyeTable::Legacy(vec![dye_row.clone(), dye_row]));
+        material.color_table_rows = Some(vec![base_row, base_row]);
+        material.index_texture = Some(0);
+        material.texture_indices = vec![0];
+
+        let base = WeaponModelData {
+            item_id: 1,
+            item_name: "test".to_string(),
+            model_main: PackedModelId::from_raw(1),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: vec!["model.mdl".to_string(), "test.mtrl".to_string()],
+            bounds: ModelBounds::default(),
+            materials: vec![material],
+            textures: vec![WeaponModelTexture {
+                path: "index.tex".to_string(),
+                kind: WeaponModelTextureKind::Index,
+                texel_layout: ModelTextureTexelLayout::Standard,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![0, 0, 0, 255],
+                rgba_f32: None,
+            }],
+            meshes: Vec::new(),
+        };
+        let templates = WeaponStainingTemplates::from_load_results(
+            Ok(legacy_staining_fixture(42, [0.8, 0.4, 0.2])),
+            Err("not needed".to_string()),
+        );
+
+        let neutral = apply_weapon_model_stains(&base, [0, 0], &templates);
+        let stained = apply_weapon_model_stains(&neutral, [1, 0], &templates);
+        let reset = apply_weapon_model_stains(&stained, [0, 0], &templates);
+        let neutral_diffuse = color_table_baked_texture(&neutral, "#colorset-diffuse");
+        let stained_diffuse = color_table_baked_texture(&stained, "#colorset-diffuse");
+        let reset_diffuse = color_table_baked_texture(&reset, "#colorset-diffuse");
+
+        assert_ne!(neutral_diffuse.rgba, stained_diffuse.rgba);
+        assert_eq!(neutral_diffuse.rgba, reset_diffuse.rgba);
+        assert_eq!(stained.loaded_paths, base.loaded_paths);
+        assert_eq!(stained.meshes, base.meshes);
+        assert_eq!(stained.textures[0], base.textures[0]);
+        assert_eq!(
+            stained.materials[0].color_table_rows,
+            Some(vec![base_row, base_row])
+        );
+        assert_eq!(
+            stained.materials[0]
+                .staining_application
+                .as_ref()
+                .map(|application| application.report.rows_changed),
+            Some(2)
+        );
+    }
+
+    fn color_table_baked_texture<'a>(
+        model: &'a WeaponModelData,
+        suffix: &str,
+    ) -> &'a WeaponModelTexture {
+        model
+            .textures
+            .iter()
+            .find(|texture| texture.path.ends_with(suffix))
+            .unwrap_or_else(|| panic!("missing baked texture {suffix}"))
+    }
+
+    fn legacy_staining_fixture(template: u32, diffuse: [f32; 3]) -> Vec<u8> {
+        const STM_MAGIC: u16 = 0x534d;
+        const STM_VERSION_LEGACY: u16 = 0x0101;
+        let columns = vec![
+            diffuse
+                .into_iter()
+                .flat_map(|value| half::f16::from_f32(value).to_bits().to_le_bytes())
+                .collect::<Vec<_>>(),
+            vec![0; 6],
+            vec![0; 6],
+            half::f16::from_f32(1.0).to_bits().to_le_bytes().to_vec(),
+            half::f16::from_f32(1.0).to_bits().to_le_bytes().to_vec(),
+        ];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&STM_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&STM_VERSION_LEGACY.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&template.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        let mut cumulative_bytes = 0_usize;
+        for column in &columns {
+            cumulative_bytes += column.len();
+            bytes.extend_from_slice(
+                &u16::try_from(cumulative_bytes / 2)
+                    .expect("fixture offset")
+                    .to_le_bytes(),
+            );
+        }
+        for column in columns {
+            bytes.extend_from_slice(&column);
+        }
+        bytes
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_shared_texture_arrays_decode_as_vertical_atlases() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let cases = [
+            (
+                CHARACTER_TILE_NORMAL_ARRAY_PATH,
+                ModelTextureKind::TileNormalArray,
+            ),
+            (
+                CHARACTER_TILE_ORB_ARRAY_PATH,
+                ModelTextureKind::TileOrbArray,
+            ),
+            (
+                BG_DETAIL_DIFFUSE_ARRAY_PATH,
+                ModelTextureKind::DetailDiffuseArray,
+            ),
+            (
+                BG_DETAIL_NORMAL_ARRAY_PATH,
+                ModelTextureKind::DetailNormalArray,
+            ),
+        ];
+
+        for (path, kind) in cases {
+            let mut textures = Vec::new();
+            let mut loaded_paths = Vec::new();
+            let index = load_shared_texture_array_from_resource(
+                &mut resource,
+                path,
+                kind,
+                &mut textures,
+                &mut loaded_paths,
+            )
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+            let texture = &textures[index];
+
+            eprintln!(
+                "{path}: kind={:?}, {}x{}, layers={}, layer_height={}, rgba={}",
+                texture.kind,
+                texture.width,
+                texture.height,
+                texture.array_size,
+                texture.array_layer_height,
+                texture.rgba.len()
+            );
+            assert_eq!(texture.path, path);
+            assert_eq!(texture.kind, kind);
+            assert!(texture.array_size > 1);
+            assert_eq!(
+                u32::from(texture.height),
+                u32::from(texture.array_layer_height) * u32::from(texture.array_size)
+            );
+            assert_eq!(
+                texture.rgba.len(),
+                usize::from(texture.width) * usize::from(texture.height) * 4
+            );
+            assert_eq!(loaded_paths, vec![path.to_string()]);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_character_weapon_attaches_tile_texture_arrays() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45052,
+            item_name: "奶油之幻梦".to_string(),
+            model_main: 4_295_295_803,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.texture_arrays.tile_normal.is_some())
+            .expect("material using character tile arrays");
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        assert!(material.texture_arrays.tile_orb.is_some());
+        assert!(material.texture_arrays.errors.is_empty());
+        assert!(prepared.resource_availability.tile_array_complete);
+        assert!(prepared.unsupported_inputs.tile_array);
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == CHARACTER_TILE_NORMAL_ARRAY_PATH)
+        );
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == CHARACTER_TILE_ORB_ARRAY_PATH)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_character_glass_uses_normal_blue_alpha_policy() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45059,
+            item_name: "冬雪之幻梦".to_string(),
+            model_main: 4_295_034_963,
+            model_sub: 773_094_181_015,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.shader_package_name.as_deref() == Some("characterglass.shpk"))
+            .expect("character glass material");
+        let normal = &model.textures[material.normal_texture.expect("glass normal texture")];
+        let (blue_min, blue_max) = normal
+            .rgba
+            .chunks_exact(4)
+            .fold((u8::MAX, u8::MIN), |(min, max), pixel| {
+                (min.min(pixel[2]), max.max(pixel[2]))
+            });
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        eprintln!(
+            "glass normal blue range={blue_min}..{blue_max}, depth={:?}, lighting={:?}",
+            material.draw_depth_mode, material.lighting_mode
+        );
+        assert_eq!(material.draw_depth_mode, MaterialDrawDepthMode::Dither);
+        assert_eq!(material.lighting_mode, MaterialLightingMode::Default);
+        assert_eq!(
+            prepared.render_pass,
+            crate::model::PreparedRenderPass::Glass
+        );
+        assert_eq!(
+            prepared.alpha_policy.source,
+            crate::model::PreparedAlphaSource::NormalBlue
+        );
+        assert!(blue_min < blue_max);
+        assert!(blue_min < u8::MAX);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45068_compatibility_multiplies_colorset_diffuse() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45068,
+            item_name: "菜蔬之幻梦".to_string(),
+            model_main: 4_295_032_946,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model.materials.first().expect("45068 material");
+        let base = &model.textures[material.base_color_texture.expect("active base texture")];
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        assert_eq!(material.value_mode, MaterialValueMode::Compatibility);
+        assert_eq!(material.vertex_movement_scale, 0.0);
+        assert_eq!(material.vertex_movement_max_length, 0.0);
+        assert!(prepared.unsupported_inputs.vertex_movement_parameters);
+        assert!(base.path.ends_with("#base-times-colorset"));
+        assert_eq!(base.texel_layout, ModelTextureTexelLayout::ColorTableRampAb);
+        assert_eq!(
+            base.rgba_f32.as_ref().map(Vec::len),
+            Some(usize::from(base.width) * usize::from(base.height))
+        );
+        assert!(
+            base.rgba_f32
+                .as_deref()
+                .expect("Compatibility float diffuse payload")
+                .iter()
+                .all(|pixel| pixel.iter().all(|value| value.is_finite()))
+        );
+        assert!(material.texture_indices.iter().any(|index| {
+            model.textures[*index]
+                .path
+                .ends_with("v01_w0114b0001_base.tex")
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_audited_tile_mip_bias_offsets_are_preserved() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        for (item_id, item_name, model_main, expected_bias, expected_scale) in [
+            (47320, "改良型护锁刃魔导典", 4_295_034_596, 1.0, 1.010_056),
+            (46462, "女王骑士之典", 8_590_591_710, -1.0, 1.0),
+        ] {
+            let request = WeaponModelLoadRequest {
+                item_id,
+                item_name: item_name.to_string(),
+                model_main,
+                model_sub: 0,
+                stain_ids: [0, 0],
+            };
+            let model = load_weapon_model_from_resource_request(&mut resource, &request)
+                .unwrap_or_else(|error| panic!("{item_id}: {error:#}"));
+            let material = model
+                .materials
+                .iter()
+                .find(|material| material.tile_mip_bias_offset == expected_bias)
+                .unwrap_or_else(|| panic!("{item_id}: audited tile bias material"));
+            let prepared = crate::model::prepare_material_for_draw_role(
+                Some(material),
+                ModelMeshDrawRole::Normal,
+            );
+
+            assert_eq!(material.tile_mip_bias_offset, expected_bias);
+            assert!((material.vertex_movement_scale - expected_scale).abs() < 0.000_01);
+            assert!(!prepared.unsupported_inputs.tile_mip_bias_offset);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_legacy_specular_mask_is_structured_and_supported() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 30520,
+            item_name: "改良型伊修加德新型天星盘".to_string(),
+            model_main: 8_593_934_389,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.specular_type == MaterialSpecularType::Mask)
+            .expect("legacy specular mask material");
+        let prepared =
+            crate::model::prepare_material_for_draw_role(Some(material), ModelMeshDrawRole::Normal);
+
+        assert_eq!(material.specular_type_raw, Some(SPECULAR_TYPE_MASK));
+        assert!(!prepared.unsupported_inputs.legacy_specular_type);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_weapon_stain_changes_baked_color_table() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45052,
+            item_name: "奶油之幻梦".to_string(),
+            model_main: 4_295_295_803,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let unstained =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("unstained");
+        let mut template_paths = Vec::new();
+        let templates = load_weapon_staining_templates_from_resource(
+            &mut resource,
+            [1, 0],
+            &mut template_paths,
+        );
+        let stained = apply_weapon_model_stains(&unstained, [1, 0], &templates);
+
+        assert_eq!(unstained.stain_ids, [0, 0]);
+        assert_eq!(stained.stain_ids, [1, 0]);
+        assert_eq!(stained.loaded_paths, unstained.loaded_paths);
+        assert!(
+            template_paths
+                .iter()
+                .any(|path| path == DAWNTRAIL_STAINING_TEMPLATE_PATH)
+        );
+
+        let stained_material = stained
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .staining_application
+                    .as_ref()
+                    .is_some_and(|application| {
+                        application.error.is_none() && application.report.rows_changed != 0
+                    })
+            })
+            .expect("stained material");
+        let unstained_material = unstained
+            .materials
+            .iter()
+            .find(|material| material.path == stained_material.path)
+            .expect("matching unstained material");
+        let stained_texture = &stained.textures[stained_material
+            .base_color_texture
+            .expect("stained base texture")];
+        let unstained_texture = &unstained.textures[unstained_material
+            .base_color_texture
+            .expect("unstained base texture")];
+
+        eprintln!(
+            "staining application: {:#?}",
+            stained_material.staining_application
+        );
+        assert_ne!(stained_texture.rgba, unstained_texture.rgba);
+        assert!(
+            !crate::model::prepare_material_for_draw_role(
+                Some(stained_material),
+                ModelMeshDrawRole::Normal
+            )
+            .unsupported_inputs
+            .dye_application
+        );
+    }
+
+    #[test]
     fn sub_model_load_failure_diagnostic_preserves_candidate_errors() {
         let model = PackedModelId::from_raw(0x0001_0002_0064);
         let failure = WeaponModelMeshLoadFailure::new(
@@ -3945,6 +6921,7 @@ mod weapon_material_tests {
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 1);
+        assert_eq!(roles[0].logical_role, MaterialSamplerLogicalRole::Normal);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Normal);
     }
 
@@ -3957,6 +6934,50 @@ mod weapon_material_tests {
 
         semantics.apply_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON);
         assert!(semantics.has_material_key(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON));
+    }
+
+    #[test]
+    fn known_shader_labels_include_all_meddle_decal_color_values() {
+        for (value, expected) in [
+            (GET_DECAL_COLOR_OFF, "GetDecalColorOff"),
+            (GET_DECAL_COLOR_ALPHA, "GetDecalColorAlpha"),
+            (GET_DECAL_COLOR_RGBA, "GetDecalColorRGBA"),
+        ] {
+            assert_eq!(known_shader_label(value).as_deref(), Some(expected));
+        }
+        assert_eq!(known_shader_label(0xDEAD_BEEF), None);
+    }
+
+    #[test]
+    fn known_semantic_labels_cover_audited_material_inputs() {
+        for (value, expected) in [
+            (CATEGORY_SPECULAR_TYPE, "CategorySpecularType"),
+            (SPECULAR_TYPE_DEFAULT, "Default"),
+            (SPECULAR_TYPE_MASK, "Mask"),
+            (GET_VALUES_MULTI_MATERIAL, "GetValuesMultiMaterial"),
+            (DRAW_DEPTH_MODE, "DrawDepthMode"),
+            (ENABLE_LIGHTING, "EnableLighting"),
+            (0x87D8_F48A, "ApplyVertexMovement"),
+            (0xF8CA_223F, "ApplyVertexMovementOff"),
+            (0xA657_DE89, "ApplyVertexMovementOn"),
+            (0xDCFC_844E, "ApplyAlphaClip"),
+            (0x7D50_81DF, "ApplyAlphaClipOff"),
+            (0x59C4_E6DB, "ApplyAlphaClipOn"),
+        ] {
+            assert_eq!(known_shader_label(value).as_deref(), Some(expected));
+        }
+        for (value, expected) in [
+            (G_TILE_MIP_BIAS_OFFSET, "g_TileMipBiasOffset"),
+            (G_VERTEX_MOVEMENT_SCALE, "g_VertexMovementScale"),
+            (G_VERTEX_MOVEMENT_MAX_LENGTH, "g_VertexMovementMaxLength"),
+            (G_AMBIENT_OCCLUSION_MASK, "g_AmbientOcclusionMask"),
+            (G_VERTEX_ALPHA_TO_ONE, "VertexAlphaToOne"),
+        ] {
+            assert_eq!(
+                known_material_constant_name(value).as_deref(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -3985,11 +7006,16 @@ mod weapon_material_tests {
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].texture_index, 0);
+        assert_eq!(roles[0].logical_role, MaterialSamplerLogicalRole::Index);
         assert_eq!(roles[0].kind, WeaponModelTextureKind::Index);
 
         let records = parse_material_sampler_records(&bytes, &semantics);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].texture_usage_name.as_deref(), Some(sampler_name));
+        assert_eq!(
+            records[0].logical_role,
+            Some(MaterialSamplerLogicalRole::Index)
+        );
         assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Index));
         assert_eq!(records[0].kind_source, Some("shpkResourceName"));
     }
@@ -4020,6 +7046,10 @@ mod weapon_material_tests {
         );
         assert_eq!(records[0].flags, 0x1234_5678);
         assert_eq!(records[0].texture_index, 0);
+        assert_eq!(
+            records[0].logical_role,
+            Some(MaterialSamplerLogicalRole::Normal)
+        );
         assert_eq!(records[0].kind, Some(WeaponModelTextureKind::Normal));
         assert_eq!(records[0].kind_source, Some("knownCrc"));
     }
@@ -4045,6 +7075,7 @@ mod weapon_material_tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].texture_usage, texture_usage);
         assert_eq!(records[0].texture_usage_name, None);
+        assert_eq!(records[0].logical_role, None);
         assert_eq!(records[0].kind, None);
         assert_eq!(records[0].kind_source, None);
     }
@@ -4097,6 +7128,24 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn material_texture_paths_follow_duplicate_texture_offsets() {
+        use physis::ReadableFile;
+
+        let bytes = test_mtrl_with_duplicate_texture_offsets();
+        let material = physis::mtrl::Material::from_existing(physis::Platform::Win32, &bytes)
+            .expect("material");
+
+        assert_eq!(
+            material_texture_paths_from_offsets(&bytes, &material.texture_paths),
+            vec![
+                "dummy.tex".to_string(),
+                "dummy.tex".to_string(),
+                "chara/weapon/w2651/obj/body/b0059/texture/v01_w2651b0059_id.tex".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn material_semantic_summary_compacts_keys_constants_and_flags() {
         let bytes = test_mtrl_with_low_level_fields();
         let low_level = material_low_level_debug(&bytes, &[]).expect("debug info");
@@ -4114,6 +7163,7 @@ mod weapon_material_tests {
                 texture_usage_name: record.texture_usage_name,
                 flags: record.flags,
                 flags_hex: hex_u32(record.flags),
+                logical_role: record.logical_role,
                 kind: record.kind,
                 kind_source: record.kind_source.map(ToString::to_string),
             })
@@ -4242,7 +7292,7 @@ mod weapon_material_tests {
         assert_eq!(rows[0].sheen_rate, row.sheen_rate);
         assert_eq!(rows[0].sheen_tint, row.sheen_tint);
         assert_eq!(rows[0].sheen_aperture, row.sheen_aperture);
-        assert_eq!(rows[0].sphere_index, f32::from(row.sphere_index));
+        assert_eq!(rows[0].sphere_index, 2.0);
         assert_eq!(rows[0].sphere_mask, row.sphere_mask);
         assert_eq!(
             rows[0].tile_matrix,
@@ -4253,6 +7303,10 @@ mod weapon_material_tests {
                 row.material_skew[1],
             ]
         );
+
+        let baked = bake_color_table_maps(&[rows[0], rows[0]], &[0, 0, 0, 255])
+            .expect("bake Dawntrail sphere properties");
+        assert_eq!(baked.sphere_properties_rgba[0], 2);
     }
 
     #[test]
@@ -4275,6 +7329,7 @@ mod weapon_material_tests {
         assert_eq!(debug.rows[0].sheen_tint, Some(row.sheen_tint));
         assert_eq!(debug.rows[0].sheen_aperture, Some(row.sheen_aperture));
         assert_eq!(debug.rows[0].sphere_mask, Some(row.sphere_mask));
+        assert_eq!(debug.rows[0].sphere_index, Some(0x4000));
         assert_eq!(
             debug.rows[0].tile_matrix,
             Some([
@@ -4365,18 +7420,21 @@ mod weapon_material_tests {
         let mut textures = vec![WeaponModelTexture {
             path: "index.tex".to_string(),
             kind: WeaponModelTextureKind::Index,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
-            rgba: vec![0, 0, 0, 255],
+            array_size: 1,
+            array_layer_height: 1,
+            rgba: vec![0, 255, 0, 255],
             rgba_f32: None,
         }];
+        let rows = weapon_color_table_rows(&color_table).expect("color table rows");
 
         let baked = bake_weapon_color_table_textures(
             "material.mtrl",
-            Some(&color_table),
+            Some(&rows),
             Some(0),
             true,
-            None,
             &mut textures,
         )
         .expect("bake");
@@ -4387,7 +7445,473 @@ mod weapon_material_tests {
             WeaponModelTextureKind::TileMatrixProperties
         );
         assert_eq!(&tile_matrix.rgba[0..4], &[255, 0, 64, 255]);
-        assert_eq!(tile_matrix.rgba_f32, Some(vec![[2.0, -0.5, 0.25, 1.5]]));
+        assert_eq!(tile_matrix.width, 2);
+        assert_eq!(
+            tile_matrix.texel_layout,
+            ModelTextureTexelLayout::ColorTableTileRampAb
+        );
+        assert_eq!(
+            textures[baked.tile_properties].texel_layout,
+            ModelTextureTexelLayout::ColorTableTileRampAb
+        );
+        assert_eq!(
+            tile_matrix.rgba_f32,
+            Some(vec![[2.0, -0.5, 0.25, 1.5], [0.0; 4]])
+        );
+        assert_eq!(textures[baked.base_color].rgba[3], 255);
+    }
+
+    #[test]
+    fn baked_diffuse_specular_emissive_sheen_and_sphere_textures_preserve_float_channels() {
+        let rows = vec![
+            ColorTableRowColors {
+                diffuse: [6.7929688, 2.0, 0.5],
+                specular: [0.25, 0.5, 0.75],
+                anisotropy: 7.0,
+                emissive: [61.46875, 2.0, 0.5],
+                sheen_aperture: 4.0,
+                sphere_index: 2.0,
+                ..Default::default()
+            },
+            ColorTableRowColors::default(),
+        ];
+        let mut textures = vec![WeaponModelTexture {
+            path: "index.tex".to_string(),
+            kind: WeaponModelTextureKind::Index,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 1,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 1,
+            rgba: vec![0, 255, 0, 255],
+            rgba_f32: None,
+        }];
+
+        let baked = bake_weapon_color_table_textures(
+            "material.mtrl",
+            Some(&rows),
+            Some(0),
+            true,
+            &mut textures,
+        )
+        .expect("bake");
+
+        assert_eq!(
+            textures[baked.base_color].rgba_f32,
+            Some(vec![[6.7929688, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
+        assert_eq!(textures[baked.specular].rgba[3], 255);
+        assert_eq!(
+            textures[baked.specular].rgba_f32,
+            Some(vec![[0.25, 0.5, 0.75, 7.0], [0.0, 0.0, 0.0, 0.0]])
+        );
+        assert_eq!(textures[baked.sheen_properties].rgba[2], 255);
+        assert_eq!(
+            textures[baked.sheen_properties].rgba_f32,
+            Some(vec![[0.0, 0.0, 4.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
+        assert_eq!(textures[baked.sphere_properties].rgba[0], 2);
+        assert_eq!(
+            textures[baked.sphere_properties].rgba_f32,
+            Some(vec![[2.0 / 255.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0],])
+        );
+        let emissive = baked.emissive.expect("HDR emissive texture");
+        assert_eq!(
+            textures[emissive].rgba_f32,
+            Some(vec![[61.46875, 2.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]])
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45059_preserves_hdr_sheen_ramp() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 45059,
+            item_name: "冬雪之幻梦".to_string(),
+            model_main: 4_295_034_963,
+            model_sub: 773_094_181_015,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let sheen = model
+            .textures
+            .iter()
+            .find(|texture| {
+                texture.kind == WeaponModelTextureKind::SheenProperties
+                    && texture
+                        .rgba_f32
+                        .as_deref()
+                        .is_some_and(|pixels| pixels.iter().any(|pixel| pixel[2] == 4.0))
+            })
+            .expect("45059 HDR sheen properties");
+
+        assert!(sheen.rgba.chunks_exact(4).any(|pixel| pixel[2] == 255));
+        assert!(
+            sheen
+                .rgba_f32
+                .as_deref()
+                .expect("float sheen payload")
+                .iter()
+                .any(|pixel| pixel[2] == 4.0)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_45063_reuses_primary_index_for_missing_duplicate_offset_texture() {
+        const PRIMARY_INDEX_PATH: &str =
+            "chara/weapon/w2601/obj/body/b0059/texture/v01_w2601b0059_id.tex";
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let request = WeaponModelLoadRequest {
+            item_id: 45_063,
+            item_name: "夏火之幻梦".to_string(),
+            model_main: 4_298_836_521,
+            model_sub: 4_298_836_571,
+            stain_ids: [0, 0],
+        };
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let primary = model
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/w2601/"))
+            })
+            .expect("45063 primary material");
+        let secondary = model
+            .materials
+            .iter()
+            .find(|material| {
+                material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/w2651/"))
+            })
+            .expect("45063 secondary material");
+        let index_texture = secondary.index_texture.expect("secondary index binding");
+
+        assert_eq!(secondary.index_texture, primary.index_texture);
+        assert_eq!(model.textures[index_texture].path, PRIMARY_INDEX_PATH);
+        assert_eq!(
+            model.textures[index_texture].kind,
+            WeaponModelTextureKind::Index
+        );
+        assert!(secondary.base_color_texture.is_some());
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| path == PRIMARY_INDEX_PATH)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_equipment_style_fist_loads_default_human_glove() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 49_100,
+            item_name: "幻境指虎·半影（复制品）".to_string(),
+            model_main: 0x0000_0000_0001_2276,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+
+        assert!(!model.meshes.is_empty());
+        assert!(
+            model
+                .loaded_paths
+                .iter()
+                .any(|path| { path == "chara/equipment/e8822/model/c0101e8822_glv.mdl" })
+        );
+        assert!(model.loaded_paths.iter().any(|path| {
+            path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+        }));
+        assert!(
+            model.materials.iter().any(|material| {
+                material.shader_package_name.as_deref() == Some("character.shpk")
+            })
+        );
+        let skin_material = model
+            .materials
+            .iter()
+            .find(|material| material.shader_package_name.as_deref() == Some("skin.shpk"))
+            .expect("skin material");
+        let prepared = crate::model::prepare_material_for_draw_role(
+            Some(skin_material),
+            ModelMeshDrawRole::Normal,
+        );
+        assert_eq!(skin_material.skin_value_mode, MaterialSkinValueMode::Body);
+        assert_eq!(prepared.skin_value_mode, MaterialSkinValueMode::Body);
+        assert_eq!(
+            prepared.texture_sampling.base_color.address_mode,
+            crate::model::PreparedTextureAddressMode::Repeat
+        );
+        assert_eq!(
+            prepared.shader_family,
+            crate::model::MaterialShaderFamily::Skin
+        );
+        assert!(prepared.unsupported_inputs.runtime_skin_color);
+        assert!(model.bounds.radius.is_finite() && model.bounds.radius > 0.0);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_equipment_fist_preserves_shape_vertex_targets() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 42_697,
+            item_name: "新生王国指虎".to_string(),
+            model_main: 74_357,
+            model_sub: 0,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let mesh = model
+            .meshes
+            .iter()
+            .find(|mesh| !mesh.shape_targets.is_empty())
+            .expect("mesh with shape targets");
+
+        assert!(mesh.shape_targets.iter().any(|target| {
+            target.shape.name.as_deref() == Some("shp_arm") && !target.vertex_deltas.is_empty()
+        }));
+        assert!(mesh.shape_targets.iter().all(|target| {
+            target
+                .vertex_deltas
+                .iter()
+                .all(|delta| delta.vertex_index < mesh.vertices.len() as u32)
+        }));
+        let shaped = crate::model::model_mesh_vertices_with_shape_mask(mesh, Some(1));
+        assert!(
+            shaped
+                .iter()
+                .zip(&mesh.vertices)
+                .any(|(shaped, base)| shaped.position != base.position
+                    || shaped.normal != base.normal)
+        );
+    }
+
+    #[test]
+    fn missing_material_reference_reuses_loaded_same_index() {
+        let mut source =
+            fallback_weapon_material(0, 0, "/mt_w3004b0001_a.mtrl".to_string(), [0.1, 0.2, 0.3]);
+        source.path = Some(
+            "chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl".to_string(),
+        );
+        source.shader_package_name = Some("character.shpk".to_string());
+        let missing =
+            fallback_weapon_material(1, 0, "/mt_w3103b0001_a.mtrl".to_string(), [0.4, 0.5, 0.6]);
+
+        let reused = reuse_loaded_material_for_missing_reference(missing, &[source]);
+
+        assert_eq!(reused.slot, 1);
+        assert_eq!(reused.material_index, 0);
+        assert_eq!(reused.name, "/mt_w3103b0001_a.mtrl");
+        assert_eq!(
+            reused.shader_package_name.as_deref(),
+            Some("character.shpk")
+        );
+        assert_eq!(
+            reused.path.as_deref(),
+            Some("chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl")
+        );
+        assert_eq!(
+            reused.reference_fallback,
+            Some(ModelMaterialReferenceFallback {
+                kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+                requested_name: "/mt_w3103b0001_a.mtrl".to_string(),
+                source_slot: 0,
+                source_material_index: 0,
+                source_name: "/mt_w3004b0001_a.mtrl".to_string(),
+                source_path:
+                    "chara/weapon/w3004/obj/body/b0001/material/v0001/mt_w3004b0001_a.mtrl"
+                        .to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn neutral_secondary_color_table_inherits_loaded_same_index_rows() {
+        let colorful_row = ColorTableRowColors {
+            diffuse: [0.2, 0.4, 0.6],
+            specular: [0.7, 0.8, 0.9],
+            ..ColorTableRowColors::default()
+        };
+        let neutral_row = ColorTableRowColors {
+            diffuse: [1.0; 3],
+            specular: [1.0; 3],
+            emissive: [0.0; 3],
+            ..ColorTableRowColors::default()
+        };
+        let mut sources = HashMap::new();
+        let mut primary_rows = Some(vec![colorful_row]);
+        let mut primary_dye = None;
+        assert_eq!(
+            resolve_loaded_color_table_reference(
+                0,
+                0,
+                "/mt_primary.mtrl",
+                "primary.mtrl",
+                &mut primary_rows,
+                &mut primary_dye,
+                &mut sources,
+            ),
+            None
+        );
+
+        let mut secondary_rows = Some(vec![neutral_row]);
+        let mut secondary_dye = None;
+        let fallback = resolve_loaded_color_table_reference(
+            1,
+            0,
+            "/mt_secondary.mtrl",
+            "secondary.mtrl",
+            &mut secondary_rows,
+            &mut secondary_dye,
+            &mut sources,
+        );
+
+        assert_eq!(secondary_rows, Some(vec![colorful_row]));
+        assert_eq!(
+            fallback.map(|fallback| fallback.kind),
+            Some(ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable)
+        );
+    }
+
+    #[test]
+    fn inherited_color_table_fills_only_the_missing_index_texture() {
+        let mut source = fallback_weapon_material(0, 0, "/mt_primary.mtrl".to_string(), [1.0; 3]);
+        source.path = Some("primary.mtrl".to_string());
+        source.normal_texture = Some(0);
+        source.index_texture = Some(1);
+        let reference = ModelMaterialReferenceFallback {
+            kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedColorTable,
+            requested_name: "/mt_secondary.mtrl".to_string(),
+            source_slot: 0,
+            source_material_index: 0,
+            source_name: source.name.clone(),
+            source_path: source.path.clone().expect("source path"),
+        };
+        let textures = vec![
+            WeaponModelTexture {
+                path: "normal.tex".to_string(),
+                kind: WeaponModelTextureKind::Normal,
+                texel_layout: ModelTextureTexelLayout::Standard,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![128, 128, 255, 255],
+                rgba_f32: None,
+            },
+            WeaponModelTexture {
+                path: "index.tex".to_string(),
+                kind: WeaponModelTextureKind::Index,
+                texel_layout: ModelTextureTexelLayout::Standard,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![0, 0, 0, 255],
+                rgba_f32: None,
+            },
+        ];
+        let fallback_index = loaded_color_table_reference_index_texture(
+            Some(&reference),
+            std::slice::from_ref(&source),
+        );
+        let mut set = WeaponTextureSet::default();
+
+        apply_color_table_index_fallback(&mut set, fallback_index, &textures);
+
+        assert_eq!(set.index, Some(1));
+        assert_eq!(set.indices, vec![1]);
+        assert_eq!(set.normal, None);
+        assert_eq!(set.mask, None);
+    }
+
+    #[test]
+    fn missing_material_reference_does_not_chain_reused_materials() {
+        let mut reused_source =
+            fallback_weapon_material(1, 0, "/mt_reused.mtrl".to_string(), [0.1, 0.2, 0.3]);
+        reused_source.path = Some("source.mtrl".to_string());
+        reused_source.reference_fallback = Some(ModelMaterialReferenceFallback {
+            kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+            requested_name: "/mt_reused.mtrl".to_string(),
+            source_slot: 0,
+            source_material_index: 0,
+            source_name: "/mt_source.mtrl".to_string(),
+            source_path: "source.mtrl".to_string(),
+        });
+        let missing =
+            fallback_weapon_material(2, 0, "/mt_missing.mtrl".to_string(), [0.4, 0.5, 0.6]);
+
+        let unresolved = reuse_loaded_material_for_missing_reference(missing, &[reused_source]);
+
+        assert_eq!(unresolved.path, None);
+        assert_eq!(unresolved.reference_fallback, None);
+    }
+
+    #[test]
+    #[ignore = "requires an installed FFXIV game directory"]
+    fn installed_43624_reuses_primary_material_for_stale_secondary_reference() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let request = WeaponModelLoadRequest {
+            item_id: 43_624,
+            item_name: "帝国魔导双牙".to_string(),
+            model_main: 0x0000_0002_0001_0BBC,
+            model_sub: 0x0000_0002_0001_0BEE,
+            stain_ids: [0, 0],
+        };
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let model =
+            load_weapon_model_from_resource_request(&mut resource, &request).expect("weapon");
+        let secondary = model
+            .materials
+            .iter()
+            .find(|material| material.name == "/mt_w3103b0001_a.mtrl")
+            .expect("secondary material");
+
+        assert_eq!(
+            secondary.shader_package_name.as_deref(),
+            Some("character.shpk")
+        );
+        assert_eq!(
+            secondary.path.as_deref(),
+            Some("chara/weapon/w3004/obj/body/b0001/material/v0002/mt_w3004b0001_a.mtrl")
+        );
+        assert_eq!(
+            secondary.reference_fallback,
+            Some(ModelMaterialReferenceFallback {
+                kind: ModelMaterialReferenceFallbackKind::SameIndexLoadedMaterial,
+                requested_name: "/mt_w3103b0001_a.mtrl".to_string(),
+                source_slot: 0,
+                source_material_index: 0,
+                source_name: "/mt_w3004b0001_a.mtrl".to_string(),
+                source_path:
+                    "chara/weapon/w3004/obj/body/b0001/material/v0002/mt_w3004b0001_a.mtrl"
+                        .to_string(),
+            })
+        );
+        assert!(!secondary.texture_indices.is_empty());
     }
 
     #[test]
@@ -4406,6 +7930,19 @@ mod weapon_material_tests {
         );
 
         let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+        assert_eq!(
+            model_color_dye_table(Some(&color_dye_table)),
+            Some(ModelColorDyeTable::Legacy(vec![
+                ModelLegacyColorDyeTableRow {
+                    template: 42,
+                    diffuse: true,
+                    specular: false,
+                    emissive: true,
+                    gloss: true,
+                    specular_strength: false,
+                }
+            ]))
+        );
 
         assert_eq!(debug.kind, "Legacy");
         assert_eq!(debug.row_count, 1);
@@ -4445,6 +7982,27 @@ mod weapon_material_tests {
         );
 
         let debug = material_color_dye_table_debug(Some(&color_dye_table)).expect("debug");
+        assert_eq!(
+            model_color_dye_table(Some(&color_dye_table)),
+            Some(ModelColorDyeTable::Dawntrail(vec![
+                ModelDawntrailColorDyeTableRow {
+                    template: 77,
+                    channel: 2,
+                    diffuse: true,
+                    specular: true,
+                    emissive: false,
+                    scalar3: true,
+                    metalness: false,
+                    roughness: true,
+                    sheen_rate: true,
+                    sheen_tint_rate: false,
+                    sheen_aperture: true,
+                    anisotropy: false,
+                    sphere_map_index: true,
+                    sphere_map_mask: true,
+                }
+            ]))
+        );
 
         assert_eq!(debug.kind, "Dawntrail");
         assert_eq!(debug.row_count, 1);
@@ -4478,6 +8036,129 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn shader_package_semantic_debug_preserves_zero_width_material_parameters() {
+        let bytes = test_shpk_with_material_defaults(&[
+            (G_ALPHA_THRESHOLD, &[0.35]),
+            (G_AMBIENT_OCCLUSION_MASK, &[]),
+        ]);
+
+        let debug =
+            shader_package_semantic_debug_from_shpk_bytes("shader/sm5/shpk/character.shpk", &bytes)
+                .expect("shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 2);
+        assert_eq!(debug.material_constants[1].id, G_AMBIENT_OCCLUSION_MASK);
+        assert_eq!(debug.material_constants[1].byte_size, 0);
+        assert_eq!(debug.material_constants[1].default_values, Some(Vec::new()));
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_preserves_parameters_without_defaults() {
+        let bytes = test_shpk_without_material_defaults(&[(G_AMBIENT_OCCLUSION_MASK, 4)]);
+
+        let debug =
+            shader_package_semantic_debug_from_shpk_bytes("shader/sm5/shpk/character.shpk", &bytes)
+                .expect("shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 1);
+        assert_eq!(debug.material_constants[0].id, G_AMBIENT_OCCLUSION_MASK);
+        assert_eq!(debug.material_constants[0].byte_size, 4);
+        assert_eq!(debug.material_constants[0].default_values, None);
+        assert!(shader_package_material_defaults(&bytes).is_empty());
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_reads_ps3_material_defaults_as_big_endian() {
+        let bytes = test_shpk_with_semantics_for_platform(
+            &[(G_ALPHA_THRESHOLD, &[0.35])],
+            &[],
+            &[],
+            &[],
+            physis::Platform::PS3,
+        );
+
+        let debug = shader_package_semantic_debug_from_bytes_for_platform(
+            "shader/sm5/shpk/character.shpk",
+            &bytes,
+            physis::Platform::PS3,
+        )
+        .expect("PS3 shader package debug");
+
+        assert_eq!(debug.material_constants.len(), 1);
+        assert_eq!(debug.material_constants[0].id, G_ALPHA_THRESHOLD);
+        assert_eq!(debug.material_constants[0].default_values, Some(vec![0.35]));
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_preserves_key_scopes_and_constant_defaults() {
+        let bytes = test_shpk_with_semantics(
+            &[(G_ALPHA_THRESHOLD, &[0.35, 0.75])],
+            &[(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON)],
+            &[(GET_VALUES, GET_VALUES_COMPATIBILITY)],
+            &[(GET_DECAL_COLOR, GET_DECAL_COLOR_RGBA)],
+        );
+
+        let debug = shader_package_semantic_debug_from_shpk_bytes(
+            r"Shader\SM5\ShPk\Character.ShPk",
+            &bytes,
+        )
+        .expect("shader package debug");
+
+        assert_eq!(debug.path, "shader/sm5/shpk/character.shpk");
+        assert_eq!(debug.name, "character.shpk");
+        assert_eq!(
+            debug.material_keys,
+            vec![ShaderPackageKeyDefaultDebug {
+                id: APPLY_ALPHA_TEST,
+                id_hex: hex_u32(APPLY_ALPHA_TEST),
+                name: Some("ApplyAlphaTest".to_string()),
+                default_value: APPLY_ALPHA_TEST_ON,
+                default_value_hex: hex_u32(APPLY_ALPHA_TEST_ON),
+                default_value_name: Some("ApplyAlphaTestOn".to_string()),
+            }]
+        );
+        assert_eq!(debug.system_keys[0].id, GET_VALUES);
+        assert_eq!(
+            debug.system_keys[0].default_value_name.as_deref(),
+            Some("GetValuesCompatibility")
+        );
+        assert_eq!(debug.scene_keys[0].id, GET_DECAL_COLOR);
+        assert_eq!(
+            debug.scene_keys[0].default_value_name.as_deref(),
+            Some("GetDecalColorRGBA")
+        );
+        assert_eq!(
+            debug.material_constants,
+            vec![ShaderPackageMaterialConstantDebug {
+                id: G_ALPHA_THRESHOLD,
+                id_hex: hex_u32(G_ALPHA_THRESHOLD),
+                name: Some("g_AlphaThreshold".to_string()),
+                byte_offset: 0,
+                byte_size: 8,
+                default_values: Some(vec![0.35, 0.75]),
+            }]
+        );
+    }
+
+    #[test]
+    fn shader_package_semantic_debug_from_resource_resolves_package_name() {
+        let bytes =
+            test_shpk_with_semantics(&[], &[(APPLY_ALPHA_TEST, APPLY_ALPHA_TEST_ON)], &[], &[]);
+        let path = "shader/sm5/shpk/character.shpk";
+        let expected = shader_package_semantic_debug_from_shpk_bytes(path, &bytes)
+            .expect("expected shader package debug");
+        let mut resource = TestShaderPackageResource {
+            path: path.to_string(),
+            bytes,
+        };
+
+        let actual = shader_package_semantic_debug_from_resource(&mut resource, "character.shpk")
+            .expect("resource shader package debug");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn composed_material_semantics_material_constant_overrides_shader_package_default() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[(G_ALPHA_THRESHOLD, &[0.2])]);
@@ -4495,18 +8176,461 @@ mod weapon_material_tests {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[(G_TRANSPARENCY, &[0.35])]);
 
-        assert_eq!(composed_material_transparency(&semantics), 0.0);
+        assert_eq!(
+            composed_material_transparency(&semantics, "character.shpk"),
+            0.0
+        );
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            1.0
+        );
 
         semantics.apply_shader_package_material_constants(&shader_package);
-        assert_eq!(composed_material_transparency(&semantics), 0.35);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            0.35
+        );
 
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[0.72], 0);
         semantics.apply_material_constants(&material);
-        assert_eq!(composed_material_transparency(&semantics), 0.72);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            0.72
+        );
 
         let material = test_mtrl_with_constant(G_TRANSPARENCY, &[8.0], 0);
         semantics.apply_material_constants(&material);
-        assert_eq!(composed_material_transparency(&semantics), 1.0);
+        assert_eq!(
+            composed_material_transparency(&semantics, "water.shpk"),
+            1.0
+        );
+    }
+
+    #[test]
+    fn composed_material_water_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.3529, 0.372_549, 0.3921, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_refraction_color(&semantics),
+            [0.4117, 0.4313, 0.4509, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_whitecap_color(&semantics),
+            [0.4509, 0.4705, 0.4901, 0.3]
+        );
+
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_WATER_DEEP_COLOR, &[0.1, 0.2, 0.3]),
+            (G_WATER_REFRACTION_COLOR, &[0.4, 0.5, 0.6]),
+            (G_WATER_WHITECAP_COLOR, &[0.7, 0.8, 0.9, 0.25]),
+        ]);
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_refraction_color(&semantics),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+        assert_eq!(
+            composed_material_water_whitecap_color(&semantics),
+            [0.7, 0.8, 0.9, 0.25]
+        );
+
+        let material = test_mtrl_with_constant(G_WATER_DEEP_COLOR, &[0.9, f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_water_deep_color(&semantics),
+            [0.9, 0.372_549, 0.3921, 1.0]
+        );
+    }
+
+    #[test]
+    fn composed_character_transparency_keys_preserve_depth_and_lighting_policy() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::None
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Default
+        );
+
+        semantics.apply_shader_package_key_default(DRAW_DEPTH_MODE, DRAW_DEPTH_MODE_DITHER);
+        semantics.apply_shader_package_key_default(ENABLE_LIGHTING, ENABLE_LIGHTING_ON);
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::Dither
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Enabled
+        );
+
+        semantics.apply_material_key(ENABLE_LIGHTING, ENABLE_LIGHTING_OFF);
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Disabled
+        );
+
+        semantics.apply_material_key(DRAW_DEPTH_MODE, 0xDEAD_BEEF);
+        semantics.apply_material_key(ENABLE_LIGHTING, 0xCAFE_BABE);
+        assert_eq!(
+            composed_material_draw_depth_mode(&semantics),
+            MaterialDrawDepthMode::Unknown
+        );
+        assert_eq!(
+            composed_material_lighting_mode(&semantics),
+            MaterialLightingMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_character_flow_mode_preserves_default_override_and_unknown() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Standard
+        );
+
+        semantics.apply_shader_package_key_default(CATEGORY_FLOW_MAP_TYPE, FLOW_MAP_STANDARD);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Standard
+        );
+
+        semantics.apply_material_key(CATEGORY_FLOW_MAP_TYPE, FLOW_MAP_FLOW);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Flow
+        );
+
+        semantics.apply_material_key(CATEGORY_FLOW_MAP_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_flow_mode(&semantics),
+            MaterialFlowMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_specular_type_preserves_default_mask_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Default, None)
+        );
+
+        semantics.apply_shader_package_key_default(CATEGORY_SPECULAR_TYPE, SPECULAR_TYPE_DEFAULT);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Default, Some(SPECULAR_TYPE_DEFAULT))
+        );
+
+        semantics.apply_material_key(CATEGORY_SPECULAR_TYPE, SPECULAR_TYPE_MASK);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Mask, Some(SPECULAR_TYPE_MASK))
+        );
+
+        semantics.apply_material_key(CATEGORY_SPECULAR_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_specular_type(&semantics),
+            (MaterialSpecularType::Unknown, Some(0xDEAD_BEEF))
+        );
+    }
+
+    #[test]
+    fn composed_get_values_mode_preserves_known_and_unknown_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_value_mode(&semantics),
+            (MaterialValueMode::Single, None)
+        );
+
+        semantics.apply_shader_package_key_default(GET_VALUES, GET_ALPHA_MULTI_VALUES);
+        assert_eq!(
+            composed_material_value_mode(&semantics),
+            (MaterialValueMode::AlphaMulti, Some(GET_ALPHA_MULTI_VALUES))
+        );
+
+        for (value, expected) in [
+            (GET_VALUES_SINGLE, MaterialValueMode::Single),
+            (GET_VALUES_MULTI, MaterialValueMode::Multi),
+            (GET_ALPHA_MULTI_VALUES, MaterialValueMode::AlphaMulti),
+            (GET_ALPHA_MULTI_VALUES2, MaterialValueMode::AlphaMulti2),
+            (GET_ALPHA_MULTI_VALUES3, MaterialValueMode::AlphaMulti3),
+            (GET_VALUES_MULTI_MATERIAL, MaterialValueMode::MultiMaterial),
+            (GET_VALUES_COMPATIBILITY, MaterialValueMode::Compatibility),
+            (0xDEAD_BEEF, MaterialValueMode::Unknown),
+        ] {
+            semantics.apply_material_key(GET_VALUES, value);
+            assert_eq!(
+                composed_material_value_mode(&semantics),
+                (expected, Some(value))
+            );
+        }
+    }
+
+    #[test]
+    fn composed_character_compatibility_gate_accepts_current_and_legacy_keys() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert!(!composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(GET_VALUES, GET_VALUES_COMPATIBILITY);
+        assert!(composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(GET_VALUES, GET_VALUES_MULTI_MATERIAL);
+        assert!(!composed_material_uses_compatibility_values(&semantics));
+
+        semantics.apply_material_key(
+            GET_VALUES_TEXTURE_TYPE,
+            GET_VALUES_TEXTURE_TYPE_COMPATIBILITY,
+        );
+        assert!(composed_material_uses_compatibility_values(&semantics));
+    }
+
+    #[test]
+    fn composed_sub_color_mode_preserves_known_and_unknown_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::None
+        );
+
+        semantics.apply_shader_package_key_default(GET_SUB_COLOR, GET_SUB_COLOR_FACE);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Face
+        );
+
+        semantics.apply_material_key(GET_SUB_COLOR, GET_SUB_COLOR_HAIR);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Hair
+        );
+
+        semantics.apply_material_key(GET_SUB_COLOR, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_sub_color_mode(&semantics),
+            MaterialSubColorMode::Unknown
+        );
+    }
+
+    #[test]
+    fn composed_decal_color_mode_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, None)
+        );
+
+        semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_OFF);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, Some(GET_DECAL_COLOR_OFF))
+        );
+
+        semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_ALPHA);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Off, Some(GET_DECAL_COLOR_OFF))
+        );
+
+        semantics.apply_material_key(GET_DECAL_COLOR, GET_DECAL_COLOR_RGBA);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Rgba, Some(GET_DECAL_COLOR_RGBA))
+        );
+
+        semantics.apply_material_key(GET_DECAL_COLOR, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_decal_color_mode(&semantics),
+            (MaterialDecalColorMode::Unknown, Some(0xDEAD_BEEF))
+        );
+
+        let mut alpha_semantics = ComposedMaterialSemantics::default();
+        alpha_semantics.apply_shader_package_key_default(GET_DECAL_COLOR, GET_DECAL_COLOR_ALPHA);
+        assert_eq!(
+            composed_material_decal_color_mode(&alpha_semantics),
+            (MaterialDecalColorMode::Alpha, Some(GET_DECAL_COLOR_ALPHA))
+        );
+    }
+
+    #[test]
+    fn composed_skin_value_mode_preserves_known_and_unknown_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_skin_value_mode(&semantics),
+            MaterialSkinValueMode::None
+        );
+
+        for (value, expected) in [
+            (GET_MATERIAL_VALUE_FACE, MaterialSkinValueMode::Face),
+            (GET_MATERIAL_VALUE_BODY, MaterialSkinValueMode::Body),
+            (GET_MATERIAL_VALUE_BODY_JJM, MaterialSkinValueMode::BodyJjm),
+            (
+                GET_MATERIAL_VALUE_FACE_EMISSIVE,
+                MaterialSkinValueMode::FaceEmissive,
+            ),
+            (0xDEAD_BEEF, MaterialSkinValueMode::Unknown),
+        ] {
+            semantics.apply_material_key(GET_MATERIAL_VALUE, value);
+            assert_eq!(composed_material_skin_value_mode(&semantics), expected);
+        }
+    }
+
+    #[test]
+    fn composed_character_scroll_variant_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (MaterialCharacterScrollVariant::None, None)
+        );
+
+        semantics.apply_shader_package_key_default(
+            CHARACTER_SCROLL_VARIANT,
+            CHARACTER_SCROLL_VARIANT_69EB4AE0,
+        );
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (
+                MaterialCharacterScrollVariant::Value69eb4ae0,
+                Some(CHARACTER_SCROLL_VARIANT_69EB4AE0)
+            )
+        );
+
+        semantics.apply_material_key(CHARACTER_SCROLL_VARIANT, CHARACTER_SCROLL_VARIANT_9A8A46F5);
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (
+                MaterialCharacterScrollVariant::Value9a8a46f5,
+                Some(CHARACTER_SCROLL_VARIANT_9A8A46F5)
+            )
+        );
+
+        semantics.apply_material_key(CHARACTER_SCROLL_VARIANT, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_character_scroll_variant(&semantics),
+            (MaterialCharacterScrollVariant::Unknown, Some(0xDEAD_BEEF))
+        );
+    }
+
+    #[test]
+    fn composed_lightshaft_type_preserves_default_override_and_unknown_raw_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::None, None)
+        );
+
+        semantics.apply_shader_package_key_default(LIGHTSHAFT_TYPE, LIGHTSHAFT_TYPE_0);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Type0, Some(LIGHTSHAFT_TYPE_0))
+        );
+
+        semantics.apply_material_key(LIGHTSHAFT_TYPE, LIGHTSHAFT_TYPE_1);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Type1, Some(LIGHTSHAFT_TYPE_1))
+        );
+
+        semantics.apply_material_key(LIGHTSHAFT_TYPE, 0xDEAD_BEEF);
+        assert_eq!(
+            composed_material_lightshaft_type(&semantics),
+            (MaterialLightShaftType::Unknown, Some(0xDEAD_BEEF))
+        );
+    }
+
+    #[test]
+    fn composed_material_alpha_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_ALPHA_APERTURE, &[2.5]),
+            (G_ALPHA_OFFSET, &[-0.25]),
+            (G_VERTEX_ALPHA_TO_ONE, &[0.01]),
+            (G_SHADOW_ALPHA_THRESHOLD, &[0.35]),
+        ]);
+
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.0);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.0);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.5);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.5);
+        assert_eq!(composed_material_alpha_offset(&semantics), -0.25);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.01);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_ALPHA_APERTURE, &[4.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 4.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.2);
+
+        let material = test_mtrl_with_constant(G_VERTEX_ALPHA_TO_ONE, &[1.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 1.0);
+
+        let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[1.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 1.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_APERTURE, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_aperture(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_ALPHA_OFFSET, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_alpha_offset(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_VERTEX_ALPHA_TO_ONE, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_alpha_to_one(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_SHADOW_ALPHA_THRESHOLD, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_alpha_threshold(&semantics), 0.5);
+    }
+
+    #[test]
+    fn composed_material_glass_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_GLASS_IOR, &[1.33]),
+            (G_GLASS_THICKNESS_MAX, &[0.08]),
+        ]);
+
+        assert_eq!(composed_material_glass_ior(&semantics), 1.0);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.01);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.33);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.08);
+
+        let material = test_mtrl_with_constant(G_GLASS_IOR, &[1.52], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.52);
+
+        let material = test_mtrl_with_constant(G_GLASS_THICKNESS_MAX, &[0.125], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.125);
+
+        let material = test_mtrl_with_constant(G_GLASS_IOR, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_ior(&semantics), 1.0);
+
+        let material = test_mtrl_with_constant(G_GLASS_THICKNESS_MAX, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_glass_thickness_max(&semantics), 0.01);
     }
 
     #[test]
@@ -4551,6 +8675,60 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_material_latent_motion_and_tile_bias_use_resolved_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_TILE_MIP_BIAS_OFFSET, &[0.25]),
+            (G_VERTEX_MOVEMENT_SCALE, &[0.75]),
+            (G_VERTEX_MOVEMENT_MAX_LENGTH, &[3.0]),
+        ]);
+
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.0);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.0);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            1.0
+        );
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.25);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 0.75);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            3.0
+        );
+
+        let material = test_mtrl_with_constant(G_TILE_MIP_BIAS_OFFSET, &[-1.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), -1.0);
+
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_SCALE, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_MAX_LENGTH, &[10.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            10.0
+        );
+
+        let material = test_mtrl_with_constant(G_TILE_MIP_BIAS_OFFSET, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_tile_mip_bias_offset(&semantics), 0.0);
+        let material = test_mtrl_with_constant(G_VERTEX_MOVEMENT_SCALE, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_vertex_movement_scale(&semantics), 1.0);
+        let material =
+            test_mtrl_with_constant(G_VERTEX_MOVEMENT_MAX_LENGTH, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_vertex_movement_max_length(&semantics),
+            1.0
+        );
+    }
+
+    #[test]
     fn composed_material_tile_select_uses_resolved_material_constants() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package = test_shpk_with_material_defaults(&[
@@ -4579,6 +8757,103 @@ mod weapon_material_tests {
         let material = test_mtrl_with_constant(G_TILE_SCALE, &[4.0, 2.0], 0);
         semantics.apply_material_constants(&material);
         assert_eq!(composed_material_tile_scale(&semantics), [4.0, 2.0]);
+    }
+
+    #[test]
+    fn composed_material_toon_sheen_sphere_params_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_TOON_INDEX, &[3.0]),
+            (G_TOON_LIGHT_SCALE, &[1.5]),
+            (G_TOON_LIGHT_SPEC_APERTURE, &[42.0]),
+            (G_TOON_REFLECTION_SCALE, &[3.25]),
+            (G_TOON_SPEC_INDEX, &[2.0]),
+            (G_SHEEN_RATE, &[0.25]),
+            (G_SHEEN_TINT_RATE, &[0.35]),
+            (G_SHEEN_APERTURE, &[0.8]),
+            (G_SPHERE_MAP_INDEX, &[2.0]),
+        ]);
+
+        assert_eq!(composed_material_toon_index(&semantics), 0.0);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.0);
+        assert_eq!(composed_material_toon_light_spec_aperture(&semantics), 50.0);
+        assert_eq!(composed_material_toon_reflection_scale(&semantics), 2.5);
+        assert_eq!(composed_material_toon_spec_index(&semantics), 4.0e-45);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.0);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.0);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.0);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 0.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(composed_material_toon_index(&semantics), 3.0);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 1.5);
+        assert_eq!(composed_material_toon_light_spec_aperture(&semantics), 42.0);
+        assert_eq!(composed_material_toon_reflection_scale(&semantics), 3.25);
+        assert_eq!(composed_material_toon_spec_index(&semantics), 2.0);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.25);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.35);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 0.8);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_TOON_INDEX, &[5.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_index(&semantics), 5.0);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SCALE, &[2.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.25);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SPEC_APERTURE, &[64.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_spec_aperture(&semantics), 64.0);
+
+        let material = test_mtrl_with_constant(G_TOON_REFLECTION_SCALE, &[4.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_reflection_scale(&semantics), 4.5);
+
+        let material = test_mtrl_with_constant(G_TOON_SPEC_INDEX, &[6.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_spec_index(&semantics), 6.0);
+
+        let material = test_mtrl_with_constant(G_SHEEN_RATE, &[0.45], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_rate(&semantics), 0.45);
+
+        let material = test_mtrl_with_constant(G_SHEEN_TINT_RATE, &[0.55], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_tint_rate(&semantics), 0.55);
+
+        let material = test_mtrl_with_constant(G_SHEEN_APERTURE, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_SPHERE_MAP_INDEX, &[4.0], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sphere_map_index(&semantics), 4.0);
+
+        let material = test_mtrl_with_constant(G_TOON_INDEX, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_index(&semantics), 0.0);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SCALE, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_scale(&semantics), 2.0);
+
+        let material = test_mtrl_with_constant(G_TOON_LIGHT_SPEC_APERTURE, &[f32::NAN], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_light_spec_aperture(&semantics), 50.0);
+
+        let material = test_mtrl_with_constant(G_TOON_REFLECTION_SCALE, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_reflection_scale(&semantics), 2.5);
+
+        let material = test_mtrl_with_constant(G_TOON_SPEC_INDEX, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_toon_spec_index(&semantics), 4.0e-45);
+
+        let material = test_mtrl_with_constant(G_SHEEN_APERTURE, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_sheen_aperture(&semantics), 1.0);
     }
 
     #[test]
@@ -4638,6 +8913,219 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn composed_material_detail_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_DETAIL_COLOR, &[0.2, 0.4, 0.6, 0.8]),
+            (G_MULTI_DETAIL_COLOR, &[0.1, 0.3, 0.5, 0.7]),
+        ]);
+
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.5, 0.5, 0.5, 1.0]
+        );
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.5, 0.5, 0.5, 1.0]
+        );
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.2, 0.4, 0.6, 0.8]
+        );
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.1, 0.3, 0.5, 0.7]
+        );
+
+        let material = test_mtrl_with_constant(G_DETAIL_COLOR, &[0.9, 0.8, 0.7, 0.6], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.9, 0.8, 0.7, 0.6]
+        );
+
+        let material = test_mtrl_with_constant(G_MULTI_DETAIL_COLOR, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_multi_detail_color(&semantics),
+            [0.25, 0.5, 0.5, 1.0]
+        );
+
+        let material =
+            test_mtrl_with_constant(G_DETAIL_COLOR, &[0.3, f32::NAN, f32::INFINITY, 0.4], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_detail_color(&semantics),
+            [0.3, 0.5, 0.5, 0.4]
+        );
+    }
+
+    #[test]
+    fn composed_material_shader_colors_use_resolved_material_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_DIFFUSE_COLOR, &[0.8, 0.7, 0.6, 0.5]),
+            (G_MULTI_DIFFUSE_COLOR, &[0.6, 0.7, 0.8, 0.9]),
+            (G_EMISSIVE_COLOR, &[0.1, 0.2, 0.3, 1.0]),
+            (G_MULTI_EMISSIVE_COLOR, &[0.4, 0.5, 0.6, 1.0]),
+        ]);
+
+        assert_eq!(composed_material_shader_diffuse_color(&semantics), [1.0; 4]);
+        assert_eq!(
+            composed_material_shader_multi_diffuse_color(&semantics),
+            [1.0; 4]
+        );
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            composed_material_shader_multi_emissive_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_shader_diffuse_color(&semantics),
+            [0.8, 0.7, 0.6, 0.5]
+        );
+        assert_eq!(
+            composed_material_shader_multi_diffuse_color(&semantics),
+            [0.6, 0.7, 0.8, 0.9]
+        );
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.1, 0.2, 0.3, 1.0]
+        );
+        assert_eq!(
+            composed_material_shader_multi_emissive_color(&semantics),
+            [0.4, 0.5, 0.6, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_DIFFUSE_COLOR, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_shader_diffuse_color(&semantics),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+
+        let material =
+            test_mtrl_with_constant(G_EMISSIVE_COLOR, &[0.75, f32::NAN, f32::INFINITY, 0.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_shader_emissive_color(&semantics),
+            [0.75, 0.0, 0.0, 0.25]
+        );
+    }
+
+    #[test]
+    fn composed_material_outline_specular_occlusion_params_use_resolved_constants() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        let shader_package = test_shpk_with_material_defaults(&[
+            (G_OUTLINE_COLOR, &[0.1, 0.2, 0.3, 0.4]),
+            (G_OUTLINE_WIDTH, &[0.05]),
+            (G_SPECULAR_COLOR_MASK, &[0.7, 0.8, 0.9, 1.0]),
+            (G_SSAO_MASK, &[0.6]),
+            (G_TEXTURE_MIP_BIAS, &[-0.75]),
+            (G_SHADOW_POS_OFFSET, &[0.125]),
+        ]);
+
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(composed_material_outline_width(&semantics), 0.0);
+        assert_eq!(composed_material_specular_color_mask(&semantics), [1.0; 4]);
+        assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), 0.0);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), 0.0);
+
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(composed_material_outline_width(&semantics), 0.05);
+        assert_eq!(
+            composed_material_specular_color_mask(&semantics),
+            [0.7, 0.8, 0.9, 1.0]
+        );
+        assert_eq!(composed_material_ssao_mask(&semantics), 0.6);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), -0.75);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), 0.125);
+
+        let material = test_mtrl_with_constant(G_OUTLINE_COLOR, &[0.9, 0.8], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.9, 0.8, 0.0, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_OUTLINE_WIDTH, &[0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_outline_width(&semantics), 0.2);
+
+        let material = test_mtrl_with_constant(G_SPECULAR_COLOR_MASK, &[0.25, 0.5], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_specular_color_mask(&semantics),
+            [0.25, 0.5, 1.0, 1.0]
+        );
+
+        let material = test_mtrl_with_constant(G_SSAO_MASK, &[0.35], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ssao_mask(&semantics), 0.35);
+
+        let material = test_mtrl_with_constant(G_TEXTURE_MIP_BIAS, &[1.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_texture_mip_bias(&semantics), 1.25);
+
+        let material = test_mtrl_with_constant(G_SHADOW_POS_OFFSET, &[-0.2], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_shadow_pos_offset(&semantics), -0.2);
+
+        let material =
+            test_mtrl_with_constant(G_OUTLINE_COLOR, &[0.3, f32::NAN, f32::INFINITY, 0.4], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_outline_color(&semantics),
+            [0.3, 0.0, 0.0, 0.4]
+        );
+
+        let material = test_mtrl_with_constant(G_SSAO_MASK, &[f32::NEG_INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ssao_mask(&semantics), 1.0);
+    }
+
+    #[test]
+    fn composed_material_ambient_occlusion_mask_preserves_optional_finite_values() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
+
+        let shader_package =
+            test_shpk_with_material_defaults(&[(G_AMBIENT_OCCLUSION_MASK, &[0.65])]);
+        semantics.apply_shader_package_material_constants(&shader_package);
+        assert_eq!(
+            composed_material_ambient_occlusion_mask(&semantics),
+            Some(0.65)
+        );
+
+        let material = test_mtrl_with_constant(G_AMBIENT_OCCLUSION_MASK, &[0.25], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(
+            composed_material_ambient_occlusion_mask(&semantics),
+            Some(0.25)
+        );
+
+        let material = test_mtrl_with_constant(G_AMBIENT_OCCLUSION_MASK, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_ambient_occlusion_mask(&semantics), None);
+    }
+
+    #[test]
     fn composed_material_uv_scroll_uses_meddletools_multiplier_mapping() {
         let mut semantics = ComposedMaterialSemantics::default();
         let shader_package =
@@ -4675,6 +9163,8 @@ mod weapon_material_tests {
             (G_LIGHTSHAFT_TEX_U, &[1.5, 0.5, 0.25]),
             (G_LIGHTSHAFT_TEX_V, &[0.25, 1.75, 0.5]),
             (G_LIGHTSHAFT_RAY, &[2.0, 3.0, 4.0, 5.0]),
+            (G_LIGHTSHAFT_ANGLE_CLIP, &[0.4]),
+            (G_LIGHTSHAFT_NEAR_CLIP, &[1.25]),
         ]);
 
         assert_eq!(composed_material_lightshaft_color(&semantics), [1.0; 4]);
@@ -4688,6 +9178,8 @@ mod weapon_material_tests {
             [0.0, 1.0, 0.0, 0.0]
         );
         assert_eq!(composed_material_lightshaft_ray(&semantics), [0.0; 4]);
+        assert_eq!(composed_material_lightshaft_angle_clip(&semantics), 0.0);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 0.25);
 
         semantics.apply_shader_package_material_constants(&shader_package);
         assert_eq!(
@@ -4710,6 +9202,8 @@ mod weapon_material_tests {
             composed_material_lightshaft_ray(&semantics),
             [2.0, 3.0, 4.0, 5.0]
         );
+        assert_eq!(composed_material_lightshaft_angle_clip(&semantics), 0.4);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 1.25);
 
         let material = test_mtrl_with_constant(G_LIGHTSHAFT_COLOR, &[1.0, 0.5, 0.25], 0);
         semantics.apply_material_constants(&material);
@@ -4724,6 +9218,10 @@ mod weapon_material_tests {
             composed_material_lightshaft_tex_u(&semantics),
             [2.0, 3.0, 0.0, 0.0]
         );
+
+        let material = test_mtrl_with_constant(G_LIGHTSHAFT_NEAR_CLIP, &[f32::INFINITY], 0);
+        semantics.apply_material_constants(&material);
+        assert_eq!(composed_material_lightshaft_near_clip(&semantics), 0.25);
     }
 
     #[test]
@@ -4823,29 +9321,95 @@ mod weapon_material_tests {
     #[test]
     fn sampler_classification_covers_meddletools_texture_roles() {
         assert_eq!(
+            classify_sampler_name("g_Sampler1"),
+            Some(WeaponModelTextureKind::SecondaryBaseColor)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerColorMap1"),
+            Some(WeaponModelTextureKind::SecondaryBaseColor)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerNormalMap1"),
+            Some(WeaponModelTextureKind::SecondaryNormal)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerSpecularMap1"),
+            Some(WeaponModelTextureKind::SecondarySpecular)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerSkinDiffuse"),
             Some(WeaponModelTextureKind::BaseColor)
+        );
+        assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinDiffuse"),
+            Some(MaterialSamplerLogicalRole::SkinDiffuse)
         );
         assert_eq!(
             classify_sampler_name("g_SamplerSkinNormal"),
             Some(WeaponModelTextureKind::Normal)
         );
         assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinNormal"),
+            Some(MaterialSamplerLogicalRole::SkinNormal)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerSkinMask"),
             Some(WeaponModelTextureKind::Mask)
         );
         assert_eq!(
+            classify_sampler_logical_role_name("g_SamplerSkinMask"),
+            Some(MaterialSamplerLogicalRole::SkinMask)
+        );
+        assert_eq!(
             classify_sampler_name("g_SamplerEnvMap"),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::Environment)
         );
         assert_eq!(
             classify_sampler_name("g_SamplerWaveMap"),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::WaterWave)
+        );
+        assert_eq!(
+            classify_sampler_name("g_SamplerWaveMap1"),
+            Some(WeaponModelTextureKind::WaterWaveSecondary)
         );
         assert_eq!(
             classify_sampler_usage(physis::shpk::ShaderPackage::crc("g_SamplerWhitecapMap")),
-            Some(WeaponModelTextureKind::Other)
+            Some(WeaponModelTextureKind::WaterWhitecap)
         );
+    }
+
+    #[test]
+    fn skin_sampler_slots_do_not_collapse_into_primary_texture_slots() {
+        let textures = vec![
+            test_texture("skin-diffuse.tex", WeaponModelTextureKind::BaseColor),
+            test_texture("primary-diffuse.tex", WeaponModelTextureKind::BaseColor),
+            test_texture("skin-normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("primary-normal.tex", WeaponModelTextureKind::Normal),
+            test_texture("skin-mask.tex", WeaponModelTextureKind::Mask),
+            test_texture("primary-mask.tex", WeaponModelTextureKind::Mask),
+        ];
+        let mut set = WeaponTextureSet::default();
+
+        for (index, role) in [
+            MaterialSamplerLogicalRole::SkinDiffuse,
+            MaterialSamplerLogicalRole::BaseColor,
+            MaterialSamplerLogicalRole::SkinNormal,
+            MaterialSamplerLogicalRole::Normal,
+            MaterialSamplerLogicalRole::SkinMask,
+            MaterialSamplerLogicalRole::Mask,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assign_weapon_texture_slot(&mut set, index, &textures[index], Some(role));
+        }
+
+        assert_eq!(set.skin_diffuse, Some(0));
+        assert_eq!(set.base_color, Some(1));
+        assert_eq!(set.skin_normal, Some(2));
+        assert_eq!(set.normal, Some(3));
+        assert_eq!(set.skin_mask, Some(4));
+        assert_eq!(set.mask, Some(5));
     }
 
     #[test]
@@ -4857,10 +9421,17 @@ mod weapon_material_tests {
             test_texture("material.tex", WeaponModelTextureKind::MaterialMap),
             test_texture("multi.tex", WeaponModelTextureKind::MultiMap),
             test_texture("specular.tex", WeaponModelTextureKind::Specular),
+            test_texture("color1.tex", WeaponModelTextureKind::SecondaryBaseColor),
+            test_texture("normal1.tex", WeaponModelTextureKind::SecondaryNormal),
+            test_texture("specular1.tex", WeaponModelTextureKind::SecondarySpecular),
             test_texture("id.tex", WeaponModelTextureKind::Index),
+            test_texture("wave.tex", WeaponModelTextureKind::WaterWave),
+            test_texture("wave1.tex", WeaponModelTextureKind::WaterWaveSecondary),
+            test_texture("whitecap.tex", WeaponModelTextureKind::WaterWhitecap),
+            test_texture("environment.tex", WeaponModelTextureKind::Environment),
         ];
         assert_eq!(
-            choose_fallback_base_texture(&[0, 1, 2, 3, 4, 5, 6], &textures),
+            choose_fallback_base_texture(&(0..textures.len()).collect::<Vec<_>>(), &textures),
             None
         );
     }
@@ -4875,7 +9446,7 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn only_base_texture_alpha_affects_material_transparency() {
+    fn base_texture_alpha_drives_generic_alpha_classification() {
         for kind in [
             WeaponModelTextureKind::Normal,
             WeaponModelTextureKind::Mask,
@@ -4889,6 +9460,10 @@ mod weapon_material_tests {
             WeaponModelTextureKind::SphereProperties,
             WeaponModelTextureKind::TileMatrixProperties,
             WeaponModelTextureKind::Index,
+            WeaponModelTextureKind::WaterWave,
+            WeaponModelTextureKind::WaterWaveSecondary,
+            WeaponModelTextureKind::WaterWhitecap,
+            WeaponModelTextureKind::Environment,
             WeaponModelTextureKind::Other,
         ] {
             let texture = test_texture_with_alpha("non-base-alpha.tex", kind, 0);
@@ -4902,6 +9477,15 @@ mod weapon_material_tests {
         let alpha_base =
             test_texture_with_alpha("base-alpha.tex", WeaponModelTextureKind::BaseColor, 128);
         assert!(texture_alpha_affects_material_transparency(&alpha_base));
+
+        let alpha_secondary = test_texture_with_alpha(
+            "base1-alpha.tex",
+            WeaponModelTextureKind::SecondaryBaseColor,
+            128,
+        );
+        assert!(texture_alpha_affects_material_transparency(
+            &alpha_secondary
+        ));
     }
 
     #[test]
@@ -4922,6 +9506,18 @@ mod weapon_material_tests {
         set.base_color = Some(1);
         refresh_texture_set_alpha(&mut set, &textures);
         assert!(set.has_alpha);
+
+        let secondary_index = textures.len();
+        let mut textures = textures;
+        textures.push(test_texture_with_alpha(
+            "secondary-base.tex",
+            WeaponModelTextureKind::SecondaryBaseColor,
+            64,
+        ));
+        set.base_color = Some(0);
+        set.secondary_base_color = Some(secondary_index);
+        refresh_texture_set_alpha(&mut set, &textures);
+        assert!(set.has_alpha);
     }
 
     #[test]
@@ -4938,6 +9534,23 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn character_transparency_and_glass_packages_force_transparent_passes() {
+        let texture_set = WeaponTextureSet::default();
+        assert_eq!(
+            weapon_material_alpha_mode("charactertransparency.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Blend
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("characterglass.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Glass
+        );
+        assert_eq!(
+            weapon_material_opacity(WeaponMaterialRenderMode::Glass),
+            1.0
+        );
+    }
+
+    #[test]
     fn alpha_test_only_masks_supported_shader_packages() {
         let texture_set = WeaponTextureSet {
             has_alpha: true,
@@ -4946,6 +9559,10 @@ mod weapon_material_tests {
 
         assert_eq!(
             weapon_material_alpha_mode("bg.shpk", 0, &texture_set, true),
+            WeaponMaterialAlphaMode::Mask
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("lightshaft.shpk", 0, &texture_set, true),
             WeaponMaterialAlphaMode::Mask
         );
         assert_eq!(
@@ -4970,21 +9587,118 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn character_colorset_diffuse_multiply_is_compatibility_gated() {
+        for family in [
+            MaterialShaderFamily::Character,
+            MaterialShaderFamily::CharacterStockings,
+            MaterialShaderFamily::CharacterGlass,
+            MaterialShaderFamily::CharacterTransparency,
+            MaterialShaderFamily::CharacterScroll,
+        ] {
+            assert_eq!(
+                color_table_diffuse_composition(family, true),
+                ColorTableDiffuseComposition::Multiply
+            );
+            assert_eq!(
+                color_table_diffuse_composition(family, false),
+                ColorTableDiffuseComposition::Replace
+            );
+        }
+
+        for family in [
+            MaterialShaderFamily::Skin,
+            MaterialShaderFamily::CharacterReflection,
+            MaterialShaderFamily::CharacterTattoo,
+            MaterialShaderFamily::CharacterOcclusion,
+            MaterialShaderFamily::Bg,
+        ] {
+            assert_eq!(
+                color_table_diffuse_composition(family, false),
+                ColorTableDiffuseComposition::Multiply
+            );
+        }
+    }
+
+    #[test]
+    fn colorset_base_selection_and_compatibility_multiply_preserve_hdr_diffuse() {
+        let mut textures = vec![
+            WeaponModelTexture {
+                path: "base.tex".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![128, 64, 32, 77],
+                rgba_f32: None,
+            },
+            WeaponModelTexture {
+                path: "baked://material#colorset-diffuse".to_string(),
+                kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
+                width: 1,
+                height: 1,
+                array_size: 1,
+                array_layer_height: 1,
+                rgba: vec![64, 128, 192, 255],
+                rgba_f32: Some(vec![[6.7929688, 2.0, 0.5, 1.0]]),
+            },
+        ];
+
+        let replaced = resolve_color_table_base_texture(
+            "material.mtrl",
+            Some(0),
+            1,
+            ColorTableDiffuseComposition::Replace,
+            &mut textures,
+        )
+        .expect("replace colorset diffuse");
+        assert_eq!(replaced, 1);
+        assert_eq!(textures.len(), 2);
+
+        let multiplied = resolve_color_table_base_texture(
+            "material.mtrl",
+            Some(0),
+            1,
+            ColorTableDiffuseComposition::Multiply,
+            &mut textures,
+        )
+        .expect("multiply compatibility diffuse");
+        assert_eq!(textures[multiplied].rgba[3], 77);
+        let multiplied_float = textures[multiplied]
+            .rgba_f32
+            .as_deref()
+            .expect("Compatibility float diffuse")[0];
+        assert!((multiplied_float[0] - srgb_u8_to_linear(128) * 6.7929688).abs() < 1.0e-6);
+        assert!((multiplied_float[1] - srgb_u8_to_linear(64) * 2.0).abs() < 1.0e-6);
+        assert!((multiplied_float[2] - srgb_u8_to_linear(32) * 0.5).abs() < 1.0e-6);
+        assert_eq!(multiplied_float[3], 77.0 / 255.0);
+        assert!(textures[multiplied].path.ends_with("#base-times-colorset"));
+    }
+
+    #[test]
     fn base_colorset_multiply_preserves_base_alpha() {
         let mut textures = vec![
             WeaponModelTexture {
                 path: "base.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
+                array_size: 1,
+                array_layer_height: 1,
                 rgba: vec![255, 128, 64, 255],
                 rgba_f32: None,
             },
             WeaponModelTexture {
                 path: "colorset.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
+                texel_layout: ModelTextureTexelLayout::Standard,
                 width: 1,
                 height: 1,
+                array_size: 1,
+                array_layer_height: 1,
                 rgba: vec![255, 255, 255, 32],
                 rgba_f32: None,
             },
@@ -5119,6 +9833,52 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn shape_remap_splits_only_the_targeted_index_occurrence() {
+        let vertices = vec![
+            test_vertex(0.0),
+            test_vertex(1.0),
+            test_vertex(2.0),
+            test_vertex(3.0),
+            test_vertex(10.0),
+        ];
+        let target = crate::mdl_geometry::MdlGeometryShapeTarget {
+            info: crate::model::ModelShapeInfo {
+                index: 0,
+                name: Some("shape_a".to_string()),
+                shape_index_mask: 1,
+                shape_index_mask_hex: "0x00000001".to_string(),
+                shape_mesh_index: 0,
+                shape_value_count: 1,
+            },
+            replacements: vec![crate::mdl_geometry::MdlGeometryShapeReplacement {
+                base_indices_index: 3,
+                replacing_vertex_index: 4,
+            }],
+        };
+
+        let (remapped_vertices, remapped_indices, shape_targets) =
+            remap_mesh_vertices_with_shapes(&vertices, &[0, 1, 2, 0, 2, 3], 0, &[target])
+                .expect("valid shape remap");
+
+        assert_ne!(remapped_indices[0], remapped_indices[3]);
+        assert_eq!(
+            remapped_vertices[remapped_indices[0] as usize].position[0],
+            0.0
+        );
+        assert_eq!(
+            remapped_vertices[remapped_indices[3] as usize].position[0],
+            0.0
+        );
+        assert_eq!(shape_targets.len(), 1);
+        assert_eq!(shape_targets[0].vertex_deltas.len(), 1);
+        assert_eq!(
+            shape_targets[0].vertex_deltas[0].vertex_index,
+            remapped_indices[3]
+        );
+        assert_eq!(shape_targets[0].vertex_deltas[0].position, [10.0, 0.0, 0.0]);
+    }
+
+    #[test]
     fn remap_mesh_vertices_keeps_winding_when_normals_match() {
         let vertices = vec![
             test_vertex_at([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
@@ -5165,8 +9925,11 @@ mod weapon_material_tests {
         WeaponModelTexture {
             path: path.to_string(),
             kind,
+            texel_layout: ModelTextureTexelLayout::Standard,
             width: 1,
             height: 1,
+            array_size: 1,
+            array_layer_height: 1,
             rgba: vec![255, 255, 255, alpha],
             rgba_f32: None,
         }
@@ -5216,7 +9979,7 @@ mod weapon_material_tests {
             shader_index: 3,
             tile_set: 0x3400,
             tile_alpha: 0.88,
-            sphere_index: 5,
+            sphere_index: 0x4000,
             material_repeat: [1.25, 1.5],
             material_skew: [0.25, 0.5],
         }
@@ -5338,48 +10101,184 @@ mod weapon_material_tests {
         bytes
     }
 
+    fn test_mtrl_with_duplicate_texture_offsets() -> Vec<u8> {
+        let mut strings = Vec::new();
+        let dummy_offset = strings.len() as u16;
+        strings.extend_from_slice(b"dummy.tex\0");
+        let index_offset = strings.len() as u16;
+        strings.extend_from_slice(
+            b"chara/weapon/w2651/obj/body/b0059/texture/v01_w2651b0059_id.tex\0",
+        );
+        let uv_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"map1\0");
+        let color_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"colorSet1\0");
+        let shader_package_name_offset = strings.len() as u16;
+        strings.extend_from_slice(b"characterlegacy.shpk\0");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0103_0000_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&(strings.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&shader_package_name_offset.to_le_bytes());
+        bytes.push(3);
+        bytes.push(1);
+        bytes.push(1);
+        bytes.push(0);
+
+        for texture_offset in [dummy_offset, dummy_offset, index_offset] {
+            bytes.extend_from_slice(&u32::from(texture_offset).to_le_bytes());
+        }
+        bytes.extend_from_slice(&uv_name_offset.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&color_name_offset.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&strings);
+
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0d_u32.to_le_bytes());
+        for (sampler, texture_index) in [
+            ("g_SamplerNormal", 0_u8),
+            ("g_SamplerMask", 1_u8),
+            ("g_SamplerIndex", 2_u8),
+        ] {
+            bytes.extend_from_slice(&physis::shpk::ShaderPackage::crc(sampler).to_le_bytes());
+            bytes.extend_from_slice(&0_u32.to_le_bytes());
+            bytes.push(texture_index);
+            bytes.extend_from_slice(&[0; 3]);
+        }
+
+        let file_size = bytes.len() as u16;
+        bytes[4..6].copy_from_slice(&file_size.to_le_bytes());
+        bytes
+    }
+
+    #[derive(Clone)]
+    struct TestShaderPackageResource {
+        path: String,
+        bytes: Vec<u8>,
+    }
+
+    impl physis::resource::Resource for TestShaderPackageResource {
+        fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+            (path == self.path).then(|| self.bytes.clone())
+        }
+
+        fn exists(&mut self, path: &str) -> bool {
+            path == self.path
+        }
+    }
+
     fn test_shpk_with_material_defaults(parameters: &[(u32, &[f32])]) -> Vec<u8> {
+        test_shpk_with_semantics(parameters, &[], &[], &[])
+    }
+
+    fn test_shpk_with_semantics(
+        parameters: &[(u32, &[f32])],
+        material_keys: &[(u32, u32)],
+        system_keys: &[(u32, u32)],
+        scene_keys: &[(u32, u32)],
+    ) -> Vec<u8> {
+        test_shpk_with_semantics_for_platform(
+            parameters,
+            material_keys,
+            system_keys,
+            scene_keys,
+            physis::Platform::Win32,
+        )
+    }
+
+    fn test_shpk_with_semantics_for_platform(
+        parameters: &[(u32, &[f32])],
+        material_keys: &[(u32, u32)],
+        system_keys: &[(u32, u32)],
+        scene_keys: &[(u32, u32)],
+        platform: physis::Platform,
+    ) -> Vec<u8> {
         let defaults_size = parameters
             .iter()
             .map(|(_, values)| values.len() * 4)
             .sum::<usize>() as u32;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"ShPk");
-        bytes.extend_from_slice(&0x0C01_u32.to_le_bytes());
+        bytes.extend_from_slice(&test_shpk_u32(0x0C01, platform));
         bytes.extend_from_slice(b"DX11");
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&defaults_size.to_le_bytes());
-        bytes.extend_from_slice(&(parameters.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        for value in [0, 0, 0, 0, 0, defaults_size] {
+            bytes.extend_from_slice(&test_shpk_u32(value, platform));
+        }
+        bytes.extend_from_slice(&test_shpk_u16(parameters.len() as u16, platform));
+        bytes.extend_from_slice(&test_shpk_u16(1, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u16(0, platform));
+        bytes.extend_from_slice(&test_shpk_u16(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(system_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(scene_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(material_keys.len() as u32, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
 
         let mut byte_offset = 0_u16;
         for (id, values) in parameters {
             let byte_size = (values.len() * 4) as u16;
-            bytes.extend_from_slice(&id.to_le_bytes());
-            bytes.extend_from_slice(&byte_offset.to_le_bytes());
-            bytes.extend_from_slice(&byte_size.to_le_bytes());
+            bytes.extend_from_slice(&test_shpk_u32(*id, platform));
+            bytes.extend_from_slice(&test_shpk_u16(byte_offset, platform));
+            bytes.extend_from_slice(&test_shpk_u16(byte_size, platform));
             byte_offset += byte_size;
         }
 
         for (_, values) in parameters {
             for value in *values {
-                bytes.extend_from_slice(&value.to_le_bytes());
+                bytes.extend_from_slice(&test_shpk_u32(value.to_bits(), platform));
             }
         }
 
+        for (id, default_value) in system_keys.iter().chain(scene_keys).chain(material_keys) {
+            bytes.extend_from_slice(&test_shpk_u32(*id, platform));
+            bytes.extend_from_slice(&test_shpk_u32(*default_value, platform));
+        }
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+        bytes.extend_from_slice(&test_shpk_u32(0, platform));
+
         bytes
+    }
+
+    fn test_shpk_without_material_defaults(parameters: &[(u32, u16)]) -> Vec<u8> {
+        let defaults = parameters
+            .iter()
+            .map(|(_, byte_size)| vec![0.0; usize::from(*byte_size) / 4])
+            .collect::<Vec<_>>();
+        let parameter_values = parameters
+            .iter()
+            .zip(&defaults)
+            .map(|((id, _), values)| (*id, values.as_slice()))
+            .collect::<Vec<_>>();
+        let mut bytes = test_shpk_with_semantics(&parameter_values, &[], &[], &[]);
+        let defaults_offset = 72 + parameters.len() * 8;
+        let defaults_size = parameters
+            .iter()
+            .map(|(_, byte_size)| usize::from(*byte_size))
+            .sum::<usize>();
+        bytes.drain(defaults_offset..defaults_offset + defaults_size);
+        bytes[38..40].copy_from_slice(&0_u16.to_le_bytes());
+        bytes
+    }
+
+    fn test_shpk_u16(value: u16, platform: physis::Platform) -> [u8; 2] {
+        match platform {
+            physis::Platform::PS3 => value.to_be_bytes(),
+            _ => value.to_le_bytes(),
+        }
+    }
+
+    fn test_shpk_u32(value: u32, platform: physis::Platform) -> [u8; 4] {
+        match platform {
+            physis::Platform::PS3 => value.to_be_bytes(),
+            _ => value.to_le_bytes(),
+        }
     }
 }

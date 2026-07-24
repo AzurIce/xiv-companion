@@ -7,13 +7,16 @@ use dioxus::prelude::*;
 use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
 };
-use crate::app::resources::load_weapon_model_from_local;
+use crate::app::resources::{
+    load_weapon_model_from_local, load_weapon_staining_templates_from_local,
+};
 use xiv_companion::{
     CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CraftDataId,
     CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe, CraftTreeNode,
     ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
     ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem,
-    WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId, build_craft_tree,
+    WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId,
+    WeaponStainingTemplates, apply_weapon_model_stains, build_craft_tree,
     craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
@@ -38,6 +41,7 @@ pub const CRAFT_TYPE_ABBRS: [&str; 8] = [
 
 thread_local! {
     static ITEM_ICON_CACHE: RefCell<HashMap<String, ItemIconResourceInfo>> = RefCell::new(HashMap::new());
+    static WEAPON_STAINING_TEMPLATE_CACHE: RefCell<Option<Rc<WeaponStainingTemplates>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone)]
@@ -95,6 +99,41 @@ pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
     Ok(Rc::new(data))
 }
 
+pub async fn load_weapon_model_with_stains(
+    item: WeaponCatalogItem,
+    stain_ids: [u8; 2],
+) -> Result<Rc<WeaponModelData>, String> {
+    let data = load_weapon_model_from_local(WeaponModelId {
+        item_id: item.id,
+        item_name: item.name,
+        model_main: item.model_main,
+        model_sub: item.model_sub,
+        stain_ids,
+    })
+    .await?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_weapon_staining_templates() -> Result<Rc<WeaponStainingTemplates>, String> {
+    if let Some(templates) = WEAPON_STAINING_TEMPLATE_CACHE.with(|cache| cache.borrow().clone()) {
+        return Ok(templates);
+    }
+
+    let templates = Rc::new(load_weapon_staining_templates_from_local().await?);
+    WEAPON_STAINING_TEMPLATE_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some(templates.clone());
+    });
+    Ok(templates)
+}
+
+pub fn stain_weapon_model(
+    base: &WeaponModelData,
+    stain_ids: [u8; 2],
+    templates: &WeaponStainingTemplates,
+) -> Rc<WeaponModelData> {
+    Rc::new(apply_weapon_model_stains(base, stain_ids, templates))
+}
+
 pub async fn load_collection_catalog() -> Result<Rc<CollectionCatalogPackage>, String> {
     let data = configured_web_resource_hub()
         .load::<CollectionCatalogResource>(CollectionCatalogId::Default)
@@ -115,14 +154,7 @@ pub async fn load_collection_catalog_with_metadata() -> Result<LoadedCollectionC
 }
 
 pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
-    let data = load_weapon_model_from_local(WeaponModelId {
-        item_id: item.id,
-        item_name: item.name,
-        model_main: item.model_main,
-        model_sub: item.model_sub,
-    })
-    .await?;
-    Ok(Rc::new(data))
+    load_weapon_model_with_stains(item, [0, 0]).await
 }
 
 pub fn create_craft_data_engine(data: Rc<CraftDataPackage>) -> CraftDataEngine {
@@ -172,6 +204,10 @@ pub async fn load_item_icon(icon_id: u32) -> Result<ItemIconResourceInfo, String
 
 pub fn clear_item_icon_cache() {
     ITEM_ICON_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+pub fn clear_weapon_staining_template_cache() {
+    WEAPON_STAINING_TEMPLATE_CACHE.with(|cache| *cache.borrow_mut() = None);
 }
 
 pub fn build_tree(engine: &CraftDataEngine, item_id: u32, amount: u32) -> CraftTreeNode {

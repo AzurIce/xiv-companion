@@ -11,6 +11,9 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
+#[cfg(target_arch = "wasm32")]
+use xiv_companion::PreparedModelOptions;
+
 use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
 use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
@@ -18,15 +21,18 @@ use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
 };
 use crate::app::utils::{cx, format_integer};
-use xiv_companion::renderer::{ModelDebugMode, WeaponRenderOptions};
+use xiv_companion::renderer::{ModelDebugMode, ModelGlassBlendMode, WeaponRenderOptions};
 
 use xiv_companion::{
     PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
-    WeaponModelTextureKind, weapon_slot_label,
+    WeaponModelTextureKind, WeaponStain, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
-use crate::app::data::{load_weapon_catalog, load_weapon_model};
+use crate::app::data::{
+    load_weapon_catalog, load_weapon_model, load_weapon_staining_templates, stain_weapon_model,
+};
+use crate::app::load_progress::{self, WeaponModelLoadProgress};
 
 const RESULT_LIMIT: usize = 220;
 
@@ -95,6 +101,38 @@ struct WeaponUrlState {
     query: String,
     filter: WeaponSlotFilter,
     item_id: Option<u32>,
+    stain_ids: [u8; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WeaponModelRequestKey {
+    item_id: u32,
+    stain_ids: [u8; 2],
+}
+
+#[derive(Clone)]
+struct WeaponModelResourceResult {
+    item_id: u32,
+    result: Result<Rc<WeaponModelData>, String>,
+}
+
+#[derive(Clone)]
+struct WeaponModelPreviewResult {
+    key: WeaponModelRequestKey,
+    result: Result<Rc<WeaponModelData>, String>,
+}
+
+impl PartialEq for WeaponModelPreviewResult {
+    fn eq(&self, other: &Self) -> bool {
+        if self.key != other.key {
+            return false;
+        }
+        match (&self.result, &other.result) {
+            (Ok(left), Ok(right)) => Rc::ptr_eq(left, right),
+            (Err(left), Err(right)) => left == right,
+            _ => false,
+        }
+    }
 }
 
 #[component]
@@ -103,20 +141,59 @@ pub fn WeaponModelsPage() -> Element {
     let initial_query = initial_url_state.query;
     let initial_filter = initial_url_state.filter;
     let initial_item_id = initial_url_state.item_id;
+    let initial_stain_ids = initial_url_state.stain_ids;
 
     let catalog = use_resource(load_weapon_catalog);
     let mut query = use_signal(move || initial_query.clone());
     let mut slot_filter = use_signal(move || initial_filter);
     let mut selected_id = use_signal(move || initial_item_id);
     let mut selected_item = use_signal(|| None::<WeaponCatalogItem>);
+    let mut stain_ids = use_signal(move || initial_stain_ids);
+    let mut model_progress = use_signal(|| None::<WeaponModelLoadProgress>);
     let model = use_resource(move || {
         let item = selected_item();
         async move {
-            match item {
-                Some(item) => load_weapon_model(item).await,
-                None => Err("未选择武器".to_string()),
-            }
+            let item = item?;
+            Some(WeaponModelResourceResult {
+                item_id: item.id,
+                result: load_weapon_model(item).await,
+            })
         }
+    });
+    let staining_templates = use_resource(load_weapon_staining_templates);
+    let preview_model = use_memo(move || {
+        let item = selected_item()?;
+        let stain_ids = stain_ids();
+        let key = WeaponModelRequestKey {
+            item_id: item.id,
+            stain_ids,
+        };
+        let loaded = model.read().as_ref().cloned().flatten()?;
+        if loaded.item_id != item.id {
+            return None;
+        }
+        let result = match loaded.result {
+            Err(error) => Err(error),
+            Ok(base) if stain_ids == [0, 0] => Ok(base),
+            Ok(base) => match staining_templates.read().as_ref().cloned() {
+                Some(Ok(templates)) => Ok(stain_weapon_model(&base, stain_ids, &templates)),
+                Some(Err(error)) => Err(error),
+                None => return None,
+            },
+        };
+        Some(WeaponModelPreviewResult { key, result })
+    });
+
+    use_effect(move || {
+        load_progress::set_weapon_model_progress_sink(move |progress| {
+            if let Ok(mut slot) = model_progress.try_write() {
+                *slot = progress;
+            }
+        });
+    });
+
+    use_drop(move || {
+        load_progress::clear_weapon_model_progress();
     });
 
     use_effect(move || {
@@ -140,7 +217,7 @@ pub fn WeaponModelsPage() -> Element {
     });
 
     use_effect(move || {
-        sync_weapon_url_state(&query(), slot_filter(), selected_id());
+        sync_weapon_url_state(&query(), slot_filter(), selected_id(), stain_ids());
     });
 
     let catalog_snapshot = catalog.read().as_ref().cloned();
@@ -148,6 +225,8 @@ pub fn WeaponModelsPage() -> Element {
     let selected_id_snapshot = selected_id();
     let query_snapshot = query();
     let slot_filter_snapshot = slot_filter();
+    let stain_ids_snapshot = stain_ids();
+    let model_progress_snapshot = model_progress();
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
@@ -162,6 +241,7 @@ pub fn WeaponModelsPage() -> Element {
                         div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
                             span { "{catalog.game_version}" }
                             span { "{format_integer(catalog.counts.items as f64)} 件武器" }
+                            span { "{format_integer(catalog.counts.stains as f64)} 种染剂" }
                         }
                     }
                 }
@@ -200,7 +280,7 @@ pub fn WeaponModelsPage() -> Element {
                     rsx! {
                         div { class: "grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[380px_minmax(0,1fr)]",
                             WeaponSearchPane {
-                                catalog,
+                                catalog: catalog.clone(),
                                 query: query_snapshot,
                                 filter: slot_filter_snapshot,
                                 result: search,
@@ -214,7 +294,18 @@ pub fn WeaponModelsPage() -> Element {
                             }
                             WeaponModelPane {
                                 selected: selected_snapshot,
-                                model,
+                                selection_pending: selected_id_snapshot.is_some(),
+                                model: preview_model(),
+                                progress: model_progress_snapshot,
+                                stains: catalog.stains.clone(),
+                                stain_ids: stain_ids_snapshot,
+                                on_stain_change: move |(channel, stain_id): (usize, u8)| {
+                                    let mut next = stain_ids();
+                                    if let Some(value) = next.get_mut(channel) {
+                                        *value = stain_id;
+                                        stain_ids.set(next);
+                                    }
+                                },
                             }
                         }
                     }
@@ -331,9 +422,26 @@ fn WeaponListRow(
 #[component]
 fn WeaponModelPane(
     selected: Option<WeaponCatalogItem>,
-    model: Resource<Result<Rc<WeaponModelData>, String>>,
+    selection_pending: bool,
+    model: Option<WeaponModelPreviewResult>,
+    progress: Option<WeaponModelLoadProgress>,
+    stains: Vec<WeaponStain>,
+    stain_ids: [u8; 2],
+    on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let render_options = use_signal(WeaponRenderOptions::default);
+    let mut shape_selection = use_signal(|| (None::<u32>, None::<u32>));
+    let requested_key = selected.as_ref().map(|item| WeaponModelRequestKey {
+        item_id: item.id,
+        stain_ids,
+    });
+    let current_model_result = requested_key.and_then(|key| {
+        model
+            .filter(|snapshot| snapshot.key.item_id == key.item_id)
+            .map(|snapshot| snapshot.result)
+    });
+    let current_progress =
+        requested_key.and_then(|key| progress.filter(|progress| progress.item_id == key.item_id));
 
     rsx! {
         section { class: "flex min-h-0 min-w-0 flex-col overflow-hidden bg-background",
@@ -358,17 +466,39 @@ fn WeaponModelPane(
                             "{item.description}"
                         }
                     }
+                    WeaponStainControls {
+                        stains,
+                        stain_ids,
+                        on_stain_change,
+                    }
                 }
 
                 div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
                     div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
-                        match model.read().as_ref() {
-                            Some(Ok(data)) if data.item_id == item.id => {
-                                let key = model_canvas_key(data);
+                        match current_model_result.as_ref() {
+                            Some(Ok(data)) => {
+                                let requested_shape = shape_selection();
+                                let shape_mask = (requested_shape.0 == Some(item.id))
+                                    .then_some(requested_shape.1)
+                                    .flatten()
+                                    .filter(|mask| model_has_shape_mask(data, *mask));
+                                let key = model_canvas_key(data, shape_mask);
+                                let item_id = item.id;
                                 rsx! {
                                     div { key: "{key}", class: "absolute inset-0",
-                                        WeaponModelCanvas { model: data.clone(), render_options }
-                                        WeaponRenderControls { options: render_options }
+                                        WeaponModelCanvas {
+                                            model: data.clone(),
+                                            render_options,
+                                            shape_mask,
+                                        }
+                                        WeaponRenderControls {
+                                            options: render_options,
+                                            model: data.clone(),
+                                            shape_mask,
+                                            on_shape_change: move |mask| {
+                                                shape_selection.set((Some(item_id), mask));
+                                            },
+                                        }
                                     }
                                 }
                             },
@@ -382,19 +512,14 @@ fn WeaponModelPane(
                                 }
                             },
                             _ => rsx! {
-                                div { class: "absolute inset-0 flex items-center justify-center",
-                                    div { class: "flex items-center gap-3 text-sm text-muted-foreground",
-                                        Icon { kind: IconKind::LoaderCircle, class: "h-4 w-4 animate-spin" }
-                                        "正在读取模型"
-                                    }
-                                }
+                                WeaponModelLoadingView { progress: current_progress.clone() }
                             },
                         }
                     }
 
                     aside { class: "h-56 shrink-0 overflow-y-auto border-t bg-card p-4 xl:h-auto xl:w-80 xl:border-l xl:border-t-0",
-                        match model.read().as_ref() {
-                            Some(Ok(data)) if data.item_id == item.id => rsx! {
+                        match current_model_result.as_ref() {
+                            Some(Ok(data)) => rsx! {
                                 WeaponModelStats { model: data.clone() }
                             },
                             _ => rsx! {
@@ -407,6 +532,13 @@ fn WeaponModelPane(
                         }
                     }
                 }
+            } else if selection_pending {
+                div { class: "relative min-h-0 flex-1 bg-[#0e1117]",
+                    WeaponModelLoadingView {
+                        progress: None,
+                        stage: Some("正在定位武器".to_string()),
+                    }
+                }
             } else {
                 div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
                     EmptyState {
@@ -416,6 +548,86 @@ fn WeaponModelPane(
                 }
             }
         }
+    }
+}
+
+#[component]
+fn WeaponModelLoadingView(
+    progress: Option<WeaponModelLoadProgress>,
+    stage: Option<String>,
+) -> Element {
+    let stage = stage
+        .or_else(|| progress.as_ref().map(|progress| progress.stage.clone()))
+        .unwrap_or_else(|| "准备读取模型".to_string());
+    let detail = progress
+        .as_ref()
+        .map(|progress| progress.detail.clone())
+        .filter(|detail| !detail.is_empty());
+    let stats = progress.as_ref().map(|progress| {
+        format!(
+            "已载入 {} / 已检查 {} 个资源 · {} · {}",
+            progress.loaded_resources,
+            progress.checked_resources,
+            format_byte_size(progress.loaded_bytes),
+            format_elapsed(progress.elapsed_ms),
+        )
+    });
+
+    rsx! {
+        div { class: "absolute inset-0 flex items-center justify-center p-6",
+            div { class: "w-full max-w-md space-y-4 text-center",
+                div {
+                    class: "flex items-center justify-center gap-3 text-sm font-medium",
+                    style: "color: rgba(255, 255, 255, 0.9);",
+                    Icon { kind: IconKind::LoaderCircle, class: "h-5 w-5 animate-spin" }
+                    span { "{stage}" }
+                }
+                if let Some(detail) = detail {
+                    div {
+                        class: "truncate text-xs",
+                        style: "color: rgba(255, 255, 255, 0.55);",
+                        title: "{detail}",
+                        "{detail}"
+                    }
+                }
+                div {
+                    class: "mx-auto h-1.5 w-full max-w-sm overflow-hidden rounded",
+                    style: "background-color: rgba(255, 255, 255, 0.1);",
+                    div {
+                        class: "h-full animate-pulse rounded",
+                        style: "width: 50%; background-color: rgba(255, 255, 255, 0.55);",
+                    }
+                }
+                if let Some(stats) = stats {
+                    div {
+                        class: "text-[11px]",
+                        style: "color: rgba(255, 255, 255, 0.45);",
+                        "{stats}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn format_byte_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    let bytes = bytes as f64;
+    if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.0} KiB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
+    }
+}
+
+fn format_elapsed(elapsed_ms: f64) -> String {
+    if elapsed_ms >= 1_000.0 {
+        format!("{:.1} 秒", elapsed_ms / 1_000.0)
+    } else {
+        format!("{elapsed_ms:.0} 毫秒")
     }
 }
 
@@ -445,18 +657,29 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
                 section { class: "space-y-2",
                     div { class: "text-sm font-semibold", "Textures" }
                     StatRow { label: "Base", value: texture_counts.base.to_string() }
+                    StatRow { label: "Base Map 1", value: texture_counts.secondary_base.to_string() }
                     StatRow { label: "Normal", value: texture_counts.normal.to_string() }
+                    StatRow { label: "Normal Map 1", value: texture_counts.secondary_normal.to_string() }
                     StatRow { label: "Mask", value: texture_counts.mask.to_string() }
                     StatRow { label: "Material Map", value: texture_counts.material_map.to_string() }
                     StatRow { label: "Multi Map", value: texture_counts.multi_map.to_string() }
                     StatRow { label: "Specular", value: texture_counts.specular.to_string() }
+                    StatRow { label: "Specular Map 1", value: texture_counts.secondary_specular.to_string() }
                     StatRow { label: "Material Props", value: texture_counts.material_properties.to_string() }
                     StatRow { label: "Tile Props", value: texture_counts.tile_properties.to_string() }
                     StatRow { label: "Sheen Props", value: texture_counts.sheen_properties.to_string() }
                     StatRow { label: "Sphere Props", value: texture_counts.sphere_properties.to_string() }
                     StatRow { label: "Tile Matrix", value: texture_counts.tile_matrix.to_string() }
                     StatRow { label: "Emissive", value: texture_counts.emissive.to_string() }
+                    StatRow { label: "Environment", value: texture_counts.environment.to_string() }
                     StatRow { label: "Index", value: texture_counts.index.to_string() }
+                    StatRow { label: "Tile Normal Array", value: texture_counts.tile_normal_array.to_string() }
+                    StatRow { label: "Tile ORB Array", value: texture_counts.tile_orb_array.to_string() }
+                    StatRow { label: "Detail Diffuse Array", value: texture_counts.detail_diffuse_array.to_string() }
+                    StatRow { label: "Detail Normal Array", value: texture_counts.detail_normal_array.to_string() }
+                    StatRow { label: "Water Wave", value: texture_counts.water_wave.to_string() }
+                    StatRow { label: "Water Wave 1", value: texture_counts.water_wave1.to_string() }
+                    StatRow { label: "Water Whitecap", value: texture_counts.water_whitecap.to_string() }
                     StatRow { label: "Other", value: texture_counts.other.to_string() }
                 }
             }
@@ -493,18 +716,29 @@ fn StatRow(label: &'static str, value: String) -> Element {
 #[derive(Default)]
 struct TextureKindCounts {
     base: usize,
+    secondary_base: usize,
     normal: usize,
+    secondary_normal: usize,
     mask: usize,
     material_map: usize,
     multi_map: usize,
     specular: usize,
+    secondary_specular: usize,
     material_properties: usize,
     tile_properties: usize,
     sheen_properties: usize,
     sphere_properties: usize,
     tile_matrix: usize,
     emissive: usize,
+    environment: usize,
     index: usize,
+    tile_normal_array: usize,
+    tile_orb_array: usize,
+    detail_diffuse_array: usize,
+    detail_normal_array: usize,
+    water_wave: usize,
+    water_wave1: usize,
+    water_whitecap: usize,
     other: usize,
 }
 
@@ -514,18 +748,29 @@ impl TextureKindCounts {
         for texture in &model.textures {
             match texture.kind {
                 WeaponModelTextureKind::BaseColor => counts.base += 1,
+                WeaponModelTextureKind::SecondaryBaseColor => counts.secondary_base += 1,
                 WeaponModelTextureKind::Normal => counts.normal += 1,
+                WeaponModelTextureKind::SecondaryNormal => counts.secondary_normal += 1,
                 WeaponModelTextureKind::Mask => counts.mask += 1,
                 WeaponModelTextureKind::MaterialMap => counts.material_map += 1,
                 WeaponModelTextureKind::MultiMap => counts.multi_map += 1,
                 WeaponModelTextureKind::Specular => counts.specular += 1,
+                WeaponModelTextureKind::SecondarySpecular => counts.secondary_specular += 1,
                 WeaponModelTextureKind::MaterialProperties => counts.material_properties += 1,
                 WeaponModelTextureKind::TileProperties => counts.tile_properties += 1,
                 WeaponModelTextureKind::SheenProperties => counts.sheen_properties += 1,
                 WeaponModelTextureKind::SphereProperties => counts.sphere_properties += 1,
                 WeaponModelTextureKind::TileMatrixProperties => counts.tile_matrix += 1,
                 WeaponModelTextureKind::Emissive => counts.emissive += 1,
+                WeaponModelTextureKind::Environment => counts.environment += 1,
                 WeaponModelTextureKind::Index => counts.index += 1,
+                WeaponModelTextureKind::TileNormalArray => counts.tile_normal_array += 1,
+                WeaponModelTextureKind::TileOrbArray => counts.tile_orb_array += 1,
+                WeaponModelTextureKind::DetailDiffuseArray => counts.detail_diffuse_array += 1,
+                WeaponModelTextureKind::DetailNormalArray => counts.detail_normal_array += 1,
+                WeaponModelTextureKind::WaterWave => counts.water_wave += 1,
+                WeaponModelTextureKind::WaterWaveSecondary => counts.water_wave1 += 1,
+                WeaponModelTextureKind::WaterWhitecap => counts.water_whitecap += 1,
                 WeaponModelTextureKind::Other => counts.other += 1,
             }
         }
@@ -541,10 +786,17 @@ fn SkeletonLine() -> Element {
 }
 
 #[component]
-fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
+fn WeaponRenderControls(
+    options: Signal<WeaponRenderOptions>,
+    model: Rc<WeaponModelData>,
+    shape_mask: Option<u32>,
+    on_shape_change: EventHandler<Option<u32>>,
+) -> Element {
     let current = options();
     let bloom_percent = (current.bloom_strength * 100.0).round() as i32;
     let debug_select_class = input_class("h-8 cursor-pointer py-1 text-xs");
+    let shape_select_class = input_class("h-8 w-24 cursor-pointer py-1 text-xs");
+    let shape_options = model_shape_options(&model);
 
     rsx! {
         div {
@@ -555,6 +807,23 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                 span { class: "text-[11px] text-muted-foreground", "{bloom_percent}%" }
             }
             div { class: "space-y-2",
+                if !shape_options.is_empty() {
+                    label { class: "flex items-center justify-between gap-3",
+                        span { class: "text-muted-foreground", "Shape" }
+                        select {
+                            class: "{shape_select_class}",
+                            value: "{shape_mask.unwrap_or(0)}",
+                            onchange: move |event| {
+                                let mask = event.value().parse::<u32>().ok().filter(|mask| *mask != 0);
+                                on_shape_change.call(mask);
+                            },
+                            option { value: "0", "Base" }
+                            for (_, mask, name) in shape_options.clone() {
+                                option { value: "{mask}", "{name}" }
+                            }
+                        }
+                    }
+                }
                 select {
                     class: "{debug_select_class}",
                     value: "{debug_mode_value(current.debug_mode)}",
@@ -576,6 +845,10 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "uv2", "UV2" }
                     option { value: "uv3", "UV3" }
                     option { value: "vertex", "Vertex" }
+                    option { value: "vertex1", "Vertex 1" }
+                    option { value: "normal1", "Normal 1" }
+                    option { value: "flow0", "Flow 0" }
+                    option { value: "flow1", "Flow 1" }
                     option { value: "mesh", "Mesh" }
                     option { value: "ct-index", "CT Index" }
                     option { value: "material-map", "Mat Map" }
@@ -584,6 +857,26 @@ fn WeaponRenderControls(options: Signal<WeaponRenderOptions>) -> Element {
                     option { value: "sheen-props", "Sheen" }
                     option { value: "sphere-props", "Sphere" }
                     option { value: "tile-matrix", "Tile Matrix" }
+                    option { value: "tile-normal-array", "Tile Normal" }
+                    option { value: "tile-orb-array", "Tile ORB" }
+                    option { value: "detail-diffuse-array", "Detail Diffuse" }
+                    option { value: "detail-normal-array", "Detail Normal" }
+                    option { value: "unsupported", "Unsupported" }
+                    option { value: "view-direction", "View Direction" }
+                }
+                label { class: "flex items-center justify-between gap-3",
+                    span { class: "text-muted-foreground", "Glass" }
+                    select {
+                        class: "{input_class(\"h-8 w-24 cursor-pointer py-1 text-xs\")}",
+                        value: "{glass_blend_mode_value(current.glass_blend_mode)}",
+                        onchange: move |event| {
+                            let mut next = options();
+                            next.glass_blend_mode = parse_glass_blend_mode(&event.value());
+                            options.set(next);
+                        },
+                        option { value: "alpha", "Alpha" }
+                        option { value: "additive", "Add" }
+                    }
                 }
                 RenderCheckbox {
                     label: "Normal",
@@ -650,6 +943,91 @@ fn parse_render_slider_value(value: &str) -> f32 {
     value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 160.0)
 }
 
+#[component]
+fn WeaponStainControls(
+    stains: Vec<WeaponStain>,
+    stain_ids: [u8; 2],
+    on_stain_change: EventHandler<(usize, u8)>,
+) -> Element {
+    let stains_available = !stains.is_empty();
+    rsx! {
+        div { class: "mt-3 flex flex-wrap items-end gap-3 border-t pt-3",
+            div { class: "pb-2 text-xs font-medium text-muted-foreground", "染色" }
+            WeaponStainControl {
+                label: "通道 1",
+                stains: stains.clone(),
+                value: stain_ids[0],
+                onchange: move |value| on_stain_change.call((0, value)),
+            }
+            WeaponStainControl {
+                label: "通道 2",
+                stains,
+                value: stain_ids[1],
+                onchange: move |value| on_stain_change.call((1, value)),
+            }
+            if !stains_available {
+                div { class: "pb-2 text-xs text-amber-700",
+                    "当前武器目录缺少染剂数据，请在数据来源中更新武器目录"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn WeaponStainControl(
+    label: &'static str,
+    stains: Vec<WeaponStain>,
+    value: u8,
+    onchange: EventHandler<u8>,
+) -> Element {
+    let selected = stains.iter().find(|stain| stain.id == value);
+    let swatch_style = selected
+        .map(|stain| {
+            format!(
+                "background-color: rgb({}, {}, {});",
+                stain.ui_color[0], stain.ui_color[1], stain.ui_color[2]
+            )
+        })
+        .unwrap_or_else(|| "background-color: transparent;".to_string());
+    let swatch_title = selected
+        .map(|stain| stain.name.clone())
+        .unwrap_or_else(|| "无染色".to_string());
+    let select_class = input_class("h-9 min-w-40 cursor-pointer py-1 text-xs");
+    let disabled = stains.is_empty();
+
+    rsx! {
+        label { class: "min-w-0 space-y-1",
+            span { class: "block text-[11px] text-muted-foreground", "{label}" }
+            div { class: "flex items-center gap-2",
+                span {
+                    class: "h-7 w-7 shrink-0 rounded border border-border shadow-sm",
+                    style: "{swatch_style}",
+                    title: "{swatch_title}",
+                }
+                select {
+                    class: "{select_class}",
+                    value: "{value}",
+                    disabled,
+                    onchange: move |event| {
+                        onchange.call(parse_stain_id(&event.value()));
+                    },
+                    option { value: "0", "无染色" }
+                    for stain in stains {
+                        option { value: "{stain.id}",
+                            if stain.metallic {
+                                "{stain.name} · 金属"
+                            } else {
+                                "{stain.name}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
     match mode {
         ModelDebugMode::Final => "final",
@@ -673,6 +1051,16 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::SheenProperties => "sheen-props",
         ModelDebugMode::SphereProperties => "sphere-props",
         ModelDebugMode::TileMatrix => "tile-matrix",
+        ModelDebugMode::TileNormalArray => "tile-normal-array",
+        ModelDebugMode::TileOrbArray => "tile-orb-array",
+        ModelDebugMode::DetailDiffuseArray => "detail-diffuse-array",
+        ModelDebugMode::DetailNormalArray => "detail-normal-array",
+        ModelDebugMode::VertexColor1 => "vertex1",
+        ModelDebugMode::SecondaryNormal => "normal1",
+        ModelDebugMode::Flow0 => "flow0",
+        ModelDebugMode::Flow1 => "flow1",
+        ModelDebugMode::UnsupportedInputs => "unsupported",
+        ModelDebugMode::ViewDirection => "view-direction",
     }
 }
 
@@ -698,7 +1086,32 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "sheen-props" => ModelDebugMode::SheenProperties,
         "sphere-props" => ModelDebugMode::SphereProperties,
         "tile-matrix" => ModelDebugMode::TileMatrix,
+        "tile-normal-array" => ModelDebugMode::TileNormalArray,
+        "tile-orb-array" => ModelDebugMode::TileOrbArray,
+        "detail-diffuse-array" => ModelDebugMode::DetailDiffuseArray,
+        "detail-normal-array" => ModelDebugMode::DetailNormalArray,
+        "vertex1" => ModelDebugMode::VertexColor1,
+        "normal1" => ModelDebugMode::SecondaryNormal,
+        "flow0" => ModelDebugMode::Flow0,
+        "flow1" => ModelDebugMode::Flow1,
+        "unsupported" => ModelDebugMode::UnsupportedInputs,
+        "view-direction" => ModelDebugMode::ViewDirection,
         _ => ModelDebugMode::Final,
+    }
+}
+
+fn glass_blend_mode_value(mode: ModelGlassBlendMode) -> &'static str {
+    match mode {
+        ModelGlassBlendMode::Alpha => "alpha",
+        ModelGlassBlendMode::Additive => "additive",
+    }
+}
+
+fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
+    match value {
+        "additive" => ModelGlassBlendMode::Additive,
+        "alpha" | "multiply" => ModelGlassBlendMode::Alpha,
+        _ => ModelGlassBlendMode::Alpha,
     }
 }
 
@@ -706,25 +1119,44 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
 fn WeaponModelCanvas(
     model: Rc<WeaponModelData>,
     render_options: Signal<WeaponRenderOptions>,
+    shape_mask: Option<u32>,
 ) -> Element {
     let canvas_id = format!(
-        "weapon-model-canvas-{}-{}-{}",
+        "weapon-model-canvas-{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
+        shape_mask.unwrap_or(0),
     );
     let init_error = use_signal(|| None::<String>);
+    let ready = use_signal(|| false);
 
     #[cfg(target_arch = "wasm32")]
     {
+        let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
+        let init_generation = use_signal(|| 0_u64);
+        let init_key = (
+            model.item_id,
+            model.model_main.raw,
+            model.model_sub.map(|value| value.raw).unwrap_or(0),
+            shape_mask,
+        );
         let effect_canvas_id = canvas_id.clone();
         let effect_model = model.clone();
+        let effect_shape_mask = shape_mask;
         let mut effect_error = init_error;
-        use_effect(move || {
+        let mut effect_ready = ready;
+        let mut effect_renderer = renderer;
+        let mut effect_generation = init_generation;
+        use_effect(use_reactive((&init_key,), move |_| {
             let canvas_id = effect_canvas_id.clone();
             let model = effect_model.clone();
             let options = render_options;
+            let generation = *effect_generation.peek() + 1;
+            effect_generation.set(generation);
+            effect_renderer.set(None);
             effect_error.set(None);
+            effect_ready.set(false);
             wasm_bindgen_futures::spawn_local(async move {
                 let result = async {
                     let window =
@@ -737,18 +1169,39 @@ fn WeaponModelCanvas(
                         .ok_or_else(|| "canvas 未挂载".to_string())?
                         .dyn_into::<HtmlCanvasElement>()
                         .map_err(|_| "canvas 元素类型错误".to_string())?;
-                    WebWeaponCanvasRenderer::from_canvas(canvas, &model).await
+                    let prepared_options = effect_shape_mask
+                        .map(|mask| PreparedModelOptions::default().with_enabled_shape_mask(mask))
+                        .unwrap_or_default();
+                    WebWeaponCanvasRenderer::from_canvas(canvas, &model, prepared_options).await
                 }
                 .await;
 
                 match result {
                     Ok(renderer) => {
-                        start_weapon_render_loop(WasmRc::new(RefCell::new(renderer)), options)
+                        if *effect_generation.peek() != generation {
+                            return;
+                        }
+                        let renderer = WasmRc::new(RefCell::new(renderer));
+                        effect_renderer.set(Some(renderer.clone()));
+                        effect_ready.set(true);
+                        start_weapon_render_loop(renderer, options, effect_generation, generation)
                     }
-                    Err(error) => effect_error.set(Some(error)),
+                    Err(error) if *effect_generation.peek() == generation => {
+                        effect_error.set(Some(error))
+                    }
+                    Err(_) => {}
                 }
             });
-        });
+        }));
+
+        let update_key = (model.item_id, model.stain_ids, shape_mask);
+        let update_model = model.clone();
+        use_effect(use_reactive((&update_key,), move |_| {
+            let Some(renderer) = renderer() else {
+                return;
+            };
+            renderer.borrow_mut().update_materials(&update_model);
+        }));
     }
 
     rsx! {
@@ -760,6 +1213,12 @@ fn WeaponModelCanvas(
             if let Some(error) = init_error() {
                 div { class: "absolute inset-x-4 top-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 shadow-sm",
                     "{error}"
+                }
+            }
+            if cfg!(target_arch = "wasm32") && !ready() && init_error().is_none() {
+                WeaponModelLoadingView {
+                    progress: None,
+                    stage: Some("正在初始化 WebGPU 渲染".to_string()),
                 }
             }
             if !cfg!(target_arch = "wasm32") {
@@ -775,6 +1234,8 @@ fn WeaponModelCanvas(
 fn start_weapon_render_loop(
     renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>,
     render_options: Signal<WeaponRenderOptions>,
+    generation: Signal<u64>,
+    expected_generation: u64,
 ) {
     let callback_slot: WasmRc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
         WasmRc::new(RefCell::new(None));
@@ -784,7 +1245,7 @@ fn start_weapon_render_loop(
     *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
         let connected = {
             let mut renderer = renderer_for_loop.borrow_mut();
-            if renderer.canvas_connected() {
+            if renderer.canvas_connected() && *generation.peek() == expected_generation {
                 let mut options = render_options();
                 options.uv_scroll_time = (time_ms as f32) / 1000.0;
                 renderer.render_with_options(options);
@@ -874,6 +1335,7 @@ fn initial_weapon_url_state() -> WeaponUrlState {
             query: String::new(),
             filter: WeaponSlotFilter::All,
             item_id: None,
+            stain_ids: [0, 0],
         }
     }
 }
@@ -884,6 +1346,7 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
         query: String::new(),
         filter: WeaponSlotFilter::All,
         item_id: None,
+        stain_ids: [0, 0],
     };
 
     let route = hash.trim_start_matches('#');
@@ -904,6 +1367,8 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
             "item" | "itemId" | "id" => {
                 state.item_id = value.parse::<u32>().ok();
             }
+            "stain0" | "dye0" => state.stain_ids[0] = parse_stain_id(&value),
+            "stain1" | "dye1" => state.stain_ids[1] = parse_stain_id(&value),
             _ => {}
         }
     }
@@ -918,8 +1383,21 @@ fn decode_query_value(value: &str) -> String {
         .unwrap_or_else(|_| value.to_string())
 }
 
+fn parse_stain_id(value: &str) -> u8 {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|stain_id| *stain_id <= 254)
+        .unwrap_or(0)
+}
+
 #[allow(unused_variables)]
-fn sync_weapon_url_state(query: &str, filter: WeaponSlotFilter, item_id: Option<u32>) {
+fn sync_weapon_url_state(
+    query: &str,
+    filter: WeaponSlotFilter,
+    item_id: Option<u32>,
+    stain_ids: [u8; 2],
+) {
     #[cfg(target_arch = "wasm32")]
     {
         let Some(window) = web_sys::window() else {
@@ -936,6 +1414,12 @@ fn sync_weapon_url_state(query: &str, filter: WeaponSlotFilter, item_id: Option<
         }
         if let Some(item_id) = item_id {
             params.push(format!("item={item_id}"));
+        }
+        if stain_ids[0] != 0 {
+            params.push(format!("stain0={}", stain_ids[0]));
+        }
+        if stain_ids[1] != 0 {
+            params.push(format!("stain1={}", stain_ids[1]));
         }
 
         let hash = if params.is_empty() {
@@ -978,13 +1462,49 @@ fn format_vec3(value: [f32; 3]) -> String {
     format!("{:.3}, {:.3}, {:.3}", value[0], value[1], value[2])
 }
 
-fn model_canvas_key(model: &WeaponModelData) -> String {
+fn model_canvas_key(model: &WeaponModelData, shape_mask: Option<u32>) -> String {
     format!(
-        "{}-{}-{}",
+        "{}-{}-{}-{}",
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
+        shape_mask.unwrap_or(0),
     )
+}
+
+fn model_shape_options(model: &WeaponModelData) -> Vec<(usize, u32, String)> {
+    let mut options = Vec::new();
+    for shape in model
+        .meshes
+        .iter()
+        .flat_map(|mesh| mesh.shape_influences.iter())
+    {
+        if shape.shape_index_mask == 0
+            || options
+                .iter()
+                .any(|(_, mask, _)| *mask == shape.shape_index_mask)
+        {
+            continue;
+        }
+        options.push((
+            shape.index,
+            shape.shape_index_mask,
+            shape
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Shape {}", shape.index)),
+        ));
+    }
+    options.sort_by_key(|(index, _, _)| *index);
+    options
+}
+
+fn model_has_shape_mask(model: &WeaponModelData, shape_mask: u32) -> bool {
+    model
+        .meshes
+        .iter()
+        .flat_map(|mesh| mesh.shape_influences.iter())
+        .any(|shape| shape.shape_index_mask == shape_mask)
 }
 
 #[cfg(test)]
@@ -993,11 +1513,20 @@ mod weapon_url_tests {
 
     #[test]
     fn parses_weapon_url_state_from_hash() {
-        let state =
-            weapon_url_state_from_hash("#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058");
+        let state = weapon_url_state_from_hash(
+            "#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058&stain0=17&stain1=93",
+        );
         assert_eq!(state.query, "浪漫");
         assert_eq!(state.filter, WeaponSlotFilter::TwoHanded);
         assert_eq!(state.item_id, Some(45058));
+        assert_eq!(state.stain_ids, [17, 93]);
+    }
+
+    #[test]
+    fn stain_id_parser_rejects_reserved_and_invalid_values() {
+        assert_eq!(parse_stain_id("254"), 254);
+        assert_eq!(parse_stain_id("255"), 0);
+        assert_eq!(parse_stain_id("invalid"), 0);
     }
 
     #[test]
@@ -1010,6 +1539,106 @@ mod weapon_url_tests {
             WeaponSlotFilter::Dual,
         ] {
             assert_eq!(WeaponSlotFilter::from_key(filter.key()), Some(filter));
+        }
+    }
+
+    #[test]
+    fn glass_blend_mode_values_round_trip() {
+        for mode in [ModelGlassBlendMode::Alpha, ModelGlassBlendMode::Additive] {
+            assert_eq!(parse_glass_blend_mode(glass_blend_mode_value(mode)), mode);
+        }
+        assert_eq!(
+            parse_glass_blend_mode("unknown"),
+            ModelGlassBlendMode::Alpha
+        );
+    }
+
+    #[test]
+    fn secondary_vertex_debug_modes_round_trip() {
+        for mode in [
+            ModelDebugMode::VertexColor1,
+            ModelDebugMode::SecondaryNormal,
+            ModelDebugMode::Flow0,
+            ModelDebugMode::Flow1,
+            ModelDebugMode::UnsupportedInputs,
+            ModelDebugMode::ViewDirection,
+        ] {
+            assert_eq!(parse_debug_mode(debug_mode_value(mode)), mode);
+        }
+    }
+
+    #[test]
+    fn shape_options_are_unique_sorted_and_rebuild_the_canvas_key() {
+        let model = test_shape_model();
+
+        assert_eq!(
+            model_shape_options(&model),
+            vec![(0, 1, "shape_a".to_string()), (2, 4, "shape_c".to_string()),]
+        );
+        assert!(model_has_shape_mask(&model, 1));
+        assert!(model_has_shape_mask(&model, 4));
+        assert!(!model_has_shape_mask(&model, 2));
+        assert_ne!(
+            model_canvas_key(&model, None),
+            model_canvas_key(&model, Some(1))
+        );
+    }
+
+    #[test]
+    fn stain_changes_keep_the_existing_canvas_key() {
+        let base = test_shape_model();
+        let mut stained = base.clone();
+        stained.stain_ids = [17, 93];
+
+        assert_eq!(
+            model_canvas_key(&base, None),
+            model_canvas_key(&stained, None)
+        );
+    }
+
+    fn test_shape_model() -> WeaponModelData {
+        WeaponModelData {
+            item_id: 42,
+            item_name: "shape test".to_string(),
+            model_main: PackedModelId::from_raw(1),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: xiv_companion::ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: vec![xiv_companion::ModelMesh {
+                path: "shape-test.mdl".to_string(),
+                part_index: 0,
+                mesh_category: Some("normal".to_string()),
+                submesh: None,
+                shape_influences: vec![
+                    test_shape_info(2, "shape_c"),
+                    test_shape_info(0, "shape_a"),
+                    test_shape_info(0, "duplicate"),
+                ],
+                shape_targets: Vec::new(),
+                material_index: 0,
+                material_slot: 0,
+                material_name: "shape test".to_string(),
+                color: [1.0; 3],
+                bone_table: None,
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }],
+        }
+    }
+
+    fn test_shape_info(index: usize, name: &str) -> xiv_companion::ModelShapeInfo {
+        let shape_index_mask = 1_u32 << index;
+        xiv_companion::ModelShapeInfo {
+            index,
+            name: Some(name.to_string()),
+            shape_index_mask,
+            shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
+            shape_mesh_index: index,
+            shape_value_count: 1,
         }
     }
 }
