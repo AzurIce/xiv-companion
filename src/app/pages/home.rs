@@ -62,11 +62,11 @@ pub fn HomePage() -> Element {
 
     rsx! {
         main { class: "min-h-screen bg-background",
-            div { class: "mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8",
-                header { class: "border-b pb-6",
-                    div { class: "text-sm text-muted-foreground", "首页" }
-                    h1 { class: "mt-1 text-2xl font-semibold", "XIV Companion" }
-                    p { class: "mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground",
+            div { class: "mx-auto max-w-5xl px-4 py-4 sm:px-5 lg:px-6",
+                header { class: "border-b pb-3",
+                    div { class: "text-xs text-muted-foreground", "首页" }
+                    h1 { class: "mt-0.5 text-xl font-semibold leading-tight", "XIV Companion" }
+                    p { class: "mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground",
                         "基础功能打开 Web 页面即可使用，数据保存在当前浏览器。模型预览和本地数据刷新需要授权 FFXIV 游戏目录；物品与当前角色状态需要 Dalamud 的 API Bridge 插件。"
                     }
                 }
