@@ -44,11 +44,11 @@ pub fn SettingsPage() -> Element {
     let active_section_snapshot = active_section();
 
     rsx! {
-        div { class: "min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8",
-            div { class: "mx-auto max-w-6xl space-y-6",
-                header { class: "border-b pb-4",
-                    div { class: "text-sm text-muted-foreground", "系统" }
-                    h1 { class: "text-2xl font-semibold", "设置" }
+        div { class: "min-h-screen bg-background px-4 py-4 sm:px-5 lg:px-6",
+            div { class: "mx-auto max-w-6xl space-y-4",
+                header { class: "border-b pb-2",
+                    div { class: "text-xs text-muted-foreground", "系统" }
+                    h1 { class: "text-xl font-semibold leading-tight", "设置" }
                 }
 
                 nav { class: "flex gap-1 border-b", aria_label: "设置分类",

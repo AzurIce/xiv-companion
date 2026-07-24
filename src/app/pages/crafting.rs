@@ -369,6 +369,32 @@ pub(super) fn is_marketable(item: Option<&CraftItem>) -> bool {
         .unwrap_or(false)
 }
 
+fn uses_market_source(
+    marketable: bool,
+    sources: &[ItemSource],
+    choice: Option<&SourceChoice>,
+    market_priority: bool,
+) -> bool {
+    marketable
+        && (market_priority
+            || matches!(choice, Some(SourceChoice::Market))
+            || (choice.is_none() && sources.is_empty()))
+}
+
+pub(super) fn materialize_market_priority(
+    data: &CraftDataPackage,
+    materials: &[MaterialSummary],
+    choices: &HashMap<u32, SourceChoice>,
+) -> HashMap<u32, SourceChoice> {
+    let mut materialized = choices.clone();
+    for material in materials {
+        if is_marketable(get_item(data, material.item_id)) {
+            materialized.insert(material.item_id, SourceChoice::Market);
+        }
+    }
+    materialized
+}
+
 fn exchange_group_key(source: &ItemSource) -> String {
     match source {
         ItemSource::SpecialShop { shop_name, costs } => format!(
@@ -388,6 +414,7 @@ pub(super) fn leaf_tone_class(
     data: &CraftDataPackage,
     node: &CraftTreeNode,
     choices: &HashMap<u32, SourceChoice>,
+    market_priority: bool,
 ) -> &'static str {
     let sources = data
         .sources
@@ -398,9 +425,9 @@ pub(super) fn leaf_tone_class(
     let marketable = is_marketable(get_item(data, node.item_id));
     let source = resolve_source(node.item_id, &sources, choices);
 
-    if matches!(choice, Some(SourceChoice::Ignore)) {
+    if !market_priority && matches!(choice, Some(SourceChoice::Ignore)) {
         "border-l-[#a8a29e] bg-[#f1f0ee] text-muted-foreground hover:bg-[#e7e5e4]"
-    } else if marketable && matches!(choice, Some(SourceChoice::Market)) {
+    } else if uses_market_source(marketable, &sources, choice, market_priority) {
         "border-l-[#93c5fd] bg-[#eff6ff] hover:bg-[#dbeafe]"
     } else {
         match source {
@@ -422,6 +449,7 @@ pub(super) fn build_material_plan(
     data: &CraftDataPackage,
     materials: &[MaterialSummary],
     choices: &HashMap<u32, SourceChoice>,
+    market_priority: bool,
 ) -> MaterialPlan {
     let mut plan = MaterialPlan::empty();
     let mut exchange_groups: HashMap<String, ExchangePlanGroup> = HashMap::new();
@@ -438,10 +466,12 @@ pub(super) fn build_material_plan(
         let marketable = is_marketable(item);
         let choice = choices.get(&material.item_id).cloned();
         let source = resolve_source(material.item_id, &sources, choices).cloned();
+        let selected_market =
+            uses_market_source(marketable, &sources, choice.as_ref(), market_priority);
         let base_entry = MaterialPlanEntry {
             item_id: material.item_id,
             amount: material.amount,
-            sources,
+            sources: sources.clone(),
             choice: choice.clone(),
             source: source.clone(),
             marketable,
@@ -450,12 +480,12 @@ pub(super) fn build_material_plan(
             costs: None,
         };
 
-        if matches!(choice, Some(SourceChoice::Ignore)) {
+        if !market_priority && matches!(choice, Some(SourceChoice::Ignore)) {
             plan.owned.push(base_entry);
             continue;
         }
 
-        if marketable && matches!(choice, Some(SourceChoice::Market)) {
+        if selected_market {
             plan.market.push(MaterialPlanEntry {
                 source: None,
                 ..base_entry
@@ -908,10 +938,11 @@ pub(super) fn SourceChoiceControls(
     sources: Vec<ItemSource>,
     marketable: bool,
     choice: Option<SourceChoice>,
+    #[props(default = false)] market_priority: bool,
     on_choose: EventHandler<(u32, Option<SourceChoice>)>,
 ) -> Element {
-    let ignored = matches!(choice, Some(SourceChoice::Ignore));
-    let market = matches!(choice, Some(SourceChoice::Market));
+    let ignored = !market_priority && matches!(choice, Some(SourceChoice::Ignore));
+    let market = uses_market_source(marketable, &sources, choice.as_ref(), market_priority);
     let source_index = current_source_index(choice.as_ref(), &sources);
     let groups = source_display_groups(&data, item_id, &sources, amount);
 
@@ -929,7 +960,11 @@ pub(super) fn SourceChoiceControls(
                     aria_label: "市场购买",
                     onclick: {
                         let on_choose = on_choose;
-                        move |_| on_choose.call((item_id, if market { None } else { Some(SourceChoice::Market) }))
+                        move |_| {
+                            if !market_priority {
+                                on_choose.call((item_id, Some(SourceChoice::Market)));
+                            }
+                        }
                     },
                     Icon { kind: IconKind::Coins, class: "h-3 w-3 shrink-0" }
                     "市场"
@@ -990,11 +1025,12 @@ pub(super) fn MaterialPlanRow(
     row_class: &'static str,
     #[props(default = None)] meta: Option<String>,
     #[props(default = false)] subdued: bool,
+    #[props(default = false)] market_priority: bool,
     on_choose: EventHandler<(u32, Option<SourceChoice>)>,
     on_inspect: EventHandler<MaterialPlanEntry>,
 ) -> Element {
     let item = get_item(&data, entry.item_id).cloned();
-    let owned = matches!(entry.choice, Some(SourceChoice::Ignore));
+    let owned = !market_priority && matches!(entry.choice, Some(SourceChoice::Ignore));
     let container_class = cx([
         "rounded-sm border-l-2 px-2 py-2 text-sm cursor-pointer transition-[box-shadow,filter] hover:shadow-sm hover:brightness-[0.98]",
         row_class,
@@ -1055,6 +1091,7 @@ pub(super) fn MaterialPlanRow(
                     sources: entry.sources.clone(),
                     marketable: entry.marketable,
                     choice: entry.choice.clone(),
+                    market_priority,
                     on_choose,
                 }
             }
@@ -1100,6 +1137,7 @@ pub(super) fn SummaryItemRow(
 pub(super) fn ExchangeGroupPanel(
     data: Rc<CraftDataPackage>,
     group: ExchangePlanGroup,
+    #[props(default = false)] market_priority: bool,
     on_choose: EventHandler<(u32, Option<SourceChoice>)>,
     on_inspect: EventHandler<MaterialPlanEntry>,
     on_inspect_item: EventHandler<(u32, u32)>,
@@ -1133,6 +1171,7 @@ pub(super) fn ExchangeGroupPanel(
                                         row_class: "border-l-[#d7c7ff] bg-[#f7f2ff]",
                                         meta,
                                         subdued: true,
+                                        market_priority,
                                         on_choose,
                                         on_inspect,
                                     }
@@ -1576,6 +1615,7 @@ fn TreeNodeView(
     depth: u32,
     collapsed: HashSet<String>,
     source_choices: HashMap<u32, SourceChoice>,
+    market_priority: bool,
     on_toggle: EventHandler<String>,
     on_select: EventHandler<CraftTreeNode>,
 ) -> Element {
@@ -1585,7 +1625,7 @@ fn TreeNodeView(
     let is_craftable = !node.children.is_empty();
     let counts_as_leaf = !is_craftable || is_collapsed;
     let tone_class = if counts_as_leaf {
-        leaf_tone_class(&data, &node, &source_choices)
+        leaf_tone_class(&data, &node, &source_choices, market_priority)
     } else {
         "border-l-transparent bg-background hover:bg-accent/70"
     };
@@ -1657,6 +1697,7 @@ fn TreeNodeView(
                         depth: depth + 1,
                         collapsed: collapsed.clone(),
                         source_choices: source_choices.clone(),
+                        market_priority,
                         on_toggle,
                         on_select,
                     }
@@ -1723,6 +1764,7 @@ pub fn CraftingPage() -> Element {
     let mut detail_target = use_signal(|| None::<DetailTarget>);
     let mut collapsed = use_signal(HashSet::<String>::new);
     let mut source_choices = use_signal(HashMap::<u32, SourceChoice>::new);
+    let mut market_priority_snapshot = use_signal(|| None::<HashMap<u32, SourceChoice>>);
     let mut side_tab = use_signal(|| "materials");
     let mut market_quotes_key = use_signal(|| None::<String>);
     let mut market_quotes =
@@ -1762,9 +1804,10 @@ pub fn CraftingPage() -> Element {
         .as_ref()
         .map(|tree| summarize_materials(tree, &collapsed()))
         .unwrap_or_default();
+    let market_priority = market_priority_snapshot().is_some();
     let material_plan = data
         .as_ref()
-        .map(|data| build_material_plan(data, &materials, &source_choices()))
+        .map(|data| build_material_plan(data, &materials, &source_choices(), market_priority))
         .unwrap_or_else(MaterialPlan::empty);
     let next_market_key = market_item_ids_key(&material_plan);
     if market_quotes_key() != next_market_key {
@@ -1796,6 +1839,7 @@ pub fn CraftingPage() -> Element {
         detail_target.set(None);
         collapsed.set(HashSet::new());
         source_choices.set(HashMap::new());
+        market_priority_snapshot.set(None);
         write_search_params(&query(), craft_type(), Some(recipe.id));
     };
     let toggle_collapsed = move |key: String| {
@@ -1807,14 +1851,34 @@ pub fn CraftingPage() -> Element {
         }
         collapsed.set(next);
     };
-    let choose_source = move |(item_id, choice): (u32, Option<SourceChoice>)| {
-        let mut next = source_choices();
+    let choice_data = data.clone();
+    let choice_materials = materials.clone();
+    let choose_source = EventHandler::new(move |(item_id, choice): (u32, Option<SourceChoice>)| {
+        let mut next = if let Some(snapshot) = market_priority_snapshot() {
+            market_priority_snapshot.set(None);
+            choice_data
+                .as_ref()
+                .map(|data| materialize_market_priority(data, &choice_materials, &snapshot))
+                .unwrap_or(snapshot)
+        } else {
+            source_choices()
+        };
         if let Some(choice) = choice {
             next.insert(item_id, choice);
         } else {
             next.remove(&item_id);
         }
         source_choices.set(next);
+    });
+    let mut toggle_market_priority = move |enabled: bool| {
+        if enabled {
+            if market_priority_snapshot().is_none() {
+                market_priority_snapshot.set(Some(source_choices()));
+            }
+        } else if let Some(snapshot) = market_priority_snapshot() {
+            source_choices.set(snapshot);
+            market_priority_snapshot.set(None);
+        }
     };
     let inspect_node = move |node: CraftTreeNode| {
         detail_target.set(Some(DetailTarget {
@@ -1848,15 +1912,17 @@ pub fn CraftingPage() -> Element {
 
     rsx! {
         div { class: "flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden",
-            div { class: "shrink-0 border-b bg-background px-4 py-4 sm:px-6 lg:px-8",
-                div { class: "mx-auto flex max-w-[1600px] flex-col gap-3 xl:flex-row xl:items-end xl:justify-between",
-                    div { class: "space-y-1.5",
-                        div { class: "text-sm text-muted-foreground", "工具 / 合成检索" }
-                        h1 { class: "text-2xl font-semibold", "合成检索" }
-                        crate::app::modules::ModuleCapabilityBadges { module_id: "crafting" }
+            div { class: "shrink-0 border-b bg-background px-4 py-2 sm:px-5 lg:px-6",
+                div { class: "mx-auto flex max-w-[1600px] flex-col gap-2 xl:flex-row xl:items-center xl:justify-between",
+                    div { class: "space-y-0.5",
+                        div { class: "text-xs text-muted-foreground", "工具 / 合成检索" }
+                        div { class: "flex flex-wrap items-center gap-x-2 gap-y-1",
+                            h1 { class: "text-xl font-semibold leading-tight", "合成检索" }
+                            crate::app::modules::ModuleCapabilityBadges { module_id: "crafting" }
+                        }
                     }
                     if let Some(data) = data.as_ref() {
-                        div { class: "flex flex-wrap gap-2 text-xs text-muted-foreground",
+                        div { class: "flex flex-wrap gap-1.5 text-xs text-muted-foreground",
                             Badge { variant: BadgeVariant::Outline, "配方 {format_integer(data.counts.recipes as f64)}" }
                             Badge { variant: BadgeVariant::Outline, "物品 {format_integer(data.counts.items as f64)}" }
                             Badge { variant: BadgeVariant::Outline, "来源 {format_integer(data.counts.sources as f64)}" }
@@ -2003,6 +2069,7 @@ pub fn CraftingPage() -> Element {
                                             depth: 0,
                                             collapsed: collapsed(),
                                             source_choices: source_choices(),
+                                            market_priority,
                                             on_toggle: EventHandler::new(toggle_collapsed),
                                             on_select: EventHandler::new(inspect_node),
                                         }
@@ -2047,6 +2114,18 @@ pub fn CraftingPage() -> Element {
                         }
 
                         if side_tab() == "materials" {
+                            label {
+                                class: "mt-3 flex cursor-pointer items-center gap-2 rounded border bg-background px-2 py-1.5 text-xs font-medium text-muted-foreground",
+                                title: "临时让全部可交易材料按市场购买规划；直接取消会恢复开启前的来源选择，手动调整任一来源会固化当前市场方案并退出该模式。",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: market_priority,
+                                    class: "h-3.5 w-3.5 accent-foreground",
+                                    onchange: move |event| toggle_market_priority(event.checked()),
+                                }
+                                Icon { kind: IconKind::Coins, class: "h-3.5 w-3.5 text-[#1d4ed8]" }
+                                "市场优先"
+                            }
                             div { class: "mt-3 flex flex-wrap gap-2",
                                 Badge { variant: BadgeVariant::Outline, "叶子 {materials.len()}" }
                                 if !material_plan.gathering.is_empty() {
@@ -2109,7 +2188,8 @@ pub fn CraftingPage() -> Element {
                                                         ExchangeGroupPanel {
                                                             data: data.clone(),
                                                             group,
-                                                            on_choose: EventHandler::new(choose_source),
+                                                            market_priority,
+                                                            on_choose: choose_source,
                                                             on_inspect: EventHandler::new(inspect_entry),
                                                             on_inspect_item: EventHandler::new(inspect_item),
                                                         }
@@ -2130,7 +2210,8 @@ pub fn CraftingPage() -> Element {
                                                             data: data.clone(),
                                                             entry,
                                                             row_class: "border-l-emerald-200 bg-emerald-50/80",
-                                                            on_choose: EventHandler::new(choose_source),
+                                                            market_priority,
+                                                            on_choose: choose_source,
                                                             on_inspect: EventHandler::new(inspect_entry),
                                                         }
                                                     }
@@ -2158,7 +2239,8 @@ pub fn CraftingPage() -> Element {
                                                                     entry,
                                                                     row_class: "border-l-amber-200 bg-amber-50/80",
                                                                     meta,
-                                                                    on_choose: EventHandler::new(choose_source),
+                                                                    market_priority,
+                                                                    on_choose: choose_source,
                                                                     on_inspect: EventHandler::new(inspect_entry),
                                                                 }
                                                             }
@@ -2192,7 +2274,8 @@ pub fn CraftingPage() -> Element {
                                                             meta: market_meta(&entry, quotes_result.as_ref(), market_loading()),
                                                             entry,
                                                             row_class: "border-l-[#93c5fd] bg-[#eff6ff]",
-                                                            on_choose: EventHandler::new(choose_source),
+                                                            market_priority,
+                                                            on_choose: choose_source,
                                                             on_inspect: EventHandler::new(inspect_entry),
                                                         }
                                                     }
@@ -2212,7 +2295,8 @@ pub fn CraftingPage() -> Element {
                                                             data: data.clone(),
                                                             entry,
                                                             row_class: "border-l-border bg-background",
-                                                            on_choose: EventHandler::new(choose_source),
+                                                            market_priority,
+                                                            on_choose: choose_source,
                                                             on_inspect: EventHandler::new(inspect_entry),
                                                         }
                                                     }
@@ -2232,7 +2316,8 @@ pub fn CraftingPage() -> Element {
                                                             data: data.clone(),
                                                             entry,
                                                             row_class: "border-l-[#a8a29e] bg-[#f1f0ee] text-muted-foreground",
-                                                            on_choose: EventHandler::new(choose_source),
+                                                            market_priority,
+                                                            on_choose: choose_source,
                                                             on_inspect: EventHandler::new(inspect_entry),
                                                         }
                                                     }

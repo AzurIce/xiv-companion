@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::crafting::{
-    DetailTarget, ExchangeGroupPanel, ItemIcon, MaterialPlanEntry, MaterialPlanRow,
-    NodeDetailDialog, build_material_plan, fetch_market_quotes, leaf_tone_class, market_cost,
-    market_item_ids_key, market_meta, recipe_level_label,
+    DetailTarget, ExchangeGroupPanel, ExchangePlanGroup, ItemIcon, MaterialCost, MaterialPlanEntry,
+    MaterialPlanRow, NodeDetailDialog, build_material_plan, fetch_market_quotes, leaf_tone_class,
+    market_cost, market_item_ids_key, market_meta, materialize_market_priority, recipe_level_label,
 };
 use crate::app::data::{
     CRAFT_TYPE_ABBRS, CRAFT_TYPE_NAMES, CraftDataEngine, build_tree, collapse_key,
@@ -27,17 +27,12 @@ const NOTES_STORAGE_KEY: &str = "xiv-companion-notes-v1";
 const MARKET_WORLD_DC_REGION: &str = "中国";
 
 #[derive(Clone)]
-struct SourceChoicesContext(HashMap<u32, SourceChoice>);
+struct SourcePlanContext {
+    choices: HashMap<u32, SourceChoice>,
+    market_priority: bool,
+}
 const CRYSTAL_ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
 const CRYSTAL_TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
-const CRYSTAL_ELEMENT_STYLES: [(&str, &str, &str); 6] = [
-    ("#c84a32", "#fff4ef", "#f2b7a8"),
-    ("#1598b7", "#eefbff", "#9bddeb"),
-    ("#2f9d55", "#effaf1", "#a8ddb7"),
-    ("#b98118", "#fff8e6", "#e8c46a"),
-    ("#a13ac1", "#fbf0ff", "#dda3ec"),
-    ("#1f8ecb", "#eff8ff", "#a6d8f5"),
-];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -214,25 +209,6 @@ struct GraphLayoutRelation {
     order: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CrystalSummaryRow {
-    tier: &'static str,
-    amounts: [u32; 6],
-    total: u32,
-}
-
-fn crystal_element_style(index: usize) -> String {
-    let (text, background, border) = CRYSTAL_ELEMENT_STYLES[index];
-    format!(
-        "color: {text}; background-color: {background}; border-left: 1px solid {border}; padding-right: 0.5rem;"
-    )
-}
-
-fn crystal_element_dot_style(index: usize) -> String {
-    let (text, _, _) = CRYSTAL_ELEMENT_STYLES[index];
-    format!("background-color: {text};")
-}
-
 fn id() -> String {
     let now = js_sys::Date::now().round() as u64;
     let random = (js_sys::Math::random() * 1_000_000_000.0).round() as u32;
@@ -368,6 +344,15 @@ enum NotesViewMode {
 struct TreeItemMeta {
     icon: u32,
     amount: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TreeContextMenuState {
+    node_id: String,
+    title: String,
+    is_folder: bool,
+    x: f64,
+    y: f64,
 }
 
 fn is_entry_node(node: &NoteTreeNode) -> bool {
@@ -1120,46 +1105,36 @@ fn crystal_total(data: &CraftDataPackage, materials: &[MaterialSummary]) -> u32 
         .sum()
 }
 
-fn crystal_summary_rows(
+fn crystal_materials(
     data: &CraftDataPackage,
     materials: &[MaterialSummary],
-) -> Vec<CrystalSummaryRow> {
-    let mut totals = [[0u32; 6]; 3];
-
-    for material in materials {
-        let Some((element, tier)) =
-            parse_crystal_resource_name(&get_item_name(data, material.item_id))
-        else {
-            continue;
-        };
-        let Some(element_index) = CRYSTAL_ELEMENTS
-            .iter()
-            .position(|candidate| *candidate == element)
-        else {
-            continue;
-        };
-        let Some(tier_index) = CRYSTAL_TIERS
-            .iter()
-            .position(|candidate| *candidate == tier)
-        else {
-            continue;
-        };
-        totals[tier_index][element_index] =
-            totals[tier_index][element_index].saturating_add(material.amount);
-    }
-
-    CRYSTAL_TIERS
+) -> Vec<MaterialSummary> {
+    let mut crystals = materials
         .iter()
-        .enumerate()
-        .map(|(index, tier)| {
-            let amounts = totals[index];
-            CrystalSummaryRow {
-                tier,
-                amounts,
-                total: amounts.iter().sum(),
-            }
-        })
-        .collect()
+        .filter(|material| is_crystal_resource(data, material.item_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    crystals.sort_by_key(|material| get_item_name(data, material.item_id));
+    crystals
+}
+
+fn exchange_cost_summary(
+    data: &CraftDataPackage,
+    groups: &[ExchangePlanGroup],
+) -> Vec<MaterialCost> {
+    let mut totals = HashMap::<u32, u32>::new();
+    for group in groups {
+        for cost in &group.costs {
+            let amount = totals.entry(cost.item_id).or_default();
+            *amount = amount.saturating_add(cost.amount);
+        }
+    }
+    let mut costs = totals
+        .into_iter()
+        .map(|(item_id, amount)| MaterialCost { item_id, amount })
+        .collect::<Vec<_>>();
+    costs.sort_by_key(|cost| get_item_name(data, cost.item_id));
+    costs
 }
 
 fn is_crystal_resource_leaf(
@@ -1880,6 +1855,8 @@ fn MaterialSummaryPanel(
     title: String,
     materials: Vec<MaterialSummary>,
     source_choices: HashMap<u32, SourceChoice>,
+    market_priority: bool,
+    on_market_priority_change: EventHandler<bool>,
     on_choose: EventHandler<(u32, Option<SourceChoice>)>,
     on_inspect_item: EventHandler<(u32, u32)>,
 ) -> Element {
@@ -1888,7 +1865,7 @@ fn MaterialSummaryPanel(
         .filter(|material| !is_crystal_resource(&data, material.item_id))
         .cloned()
         .collect::<Vec<_>>();
-    let plan = build_material_plan(&data, &ordinary_materials, &source_choices);
+    let plan = build_material_plan(&data, &ordinary_materials, &source_choices, market_priority);
     let mut market_quotes_key = use_signal(|| None::<String>);
     let mut market_quotes = use_signal(|| {
         None::<(
@@ -1921,7 +1898,8 @@ fn MaterialSummaryPanel(
             .and_then(|result| result.as_ref().ok()),
     );
     let crystal_amount = crystal_total(&data, &materials);
-    let crystal_rows = crystal_summary_rows(&data, &materials);
+    let crystals = crystal_materials(&data, &materials);
+    let exchange_costs = exchange_cost_summary(&data, &plan.exchange_groups);
 
     rsx! {
         section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
@@ -1943,6 +1921,18 @@ fn MaterialSummaryPanel(
                 }
 
                 div { class: "mt-3 flex flex-wrap gap-2",
+                    label {
+                        class: "inline-flex cursor-pointer items-center gap-1.5 rounded border bg-background px-2 py-1 text-xs font-medium text-muted-foreground",
+                        title: "临时让全部可交易材料按市场购买规划；直接取消会恢复开启前的来源选择，手动调整任一来源会固化当前市场方案并退出该模式。",
+                        input {
+                            r#type: "checkbox",
+                            checked: market_priority,
+                            class: "h-3.5 w-3.5 accent-foreground",
+                            onchange: move |event| on_market_priority_change.call(event.checked()),
+                        }
+                        Icon { kind: IconKind::Coins, class: "h-3.5 w-3.5 text-[#1d4ed8]" }
+                        "市场优先"
+                    }
                     if crystal_amount > 0 {
                         Badge { variant: BadgeVariant::Outline, "晶石汇总 {format_integer(crystal_amount as f64)}" }
                     }
@@ -1992,50 +1982,25 @@ fn MaterialSummaryPanel(
                 } else {
                     div { class: "space-y-4",
                         if crystal_amount > 0 {
-                            section {
-                                div { class: "overflow-hidden rounded-md border bg-[#fafaf9]",
-                                    div { class: "flex items-center justify-between gap-2 p-3",
-                                        div {
-                                            div { class: "text-xs font-semibold text-foreground", "晶石消耗" }
-                                            div { class: "mt-0.5 text-[11px] text-muted-foreground", "碎晶 / 水晶 / 晶簇按元素汇总，图中不再显示为节点" }
-                                        }
-                                        Badge { variant: BadgeVariant::Secondary, "总 {format_integer(crystal_amount as f64)}" }
+                            section { class: "rounded-md border bg-[#fafaf9] p-2.5",
+                                div { class: "flex items-center justify-between gap-2",
+                                    div { class: "flex items-center gap-2 text-xs font-semibold text-foreground",
+                                        Icon { kind: IconKind::Sparkles, class: "h-3.5 w-3.5 text-amber-700" }
+                                        "晶石消耗"
                                     }
-                                    div { class: "overflow-x-auto border-t",
-                                        div { class: "min-w-[500px]",
-                                            div {
-                                                class: "grid bg-[#f3f2ef] px-3 py-2 text-[11px] font-medium text-muted-foreground",
-                                                style: "grid-template-columns: 7rem repeat(6, minmax(3.5rem, 1fr));",
-                                                div { "类型" }
-                                                for (index, element) in CRYSTAL_ELEMENTS.into_iter().enumerate() {
-                                                    div {
-                                                        class: "flex items-center justify-end gap-1.5",
-                                                        style: "{crystal_element_style(index)}",
-                                                        span {
-                                                            class: "h-2 w-2 rounded-full",
-                                                            style: "{crystal_element_dot_style(index)}",
-                                                        }
-                                                        "{element}"
-                                                    }
-                                                }
-                                            }
-                                            for row in crystal_rows.clone() {
+                                    Badge { variant: BadgeVariant::Secondary, "总 {format_integer(crystal_amount as f64)}" }
+                                }
+                                div { class: "mt-2 flex flex-wrap gap-1.5",
+                                    for crystal in crystals {
+                                        {
+                                            let item = get_item(&data, crystal.item_id);
+                                            let name = get_item_name(&data, crystal.item_id);
+                                            rsx! {
                                                 div {
-                                                    class: "grid border-t border-[#e7e5e4] px-3 py-2 text-xs",
-                                                    style: "grid-template-columns: 7rem repeat(6, minmax(3.5rem, 1fr));",
-                                                    div { class: "flex min-w-0 items-center justify-between gap-2 font-medium text-foreground",
-                                                        span { "{row.tier}" }
-                                                        span { class: "shrink-0 font-semibold tabular-nums",
-                                                            "{format_integer(row.total as f64)}"
-                                                        }
-                                                    }
-                                                    for (index, amount) in row.amounts.into_iter().enumerate() {
-                                                        div {
-                                                            class: "text-right tabular-nums font-medium",
-                                                            style: "{crystal_element_style(index)}",
-                                                            "{format_integer(amount as f64)}"
-                                                        }
-                                                    }
+                                                    class: "inline-flex h-7 items-center gap-1 rounded border bg-background px-1.5 text-xs font-medium tabular-nums",
+                                                    title: "{name}",
+                                                    ItemIcon { icon: item.map(|item| item.icon).unwrap_or(0), size: "sm" }
+                                                    "×{format_integer(crystal.amount as f64)}"
                                                 }
                                             }
                                         }
@@ -2045,19 +2010,45 @@ fn MaterialSummaryPanel(
                         }
 
                         if !plan.exchange_groups.is_empty() {
-                            section {
-                                div { class: "mb-2 flex items-center gap-2 text-sm font-semibold",
-                                    Icon { kind: IconKind::Shuffle, class: "h-4 w-4 text-[#3b2778]" }
-                                    "兑换"
+                            section { class: "rounded-md border bg-[#fbf9ff] p-2.5",
+                                div { class: "flex items-center justify-between gap-2",
+                                    div { class: "flex items-center gap-2 text-sm font-semibold",
+                                        Icon { kind: IconKind::Shuffle, class: "h-4 w-4 text-[#3b2778]" }
+                                        "兑换总计"
+                                    }
+                                    Badge { variant: BadgeVariant::Outline, "{plan.exchange_groups.len()} 个商店" }
                                 }
-                                div { class: "space-y-2",
-                                    for group in plan.exchange_groups.clone() {
-                                        ExchangeGroupPanel {
-                                            data: data.clone(),
-                                            group,
-                                            on_choose,
-                                            on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
-                                            on_inspect_item,
+                                div { class: "mt-2 flex flex-wrap gap-1.5",
+                                    for cost in exchange_costs {
+                                        {
+                                            let item = get_item(&data, cost.item_id);
+                                            let name = get_item_name(&data, cost.item_id);
+                                            rsx! {
+                                                button {
+                                                    r#type: "button",
+                                                    class: "inline-flex h-7 max-w-full items-center gap-1 rounded border border-[#d7c7ff] bg-background px-1.5 text-xs font-medium hover:bg-[#f3efff]",
+                                                    title: "查看 {name}",
+                                                    onclick: move |_| on_inspect_item.call((cost.item_id, cost.amount)),
+                                                    ItemIcon { icon: item.map(|item| item.icon).unwrap_or(0), size: "sm" }
+                                                    span { class: "truncate", "{name}" }
+                                                    span { class: "shrink-0 tabular-nums text-muted-foreground", "×{format_integer(cost.amount as f64)}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                details { class: "mt-2 border-t border-[#e4dbff] pt-2 text-xs",
+                                    summary { class: "cursor-pointer select-none font-medium text-[#4c3290] hover:text-[#3b2778]", "按商店查看兑换方案" }
+                                    div { class: "mt-2 space-y-2",
+                                        for group in plan.exchange_groups.clone() {
+                                            ExchangeGroupPanel {
+                                                data: data.clone(),
+                                                group,
+                                                market_priority,
+                                                on_choose,
+                                                on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
+                                                on_inspect_item,
+                                            }
                                         }
                                     }
                                 }
@@ -2065,19 +2056,47 @@ fn MaterialSummaryPanel(
                         }
 
                         if !plan.gathering.is_empty() {
-                            section {
-                                div { class: "mb-2 flex items-center gap-2 text-sm font-semibold",
-                                    Icon { kind: IconKind::Leaf, class: "h-4 w-4 text-emerald-700" }
-                                    "采集清单"
+                            section { class: "rounded-md border border-emerald-200 bg-emerald-50/50 p-2.5",
+                                div { class: "flex items-center justify-between gap-2",
+                                    div { class: "flex items-center gap-2 text-sm font-semibold",
+                                        Icon { kind: IconKind::Leaf, class: "h-4 w-4 text-emerald-700" }
+                                        "采集总计"
+                                    }
+                                    Badge { variant: BadgeVariant::Success, "{plan.gathering.len()} 项" }
                                 }
-                                div { class: "space-y-2",
+                                div { class: "mt-2 flex flex-wrap gap-1.5",
                                     for entry in plan.gathering.clone() {
-                                        MaterialPlanRow {
-                                            data: data.clone(),
-                                            entry,
-                                            row_class: "border-l-emerald-200 bg-emerald-50/80",
-                                            on_choose,
-                                            on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
+                                        {
+                                            let item_id = entry.item_id;
+                                            let amount = entry.amount;
+                                            let item = get_item(&data, item_id);
+                                            let name = get_item_name(&data, item_id);
+                                            rsx! {
+                                                button {
+                                                    r#type: "button",
+                                                    class: "inline-flex h-7 max-w-full items-center gap-1 rounded border border-emerald-200 bg-background px-1.5 text-xs font-medium hover:bg-emerald-50",
+                                                    title: "查看 {name}",
+                                                    onclick: move |_| on_inspect_item.call((item_id, amount)),
+                                                    ItemIcon { icon: item.map(|item| item.icon).unwrap_or(0), size: "sm" }
+                                                    span { class: "truncate", "{name}" }
+                                                    span { class: "shrink-0 tabular-nums text-muted-foreground", "×{format_integer(amount as f64)}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                details { class: "mt-2 border-t border-emerald-200 pt-2 text-xs",
+                                    summary { class: "cursor-pointer select-none font-medium text-emerald-800 hover:text-emerald-900", "查看采集地点与来源选择" }
+                                    div { class: "mt-2 space-y-2",
+                                        for entry in plan.gathering.clone() {
+                                            MaterialPlanRow {
+                                                data: data.clone(),
+                                                entry,
+                                                row_class: "border-l-emerald-200 bg-emerald-50/80",
+                                                market_priority,
+                                                on_choose,
+                                                on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
+                                            }
                                         }
                                     }
                                 }
@@ -2104,6 +2123,7 @@ fn MaterialSummaryPanel(
                                                     entry,
                                                     row_class: "border-l-amber-200 bg-amber-50/80",
                                                     meta,
+                                                    market_priority,
                                                     on_choose,
                                                     on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
                                                 }
@@ -2115,13 +2135,13 @@ fn MaterialSummaryPanel(
                         }
 
                         if !plan.market.is_empty() {
-                            section {
-                                div { class: "mb-2 flex items-center justify-between gap-2 text-sm font-semibold",
-                                    div { class: "flex items-center gap-2",
+                            section { class: "rounded-md border border-[#bfdbfe] bg-[#eff6ff]/60 p-2.5",
+                                div { class: "flex items-center justify-between gap-2",
+                                    div { class: "flex items-center gap-2 text-sm font-semibold",
                                         Icon { kind: IconKind::Coins, class: "h-4 w-4 text-[#1d4ed8]" }
-                                        "市场购买"
+                                        "市场总计"
                                     }
-                                    div { class: "text-xs font-medium text-muted-foreground",
+                                    Badge { variant: BadgeVariant::Outline,
                                         if market_loading() {
                                             "估价载入中"
                                         } else if market_cost_value.total > 0 {
@@ -2131,15 +2151,40 @@ fn MaterialSummaryPanel(
                                         }
                                     }
                                 }
-                                div { class: "space-y-2",
+                                div { class: "mt-2 flex flex-wrap gap-1.5",
                                     for entry in plan.market.clone() {
-                                        MaterialPlanRow {
-                                            data: data.clone(),
-                                            meta: market_meta(&entry, quotes_result.as_ref(), market_loading()),
-                                            entry,
-                                            row_class: "border-l-[#93c5fd] bg-[#eff6ff]",
-                                            on_choose,
-                                            on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
+                                        {
+                                            let item_id = entry.item_id;
+                                            let amount = entry.amount;
+                                            let item = get_item(&data, item_id);
+                                            let name = get_item_name(&data, item_id);
+                                            rsx! {
+                                                button {
+                                                    r#type: "button",
+                                                    class: "inline-flex h-7 max-w-full items-center gap-1 rounded border border-[#bfdbfe] bg-background px-1.5 text-xs font-medium hover:bg-[#dbeafe]",
+                                                    title: "查看 {name}",
+                                                    onclick: move |_| on_inspect_item.call((item_id, amount)),
+                                                    ItemIcon { icon: item.map(|item| item.icon).unwrap_or(0), size: "sm" }
+                                                    span { class: "truncate", "{name}" }
+                                                    span { class: "shrink-0 tabular-nums text-muted-foreground", "×{format_integer(amount as f64)}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                details { class: "mt-2 border-t border-[#bfdbfe] pt-2 text-xs",
+                                    summary { class: "cursor-pointer select-none font-medium text-[#1d4ed8] hover:text-[#1e40af]", "查看报价与来源选择" }
+                                    div { class: "mt-2 space-y-2",
+                                        for entry in plan.market.clone() {
+                                            MaterialPlanRow {
+                                                data: data.clone(),
+                                                meta: market_meta(&entry, quotes_result.as_ref(), market_loading()),
+                                                entry,
+                                                row_class: "border-l-[#93c5fd] bg-[#eff6ff]",
+                                                market_priority,
+                                                on_choose,
+                                                on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
+                                            }
                                         }
                                     }
                                 }
@@ -2158,6 +2203,7 @@ fn MaterialSummaryPanel(
                                             data: data.clone(),
                                             entry,
                                             row_class: "border-l-border bg-background",
+                                            market_priority,
                                             on_choose,
                                             on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
                                         }
@@ -2178,6 +2224,7 @@ fn MaterialSummaryPanel(
                                             data: data.clone(),
                                             entry,
                                             row_class: "border-l-[#a8a29e] bg-[#f1f0ee] text-muted-foreground",
+                                            market_priority,
                                             on_choose,
                                             on_inspect: move |entry: MaterialPlanEntry| on_inspect_item.call((entry.item_id, entry.amount)),
                                         }
@@ -2200,7 +2247,7 @@ fn MergedCraftGraphNodeCard(
 ) -> Element {
     let graph_node = node.node.clone();
     let counts_as_leaf = !graph_node.craftable || graph_node.collapsed;
-    let source_choices = use_context::<SourceChoicesContext>().0;
+    let source_plan = use_context::<SourcePlanContext>();
     let tone_class = if counts_as_leaf {
         leaf_tone_class(
             &data,
@@ -2210,7 +2257,8 @@ fn MergedCraftGraphNodeCard(
                 recipe: graph_node.recipe.clone(),
                 children: Vec::new(),
             },
-            &source_choices,
+            &source_plan.choices,
+            source_plan.market_priority,
         )
     } else {
         "border-l-transparent bg-background hover:bg-accent/70"
@@ -2477,6 +2525,7 @@ fn CraftAnalysisView(
     active: bool,
     #[props(default = true)] show_actions: bool,
     source_choices: HashMap<u32, SourceChoice>,
+    on_apply_source_choices: EventHandler<HashMap<u32, SourceChoice>>,
     on_select: EventHandler<()>,
     on_edit: EventHandler<()>,
     on_remove: EventHandler<()>,
@@ -2498,7 +2547,52 @@ fn CraftAnalysisView(
         })
         .collect::<Vec<_>>();
 
-    provide_context(SourceChoicesContext(source_choices.clone()));
+    let mut market_priority_snapshot = use_signal(|| None::<HashMap<u32, SourceChoice>>);
+    let market_priority = market_priority_snapshot().is_some();
+    let priority_data = data.clone();
+    let priority_materials = materials
+        .iter()
+        .filter(|material| !is_crystal_resource(&data, material.item_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let choose_source = move |(item_id, choice): (u32, Option<SourceChoice>)| {
+        if let Some(snapshot) = market_priority_snapshot() {
+            market_priority_snapshot.set(None);
+            let materialized =
+                materialize_market_priority(&priority_data, &priority_materials, &snapshot);
+            let mut changes = priority_materials
+                .iter()
+                .filter_map(|material| {
+                    materialized
+                        .get(&material.item_id)
+                        .cloned()
+                        .filter(|choice| matches!(choice, SourceChoice::Market))
+                        .map(|choice| (material.item_id, choice))
+                })
+                .collect::<HashMap<_, _>>();
+            if let Some(choice) = choice {
+                changes.insert(item_id, choice);
+            }
+            on_apply_source_choices.call(changes);
+        } else {
+            on_choose_source.call((item_id, choice));
+        }
+    };
+    let priority_snapshot_choices = source_choices.clone();
+    let toggle_market_priority = move |enabled: bool| {
+        if enabled {
+            if market_priority_snapshot().is_none() {
+                market_priority_snapshot.set(Some(priority_snapshot_choices.clone()));
+            }
+        } else if market_priority_snapshot().is_some() {
+            market_priority_snapshot.set(None);
+        }
+    };
+
+    provide_context(SourcePlanContext {
+        choices: source_choices.clone(),
+        market_priority,
+    });
 
     rsx! {
         div {
@@ -2566,7 +2660,9 @@ fn CraftAnalysisView(
                         title: selection.title.clone(),
                         materials,
                         source_choices,
-                        on_choose: on_choose_source,
+                        market_priority,
+                        on_market_priority_change: EventHandler::new(toggle_market_priority),
+                        on_choose: EventHandler::new(choose_source),
                         on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
                             item_id,
                             amount_needed,
@@ -2586,14 +2682,13 @@ fn TreeNodeRow(
     item_meta: HashMap<String, TreeItemMeta>,
     selected_ids: HashSet<String>,
     expanded: HashSet<String>,
+    drag_over_target: Option<(String, bool)>,
     on_toggle: EventHandler<String>,
     on_select: EventHandler<(String, bool, bool)>,
-    on_add_folder: EventHandler<String>,
-    on_add_item: EventHandler<String>,
-    on_change_amount: EventHandler<(String, u32)>,
-    on_rename: EventHandler<(String, String)>,
-    on_delete: EventHandler<String>,
+    on_context_menu: EventHandler<TreeContextMenuState>,
     on_drag_start: EventHandler<String>,
+    on_drag_end: EventHandler<()>,
+    on_drag_over: EventHandler<(String, bool)>,
     on_drop: EventHandler<(String, bool)>,
 ) -> Element {
     let is_folder = node.kind == "folder";
@@ -2606,12 +2701,29 @@ fn TreeNodeRow(
         selected_ids.contains(&node.id)
     };
     let padding_left = format!("{}px", 8 + depth * 16);
+    let is_before_target = drag_over_target
+        .as_ref()
+        .is_some_and(|(id, into_folder)| id == &node.id && !into_folder);
+    let is_drop_target = is_folder
+        && drag_over_target
+            .as_ref()
+            .is_some_and(|(id, into_folder)| id == &node.id && *into_folder);
 
     rsx! {
         div {
             div {
-                class: "h-1 rounded-full transition-colors hover:bg-primary/30",
-                title: "插入到此节点前",
+                class: if is_before_target {
+                    "h-1.5 rounded-full bg-primary shadow-sm transition-colors"
+                } else {
+                    "h-1 rounded-full bg-transparent transition-colors"
+                },
+                ondragenter: {
+                    let node_id = node.id.clone();
+                    move |event| {
+                        event.prevent_default();
+                        on_drag_over.call((node_id.clone(), false));
+                    }
+                },
                 ondragover: move |event| event.prevent_default(),
                 ondrop: {
                     let node_id = node.id.clone();
@@ -2631,11 +2743,39 @@ fn TreeNodeRow(
                     } else {
                         "text-muted-foreground hover:bg-accent/70 hover:text-foreground"
                     },
+                    if is_drop_target {
+                        "bg-accent ring-2 ring-primary/50"
+                    } else {
+                        ""
+                    },
                 ]),
                 style: "padding-left: {padding_left};",
+                oncontextmenu: {
+                    let node_id = node.id.clone();
+                    let title = node.title.clone();
+                    move |event| {
+                        event.prevent_default();
+                        let position = event.data().client_coordinates();
+                        on_context_menu.call(TreeContextMenuState {
+                            node_id: node_id.clone(),
+                            title: title.clone(),
+                            is_folder,
+                            x: position.x,
+                            y: position.y,
+                        });
+                    }
+                },
                 ondragstart: {
                     let node_id = node.id.clone();
                     move |_| on_drag_start.call(node_id.clone())
+                },
+                ondragend: move |_| on_drag_end.call(()),
+                ondragenter: {
+                    let node_id = node.id.clone();
+                    move |event| {
+                        event.prevent_default();
+                        on_drag_over.call((node_id.clone(), is_folder));
+                    }
                 },
                 ondragover: move |event| event.prevent_default(),
                 ondrop: {
@@ -2643,15 +2783,14 @@ fn TreeNodeRow(
                     move |event| {
                         event.prevent_default();
                         event.stop_propagation();
-                        on_drop.call((node_id.clone(), is_folder));
+                        if is_folder {
+                            on_drop.call((node_id.clone(), true));
+                        }
                     }
                 },
-                span { class: "flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground/60", title: "拖动整理",
-                    Icon { kind: IconKind::GripVertical, class: "h-3.5 w-3.5" }
-                }
                 button {
                     r#type: "button",
-                    class: "flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-background/80",
+                    class: "flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-background/80",
                     aria_label: if is_folder {
                         if is_expanded { "折叠目录" } else { "展开目录" }
                     } else {
@@ -2704,89 +2843,7 @@ fn TreeNodeRow(
                 }
                 if !is_folder {
                     if let Some(meta) = item_meta.get(&node.id) {
-                        div {
-                            class: "flex h-7 shrink-0 items-center rounded border border-input bg-background px-1 text-xs text-muted-foreground focus-within:ring-2 focus-within:ring-ring",
-                            span { class: "select-none", "×" }
-                            input {
-                                r#type: "number",
-                                min: "1",
-                                value: "{meta.amount}",
-                                style: "width: 2.25rem; appearance: textfield;",
-                                class: "h-6 border-0 bg-transparent px-0.5 text-right text-xs font-medium text-foreground outline-none",
-                                aria_label: "物品数量",
-                                onclick: move |event| event.stop_propagation(),
-                                oninput: {
-                                    let node_id = node.id.clone();
-                                    move |event| {
-                                        let amount = event.value().parse::<u32>().unwrap_or(1).max(1);
-                                        on_change_amount.call((node_id.clone(), amount));
-                                    }
-                                },
-                            }
-                        }
-                    }
-                }
-                div { class: "flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
-                    if is_folder {
-                        button {
-                            r#type: "button",
-                            class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                            title: "添加物品",
-                            aria_label: "添加物品",
-                            onclick: {
-                                let node_id = node.id.clone();
-                                move |event| {
-                                    event.stop_propagation();
-                                    on_add_item.call(node_id.clone());
-                                }
-                            },
-                            Icon { kind: IconKind::Plus, class: "h-3.5 w-3.5" }
-                        }
-                        button {
-                            r#type: "button",
-                            class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                            title: "添加目录",
-                            aria_label: "添加目录",
-                            onclick: {
-                                let node_id = node.id.clone();
-                                move |event| {
-                                    event.stop_propagation();
-                                    on_add_folder.call(node_id.clone());
-                                }
-                            },
-                            Icon { kind: IconKind::FolderPlus, class: "h-3.5 w-3.5" }
-                        }
-                    }
-                    if is_folder {
-                        button {
-                            r#type: "button",
-                            class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                            title: "重命名目录",
-                            aria_label: "重命名目录",
-                            onclick: {
-                                let node_id = node.id.clone();
-                                let title = node.title.clone();
-                                move |event| {
-                                    event.stop_propagation();
-                                    on_rename.call((node_id.clone(), title.clone()));
-                                }
-                            },
-                            Icon { kind: IconKind::Pencil, class: "h-3.5 w-3.5" }
-                        }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "flex h-6 w-6 items-center justify-center rounded border border-transparent bg-background/60 hover:border-border hover:bg-background",
-                        title: "删除",
-                        aria_label: "删除",
-                        onclick: {
-                            let node_id = node.id.clone();
-                            move |event| {
-                                event.stop_propagation();
-                                on_delete.call(node_id.clone());
-                            }
-                        },
-                        Icon { kind: IconKind::Trash2, class: "h-3.5 w-3.5" }
+                        div { class: "shrink-0 px-1 text-[11px] tabular-nums text-muted-foreground", "×{meta.amount}" }
                     }
                 }
             }
@@ -2799,14 +2856,13 @@ fn TreeNodeRow(
                         item_meta: item_meta.clone(),
                         selected_ids: selected_ids.clone(),
                         expanded: expanded.clone(),
+                        drag_over_target: drag_over_target.clone(),
                         on_toggle,
                         on_select,
-                        on_add_folder,
-                        on_add_item,
-                        on_change_amount,
-                        on_rename,
-                        on_delete,
+                        on_context_menu,
                         on_drag_start,
+                        on_drag_end,
+                        on_drag_over,
                         on_drop,
                     }
                 }
@@ -3236,6 +3292,152 @@ fn CraftItemPickerDialog(
 }
 
 #[component]
+fn TreeContextMenu(
+    menu: TreeContextMenuState,
+    item: Option<TreeItemMeta>,
+    on_close: EventHandler<()>,
+    on_change_amount: EventHandler<(String, u32)>,
+    on_add_folder: EventHandler<String>,
+    on_add_item: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
+    on_delete: EventHandler<String>,
+) -> Element {
+    let amount = item.as_ref().map(|meta| meta.amount.max(1)).unwrap_or(1);
+    let node_id = menu.node_id.clone();
+    let title = menu.title.clone();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-40",
+            onclick: move |_| on_close.call(()),
+            oncontextmenu: move |event| event.prevent_default(),
+            div {
+                class: "fixed z-50 w-64 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg",
+                style: "left: min({menu.x}px, calc(100vw - 272px)); top: min({menu.y}px, calc(100vh - 280px));",
+                onclick: move |event| event.stop_propagation(),
+                div { class: "flex items-center gap-2 border-b px-3 py-2.5",
+                    if menu.is_folder {
+                        Icon { kind: IconKind::Folder, class: "h-4 w-4 shrink-0 text-muted-foreground" }
+                    } else if let Some(meta) = item.as_ref() {
+                        ItemIcon { icon: meta.icon, size: "sm" }
+                    } else {
+                        Icon { kind: IconKind::PackageSearch, class: "h-4 w-4 shrink-0 text-muted-foreground" }
+                    }
+                    div { class: "min-w-0 truncate text-sm font-medium", title: "{menu.title}", "{menu.title}" }
+                }
+
+                if !menu.is_folder {
+                    div { class: "border-b p-3",
+                        div { class: "mb-1.5 text-xs font-medium text-muted-foreground", "数量" }
+                        div { class: "flex h-8 items-center rounded border bg-background",
+                            button {
+                                r#type: "button",
+                                class: "flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground",
+                                aria_label: "减少数量",
+                                title: "减少数量",
+                                onclick: {
+                                    let node_id = node_id.clone();
+                                    move |_| on_change_amount.call((node_id.clone(), amount.saturating_sub(1).max(1)))
+                                },
+                                Icon { kind: IconKind::Minus, class: "h-3.5 w-3.5" }
+                            }
+                            input {
+                                r#type: "number",
+                                min: "1",
+                                value: "{amount}",
+                                class: "h-7 min-w-0 flex-1 border-0 bg-transparent px-1 text-center text-sm font-medium outline-none",
+                                aria_label: "数量",
+                                oninput: {
+                                    let node_id = node_id.clone();
+                                    move |event| {
+                                        let next = event.value().parse::<u32>().unwrap_or(1).max(1);
+                                        on_change_amount.call((node_id.clone(), next));
+                                    }
+                                },
+                            }
+                            button {
+                                r#type: "button",
+                                class: "flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground",
+                                aria_label: "增加数量",
+                                title: "增加数量",
+                                onclick: {
+                                    let node_id = node_id.clone();
+                                    move |_| on_change_amount.call((node_id.clone(), amount.saturating_add(1)))
+                                },
+                                Icon { kind: IconKind::Plus, class: "h-3.5 w-3.5" }
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "border-b p-1.5",
+                        button {
+                            r#type: "button",
+                            class: "flex h-8 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-accent",
+                            onclick: {
+                                let node_id = node_id.clone();
+                                move |event| {
+                                    event.stop_propagation();
+                                    on_add_item.call(node_id.clone());
+                                    on_close.call(());
+                                }
+                            },
+                            Icon { kind: IconKind::Plus, class: "h-3.5 w-3.5 text-muted-foreground" }
+                            "添加物品"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex h-8 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-accent",
+                            onclick: {
+                                let node_id = node_id.clone();
+                                move |event| {
+                                    event.stop_propagation();
+                                    on_add_folder.call(node_id.clone());
+                                    on_close.call(());
+                                }
+                            },
+                            Icon { kind: IconKind::FolderPlus, class: "h-3.5 w-3.5 text-muted-foreground" }
+                            "添加目录"
+                        }
+                    }
+                }
+
+                div { class: "p-1.5",
+                    button {
+                        r#type: "button",
+                        class: "flex h-8 w-full items-center gap-2 rounded px-2 text-left text-sm hover:bg-accent",
+                        onclick: {
+                            let node_id = node_id.clone();
+                            let title = title.clone();
+                            move |event| {
+                                event.stop_propagation();
+                                on_rename.call((node_id.clone(), title.clone()));
+                                on_close.call(());
+                            }
+                        },
+                        Icon { kind: IconKind::Pencil, class: "h-3.5 w-3.5 text-muted-foreground" }
+                        "重命名"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "flex h-8 w-full items-center gap-2 rounded px-2 text-left text-sm text-destructive hover:bg-destructive/10",
+                        onclick: {
+                            let node_id = node_id.clone();
+                            move |event| {
+                                event.stop_propagation();
+                                on_delete.call(node_id.clone());
+                                on_close.call(());
+                            }
+                        },
+                        Icon { kind: IconKind::Trash2, class: "h-3.5 w-3.5" }
+                        "删除"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 pub fn NotesPage() -> Element {
     let craft_data = use_resource(load_craft_data);
     let mut state = use_signal(load_notes_state);
@@ -3244,6 +3446,8 @@ pub fn NotesPage() -> Element {
     let mut selection_anchor_id = use_signal(|| None::<String>);
     let mut view_mode = use_signal(|| NotesViewMode::Summary);
     let mut dragged_node_id = use_signal(|| None::<String>);
+    let mut drag_over_target = use_signal(|| None::<(String, bool)>);
+    let mut context_menu = use_signal(|| None::<TreeContextMenuState>);
     let mut add_item_parent_id = use_signal(|| None::<String>);
     let mut editing_item_id = use_signal(|| None::<String>);
     let mut detail_target = use_signal(|| None::<DetailTarget>);
@@ -3427,15 +3631,17 @@ pub fn NotesPage() -> Element {
     };
     rsx! {
         div { class: "flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden",
-            div { class: "shrink-0 border-b bg-background px-4 py-4 sm:px-6 lg:px-8",
-                div { class: "mx-auto flex max-w-[1720px] flex-col gap-3 xl:flex-row xl:items-end xl:justify-between",
-                    div { class: "space-y-1.5",
-                        div { class: "text-sm text-muted-foreground", "工具 / 制作清单" }
-                        h1 { class: "text-2xl font-semibold", "制作清单" }
-                        crate::app::modules::ModuleCapabilityBadges { module_id: "notes" }
+            div { class: "shrink-0 border-b bg-background px-4 py-2 sm:px-5 lg:px-6",
+                div { class: "mx-auto flex max-w-[1720px] flex-col gap-2 xl:flex-row xl:items-center xl:justify-between",
+                    div { class: "space-y-0.5",
+                        div { class: "text-xs text-muted-foreground", "工具 / 制作清单" }
+                        div { class: "flex flex-wrap items-center gap-x-2 gap-y-1",
+                            h1 { class: "text-xl font-semibold leading-tight", "制作清单" }
+                            crate::app::modules::ModuleCapabilityBadges { module_id: "notes" }
+                        }
                     }
                     if let Some(data) = data.as_ref() {
-                        div { class: "flex flex-wrap gap-2 text-xs text-muted-foreground",
+                        div { class: "flex flex-wrap gap-1.5 text-xs text-muted-foreground",
                             Badge { variant: BadgeVariant::Outline, "配方 {format_integer(data.counts.recipes as f64)}" }
                             Badge { variant: BadgeVariant::Outline, "物品 {format_integer(data.counts.items as f64)}" }
                             Badge { variant: BadgeVariant::Outline, "来源 {format_integer(data.counts.sources as f64)}" }
@@ -3444,7 +3650,7 @@ pub fn NotesPage() -> Element {
                 }
             }
 
-            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[340px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]",
+            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)]",
                 aside { class: "flex h-[320px] flex-col overflow-hidden border-b bg-card xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r",
                     div { class: "flex items-center justify-between gap-2 border-b p-3",
                         div { class: "flex items-center gap-2 text-sm font-semibold",
@@ -3479,6 +3685,7 @@ pub fn NotesPage() -> Element {
                                 item_meta: item_meta.clone(),
                                 selected_ids: selected_id_set.clone(),
                                 expanded: expanded_folders(),
+                                drag_over_target: drag_over_target(),
                                 on_toggle: move |folder_id| {
                                     let mut expanded = expanded_folders();
                                     if expanded.contains(&folder_id) {
@@ -3507,22 +3714,16 @@ pub fn NotesPage() -> Element {
                                         selection_anchor_id.set(Some(entry_id));
                                     }
                                 },
-                                on_add_folder: move |parent_id| name_dialog.set(Some(NameDialogKind::AddFolder { parent_id: Some(parent_id) })),
-                                on_add_item: move |parent_id| {
-                                    add_item_parent_id.set(Some(parent_id));
-                                    editing_item_id.set(Some("new".to_string()));
+                                on_context_menu: move |menu| context_menu.set(Some(menu)),
+                                on_drag_start: move |node_id| {
+                                    dragged_node_id.set(Some(node_id));
+                                    drag_over_target.set(None);
                                 },
-                                on_change_amount: move |change: (String, u32)| {
-                                    let (item_id, amount) = change;
-                                    let mut next = state();
-                                    if let Some(item) = next.items.get_mut(&item_id) {
-                                        item.amount = amount.max(1);
-                                    }
-                                    state.set(next);
+                                on_drag_end: move |_| {
+                                    dragged_node_id.set(None);
+                                    drag_over_target.set(None);
                                 },
-                                on_rename: move |(node_id, current_title)| name_dialog.set(Some(NameDialogKind::RenameNode { node_id, current_title })),
-                                on_delete: move |node_id| confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id })),
-                                on_drag_start: move |node_id| dragged_node_id.set(Some(node_id)),
+                                on_drag_over: move |target| drag_over_target.set(Some(target)),
                                 on_drop: move |drop_target: (String, bool)| {
                                     let (target_id, into_folder) = drop_target;
                                     let Some(source_id) = dragged_node_id() else { return; };
@@ -3530,12 +3731,21 @@ pub fn NotesPage() -> Element {
                                     next.tree = move_tree_node(&next.tree, &source_id, Some(&target_id), into_folder);
                                     state.set(next);
                                     dragged_node_id.set(None);
+                                    drag_over_target.set(None);
                                 },
                             }
                         }
                         div {
-                            class: "h-8 rounded-md border border-dashed border-transparent hover:border-border",
+                            class: if drag_over_target().as_ref().is_some_and(|(id, into_folder)| id.is_empty() && !into_folder) {
+                                "h-1.5 rounded-full bg-primary shadow-sm"
+                            } else {
+                                "h-2 rounded-md border border-dashed border-transparent"
+                            },
                             title: "移至根目录",
+                            ondragenter: move |event| {
+                                event.prevent_default();
+                                drag_over_target.set(Some((String::new(), false)));
+                            },
                             ondragover: move |event| event.prevent_default(),
                             ondrop: move |event| {
                                 event.prevent_default();
@@ -3544,6 +3754,7 @@ pub fn NotesPage() -> Element {
                                 next.tree = move_tree_node(&next.tree, &source_id, None, false);
                                 state.set(next);
                                 dragged_node_id.set(None);
+                                drag_over_target.set(None);
                             },
                         }
                     }
@@ -3604,6 +3815,20 @@ pub fn NotesPage() -> Element {
                                                     state.set(next);
                                                 }
                                             },
+                                            on_apply_source_choices: {
+                                                let selected_ids = selected_ids.clone();
+                                                move |choices: HashMap<u32, SourceChoice>| {
+                                                    let mut next = state();
+                                                    for entry_id in &selected_ids {
+                                                        if let Some(item) = next.items.get_mut(entry_id) {
+                                                            for (item_id, choice) in &choices {
+                                                                item.source_choices.insert(item_id.to_string(), choice.clone());
+                                                            }
+                                                        }
+                                                    }
+                                                    state.set(next);
+                                                }
+                                            },
                                             on_choose_source: {
                                                 let selected_ids = selected_ids.clone();
                                                 move |(item_id, choice): (u32, Option<SourceChoice>)| {
@@ -3640,6 +3865,7 @@ pub fn NotesPage() -> Element {
                                                         on_edit: { let entry_id = entry_id.clone(); move |_| { add_item_parent_id.set(find_parent_folder_id(&state().tree, &entry_id)); editing_item_id.set(Some(entry_id.clone())); } },
                                                         on_remove: { let entry_id = entry_id.clone(); move |_| confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id: entry_id.clone() })) },
                                                         on_toggle_collapsed_item: { let entry_id = entry_id.clone(); move |(item_id, collapsed)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed; } state.set(next); } },
+                                                        on_apply_source_choices: { let entry_id = entry_id.clone(); move |choices: HashMap<u32, SourceChoice>| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { for (item_id, choice) in choices { item.source_choices.insert(item_id.to_string(), choice); } } state.set(next); } },
                                                         on_choose_source: { let entry_id = entry_id.clone(); move |(item_id, choice): (u32, Option<SourceChoice>)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { if let Some(choice) = choice { item.source_choices.insert(item_id.to_string(), choice); } else { item.source_choices.remove(&item_id.to_string()); } } state.set(next); } },
                                                         on_inspect: move |target| detail_target.set(Some(target)),
                                                     }
@@ -3658,6 +3884,34 @@ pub fn NotesPage() -> Element {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(menu) = context_menu() {
+                TreeContextMenu {
+                    item: item_meta.get(&menu.node_id).cloned(),
+                    menu,
+                    on_close: move |_| context_menu.set(None),
+                    on_change_amount: move |(item_id, amount): (String, u32)| {
+                        let mut next = state();
+                        if let Some(item) = next.items.get_mut(&item_id) {
+                            item.amount = amount.max(1);
+                        }
+                        state.set(next);
+                    },
+                    on_add_folder: move |parent_id| {
+                        name_dialog.set(Some(NameDialogKind::AddFolder { parent_id: Some(parent_id) }));
+                    },
+                    on_add_item: move |parent_id| {
+                        add_item_parent_id.set(Some(parent_id));
+                        editing_item_id.set(Some("new".to_string()));
+                    },
+                    on_rename: move |(node_id, current_title)| {
+                        name_dialog.set(Some(NameDialogKind::RenameNode { node_id, current_title }));
+                    },
+                    on_delete: move |node_id| {
+                        confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id }));
+                    },
                 }
             }
 
@@ -3683,7 +3937,7 @@ pub fn NotesPage() -> Element {
             if let Some(kind) = name_dialog() {
                 NameDialog {
                     kind,
-                    on_confirm: move |(kind, value)| {
+                    on_confirm: move |(kind, value): (NameDialogKind, String)| {
                         match kind {
                             NameDialogKind::AddFolder { parent_id } => create_folder(value, parent_id),
                             NameDialogKind::RenameNode { node_id, .. } => {
