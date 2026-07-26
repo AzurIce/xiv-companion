@@ -7,13 +7,16 @@ use crate::app::data::{
     load_item_icon, resolve_source, source_label, source_priority, summarize_materials,
 };
 use crate::app::icons::{Icon, IconKind};
+use crate::app::market::{
+    MARKET_REGION as MARKET_WORLD_DC_REGION, MarketQuote as SharedMarketQuote,
+    load_cached_market_quotes, refresh_market_quotes,
+};
 use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, DialogKeyAction, EmptyState,
+    dialog_key_action, input_class,
 };
 use crate::app::utils::{cx, format_integer};
 use dioxus::prelude::*;
-use gloo_net::http::Request;
-use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
 use xiv_companion::{
     CraftDataPackage, CraftItem, CraftRecipe, CraftTreeNode, CrafterAttributes, ItemSource,
@@ -21,8 +24,35 @@ use xiv_companion::{
     solve_raphael_macro,
 };
 
-const MARKET_WORLD_DC_REGION: &str = "中国";
-const UNIVERSALIS_BASE_URL: &str = "https://universalis.app";
+const COLLAPSED_STORAGE_PREFIX: &str = "xiv-companion-crafting-collapsed-";
+
+fn load_collapsed_state(recipe_id: Option<u32>) -> HashSet<String> {
+    let Some(recipe_id) = recipe_id else {
+        return HashSet::new();
+    };
+    web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .and_then(|storage| {
+            storage
+                .get_item(&format!("{COLLAPSED_STORAGE_PREFIX}{recipe_id}"))
+                .ok()
+                .flatten()
+        })
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
+}
+
+fn persist_collapsed_state(recipe_id: Option<u32>, collapsed: &HashSet<String>) {
+    let Some(recipe_id) = recipe_id else { return };
+    let Ok(value) = serde_json::to_string(collapsed) else {
+        return;
+    };
+    if let Some(storage) =
+        web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+    {
+        let _ = storage.set_item(&format!("{COLLAPSED_STORAGE_PREFIX}{recipe_id}"), &value);
+    }
+}
 
 const DEFAULT_CRAFTER_ATTRIBUTES: CrafterAttributes = CrafterAttributes {
     level: 100,
@@ -121,9 +151,15 @@ pub(super) struct DetailTarget {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct MarketQuote {
-    item_id: u32,
-    unit_price: u32,
+    pub(super) item_id: u32,
+    pub(super) unit_price: u32,
     basis: String,
+    pub(super) updated_at: Option<i64>,
+    pub(super) daily_sales: Option<f64>,
+    pub(super) nq_unit_price: Option<u32>,
+    pub(super) hq_unit_price: Option<u32>,
+    pub(super) nq_daily_sales: Option<f64>,
+    pub(super) hq_daily_sales: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,38 +167,6 @@ pub(super) struct MarketCost {
     pub(super) total: u32,
     pub(super) priced: usize,
     pub(super) missing: usize,
-}
-
-#[derive(Clone, Deserialize)]
-struct UniversalisAggregatedResponse {
-    #[serde(default)]
-    results: Vec<UniversalisResult>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UniversalisResult {
-    item_id: u32,
-    #[serde(default)]
-    nq: UniversalisNq,
-}
-
-#[derive(Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UniversalisNq {
-    min_listing: Option<UniversalisPriceScope>,
-    recent_purchase: Option<UniversalisPriceScope>,
-    average_sale_price: Option<UniversalisPriceScope>,
-}
-
-#[derive(Clone, Deserialize)]
-struct UniversalisPriceScope {
-    region: Option<UniversalisPrice>,
-}
-
-#[derive(Clone, Deserialize)]
-struct UniversalisPrice {
-    price: Option<f64>,
 }
 
 pub(super) fn recipe_level_label(data: &CraftDataPackage, recipe: &CraftRecipe) -> String {
@@ -369,7 +373,7 @@ pub(super) fn is_marketable(item: Option<&CraftItem>) -> bool {
         .unwrap_or(false)
 }
 
-fn uses_market_source(
+pub(super) fn uses_market_source(
     marketable: bool,
     sources: &[ItemSource],
     choice: Option<&SourceChoice>,
@@ -593,89 +597,61 @@ pub(super) fn market_item_ids_key(plan: &MaterialPlan) -> Option<String> {
     (!ids.is_empty()).then(|| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
 }
 
-fn first_positive(values: &[Option<f64>]) -> Option<u32> {
-    values
-        .iter()
-        .flatten()
-        .find(|value| value.is_finite() && **value > 0.0)
-        .map(|value| value.round() as u32)
-}
-
-fn normalize_market_quote(raw: UniversalisResult) -> Option<MarketQuote> {
-    let min_listing_price = raw
-        .nq
-        .min_listing
-        .as_ref()
-        .and_then(|scope| scope.region.as_ref())
-        .and_then(|region| region.price);
-    let recent_purchase_price = raw
-        .nq
-        .recent_purchase
-        .as_ref()
-        .and_then(|scope| scope.region.as_ref())
-        .and_then(|region| region.price);
-    let average_sale_price = raw
-        .nq
-        .average_sale_price
-        .as_ref()
-        .and_then(|scope| scope.region.as_ref())
-        .and_then(|region| region.price);
-    let unit_price =
-        first_positive(&[min_listing_price, recent_purchase_price, average_sale_price])?;
-    let basis = if min_listing_price.is_some() {
-        "最低挂单"
-    } else if recent_purchase_price.is_some() {
-        "近期成交"
-    } else {
-        "平均成交"
-    };
+fn market_quote_from_shared(quote: SharedMarketQuote) -> Option<MarketQuote> {
     Some(MarketQuote {
-        item_id: raw.item_id,
-        unit_price,
-        basis: basis.to_string(),
+        item_id: quote.item_id,
+        unit_price: quote.unit_price()?,
+        basis: quote.basis().unwrap_or("缓存报价").to_string(),
+        updated_at: quote.updated_at,
+        daily_sales: quote.daily_sales(),
+        nq_unit_price: quote.nq.unit_price,
+        hq_unit_price: quote.hq.unit_price,
+        nq_daily_sales: quote.nq.daily_sales,
+        hq_daily_sales: quote.hq.daily_sales,
     })
 }
 
-pub(super) async fn fetch_market_quotes(
-    item_ids_key: String,
-) -> Result<HashMap<u32, MarketQuote>, String> {
+fn market_item_ids_from_key(item_ids_key: &str) -> Vec<u32> {
     let item_ids = item_ids_key
         .split(',')
         .filter_map(|item_id| item_id.parse::<u32>().ok())
         .filter(|item_id| *item_id > 0)
         .collect::<Vec<_>>();
-    let mut result = HashMap::new();
+    item_ids
+}
 
-    for chunk in item_ids.chunks(100) {
-        let ids = chunk
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let url = format!(
-            "{UNIVERSALIS_BASE_URL}/api/v2/aggregated/{}/{}",
-            urlencoding::encode(MARKET_WORLD_DC_REGION),
-            ids
-        );
-        let response = Request::get(&url)
-            .send()
-            .await
-            .map_err(|error| format!("Universalis {error}"))?;
-        if !response.ok() {
-            return Err(format!("Universalis {}", response.status()));
-        }
-        let json = response
-            .json::<UniversalisAggregatedResponse>()
-            .await
-            .map_err(|error| format!("Universalis {error}"))?;
-        for raw in json.results {
-            if let Some(quote) = normalize_market_quote(raw) {
-                result.insert(quote.item_id, quote);
-            }
+pub(super) async fn load_cached_crafting_market_quotes(
+    item_ids_key: &str,
+) -> Result<HashMap<u32, MarketQuote>, String> {
+    let item_ids = market_item_ids_from_key(item_ids_key);
+    Ok(load_cached_market_quotes(&item_ids)
+        .await?
+        .into_iter()
+        .filter_map(|(item_id, quote)| {
+            market_quote_from_shared(quote).map(|quote| (item_id, quote))
+        })
+        .collect())
+}
+
+pub(super) async fn fetch_market_quotes(
+    item_ids_key: String,
+    force: bool,
+) -> Result<HashMap<u32, MarketQuote>, String> {
+    let item_ids = market_item_ids_from_key(&item_ids_key);
+    let refreshed = refresh_market_quotes(&item_ids, force).await;
+    let quotes = refreshed
+        .quotes
+        .into_iter()
+        .filter_map(|(item_id, quote)| {
+            market_quote_from_shared(quote).map(|quote| (item_id, quote))
+        })
+        .collect::<HashMap<_, _>>();
+    if quotes.is_empty() {
+        if let Some(error) = refreshed.error {
+            return Err(error);
         }
     }
-
-    Ok(result)
+    Ok(quotes)
 }
 
 pub(super) fn market_cost(
@@ -708,9 +684,6 @@ pub(super) fn market_meta(
     quotes_state: Option<&Result<HashMap<u32, MarketQuote>, String>>,
     loading: bool,
 ) -> String {
-    if loading {
-        return format!("估价载入中 · {MARKET_WORLD_DC_REGION}");
-    }
     match quotes_state {
         Some(Err(_)) => "估价失败".to_string(),
         Some(Ok(quotes)) => quotes
@@ -723,8 +696,20 @@ pub(super) fn market_meta(
                     quote.basis
                 )
             })
-            .unwrap_or_else(|| "暂无市场价格".to_string()),
-        None => "暂无市场价格".to_string(),
+            .unwrap_or_else(|| {
+                if loading {
+                    format!("估价载入中 · {MARKET_WORLD_DC_REGION}")
+                } else {
+                    "暂无市场价格".to_string()
+                }
+            }),
+        None => {
+            if loading {
+                format!("估价载入中 · {MARKET_WORLD_DC_REGION}")
+            } else {
+                "暂无市场价格".to_string()
+            }
+        }
     }
 }
 
@@ -833,6 +818,7 @@ pub(super) fn ItemIcon(icon: u32, #[props(default = "md")] size: &'static str) -
     }));
     let size_class = match size {
         "sm" => "h-5 w-5",
+        "tree" => "h-6 w-6",
         "lg" => "h-10 w-10",
         _ => "h-7 w-7",
     };
@@ -1207,6 +1193,16 @@ pub(super) fn NodeDetailDialog(
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4",
             role: "dialog",
             aria_modal: "true",
+            tabindex: "-1",
+            autofocus: true,
+            onkeydown: move |event| {
+                if matches!(
+                    dialog_key_action(&event, true),
+                    Some(DialogKeyAction::Confirm | DialogKeyAction::Close)
+                ) {
+                    on_close.call(());
+                }
+            },
             onclick: move |_| on_close.call(()),
             div {
                 class: "max-h-[min(680px,calc(100vh-2rem))] w-full max-w-md overflow-hidden rounded-md border bg-card shadow-xl",
@@ -1759,10 +1755,11 @@ pub fn CraftingPage() -> Element {
     let craft_data = use_resource(load_craft_data);
     let mut query = use_signal(|| read_search_param("q").unwrap_or_default());
     let mut craft_type = use_signal(|| parse_craft_type_param(read_search_param("type")));
-    let mut selected_recipe_id = use_signal(|| parse_recipe_param(read_search_param("recipe")));
+    let initial_recipe_id = parse_recipe_param(read_search_param("recipe"));
+    let mut selected_recipe_id = use_signal(|| initial_recipe_id);
     let mut recipe_linked = use_signal(|| selected_recipe_id().is_some());
     let mut detail_target = use_signal(|| None::<DetailTarget>);
-    let mut collapsed = use_signal(HashSet::<String>::new);
+    let mut collapsed = use_signal(|| load_collapsed_state(initial_recipe_id));
     let mut source_choices = use_signal(HashMap::<u32, SourceChoice>::new);
     let mut market_priority_snapshot = use_signal(|| None::<HashMap<u32, SourceChoice>>);
     let mut side_tab = use_signal(|| "materials");
@@ -1810,13 +1807,28 @@ pub fn CraftingPage() -> Element {
         .map(|data| build_material_plan(data, &materials, &source_choices(), market_priority))
         .unwrap_or_else(MaterialPlan::empty);
     let next_market_key = market_item_ids_key(&material_plan);
+    let market_refresh_icon_kind = if market_loading() {
+        IconKind::LoaderCircle
+    } else {
+        IconKind::RotateCcw
+    };
+    let market_refresh_icon_class: &'static str = if market_loading() {
+        "h-3 w-3 animate-spin"
+    } else {
+        "h-3 w-3"
+    };
     if market_quotes_key() != next_market_key {
         market_quotes_key.set(next_market_key.clone());
         market_quotes.set(None);
         if let Some(key) = next_market_key {
             market_loading.set(true);
             spawn_local(async move {
-                let result = fetch_market_quotes(key.clone()).await;
+                if let Ok(cached) = load_cached_crafting_market_quotes(&key).await {
+                    if !cached.is_empty() {
+                        market_quotes.set(Some((key.clone(), Ok(cached))));
+                    }
+                }
+                let result = fetch_market_quotes(key.clone(), false).await;
                 market_quotes.set(Some((key, result)));
                 market_loading.set(false);
             });
@@ -1837,7 +1849,7 @@ pub fn CraftingPage() -> Element {
         selected_recipe_id.set(Some(recipe.id));
         recipe_linked.set(true);
         detail_target.set(None);
-        collapsed.set(HashSet::new());
+        collapsed.set(load_collapsed_state(Some(recipe.id)));
         source_choices.set(HashMap::new());
         market_priority_snapshot.set(None);
         write_search_params(&query(), craft_type(), Some(recipe.id));
@@ -1849,6 +1861,7 @@ pub fn CraftingPage() -> Element {
         } else {
             next.insert(key);
         }
+        persist_collapsed_state(selected_recipe_id(), &next);
         collapsed.set(next);
     };
     let choice_data = data.clone();
@@ -2257,13 +2270,33 @@ pub fn CraftingPage() -> Element {
                                                         Icon { kind: IconKind::Coins, class: "h-4 w-4 text-[#1d4ed8]" }
                                                         "市场购买"
                                                     }
-                                                    div { class: "text-xs font-medium text-muted-foreground",
-                                                        if market_loading() {
-                                                            "估价载入中"
-                                                        } else if market_cost_value.total > 0 {
+                                                    div { class: "flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+                                                        if market_cost_value.priced > 0 {
                                                             "估 {format_integer(market_cost_value.total as f64)}G"
+                                                        } else if market_loading() {
+                                                            "估价载入中"
                                                         } else {
                                                             "区域 {MARKET_WORLD_DC_REGION}"
+                                                        }
+                                                        button {
+                                                            r#type: "button",
+                                                            class: "flex h-4 w-4 items-center justify-center rounded hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+                                                            disabled: market_loading(),
+                                                            title: "刷新市场估价",
+                                                            aria_label: "刷新市场估价",
+                                                            onclick: move |_| {
+                                                                let Some(key) = market_quotes_key() else { return; };
+                                                                market_loading.set(true);
+                                                                spawn_local(async move {
+                                                                    let result = fetch_market_quotes(key.clone(), true).await;
+                                                                    market_quotes.set(Some((key, result)));
+                                                                    market_loading.set(false);
+                                                                });
+                                                            },
+                                                            Icon {
+                                                                kind: market_refresh_icon_kind,
+                                                                class: market_refresh_icon_class,
+                                                            }
                                                         }
                                                     }
                                                 }

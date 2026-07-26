@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -8,8 +9,9 @@ use serde_json::Value;
 
 use super::crafting::{
     DetailTarget, ExchangeGroupPanel, ExchangePlanGroup, ItemIcon, MaterialCost, MaterialPlanEntry,
-    MaterialPlanRow, NodeDetailDialog, build_material_plan, fetch_market_quotes, leaf_tone_class,
-    market_cost, market_item_ids_key, market_meta, materialize_market_priority, recipe_level_label,
+    MaterialPlanRow, NodeDetailDialog, build_material_plan, fetch_market_quotes, is_marketable,
+    leaf_tone_class, load_cached_crafting_market_quotes, market_cost, market_item_ids_key,
+    market_meta, materialize_market_priority, recipe_level_label, uses_market_source,
 };
 use crate::app::data::{
     CRAFT_TYPE_ABBRS, CRAFT_TYPE_NAMES, CraftDataEngine, build_tree, collapse_key,
@@ -17,19 +19,32 @@ use crate::app::data::{
     summarize_materials,
 };
 use crate::app::icons::{Icon, IconKind};
+use crate::app::market::{
+    MARKET_REGION as MARKET_WORLD_DC_REGION, MarketQuote as SharedMarketQuote,
+    SalesWindow as SharedSalesWindow, load_cached_market_quotes, refresh_market_quotes,
+};
 use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, DialogKeyAction, EmptyState,
+    dialog_key_action, input_class,
 };
 use crate::app::utils::{cx, format_integer};
-use xiv_companion::{CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummary, SourceChoice};
+use xiv_companion::{
+    CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummary, SourceChoice,
+};
 
 const NOTES_STORAGE_KEY: &str = "xiv-companion-notes-v1";
-const MARKET_WORLD_DC_REGION: &str = "中国";
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct SourcePlanContext {
     choices: HashMap<u32, SourceChoice>,
     market_priority: bool,
+}
+
+// 折叠按钮上的"直接购买更划算"建议(纯展示,不改变任何状态)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BuySuggestion {
+    buy: u64,
+    craft: u64,
 }
 const CRYSTAL_ELEMENTS: [&str; 6] = ["火", "冰", "风", "土", "雷", "水"];
 const CRYSTAL_TIERS: [&str; 3] = ["碎晶", "水晶", "晶簇"];
@@ -97,6 +112,8 @@ struct NotesState {
     items: BTreeMap<String, NoteItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    expanded_folders: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,6 +244,7 @@ fn create_default_state() -> NotesState {
         tree: Vec::new(),
         items: BTreeMap::new(),
         active_item_id: None,
+        expanded_folders: BTreeSet::new(),
     }
 }
 
@@ -236,6 +254,15 @@ fn collect_page_ids(node: &NoteTreeNode, result: &mut Vec<String>) {
     }
     for child in &node.children {
         collect_page_ids(child, result);
+    }
+}
+
+fn collect_folder_ids(nodes: &[NoteTreeNode], result: &mut HashSet<String>) {
+    for node in nodes {
+        if node.kind == "folder" {
+            result.insert(node.id.clone());
+            collect_folder_ids(&node.children, result);
+        }
     }
 }
 
@@ -334,16 +361,344 @@ fn delete_tree_node(nodes: &[NoteTreeNode], node_id: &str) -> (Vec<NoteTreeNode>
     (next_nodes, removed_pages)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NotesViewMode {
-    Summary,
-    Items,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeItemMeta {
+    item_id: u32,
     icon: u32,
     amount: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TreeMarketQuote {
+    unit_price: Option<u32>,
+    updated_at: Option<i64>,
+    daily_sales: Option<f64>,
+    sales_window: Option<SalesTrendWindow>,
+    nq: TreeMarketQualityQuote,
+    hq: TreeMarketQualityQuote,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TreeMarketQualityQuote {
+    unit_price: Option<u32>,
+    daily_sales: Option<f64>,
+    sales_window: Option<SalesTrendWindow>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SalesTrendWindow {
+    recent: f64,
+    previous: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TreeMarketEstimate {
+    total: u64,
+    priced: usize,
+    missing: usize,
+    loading: bool,
+    failed: bool,
+    error: Option<String>,
+    updated_at: Option<i64>,
+    daily_sales: Option<f64>,
+    sales_window: Option<SalesTrendWindow>,
+    nq: TreeMarketQualityEstimate,
+    hq: TreeMarketQualityEstimate,
+    item_ids: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TreeMarketQualityEstimate {
+    total: u64,
+    priced: usize,
+    missing: usize,
+    daily_sales: Option<f64>,
+    sales_window: Option<SalesTrendWindow>,
+}
+
+fn sales_window_from_shared(window: SharedSalesWindow) -> SalesTrendWindow {
+    SalesTrendWindow {
+        recent: window.recent,
+        previous: window.previous,
+    }
+}
+
+fn tree_market_quote_from_shared(quote: SharedMarketQuote) -> TreeMarketQuote {
+    TreeMarketQuote {
+        unit_price: quote.unit_price(),
+        updated_at: quote.updated_at,
+        daily_sales: quote.daily_sales(),
+        sales_window: quote.sales_window().map(sales_window_from_shared),
+        nq: TreeMarketQualityQuote {
+            unit_price: quote.nq.unit_price,
+            daily_sales: quote.nq.daily_sales,
+            sales_window: quote.nq.sales_window.map(sales_window_from_shared),
+        },
+        hq: TreeMarketQualityQuote {
+            unit_price: quote.hq.unit_price,
+            daily_sales: quote.hq.daily_sales,
+            sales_window: quote.hq.sales_window.map(sales_window_from_shared),
+        },
+    }
+}
+
+fn request_tree_market_quotes(
+    item_ids: Vec<u32>,
+    mut quotes: Signal<HashMap<u32, TreeMarketQuote>>,
+    mut loading: Signal<HashSet<u32>>,
+    mut failed: Signal<HashMap<u32, String>>,
+    force: bool,
+) {
+    let mut item_ids = item_ids
+        .into_iter()
+        .filter(|item_id| *item_id > 0)
+        .collect::<Vec<_>>();
+    item_ids.sort_unstable();
+    item_ids.dedup();
+    if item_ids.is_empty() {
+        return;
+    }
+
+    let mut next_failed = failed();
+    for item_id in &item_ids {
+        next_failed.remove(item_id);
+    }
+    failed.set(next_failed);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut loading_ids = item_ids.clone();
+        if !force {
+            if let Ok(cached) = load_cached_market_quotes(&item_ids).await {
+                loading_ids.retain(|item_id| !cached.contains_key(item_id));
+                if !cached.is_empty() {
+                    let mut next_quotes = quotes();
+                    next_quotes.extend(
+                        cached.into_iter().map(|(item_id, quote)| {
+                            (item_id, tree_market_quote_from_shared(quote))
+                        }),
+                    );
+                    quotes.set(next_quotes);
+                }
+            }
+        }
+        if !loading_ids.is_empty() {
+            let mut next_loading = loading();
+            next_loading.extend(loading_ids);
+            loading.set(next_loading);
+        }
+        let refreshed = refresh_market_quotes(&item_ids, force).await;
+        if !refreshed.quotes.is_empty() {
+            let mut next_quotes = quotes();
+            next_quotes.extend(
+                refreshed
+                    .quotes
+                    .into_iter()
+                    .map(|(item_id, quote)| (item_id, tree_market_quote_from_shared(quote))),
+            );
+            quotes.set(next_quotes);
+        }
+        let mut next_failed = failed();
+        if let Some(error) = refreshed.error {
+            for item_id in &item_ids {
+                next_failed.insert(*item_id, error.clone());
+            }
+        } else {
+            for item_id in &item_ids {
+                next_failed.remove(item_id);
+            }
+        }
+        failed.set(next_failed);
+        let mut next_loading = loading();
+        for item_id in &item_ids {
+            next_loading.remove(item_id);
+        }
+        loading.set(next_loading);
+    });
+}
+
+fn combine_market_update(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn tree_market_quality_estimate(
+    quote: Option<&TreeMarketQualityQuote>,
+    amount: u32,
+) -> TreeMarketQualityEstimate {
+    let unit_price = quote.and_then(|quote| quote.unit_price);
+    TreeMarketQualityEstimate {
+        total: unit_price
+            .map(|unit_price| unit_price as u64 * amount as u64)
+            .unwrap_or_default(),
+        priced: usize::from(unit_price.is_some()),
+        missing: usize::from(unit_price.is_none()),
+        daily_sales: quote.and_then(|quote| quote.daily_sales),
+        sales_window: quote.and_then(|quote| quote.sales_window),
+    }
+}
+
+fn add_tree_market_quality_estimate(
+    target: &mut TreeMarketQualityEstimate,
+    child: &TreeMarketQualityEstimate,
+) {
+    target.total = target.total.saturating_add(child.total);
+    target.priced += child.priced;
+    target.missing += child.missing;
+    if let Some(daily_sales) = child.daily_sales {
+        target.daily_sales = Some(target.daily_sales.unwrap_or_default() + daily_sales);
+    }
+    if let Some(child_window) = child.sales_window {
+        let window = target.sales_window.get_or_insert_default();
+        window.recent += child_window.recent;
+        window.previous += child_window.previous;
+    }
+}
+
+fn collect_tree_market_estimates(
+    nodes: &[NoteTreeNode],
+    item_meta: &HashMap<String, TreeItemMeta>,
+    quotes: &HashMap<u32, TreeMarketQuote>,
+    loading: &HashSet<u32>,
+    failed: &HashMap<u32, String>,
+) -> HashMap<String, TreeMarketEstimate> {
+    fn collect_node(
+        node: &NoteTreeNode,
+        item_meta: &HashMap<String, TreeItemMeta>,
+        quotes: &HashMap<u32, TreeMarketQuote>,
+        loading: &HashSet<u32>,
+        failed: &HashMap<u32, String>,
+        result: &mut HashMap<String, TreeMarketEstimate>,
+    ) -> TreeMarketEstimate {
+        let estimate = if node.kind == "folder" {
+            let mut estimate = TreeMarketEstimate::default();
+            for child in &node.children {
+                let child = collect_node(child, item_meta, quotes, loading, failed, result);
+                estimate.total = estimate.total.saturating_add(child.total);
+                estimate.priced += child.priced;
+                estimate.missing += child.missing;
+                estimate.loading |= child.loading;
+                estimate.failed |= child.failed;
+                if estimate.error.is_none() {
+                    estimate.error = child.error.clone();
+                }
+                estimate.updated_at = combine_market_update(estimate.updated_at, child.updated_at);
+                if let Some(daily_sales) = child.daily_sales {
+                    estimate.daily_sales =
+                        Some(estimate.daily_sales.unwrap_or_default() + daily_sales);
+                }
+                if let Some(child_window) = child.sales_window {
+                    let window = estimate.sales_window.get_or_insert_default();
+                    window.recent += child_window.recent;
+                    window.previous += child_window.previous;
+                }
+                add_tree_market_quality_estimate(&mut estimate.nq, &child.nq);
+                add_tree_market_quality_estimate(&mut estimate.hq, &child.hq);
+                estimate.item_ids.extend(child.item_ids);
+            }
+            estimate.item_ids.sort_unstable();
+            estimate.item_ids.dedup();
+            estimate
+        } else if let Some(meta) = item_meta.get(&node.id) {
+            let quote = quotes.get(&meta.item_id);
+            let unit_price = quote.and_then(|quote| quote.unit_price);
+            let nq = tree_market_quality_estimate(quote.map(|quote| &quote.nq), meta.amount);
+            let hq = tree_market_quality_estimate(quote.map(|quote| &quote.hq), meta.amount);
+            TreeMarketEstimate {
+                total: unit_price
+                    .map(|unit_price| unit_price as u64 * meta.amount as u64)
+                    .unwrap_or_default(),
+                priced: usize::from(unit_price.is_some()),
+                missing: usize::from(unit_price.is_none()),
+                loading: loading.contains(&meta.item_id),
+                failed: failed.contains_key(&meta.item_id),
+                error: failed.get(&meta.item_id).cloned(),
+                updated_at: quote.and_then(|quote| quote.updated_at),
+                daily_sales: quote.and_then(|quote| quote.daily_sales),
+                sales_window: quote.and_then(|quote| quote.sales_window),
+                nq,
+                hq,
+                item_ids: vec![meta.item_id],
+            }
+        } else {
+            TreeMarketEstimate::default()
+        };
+        result.insert(node.id.clone(), estimate.clone());
+        estimate
+    }
+
+    let mut result = HashMap::new();
+    for node in nodes {
+        collect_node(node, item_meta, quotes, loading, failed, &mut result);
+    }
+    result
+}
+
+fn tree_market_quality_label(
+    quality: &TreeMarketQualityEstimate,
+    estimate: &TreeMarketEstimate,
+) -> String {
+    if quality.priced > 0 {
+        let prefix = if quality.missing > 0 { "≥" } else { "" };
+        format!("{prefix}{}G", format_integer(quality.total as f64))
+    } else if estimate.loading {
+        "载入中".to_string()
+    } else if estimate.failed {
+        "刷新失败".to_string()
+    } else if estimate.item_ids.is_empty() {
+        "—".to_string()
+    } else {
+        "暂无".to_string()
+    }
+}
+
+fn tree_market_updated_label(updated_at: Option<i64>) -> String {
+    let Some(updated_at) = updated_at else {
+        return "未更新".to_string();
+    };
+    let timestamp = if updated_at < 10_000_000_000 {
+        updated_at.saturating_mul(1_000)
+    } else {
+        updated_at
+    };
+    let elapsed_seconds = ((js_sys::Date::now() - timestamp as f64) / 1_000.0)
+        .max(0.0)
+        .floor() as u64;
+    if elapsed_seconds < 60 {
+        "刚刚".to_string()
+    } else if elapsed_seconds < 3_600 {
+        format!("{} 分前", elapsed_seconds / 60)
+    } else if elapsed_seconds < 86_400 {
+        format!("{} 小时前", elapsed_seconds / 3_600)
+    } else {
+        format!("{} 天前", elapsed_seconds / 86_400)
+    }
+}
+
+fn tree_market_sales_label(daily_sales: f64) -> String {
+    if daily_sales >= 10.0 {
+        format!("{:.0}", daily_sales)
+    } else {
+        let label = format!("{daily_sales:.1}");
+        label
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
+}
+
+fn tree_market_sales_trend(window: SalesTrendWindow) -> Option<Ordering> {
+    if window.recent <= 0.0 && window.previous <= 0.0 {
+        None
+    } else if window.recent > window.previous * 1.1 {
+        Some(Ordering::Greater)
+    } else if window.recent < window.previous * 0.9 {
+        Some(Ordering::Less)
+    } else {
+        Some(Ordering::Equal)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -353,6 +708,20 @@ struct TreeContextMenuState {
     is_folder: bool,
     x: f64,
     y: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TreeDropPosition {
+    Before,
+    Inside,
+    After,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TreeDropTarget {
+    node_id: String,
+    position: TreeDropPosition,
+    depth: u32,
 }
 
 fn is_entry_node(node: &NoteTreeNode) -> bool {
@@ -396,21 +765,6 @@ fn analysis_selection(item: &NoteItem, title: String) -> CraftAnalysisSelection 
         }],
         source_choices: item.source_choices.clone(),
     }
-}
-
-fn find_parent_folder_id(nodes: &[NoteTreeNode], node_id: &str) -> Option<String> {
-    for node in nodes {
-        if node.kind != "folder" {
-            continue;
-        }
-        if node.children.iter().any(|child| child.id == node_id) {
-            return Some(node.id.clone());
-        }
-        if let Some(parent_id) = find_parent_folder_id(&node.children, node_id) {
-            return Some(parent_id);
-        }
-    }
-    None
 }
 
 fn select_entry_ids(
@@ -484,50 +838,56 @@ fn take_tree_node(
     (next, removed)
 }
 
-fn insert_tree_node(
+fn insert_tree_node_relative(
     nodes: &[NoteTreeNode],
-    target_id: Option<&str>,
-    into_folder: bool,
+    target_id: &str,
+    position: TreeDropPosition,
     node_to_add: NoteTreeNode,
-) -> Vec<NoteTreeNode> {
-    if target_id.is_none() {
-        let mut next = nodes.to_vec();
-        next.push(node_to_add);
-        return next;
-    }
-    let target_id = target_id.unwrap();
+) -> (Vec<NoteTreeNode>, bool) {
     let mut next = Vec::with_capacity(nodes.len() + 1);
-    for node in nodes {
+    for (index, node) in nodes.iter().enumerate() {
         if node.id == target_id {
-            if into_folder && node.kind == "folder" {
-                let mut target = node.clone();
-                target.children.push(node_to_add.clone());
-                next.push(target);
-            } else {
-                next.push(node_to_add.clone());
-                next.push(node.clone());
+            match position {
+                TreeDropPosition::Before => {
+                    next.push(node_to_add);
+                    next.push(node.clone());
+                }
+                TreeDropPosition::Inside if node.kind == "folder" => {
+                    let mut target = node.clone();
+                    target.children.push(node_to_add);
+                    next.push(target);
+                }
+                TreeDropPosition::After => {
+                    next.push(node.clone());
+                    next.push(node_to_add);
+                }
+                TreeDropPosition::Inside => return (nodes.to_vec(), false),
             }
-            continue;
+            next.extend_from_slice(&nodes[index + 1..]);
+            return (next, true);
         }
         let mut node = node.clone();
         if node.kind == "folder" {
-            node.children = insert_tree_node(
-                &node.children,
-                Some(target_id),
-                into_folder,
-                node_to_add.clone(),
-            );
+            let (children, inserted) =
+                insert_tree_node_relative(&node.children, target_id, position, node_to_add.clone());
+            node.children = children;
+            next.push(node);
+            if inserted {
+                next.extend_from_slice(&nodes[index + 1..]);
+                return (next, true);
+            }
+            continue;
         }
         next.push(node);
     }
-    next
+    (next, false)
 }
 
 fn move_tree_node(
     nodes: &[NoteTreeNode],
     source_id: &str,
     target_id: Option<&str>,
-    into_folder: bool,
+    position: TreeDropPosition,
 ) -> Vec<NoteTreeNode> {
     let source = find_tree_node(nodes, Some(source_id));
     let target_is_descendant = target_id.is_some_and(|target| {
@@ -539,7 +899,13 @@ fn move_tree_node(
     let (without_source, Some(source)) = take_tree_node(nodes, source_id) else {
         return nodes.to_vec();
     };
-    insert_tree_node(&without_source, target_id, into_folder, source)
+    let Some(target_id) = target_id else {
+        let mut next = without_source;
+        next.push(source);
+        return next;
+    };
+    let (next, inserted) = insert_tree_node_relative(&without_source, target_id, position, source);
+    if inserted { next } else { nodes.to_vec() }
 }
 
 #[cfg(test)]
@@ -580,7 +946,7 @@ mod note_tree_tests {
     #[test]
     fn moving_an_item_into_a_folder_preserves_the_other_nodes() {
         let tree = vec![item("a"), folder("group", vec![item("b")]), item("c")];
-        let moved = move_tree_node(&tree, "c", Some("group"), true);
+        let moved = move_tree_node(&tree, "c", Some("group"), TreeDropPosition::Inside);
         assert_eq!(moved.len(), 2);
         assert_eq!(
             moved[1]
@@ -593,9 +959,113 @@ mod note_tree_tests {
     }
 
     #[test]
+    fn moving_an_item_before_another_item_reorders_the_siblings() {
+        let tree = vec![item("a"), item("b"), item("c")];
+        let moved = move_tree_node(&tree, "c", Some("a"), TreeDropPosition::Before);
+        assert_eq!(
+            moved
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
+        );
+    }
+
+    #[test]
+    fn moving_a_nested_item_after_a_root_item_moves_it_to_the_root() {
+        let tree = vec![folder("group", vec![item("a")]), item("b")];
+        let moved = move_tree_node(&tree, "a", Some("b"), TreeDropPosition::After);
+        assert!(moved[0].children.is_empty());
+        assert_eq!(
+            moved
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["group", "b", "a"]
+        );
+    }
+
+    #[test]
+    fn moving_a_root_item_after_a_nested_item_moves_it_into_that_parent() {
+        let tree = vec![item("a"), folder("group", vec![item("b")])];
+        let moved = move_tree_node(&tree, "a", Some("b"), TreeDropPosition::After);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(
+            moved[0]
+                .children
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+    }
+
+    #[test]
+    fn drop_zones_distinguish_sibling_and_folder_destinations() {
+        assert_eq!(tree_drop_position(0.1, true), TreeDropPosition::Before);
+        assert_eq!(tree_drop_position(0.5, true), TreeDropPosition::Inside);
+        assert_eq!(tree_drop_position(0.9, true), TreeDropPosition::After);
+        assert_eq!(tree_drop_position(0.4, false), TreeDropPosition::Before);
+        assert_eq!(tree_drop_position(0.6, false), TreeDropPosition::After);
+    }
+
+    #[test]
+    fn folder_market_estimate_updates_after_a_child_moves_into_it() {
+        let tree = vec![folder("group", vec![item("a")]), item("b")];
+        let item_meta = HashMap::from([
+            (
+                "a".to_string(),
+                TreeItemMeta {
+                    item_id: 10,
+                    icon: 1,
+                    amount: 2,
+                },
+            ),
+            (
+                "b".to_string(),
+                TreeItemMeta {
+                    item_id: 20,
+                    icon: 2,
+                    amount: 3,
+                },
+            ),
+        ]);
+        let quote = |unit_price| TreeMarketQuote {
+            unit_price: Some(unit_price),
+            nq: TreeMarketQualityQuote {
+                unit_price: Some(unit_price),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let quotes = HashMap::from([(10, quote(100)), (20, quote(200))]);
+        let before = collect_tree_market_estimates(
+            &tree,
+            &item_meta,
+            &quotes,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(before["group"].nq.total, 200);
+
+        let moved = move_tree_node(&tree, "b", Some("group"), TreeDropPosition::Inside);
+        let after = collect_tree_market_estimates(
+            &moved,
+            &item_meta,
+            &quotes,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(after["group"].nq.total, 800);
+    }
+
+    #[test]
     fn a_folder_cannot_be_moved_into_its_descendant() {
         let tree = vec![folder("outer", vec![folder("inner", vec![item("a")])])];
-        assert_eq!(move_tree_node(&tree, "outer", Some("inner"), true), tree);
+        assert_eq!(
+            move_tree_node(&tree, "outer", Some("inner"), TreeDropPosition::Inside,),
+            tree
+        );
     }
 
     #[test]
@@ -615,6 +1085,132 @@ mod note_tree_tests {
         assert_eq!(state.items.len(), 1);
         assert_eq!(state.active_item_id.as_deref(), Some("item-a"));
         assert_eq!(state.items["item-a"].amount, 3);
+    }
+
+    #[test]
+    fn expanded_folders_round_trip_and_discard_missing_ids() {
+        let state = normalize_state(serde_json::json!({
+            "tree": [{
+                "id": "group",
+                "kind": "folder",
+                "title": "目录",
+                "children": [{ "id": "item-a", "kind": "item", "title": "物品" }]
+            }],
+            "items": {
+                "item-a": { "id": "item-a", "recipeId": 10, "itemId": 20, "amount": 1 }
+            },
+            "expandedFolders": ["group", "missing"]
+        }));
+        assert_eq!(
+            state.expanded_folders,
+            BTreeSet::from(["group".to_string()])
+        );
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["expandedFolders"], serde_json::json!(["group"]));
+    }
+
+    #[test]
+    fn folder_estimate_sums_descendants_and_uses_oldest_update() {
+        let tree = vec![folder("group", vec![item("a"), item("b")])];
+        let item_meta = HashMap::from([
+            (
+                "a".to_string(),
+                TreeItemMeta {
+                    item_id: 20,
+                    icon: 1,
+                    amount: 2,
+                },
+            ),
+            (
+                "b".to_string(),
+                TreeItemMeta {
+                    item_id: 30,
+                    icon: 2,
+                    amount: 3,
+                },
+            ),
+        ]);
+        let quotes = HashMap::from([
+            (
+                20,
+                TreeMarketQuote {
+                    unit_price: Some(100),
+                    updated_at: Some(2_000),
+                    daily_sales: Some(1.5),
+                    sales_window: Some(SalesTrendWindow {
+                        recent: 12.0,
+                        previous: 8.0,
+                    }),
+                    nq: TreeMarketQualityQuote {
+                        unit_price: Some(100),
+                        daily_sales: Some(1.0),
+                        sales_window: Some(SalesTrendWindow {
+                            recent: 8.0,
+                            previous: 6.0,
+                        }),
+                    },
+                    hq: TreeMarketQualityQuote {
+                        unit_price: Some(150),
+                        daily_sales: Some(0.5),
+                        sales_window: Some(SalesTrendWindow {
+                            recent: 4.0,
+                            previous: 2.0,
+                        }),
+                    },
+                },
+            ),
+            (
+                30,
+                TreeMarketQuote {
+                    unit_price: Some(250),
+                    updated_at: Some(1_000),
+                    daily_sales: Some(0.25),
+                    sales_window: Some(SalesTrendWindow {
+                        recent: 3.0,
+                        previous: 5.0,
+                    }),
+                    nq: TreeMarketQualityQuote {
+                        unit_price: Some(250),
+                        daily_sales: Some(0.2),
+                        sales_window: Some(SalesTrendWindow {
+                            recent: 2.0,
+                            previous: 4.0,
+                        }),
+                    },
+                    hq: TreeMarketQualityQuote {
+                        unit_price: Some(300),
+                        daily_sales: Some(0.05),
+                        sales_window: Some(SalesTrendWindow {
+                            recent: 1.0,
+                            previous: 1.0,
+                        }),
+                    },
+                },
+            ),
+        ]);
+        let estimates = collect_tree_market_estimates(
+            &tree,
+            &item_meta,
+            &quotes,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(estimates["group"].total, 950);
+        assert_eq!(estimates["group"].priced, 2);
+        assert_eq!(estimates["group"].updated_at, Some(1_000));
+        assert_eq!(estimates["group"].daily_sales, Some(1.75));
+        assert_eq!(estimates["group"].nq.total, 950);
+        assert_eq!(estimates["group"].hq.total, 1_200);
+        assert_eq!(estimates["group"].nq.daily_sales, Some(1.2));
+        assert_eq!(estimates["group"].hq.daily_sales, Some(0.55));
+        assert_eq!(
+            estimates["group"].sales_window,
+            Some(SalesTrendWindow {
+                recent: 15.0,
+                previous: 13.0,
+            })
+        );
+        assert_eq!(estimates["group"].item_ids, vec![20, 30]);
     }
 }
 
@@ -921,6 +1517,19 @@ fn normalize_item(raw: &Value, fallback_id: &str) -> Option<NoteItem> {
     })
 }
 
+fn normalize_expanded_folders(raw: &Value, tree: &[NoteTreeNode]) -> BTreeSet<String> {
+    let mut folder_ids = HashSet::new();
+    collect_folder_ids(tree, &mut folder_ids);
+    raw.get("expandedFolders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|folder_id| folder_ids.contains(*folder_id))
+        .map(str::to_string)
+        .collect()
+}
+
 fn normalize_state(raw: Value) -> NotesState {
     let fallback = create_default_state();
     let tree = raw
@@ -954,10 +1563,12 @@ fn normalize_state(raw: Value) -> NotesState {
         }
         let mut items = BTreeMap::new();
         let tree = migrate_legacy_tree(&tree, &pages, &mut items);
+        let expanded_folders = normalize_expanded_folders(&raw, &tree);
         return NotesState {
             active_item_id: first_page_id(&tree),
             tree,
             items,
+            expanded_folders,
         };
     }
 
@@ -976,10 +1587,12 @@ fn normalize_state(raw: Value) -> NotesState {
         .filter(|id| items.contains_key(*id))
         .map(str::to_string)
         .or_else(|| first_page_id(&tree));
+    let expanded_folders = normalize_expanded_folders(&raw, &tree);
     NotesState {
         tree,
         items,
         active_item_id,
+        expanded_folders,
     }
 }
 
@@ -1143,6 +1756,130 @@ fn is_crystal_resource_leaf(
     parent_item_id: Option<u32>,
 ) -> bool {
     parent_item_id.is_some() && node.children.is_empty() && is_crystal_resource(data, node.item_id)
+}
+
+// "直接购买更划算"建议:某个可合成节点的全部有效叶子(含已折叠节点)都是
+// 市场来源且报价齐全时,比较直接买它与按当前来源分解的成本。晶石不参与
+// "全市场"判定,但按市场价计入成本。纯展示建议,不改变任何状态。
+fn market_collapse_suggestions(
+    data: &CraftDataPackage,
+    engine: &CraftDataEngine,
+    targets: &[CraftSummaryTarget],
+    choices: &HashMap<u32, SourceChoice>,
+    market_priority: bool,
+    quotes: &HashMap<u32, TreeMarketQuote>,
+) -> HashMap<u32, BuySuggestion> {
+    let mut suggestions = HashMap::new();
+    for target in targets {
+        let tree = build_tree(engine, target.item_id, target.amount.max(1));
+        let collapsed = collapsed_keys_for_tree(&tree, &target.collapsed.iter().cloned().collect());
+        collect_buy_suggestions(
+            data,
+            &tree,
+            &collapsed,
+            0,
+            choices,
+            market_priority,
+            quotes,
+            &mut suggestions,
+        );
+    }
+    suggestions
+}
+
+// 子树按当前折叠形状的有效叶子成本;任一叶子不是市场来源或缺少报价时返回 None。
+fn market_subtree_cost(
+    data: &CraftDataPackage,
+    node: &CraftTreeNode,
+    collapsed: &HashSet<String>,
+    depth: u32,
+    choices: &HashMap<u32, SourceChoice>,
+    market_priority: bool,
+    quotes: &HashMap<u32, TreeMarketQuote>,
+) -> Option<u64> {
+    let is_leaf = node.children.is_empty() || collapsed.contains(&collapse_key(node.item_id, depth));
+    if is_leaf {
+        let unit_price = quotes
+            .get(&node.item_id)
+            .and_then(|quote| quote.unit_price);
+        if !is_crystal_resource(data, node.item_id) {
+            let sources = data
+                .sources
+                .get(&node.item_id.to_string())
+                .cloned()
+                .unwrap_or_default();
+            let marketable = is_marketable(get_item(data, node.item_id));
+            if !uses_market_source(marketable, &sources, choices.get(&node.item_id), market_priority)
+            {
+                return None;
+            }
+        }
+        return unit_price.map(|price| u64::from(price) * u64::from(node.amount_needed));
+    }
+    let mut total = 0u64;
+    for child in &node.children {
+        total +=
+            market_subtree_cost(data, child, collapsed, depth + 1, choices, market_priority, quotes)?;
+    }
+    Some(total)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_buy_suggestions(
+    data: &CraftDataPackage,
+    node: &CraftTreeNode,
+    collapsed: &HashSet<String>,
+    depth: u32,
+    choices: &HashMap<u32, SourceChoice>,
+    market_priority: bool,
+    quotes: &HashMap<u32, TreeMarketQuote>,
+    suggestions: &mut HashMap<u32, BuySuggestion>,
+) {
+    if node.children.is_empty() || collapsed.contains(&collapse_key(node.item_id, depth)) {
+        return;
+    }
+    let buy = if is_marketable(get_item(data, node.item_id)) {
+        quotes
+            .get(&node.item_id)
+            .and_then(|quote| quote.unit_price)
+            .map(|price| u64::from(price) * u64::from(node.amount_needed))
+    } else {
+        None
+    };
+    let craft = market_subtree_cost(data, node, collapsed, depth, choices, market_priority, quotes);
+    if let (Some(buy), Some(craft)) = (buy, craft)
+        && buy < craft
+    {
+        suggestions
+            .entry(node.item_id)
+            .and_modify(|suggestion: &mut BuySuggestion| {
+                if craft - buy > suggestion.craft - suggestion.buy {
+                    *suggestion = BuySuggestion { buy, craft };
+                }
+            })
+            .or_insert(BuySuggestion { buy, craft });
+    }
+    for child in &node.children {
+        collect_buy_suggestions(
+            data,
+            child,
+            collapsed,
+            depth + 1,
+            choices,
+            market_priority,
+            quotes,
+            suggestions,
+        );
+    }
+}
+
+fn collect_marketable_tree_items(data: &CraftDataPackage, node: &CraftTreeNode, ids: &mut Vec<u32>) {
+    if is_marketable(get_item(data, node.item_id)) {
+        ids.push(node.item_id);
+    }
+    for child in &node.children {
+        collect_marketable_tree_items(data, child, ids);
+    }
 }
 
 fn build_merged_craft_graph(data: &CraftDataPackage, roots: &[CraftGraphRoot]) -> MergedCraftGraph {
@@ -1881,7 +2618,12 @@ fn MaterialSummaryPanel(
         if let Some(key) = next_market_key {
             market_loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
-                let result = fetch_market_quotes(key.clone()).await;
+                if let Ok(cached) = load_cached_crafting_market_quotes(&key).await
+                    && !cached.is_empty()
+                {
+                    market_quotes.set(Some((key.clone(), Ok(cached))));
+                }
+                let result = fetch_market_quotes(key.clone(), false).await;
                 market_quotes.set(Some((key, result)));
                 market_loading.set(false);
             });
@@ -1900,6 +2642,16 @@ fn MaterialSummaryPanel(
     let crystal_amount = crystal_total(&data, &materials);
     let crystals = crystal_materials(&data, &materials);
     let exchange_costs = exchange_cost_summary(&data, &plan.exchange_groups);
+    let market_refresh_icon_kind = if market_loading() {
+        IconKind::LoaderCircle
+    } else {
+        IconKind::RotateCcw
+    };
+    let market_refresh_icon_class: &'static str = if market_loading() {
+        "h-3 w-3 animate-spin"
+    } else {
+        "h-3 w-3"
+    };
 
     rsx! {
         section { class: "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background",
@@ -1917,12 +2669,50 @@ fn MaterialSummaryPanel(
                         if crystal_amount > 0 {
                             Badge { variant: BadgeVariant::Outline, "晶石 {format_integer(crystal_amount as f64)}" }
                         }
+                        if !plan.market.is_empty() {
+                            Badge { variant: BadgeVariant::Outline,
+                                if market_cost_value.priced > 0 {
+                                    "估 {format_integer(market_cost_value.total as f64)}G"
+                                } else if market_loading() {
+                                    "估价载入中"
+                                } else {
+                                    "暂无报价"
+                                }
+                            }
+                            button {
+                                r#type: "button",
+                                class: "flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+                                disabled: market_loading(),
+                                title: "刷新市场估价",
+                                aria_label: "刷新市场估价",
+                                onclick: move |_| {
+                                    let Some(key) = market_quotes_key() else { return; };
+                                    market_loading.set(true);
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        let result = fetch_market_quotes(key.clone(), true).await;
+                                        market_quotes.set(Some((key, result)));
+                                        market_loading.set(false);
+                                    });
+                                },
+                                Icon {
+                                    kind: market_refresh_icon_kind,
+                                    class: market_refresh_icon_class,
+                                }
+                            }
+                        }
                     }
                 }
 
-                div { class: "mt-3 flex flex-wrap gap-2",
+                div { class: "mt-3 flex flex-wrap items-center gap-1.5",
                     label {
-                        class: "inline-flex cursor-pointer items-center gap-1.5 rounded border bg-background px-2 py-1 text-xs font-medium text-muted-foreground",
+                        class: cx([
+                            "inline-flex h-6 cursor-pointer items-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors",
+                            if market_priority {
+                                "border-[#93c5fd] bg-[#eff6ff] text-[#1d4ed8]"
+                            } else {
+                                "bg-background text-muted-foreground hover:text-foreground"
+                            },
+                        ]),
                         title: "临时让全部可交易材料按市场购买规划；直接取消会恢复开启前的来源选择，手动调整任一来源会固化当前市场方案并退出该模式。",
                         input {
                             r#type: "checkbox",
@@ -1930,42 +2720,46 @@ fn MaterialSummaryPanel(
                             class: "h-3.5 w-3.5 accent-foreground",
                             onchange: move |event| on_market_priority_change.call(event.checked()),
                         }
-                        Icon { kind: IconKind::Coins, class: "h-3.5 w-3.5 text-[#1d4ed8]" }
+                        Icon { kind: IconKind::Coins, class: "h-3.5 w-3.5" }
                         "市场优先"
                     }
-                    if crystal_amount > 0 {
-                        Badge { variant: BadgeVariant::Outline, "晶石汇总 {format_integer(crystal_amount as f64)}" }
-                    }
                     if !plan.gathering.is_empty() {
-                        Badge { variant: BadgeVariant::Success,
-                            Icon { kind: IconKind::Leaf, class: "mr-1 h-3 w-3" }
+                        span {
+                            class: "inline-flex h-6 items-center gap-1 rounded border border-emerald-200 bg-emerald-50/80 px-1.5 text-xs font-medium text-emerald-800",
+                            title: "默认通过采集获取,不计金币成本",
+                            Icon { kind: IconKind::Leaf, class: "h-3 w-3" }
                             "采集 {plan.gathering.len()}"
                         }
                     }
                     if !plan.exchange_groups.is_empty() {
-                        Badge { variant: BadgeVariant::Outline,
-                            Icon { kind: IconKind::Shuffle, class: "mr-1 h-3 w-3" }
+                        span {
+                            class: "inline-flex h-6 items-center gap-1 rounded border border-[#d7c7ff] bg-[#f7f2ff] px-1.5 text-xs font-medium text-[#6d28d9]",
+                            title: "通过兑换货币获取",
+                            Icon { kind: IconKind::Shuffle, class: "h-3 w-3" }
                             "兑换 {plan.exchange_groups.len()}"
                         }
                     }
                     if plan.gil_total > 0 {
-                        Badge { variant: BadgeVariant::Warning,
-                            Icon { kind: IconKind::Coins, class: "mr-1 h-3 w-3" }
+                        span {
+                            class: "inline-flex h-6 items-center gap-1 rounded border border-amber-200 bg-amber-50/80 px-1.5 text-xs font-medium text-amber-800",
+                            title: "金币商店合计成本",
+                            Icon { kind: IconKind::Coins, class: "h-3 w-3" }
                             "商店 {format_integer(plan.gil_total as f64)}G"
                         }
                     }
                     if !plan.market.is_empty() {
-                        Badge { variant: BadgeVariant::Outline,
-                            Icon { kind: IconKind::Coins, class: "mr-1 h-3 w-3" }
+                        span {
+                            class: "inline-flex h-6 items-center gap-1 rounded border border-[#bfdbfe] bg-[#eff6ff] px-1.5 text-xs font-medium text-[#1d4ed8]",
+                            title: "按市场购买规划的材料种数",
+                            Icon { kind: IconKind::Coins, class: "h-3 w-3" }
                             "市场 {plan.market.len()}"
                         }
                     }
-                    if market_cost_value.total > 0 {
-                        Badge { variant: BadgeVariant::Outline, "估 {format_integer(market_cost_value.total as f64)}G" }
-                    }
                     if !plan.owned.is_empty() {
-                        Badge { variant: BadgeVariant::Outline,
-                            Icon { kind: IconKind::CircleCheck, class: "mr-1 h-3 w-3" }
+                        span {
+                            class: "inline-flex h-6 items-center gap-1 rounded border border-[#d6d3d1] bg-[#f1f0ee] px-1.5 text-xs font-medium text-muted-foreground",
+                            title: "标记为已有,不计成本",
+                            Icon { kind: IconKind::CircleCheck, class: "h-3 w-3" }
                             "已拥有 {plan.owned.len()}"
                         }
                     }
@@ -2142,10 +2936,10 @@ fn MaterialSummaryPanel(
                                         "市场总计"
                                     }
                                     Badge { variant: BadgeVariant::Outline,
-                                        if market_loading() {
-                                            "估价载入中"
-                                        } else if market_cost_value.total > 0 {
+                                        if market_cost_value.priced > 0 {
                                             "估 {format_integer(market_cost_value.total as f64)}G"
+                                        } else if market_loading() {
+                                            "估价载入中"
                                         } else {
                                             "区域 {MARKET_WORLD_DC_REGION}"
                                         }
@@ -2243,11 +3037,12 @@ fn MaterialSummaryPanel(
 fn MergedCraftGraphNodeCard(
     data: Rc<CraftDataPackage>,
     node: PositionedCraftGraphNode,
+    source_plan: SourcePlanContext,
+    suggestion: Option<BuySuggestion>,
     on_toggle: EventHandler<(u32, bool)>,
 ) -> Element {
     let graph_node = node.node.clone();
     let counts_as_leaf = !graph_node.craftable || graph_node.collapsed;
-    let source_plan = use_context::<SourcePlanContext>();
     let tone_class = if counts_as_leaf {
         leaf_tone_class(
             &data,
@@ -2316,24 +3111,47 @@ fn MergedCraftGraphNodeCard(
             }
 
             if graph_node.craftable {
-                button {
-                    r#type: "button",
-                    class: "absolute right-[-12px] top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground",
-                    aria_label: if graph_node.collapsed { "继续分解" } else { "停止分解" },
-                    title: if graph_node.collapsed { "继续分解" } else { "停止分解" },
-                    "data-flow-no-drag": "true",
-                    onmousedown: move |event| event.stop_propagation(),
-                    onmouseup: move |event| event.stop_propagation(),
-                    onclick: {
-                        let graph_node = graph_node.clone();
-                        move |event| {
-                            event.stop_propagation();
-                            on_toggle.call((graph_node.item_id, !graph_node.collapsed));
+                {
+                    let toggle_hint = match suggestion {
+                        Some(suggestion) => format!(
+                            "直接购买约 {}G,比按当前来源分解(约 {}G)省约 {}G;点击停止分解",
+                            format_integer(suggestion.buy as f64),
+                            format_integer(suggestion.craft as f64),
+                            format_integer((suggestion.craft - suggestion.buy) as f64)
+                        ),
+                        None => if graph_node.collapsed { "继续分解" } else { "停止分解" }.to_string(),
+                    };
+                    rsx! {
+                        button {
+                            r#type: "button",
+                            class: cx([
+                                "absolute right-[-12px] top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border bg-background shadow-sm transition-colors",
+                                if suggestion.is_some() {
+                                    "border-[#93c5fd] text-[#1d4ed8] hover:bg-[#eff6ff]"
+                                } else {
+                                    "text-muted-foreground hover:bg-accent hover:text-foreground"
+                                },
+                            ]),
+                            aria_label: toggle_hint.clone(),
+                            title: toggle_hint,
+                            "data-flow-no-drag": "true",
+                            onmousedown: move |event| event.stop_propagation(),
+                            onmouseup: move |event| event.stop_propagation(),
+                            onclick: {
+                                let graph_node = graph_node.clone();
+                                move |event| {
+                                    event.stop_propagation();
+                                    on_toggle.call((graph_node.item_id, !graph_node.collapsed));
+                                }
+                            },
+                            Icon {
+                                kind: if graph_node.collapsed { IconKind::Plus } else { IconKind::ChevronRight },
+                                class: "h-3.5 w-3.5"
+                            }
+                            if suggestion.is_some() {
+                                span { class: "absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-[#1d4ed8] ring-1 ring-background" }
+                            }
                         }
-                    },
-                    Icon {
-                        kind: if graph_node.collapsed { IconKind::Plus } else { IconKind::ChevronRight },
-                        class: "h-3.5 w-3.5"
                     }
                 }
             }
@@ -2345,6 +3163,8 @@ fn MergedCraftGraphNodeCard(
 fn CraftSummaryGraph(
     data: Rc<CraftDataPackage>,
     roots: Vec<CraftGraphRoot>,
+    source_plan: SourcePlanContext,
+    buy_suggestions: Rc<HashMap<u32, BuySuggestion>>,
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
@@ -2355,6 +3175,8 @@ fn CraftSummaryGraph(
             data,
             root_count: roots.len(),
             layout,
+            source_plan,
+            buy_suggestions,
             on_toggle_collapsed_item,
             on_select,
         }
@@ -2366,6 +3188,8 @@ fn CraftFlowCanvas(
     data: Rc<CraftDataPackage>,
     root_count: usize,
     layout: CraftGraphLayout,
+    source_plan: SourcePlanContext,
+    buy_suggestions: Rc<HashMap<u32, BuySuggestion>>,
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_select: EventHandler<DetailTarget>,
 ) -> Element {
@@ -2498,10 +3322,13 @@ fn CraftFlowCanvas(
                 },
                 render_node: move |id: NodeId| {
                     let Some(node) = nodes_by_id.get(&id.0).cloned() else { return rsx! {}; };
+                    let suggestion = buy_suggestions.get(&node.node.item_id).copied();
                     rsx! {
                         MergedCraftGraphNodeCard {
                             data: data.clone(),
                             node,
+                            source_plan: source_plan.clone(),
+                            suggestion,
                             on_toggle: on_toggle_collapsed_item,
                         }
                     }
@@ -2522,13 +3349,10 @@ fn CraftAnalysisView(
     data: Rc<CraftDataPackage>,
     engine: CraftDataEngine,
     selection: CraftAnalysisSelection,
-    active: bool,
-    #[props(default = true)] show_actions: bool,
     source_choices: HashMap<u32, SourceChoice>,
-    on_apply_source_choices: EventHandler<HashMap<u32, SourceChoice>>,
-    on_select: EventHandler<()>,
-    on_edit: EventHandler<()>,
-    on_remove: EventHandler<()>,
+    market_priority: bool,
+    on_market_priority_change: EventHandler<bool>,
+    buy_suggestions: Rc<HashMap<u32, BuySuggestion>>,
     on_toggle_collapsed_item: EventHandler<(u32, bool)>,
     on_choose_source: EventHandler<(u32, Option<SourceChoice>)>,
     on_inspect: EventHandler<DetailTarget>,
@@ -2547,131 +3371,90 @@ fn CraftAnalysisView(
         })
         .collect::<Vec<_>>();
 
-    let mut market_priority_snapshot = use_signal(|| None::<HashMap<u32, SourceChoice>>);
-    let market_priority = market_priority_snapshot().is_some();
-    let priority_data = data.clone();
-    let priority_materials = materials
-        .iter()
-        .filter(|material| !is_crystal_resource(&data, material.item_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let choose_source = move |(item_id, choice): (u32, Option<SourceChoice>)| {
-        if let Some(snapshot) = market_priority_snapshot() {
-            market_priority_snapshot.set(None);
-            let materialized =
-                materialize_market_priority(&priority_data, &priority_materials, &snapshot);
-            let mut changes = priority_materials
-                .iter()
-                .filter_map(|material| {
-                    materialized
-                        .get(&material.item_id)
-                        .cloned()
-                        .filter(|choice| matches!(choice, SourceChoice::Market))
-                        .map(|choice| (material.item_id, choice))
-                })
-                .collect::<HashMap<_, _>>();
-            if let Some(choice) = choice {
-                changes.insert(item_id, choice);
-            }
-            on_apply_source_choices.call(changes);
-        } else {
-            on_choose_source.call((item_id, choice));
-        }
-    };
-    let priority_snapshot_choices = source_choices.clone();
-    let toggle_market_priority = move |enabled: bool| {
-        if enabled {
-            if market_priority_snapshot().is_none() {
-                market_priority_snapshot.set(Some(priority_snapshot_choices.clone()));
-            }
-        } else if market_priority_snapshot().is_some() {
-            market_priority_snapshot.set(None);
-        }
-    };
-
-    provide_context(SourcePlanContext {
+    let source_plan = SourcePlanContext {
         choices: source_choices.clone(),
         market_priority,
-    });
+    };
 
     rsx! {
-        div {
-            class: cx([
-                "w-full min-w-0 overflow-hidden rounded-md border bg-card transition-colors",
-                if active { "border-foreground/30 ring-1 ring-foreground/10" } else { "" },
-            ]),
-            onclick: move |_| on_select.call(()),
-            div { class: "flex items-start gap-3 border-b p-3",
-                div { class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground",
-                    Icon { kind: IconKind::PackageSearch, class: "h-4 w-4" }
-                }
-                div { class: "min-w-0 flex-1",
-                        div { class: "truncate text-sm font-semibold", "{selection.title}" }
-                    div { class: "mt-0.5 flex flex-wrap gap-1.5 text-xs text-muted-foreground",
-                            Badge { variant: BadgeVariant::Outline, "物品 {selection.targets.len()}" }
-                        Badge { variant: BadgeVariant::Outline, "叶子 {materials.len()}" }
+        div { class: "grid min-h-[640px] min-w-0 gap-3 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_460px]",
+            div { class: "min-h-0 min-w-0",
+                if roots.is_empty() {
+                    EmptyState {
+                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                        title: "暂无物品".to_string(),
                     }
-                }
-                if show_actions { div { class: "flex shrink-0 items-center gap-1",
-                    button {
-                        r#type: "button",
-                        class: "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                        title: "编辑物品",
-                        aria_label: "编辑物品",
-                        onclick: move |event| {
-                            event.stop_propagation();
-                            on_edit.call(());
-                        },
-                        Icon { kind: IconKind::Pencil, class: "h-4 w-4" }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                        title: "删除物品",
-                        aria_label: "删除物品",
-                        onclick: move |event| {
-                            event.stop_propagation();
-                            on_remove.call(());
-                        },
-                        Icon { kind: IconKind::Trash2, class: "h-4 w-4" }
-                    }
-                } }
-            }
-
-            div { class: "grid min-w-0 gap-3 p-3 xl:h-[640px] xl:grid-cols-[minmax(0,1fr)_400px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_460px]",
-                div { class: "min-h-0 min-w-0",
-                    if roots.is_empty() {
-                        EmptyState {
-                            icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                            title: "暂无物品".to_string(),
-                        }
-                    } else {
-                        CraftSummaryGraph {
-                            data: data.clone(),
-                            roots,
-                            on_toggle_collapsed_item,
-                            on_select: on_inspect,
-                        }
-                    }
-                }
-                aside { class: "min-h-0 min-w-0",
-                    MaterialSummaryPanel {
+                } else {
+                    CraftSummaryGraph {
                         data: data.clone(),
-                        title: selection.title.clone(),
-                        materials,
-                        source_choices,
-                        market_priority,
-                        on_market_priority_change: EventHandler::new(toggle_market_priority),
-                        on_choose: EventHandler::new(choose_source),
-                        on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
-                            item_id,
-                            amount_needed,
-                            recipe: None,
-                        }),
+                        roots,
+                        source_plan,
+                        buy_suggestions,
+                        on_toggle_collapsed_item,
+                        on_select: on_inspect,
                     }
+                }
+            }
+            aside { class: "min-h-0 min-w-0",
+                MaterialSummaryPanel {
+                    data: data.clone(),
+                    title: selection.title.clone(),
+                    materials,
+                    source_choices,
+                    market_priority,
+                    on_market_priority_change,
+                    on_choose: on_choose_source,
+                    on_inspect_item: move |(item_id, amount_needed)| on_inspect.call(DetailTarget {
+                        item_id,
+                        amount_needed,
+                        recipe: None,
+                    }),
                 }
             }
         }
+    }
+}
+
+fn tree_row_drop_target(
+    node_id: &str,
+    depth: u32,
+    is_folder: bool,
+    client_y: f64,
+) -> TreeDropTarget {
+    let row_dom_id = format!("notes-tree-row-{node_id}");
+    let relative_y = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(&row_dom_id))
+        .map(|element| {
+            let bounds = element.get_bounding_client_rect();
+            ((client_y - bounds.top()) / bounds.height().max(1.0)).clamp(0.0, 1.0)
+        })
+        .unwrap_or(0.5);
+    let position = tree_drop_position(relative_y, is_folder);
+    TreeDropTarget {
+        node_id: node_id.to_string(),
+        position,
+        depth: if position == TreeDropPosition::Inside {
+            depth + 1
+        } else {
+            depth
+        },
+    }
+}
+
+fn tree_drop_position(relative_y: f64, is_folder: bool) -> TreeDropPosition {
+    if is_folder {
+        if relative_y < 0.25 {
+            TreeDropPosition::Before
+        } else if relative_y > 0.75 {
+            TreeDropPosition::After
+        } else {
+            TreeDropPosition::Inside
+        }
+    } else if relative_y < 0.5 {
+        TreeDropPosition::Before
+    } else {
+        TreeDropPosition::After
     }
 }
 
@@ -2679,20 +3462,24 @@ fn CraftAnalysisView(
 fn TreeNodeRow(
     node: NoteTreeNode,
     depth: u32,
-    item_meta: HashMap<String, TreeItemMeta>,
-    selected_ids: HashSet<String>,
-    expanded: HashSet<String>,
-    drag_over_target: Option<(String, bool)>,
+    item_meta: Rc<HashMap<String, TreeItemMeta>>,
+    market_meta: Rc<HashMap<String, TreeMarketEstimate>>,
+    selected_ids: Rc<HashSet<String>>,
+    expanded: Rc<HashSet<String>>,
+    dragged_node_id: Option<String>,
+    drag_over_target: Option<TreeDropTarget>,
     on_toggle: EventHandler<String>,
     on_select: EventHandler<(String, bool, bool)>,
     on_context_menu: EventHandler<TreeContextMenuState>,
     on_drag_start: EventHandler<String>,
     on_drag_end: EventHandler<()>,
-    on_drag_over: EventHandler<(String, bool)>,
-    on_drop: EventHandler<(String, bool)>,
+    on_drag_over: EventHandler<TreeDropTarget>,
+    on_drop: EventHandler<TreeDropTarget>,
+    on_refresh_market: EventHandler<Vec<u32>>,
 ) -> Element {
     let is_folder = node.kind == "folder";
     let is_expanded = expanded.contains(&node.id);
+    let is_dragging = dragged_node_id.as_deref() == Some(node.id.as_str());
     let mut descendants = Vec::new();
     collect_entry_ids(&node, &mut descendants);
     let selected = if is_folder {
@@ -2701,43 +3488,77 @@ fn TreeNodeRow(
         selected_ids.contains(&node.id)
     };
     let padding_left = format!("{}px", 8 + depth * 16);
-    let is_before_target = drag_over_target
-        .as_ref()
-        .is_some_and(|(id, into_folder)| id == &node.id && !into_folder);
+    let is_before_target = drag_over_target.as_ref().is_some_and(|target| {
+        target.node_id == node.id && target.position == TreeDropPosition::Before
+    });
+    let is_after_target = drag_over_target.as_ref().is_some_and(|target| {
+        target.node_id == node.id && target.position == TreeDropPosition::After
+    });
     let is_drop_target = is_folder
-        && drag_over_target
+        && drag_over_target.as_ref().is_some_and(|target| {
+            target.node_id == node.id && target.position == TreeDropPosition::Inside
+        });
+    let guide_left = format!("{}px", depth * 16);
+    let drop_line_left = format!(
+        "{}px",
+        8 + drag_over_target
             .as_ref()
-            .is_some_and(|(id, into_folder)| id == &node.id && *into_folder);
+            .map_or(depth, |target| target.depth)
+            * 16
+    );
+    let row_dom_id = format!("notes-tree-row-{}", node.id);
+    let estimate = market_meta.get(&node.id).cloned().unwrap_or_default();
+    let nq_price_label = tree_market_quality_label(&estimate.nq, &estimate);
+    let hq_price_label = tree_market_quality_label(&estimate.hq, &estimate);
+    let updated_label = tree_market_updated_label(estimate.updated_at);
+    let nq_sales_label = estimate.nq.daily_sales.map(tree_market_sales_label);
+    let hq_sales_label = estimate.hq.daily_sales.map(tree_market_sales_label);
+    let nq_sales_trend = estimate.nq.sales_window.and_then(tree_market_sales_trend);
+    let hq_sales_trend = estimate.hq.sales_window.and_then(tree_market_sales_trend);
+    let update_title = if let Some(error) = estimate.error.as_deref() {
+        error.to_string()
+    } else if is_folder {
+        "目录汇总更新时间取所有报价中最早的 Universalis 数据时间".to_string()
+    } else {
+        "Universalis 数据更新时间".to_string()
+    };
+    let refresh_icon_kind = if estimate.loading {
+        IconKind::LoaderCircle
+    } else {
+        IconKind::RotateCcw
+    };
+    let refresh_icon_class: &'static str = if estimate.loading {
+        "h-3 w-3 animate-spin"
+    } else {
+        "h-3 w-3"
+    };
 
     rsx! {
         div {
-            div {
-                class: if is_before_target {
-                    "h-1.5 rounded-full bg-primary shadow-sm transition-colors"
-                } else {
-                    "h-1 rounded-full bg-transparent transition-colors"
-                },
-                ondragenter: {
-                    let node_id = node.id.clone();
-                    move |event| {
-                        event.prevent_default();
-                        on_drag_over.call((node_id.clone(), false));
-                    }
-                },
-                ondragover: move |event| event.prevent_default(),
-                ondrop: {
-                    let node_id = node.id.clone();
-                    move |event| {
-                        event.prevent_default();
-                        event.stop_propagation();
-                        on_drop.call((node_id.clone(), false));
-                    }
-                },
+            class: "relative",
+            if depth > 0 {
+                div {
+                    class: "pointer-events-none absolute inset-y-0 border-l border-border",
+                    style: "left: {guide_left};",
+                }
+                div {
+                    class: "pointer-events-none absolute w-2 border-t border-border",
+                    style: "left: {guide_left}; top: 38px;",
+                }
             }
             div {
+                class: "flex h-1.5 items-center",
+                style: "margin-left: {drop_line_left};",
+                if is_before_target {
+                    span { class: "h-2 w-2 shrink-0 rounded-full border-2 border-primary bg-card" }
+                    span { class: "h-0.5 flex-1 bg-primary shadow-sm" }
+                }
+            }
+            div {
+                id: "{row_dom_id}",
                 draggable: "true",
                 class: cx([
-                    "group flex min-h-9 items-center gap-1 rounded-md px-2 text-sm transition-colors",
+                    "group flex min-h-16 select-none items-center gap-1 rounded-md px-2 text-sm",
                     if selected {
                         "bg-accent text-foreground ring-1 ring-foreground/10"
                     } else {
@@ -2745,11 +3566,38 @@ fn TreeNodeRow(
                     },
                     if is_drop_target {
                         "bg-accent ring-2 ring-primary/50"
+                    } else if is_dragging {
+                        "opacity-50 ring-1 ring-primary/40"
                     } else {
                         ""
                     },
                 ]),
                 style: "padding-left: {padding_left};",
+                onclick: {
+                    let node_id = node.id.clone();
+                    let descendants = descendants.clone();
+                    move |event| {
+                        let modifiers = event.data().modifiers();
+                        if is_folder {
+                            if let Some(first) = descendants.first() {
+                                on_select.call((
+                                    first.clone(),
+                                    modifiers.ctrl(),
+                                    modifiers.shift(),
+                                ));
+                                for entry_id in descendants.iter().skip(1) {
+                                    on_select.call((entry_id.clone(), true, false));
+                                }
+                            }
+                        } else {
+                            on_select.call((
+                                node_id.clone(),
+                                modifiers.ctrl(),
+                                modifiers.shift(),
+                            ));
+                        }
+                    }
+                },
                 oncontextmenu: {
                     let node_id = node.id.clone();
                     let title = node.title.clone();
@@ -2774,31 +3622,70 @@ fn TreeNodeRow(
                     let node_id = node.id.clone();
                     move |event| {
                         event.prevent_default();
-                        on_drag_over.call((node_id.clone(), is_folder));
+                        let client_y = event.data().client_coordinates().y;
+                        on_drag_over.call(tree_row_drop_target(
+                            &node_id,
+                            depth,
+                            is_folder,
+                            client_y,
+                        ));
                     }
                 },
-                ondragover: move |event| event.prevent_default(),
+                ondragover: {
+                    let node_id = node.id.clone();
+                    move |event| {
+                        event.prevent_default();
+                        let client_y = event.data().client_coordinates().y;
+                        on_drag_over.call(tree_row_drop_target(
+                            &node_id,
+                            depth,
+                            is_folder,
+                            client_y,
+                        ));
+                    }
+                },
                 ondrop: {
                     let node_id = node.id.clone();
                     move |event| {
                         event.prevent_default();
                         event.stop_propagation();
-                        if is_folder {
-                            on_drop.call((node_id.clone(), true));
-                        }
+                        let client_y = event.data().client_coordinates().y;
+                        on_drop.call(tree_row_drop_target(
+                            &node_id,
+                            depth,
+                            is_folder,
+                            client_y,
+                        ));
                     }
                 },
+                if is_folder {
+                    button {
+                        r#type: "button",
+                        class: "flex h-8 w-5 shrink-0 items-center justify-center rounded hover:bg-background/80",
+                        aria_label: if is_expanded { "折叠目录" } else { "展开目录" },
+                        onclick: {
+                            let node_id = node.id.clone();
+                            move |event| {
+                                event.stop_propagation();
+                                on_toggle.call(node_id.clone());
+                            }
+                        },
+                        Icon {
+                            kind: if is_expanded { IconKind::ChevronDown } else { IconKind::ChevronRight },
+                            class: "h-4 w-4"
+                        }
+                    }
+                } else {
+                    div { class: "w-5 shrink-0" }
+                }
                 button {
                     r#type: "button",
-                    class: "flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-background/80",
-                    aria_label: if is_folder {
-                        if is_expanded { "折叠目录" } else { "展开目录" }
-                    } else {
-                        "选择物品"
-                    },
+                    class: "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded hover:bg-background/80",
+                    aria_label: if is_folder { "展开或折叠目录" } else { "选择物品" },
                     onclick: {
                         let node_id = node.id.clone();
-                        move |_| {
+                        move |event| {
+                            event.stop_propagation();
                             if is_folder {
                                 on_toggle.call(node_id.clone());
                             } else {
@@ -2807,43 +3694,102 @@ fn TreeNodeRow(
                         }
                     },
                     if is_folder {
-                        Icon {
-                            kind: if is_expanded { IconKind::ChevronDown } else { IconKind::ChevronRight },
-                            class: "h-4 w-4"
-                        }
+                        Icon { kind: IconKind::Folder, class: "h-5 w-5 text-muted-foreground" }
                     } else if let Some(meta) = item_meta.get(&node.id) {
-                        ItemIcon { icon: meta.icon, size: "sm" }
+                        ItemIcon { icon: meta.icon, size: "tree" }
                     } else {
                         Icon { kind: IconKind::PackageSearch, class: "h-4 w-4" }
                     }
                 }
-                button {
-                    r#type: "button",
-                    class: "min-w-0 flex-1 truncate px-1 text-left font-medium",
-                    title: "{node.title}",
-                    onclick: {
-                        let node_id = node.id.clone();
-                        let descendants = descendants.clone();
-                        move |event| {
-                            if is_folder {
-                                if let Some(first) = descendants.first() {
-                                    let modifiers = event.data().modifiers();
-                                    on_select.call((first.clone(), modifiers.ctrl(), modifiers.shift()));
-                                    for entry_id in descendants.iter().skip(1) {
-                                        on_select.call((entry_id.clone(), true, false));
-                                    }
-                                }
-                            } else {
-                                let modifiers = event.data().modifiers();
-                                on_select.call((node_id.clone(), modifiers.ctrl(), modifiers.shift()));
+                div { class: "min-w-0 flex-1 py-1",
+                    div {
+                        class: "flex w-full min-w-0 items-center gap-1 px-1 text-left font-medium",
+                        title: "{node.title}",
+                        span { class: "min-w-0 flex-1 truncate", "{node.title}" }
+                        if is_drop_target {
+                            span { class: "shrink-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground", "移入" }
+                        }
+                        if !is_folder {
+                            if let Some(meta) = item_meta.get(&node.id) {
+                                span { class: "shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground", "×{meta.amount}" }
                             }
                         }
-                    },
-                    "{node.title}"
-                }
-                if !is_folder {
-                    if let Some(meta) = item_meta.get(&node.id) {
-                        div { class: "shrink-0 px-1 text-[11px] tabular-nums text-muted-foreground", "×{meta.amount}" }
+                    }
+                    div { class: "flex min-w-0 items-center gap-1 px-1 text-[10px] leading-tight text-muted-foreground",
+                        div { class: "min-w-0 flex-1 space-y-0.5",
+                            div { class: "flex min-w-0 items-center gap-1",
+                                span { class: "w-5 shrink-0 font-semibold text-slate-500", "NQ" }
+                                span { class: "min-w-0 truncate tabular-nums", "{nq_price_label}" }
+                                if let Some(sales_label) = nq_sales_label {
+                                    span {
+                                        class: "inline-flex shrink-0 items-center gap-px tabular-nums",
+                                        title: "NQ 区域日均销量；箭头比较最近 3.5 天与此前 3.5 天的成交量",
+                                        span { "{sales_label}/天" }
+                                        if let Some(sales_trend) = nq_sales_trend {
+                                            span {
+                                                class: match sales_trend {
+                                                    Ordering::Greater => "font-semibold text-emerald-600",
+                                                    Ordering::Less => "font-semibold text-rose-500",
+                                                    Ordering::Equal => "font-semibold text-muted-foreground",
+                                                },
+                                                match sales_trend {
+                                                    Ordering::Greater => "↑",
+                                                    Ordering::Less => "↓",
+                                                    Ordering::Equal => "→",
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: "flex min-w-0 items-center gap-1",
+                                span { class: "w-5 shrink-0 font-semibold text-amber-600", "HQ" }
+                                span { class: "min-w-0 truncate tabular-nums", "{hq_price_label}" }
+                                if let Some(sales_label) = hq_sales_label {
+                                    span {
+                                        class: "inline-flex shrink-0 items-center gap-px tabular-nums",
+                                        title: "HQ 区域日均销量；箭头比较最近 3.5 天与此前 3.5 天的成交量",
+                                        span { "{sales_label}/天" }
+                                        if let Some(sales_trend) = hq_sales_trend {
+                                            span {
+                                                class: match sales_trend {
+                                                    Ordering::Greater => "font-semibold text-emerald-600",
+                                                    Ordering::Less => "font-semibold text-rose-500",
+                                                    Ordering::Equal => "font-semibold text-muted-foreground",
+                                                },
+                                                match sales_trend {
+                                                    Ordering::Greater => "↑",
+                                                    Ordering::Less => "↓",
+                                                    Ordering::Equal => "→",
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span { class: "ml-auto inline-flex shrink-0 items-center gap-1",
+                            span { class: "w-12 truncate text-right", title: "{update_title}", "{updated_label}" }
+                            button {
+                                r#type: "button",
+                                class: "flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+                                disabled: estimate.item_ids.is_empty() || estimate.loading,
+                                aria_label: if is_folder { "刷新整个目录估价" } else { "刷新物品估价" },
+                                title: if is_folder { "刷新整个目录估价" } else { "刷新物品估价" },
+                                onmousedown: move |event| event.stop_propagation(),
+                                onclick: {
+                                    let item_ids = estimate.item_ids.clone();
+                                    move |event| {
+                                        event.stop_propagation();
+                                        on_refresh_market.call(item_ids.clone());
+                                    }
+                                },
+                                Icon {
+                                    kind: refresh_icon_kind,
+                                    class: refresh_icon_class,
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2851,11 +3797,14 @@ fn TreeNodeRow(
             if is_folder && is_expanded {
                 for child in node.children.clone() {
                     TreeNodeRow {
+                        key: "{child.id}",
                         node: child,
                         depth: depth + 1,
                         item_meta: item_meta.clone(),
+                        market_meta: market_meta.clone(),
                         selected_ids: selected_ids.clone(),
                         expanded: expanded.clone(),
+                        dragged_node_id: dragged_node_id.clone(),
                         drag_over_target: drag_over_target.clone(),
                         on_toggle,
                         on_select,
@@ -2864,8 +3813,73 @@ fn TreeNodeRow(
                         on_drag_end,
                         on_drag_over,
                         on_drop,
+                        on_refresh_market,
                     }
                 }
+            }
+            div {
+                class: "flex h-1.5 items-center",
+                style: "margin-left: {drop_line_left};",
+                if is_after_target {
+                    span { class: "h-2 w-2 shrink-0 rounded-full border-2 border-primary bg-card" }
+                    span { class: "h-0.5 flex-1 bg-primary shadow-sm" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn NotesItemTree(
+    nodes: Vec<NoteTreeNode>,
+    item_meta: Rc<HashMap<String, TreeItemMeta>>,
+    market_meta: Rc<HashMap<String, TreeMarketEstimate>>,
+    selected_ids: Rc<HashSet<String>>,
+    expanded: Rc<HashSet<String>>,
+    on_toggle: EventHandler<String>,
+    on_select: EventHandler<(String, bool, bool)>,
+    on_context_menu: EventHandler<TreeContextMenuState>,
+    on_refresh_market: EventHandler<Vec<u32>>,
+    on_move: EventHandler<(String, TreeDropTarget)>,
+) -> Element {
+    let mut dragged_node_id = use_signal(|| None::<String>);
+    let mut drag_over_target = use_signal(|| None::<TreeDropTarget>);
+
+    rsx! {
+        for node in nodes {
+            TreeNodeRow {
+                key: "{node.id}",
+                node,
+                depth: 0,
+                item_meta: item_meta.clone(),
+                market_meta: market_meta.clone(),
+                selected_ids: selected_ids.clone(),
+                expanded: expanded.clone(),
+                dragged_node_id: dragged_node_id(),
+                drag_over_target: drag_over_target(),
+                on_toggle,
+                on_select,
+                on_context_menu,
+                on_drag_start: move |node_id| {
+                    dragged_node_id.set(Some(node_id));
+                    drag_over_target.set(None);
+                },
+                on_drag_end: move |_| {
+                    dragged_node_id.set(None);
+                    drag_over_target.set(None);
+                },
+                on_drag_over: move |target| {
+                    if drag_over_target.peek().as_ref() != Some(&target) {
+                        drag_over_target.set(Some(target));
+                    }
+                },
+                on_refresh_market,
+                on_drop: move |target| {
+                    let Some(source_id) = dragged_node_id() else { return; };
+                    on_move.call((source_id, target));
+                    dragged_node_id.set(None);
+                    drag_over_target.set(None);
+                },
             }
         }
     }
@@ -2885,6 +3899,22 @@ fn NameDialog(
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4",
             role: "dialog",
             aria_modal: "true",
+            tabindex: "-1",
+            autofocus: true,
+            onkeydown: {
+                let kind = kind.clone();
+                move |event| match dialog_key_action(&event, !trimmed.is_empty()) {
+                    Some(DialogKeyAction::Confirm) => {
+                        let value = value().trim().to_string();
+                        if !value.is_empty() {
+                            on_confirm.call((kind.clone(), value));
+                            on_close.call(());
+                        }
+                    }
+                    Some(DialogKeyAction::Close) => on_close.call(()),
+                    None => {}
+                }
+            },
             onclick: move |_| on_close.call(()),
             div {
                 class: "w-full max-w-sm overflow-hidden rounded-md border bg-card shadow-xl",
@@ -2953,6 +3983,16 @@ fn ConfirmDialog(
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4",
             role: "dialog",
             aria_modal: "true",
+            tabindex: "-1",
+            autofocus: true,
+            onkeydown: move |event| match dialog_key_action(&event, true) {
+                Some(DialogKeyAction::Confirm) => {
+                    on_confirm.call(());
+                    on_close.call(());
+                }
+                Some(DialogKeyAction::Close) => on_close.call(()),
+                None => {}
+            },
             onclick: move |_| on_close.call(()),
             div {
                 class: "w-full max-w-sm overflow-hidden rounded-md border bg-card shadow-xl",
@@ -3063,6 +4103,41 @@ fn CraftItemPickerDialog(
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4",
             role: "dialog",
             aria_modal: "true",
+            tabindex: "-1",
+            autofocus: true,
+            onkeydown: {
+                let item = item.clone();
+                move |event| match dialog_key_action(&event, !targets().is_empty()) {
+                    Some(DialogKeyAction::Confirm) => {
+                        let source_choices = item
+                            .as_ref()
+                            .map(|item| item.source_choices.clone())
+                            .unwrap_or_default();
+                        let items = targets()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, target)| NoteItem {
+                                id: if index == 0 {
+                                    item.as_ref()
+                                        .map(|item| item.id.clone())
+                                        .unwrap_or(target.id.clone())
+                                } else {
+                                    target.id.clone()
+                                },
+                                recipe_id: target.recipe_id,
+                                item_id: target.item_id,
+                                amount: target.amount,
+                                collapsed: target.collapsed,
+                                source_choices: source_choices.clone(),
+                            })
+                            .collect();
+                        on_save.call(items);
+                        on_close.call(());
+                    }
+                    Some(DialogKeyAction::Close) => on_close.call(()),
+                    None => {}
+                }
+            },
             onclick: move |_| on_close.call(()),
             div {
                 class: "flex max-h-[min(820px,calc(100vh-2rem))] w-full max-w-5xl flex-col overflow-hidden rounded-md border bg-card shadow-xl",
@@ -3441,23 +4516,124 @@ fn TreeContextMenu(
 pub fn NotesPage() -> Element {
     let craft_data = use_resource(load_craft_data);
     let mut state = use_signal(load_notes_state);
-    let mut expanded_folders = use_signal(HashSet::<String>::new);
+    let mut expanded_folders = use_signal(|| {
+        state
+            .peek()
+            .expanded_folders
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+    });
     let mut selected_entry_ids = use_signal(Vec::<String>::new);
     let mut selection_anchor_id = use_signal(|| None::<String>);
-    let mut view_mode = use_signal(|| NotesViewMode::Summary);
-    let mut dragged_node_id = use_signal(|| None::<String>);
-    let mut drag_over_target = use_signal(|| None::<(String, bool)>);
     let mut context_menu = use_signal(|| None::<TreeContextMenuState>);
     let mut add_item_parent_id = use_signal(|| None::<String>);
     let mut editing_item_id = use_signal(|| None::<String>);
     let mut detail_target = use_signal(|| None::<DetailTarget>);
     let mut name_dialog = use_signal(|| None::<NameDialogKind>);
     let mut confirm_dialog = use_signal(|| None::<ConfirmDialogKind>);
+    let tree_market_quotes = use_signal(HashMap::<u32, TreeMarketQuote>::new);
+    let tree_market_loading = use_signal(HashSet::<u32>::new);
+    let tree_market_failed = use_signal(HashMap::<u32, String>::new);
+    let mut tree_market_requested = use_signal(HashSet::<u32>::new);
+    let mut market_priority_snapshot = use_signal(|| None::<HashMap<u32, SourceChoice>>);
 
     use_effect(move || {
         let current = state();
         save_notes_state(&current);
     });
+
+    use_effect(move || {
+        let mut current = state();
+        let mut valid_folder_ids = HashSet::new();
+        collect_folder_ids(&current.tree, &mut valid_folder_ids);
+        let expanded = expanded_folders()
+            .into_iter()
+            .filter(|folder_id| valid_folder_ids.contains(folder_id))
+            .collect::<BTreeSet<_>>();
+        if current.expanded_folders != expanded {
+            current.expanded_folders = expanded.clone();
+            state.set(current);
+        }
+        let expanded = expanded.into_iter().collect::<HashSet<_>>();
+        if *expanded_folders.peek() != expanded {
+            expanded_folders.set(expanded);
+        }
+    });
+
+    use_effect(move || {
+        let current = state();
+        let mut requested = tree_market_requested();
+        let mut missing = current
+            .items
+            .values()
+            .map(|item| item.item_id)
+            .filter(|item_id| !requested.contains(item_id))
+            .collect::<Vec<_>>();
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            requested.extend(missing.iter().copied());
+            tree_market_requested.set(requested);
+            request_tree_market_quotes(
+                missing,
+                tree_market_quotes,
+                tree_market_loading,
+                tree_market_failed,
+                false,
+            );
+        }
+    });
+
+    // 最优成本模式:来源、报价或选择变化时重算折叠方案,写入结果收敛后停止。
+    // 为选中条目的完整合成树补齐市场报价(缓存优先,过期后台刷新),
+    // 供折叠按钮上的"直接购买更划算"提示使用。
+    use_effect(move || {
+        let current = state();
+        let data = craft_data
+            .read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        let Some(data) = data else { return; };
+        let engine = create_craft_data_engine(data.clone());
+        let mut selected = selected_entry_ids();
+        if selected.is_empty()
+            && let Some(active_id) = current.active_item_id.clone()
+        {
+            selected.push(active_id);
+        }
+        selected.retain(|id| current.items.contains_key(id));
+        if selected.is_empty() {
+            return;
+        }
+        let mut marketable_ids = Vec::new();
+        for entry_id in &selected {
+            let item = &current.items[entry_id];
+            let tree = build_tree(&engine, item.item_id, item.amount.max(1));
+            collect_marketable_tree_items(&data, &tree, &mut marketable_ids);
+        }
+        marketable_ids.sort_unstable();
+        marketable_ids.dedup();
+        let mut requested = tree_market_requested();
+        let unrequested = marketable_ids
+            .iter()
+            .filter(|item_id| !requested.contains(item_id))
+            .copied()
+            .collect::<Vec<_>>();
+        if !unrequested.is_empty() {
+            requested.extend(unrequested.iter().copied());
+            tree_market_requested.set(requested);
+            request_tree_market_quotes(
+                unrequested,
+                tree_market_quotes,
+                tree_market_loading,
+                tree_market_failed,
+                false,
+            );
+        }
+    });
+
 
     let data = craft_data
         .read()
@@ -3486,6 +4662,7 @@ pub fn NotesPage() -> Element {
                     (
                         id.clone(),
                         TreeItemMeta {
+                            item_id: item.item_id,
                             icon: game_item.icon,
                             amount: item.amount,
                         },
@@ -3493,6 +4670,16 @@ pub fn NotesPage() -> Element {
                 })
         })
         .collect::<HashMap<_, _>>();
+    let tree_market_meta = collect_tree_market_estimates(
+        &current_state.tree,
+        &item_meta,
+        &tree_market_quotes(),
+        &tree_market_loading(),
+        &tree_market_failed(),
+    );
+    let item_meta = Rc::new(item_meta);
+    let tree_market_meta = Rc::new(tree_market_meta);
+    let selected_id_set = Rc::new(selected_id_set);
     let selected_analyses = selected_ids
         .iter()
         .filter_map(|entry_id| {
@@ -3504,8 +4691,12 @@ pub fn NotesPage() -> Element {
             })
         })
         .collect::<Vec<_>>();
-    let combined_analysis = if selected_analyses.is_empty() {
+    let active_analysis = if selected_analyses.is_empty() {
         None
+    } else if selected_analyses.len() == 1 {
+        selected_analyses
+            .first()
+            .map(|(_, analysis)| analysis.clone())
     } else {
         Some(CraftAnalysisSelection {
             id: "selected-summary".to_string(),
@@ -3534,6 +4725,17 @@ pub fn NotesPage() -> Element {
             current_state.items.get(&entry_id).cloned()
         }
     });
+    let buy_suggestions = match (data.as_ref(), engine.as_ref(), active_analysis.as_ref()) {
+        (Some(data), Some(engine), Some(selection)) => Rc::new(market_collapse_suggestions(
+            data,
+            engine,
+            &selection.targets,
+            &choice_record_to_map(&selection.source_choices),
+            market_priority_snapshot().is_some(),
+            &tree_market_quotes(),
+        )),
+        _ => Rc::new(HashMap::new()),
+    };
     let detail_recipe = detail_target().and_then(|target| {
         target.recipe.or_else(|| {
             engine
@@ -3650,7 +4852,7 @@ pub fn NotesPage() -> Element {
                 }
             }
 
-            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)]",
+            div { class: "grid w-full flex-1 lg:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]",
                 aside { class: "flex h-[320px] flex-col overflow-hidden border-b bg-card xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r",
                     div { class: "flex items-center justify-between gap-2 border-b p-3",
                         div { class: "flex items-center gap-2 text-sm font-semibold",
@@ -3678,83 +4880,64 @@ pub fn NotesPage() -> Element {
                         }
                     }
                     div { class: "min-h-0 flex-1 overflow-y-auto p-2",
-                        for node in current_state.tree.clone() {
-                            TreeNodeRow {
-                                node,
-                                depth: 0,
-                                item_meta: item_meta.clone(),
-                                selected_ids: selected_id_set.clone(),
-                                expanded: expanded_folders(),
-                                drag_over_target: drag_over_target(),
-                                on_toggle: move |folder_id| {
-                                    let mut expanded = expanded_folders();
-                                    if expanded.contains(&folder_id) {
-                                        expanded.remove(&folder_id);
-                                    } else {
-                                        expanded.insert(folder_id);
-                                    }
-                                    expanded_folders.set(expanded);
-                                },
-                                on_select: move |selection: (String, bool, bool)| {
-                                    let (entry_id, ctrl, shift) = selection;
-                                    let visible = visible_entry_ids(&state().tree, &expanded_folders());
-                                    let next_selection = select_entry_ids(
-                                        &visible,
-                                        &selected_entry_ids(),
-                                        &entry_id,
-                                        ctrl,
-                                        shift,
-                                        selection_anchor_id().as_deref(),
-                                    );
-                                    let mut next = state();
-                                    next.active_item_id = next_selection.last().cloned();
-                                    state.set(next);
-                                    selected_entry_ids.set(next_selection);
-                                    if !shift {
-                                        selection_anchor_id.set(Some(entry_id));
-                                    }
-                                },
-                                on_context_menu: move |menu| context_menu.set(Some(menu)),
-                                on_drag_start: move |node_id| {
-                                    dragged_node_id.set(Some(node_id));
-                                    drag_over_target.set(None);
-                                },
-                                on_drag_end: move |_| {
-                                    dragged_node_id.set(None);
-                                    drag_over_target.set(None);
-                                },
-                                on_drag_over: move |target| drag_over_target.set(Some(target)),
-                                on_drop: move |drop_target: (String, bool)| {
-                                    let (target_id, into_folder) = drop_target;
-                                    let Some(source_id) = dragged_node_id() else { return; };
-                                    let mut next = state();
-                                    next.tree = move_tree_node(&next.tree, &source_id, Some(&target_id), into_folder);
-                                    state.set(next);
-                                    dragged_node_id.set(None);
-                                    drag_over_target.set(None);
-                                },
-                            }
-                        }
-                        div {
-                            class: if drag_over_target().as_ref().is_some_and(|(id, into_folder)| id.is_empty() && !into_folder) {
-                                "h-1.5 rounded-full bg-primary shadow-sm"
-                            } else {
-                                "h-2 rounded-md border border-dashed border-transparent"
+                        NotesItemTree {
+                            nodes: current_state.tree.clone(),
+                            item_meta: item_meta.clone(),
+                            market_meta: tree_market_meta.clone(),
+                            selected_ids: selected_id_set.clone(),
+                            expanded: Rc::new(expanded_folders()),
+                            on_toggle: move |folder_id| {
+                                let mut expanded = expanded_folders();
+                                if expanded.contains(&folder_id) {
+                                    expanded.remove(&folder_id);
+                                } else {
+                                    expanded.insert(folder_id);
+                                }
+                                expanded_folders.set(expanded);
                             },
-                            title: "移至根目录",
-                            ondragenter: move |event| {
-                                event.prevent_default();
-                                drag_over_target.set(Some((String::new(), false)));
-                            },
-                            ondragover: move |event| event.prevent_default(),
-                            ondrop: move |event| {
-                                event.prevent_default();
-                                let Some(source_id) = dragged_node_id() else { return; };
+                            on_select: move |selection: (String, bool, bool)| {
+                                let (entry_id, ctrl, shift) = selection;
+                                let visible = visible_entry_ids(&state().tree, &expanded_folders());
+                                let next_selection = select_entry_ids(
+                                    &visible,
+                                    &selected_entry_ids(),
+                                    &entry_id,
+                                    ctrl,
+                                    shift,
+                                    selection_anchor_id().as_deref(),
+                                );
                                 let mut next = state();
-                                next.tree = move_tree_node(&next.tree, &source_id, None, false);
+                                next.active_item_id = next_selection.last().cloned();
                                 state.set(next);
-                                dragged_node_id.set(None);
-                                drag_over_target.set(None);
+                                selected_entry_ids.set(next_selection);
+                                if !shift {
+                                    selection_anchor_id.set(Some(entry_id));
+                                }
+                            },
+                            on_context_menu: move |menu| context_menu.set(Some(menu)),
+                            on_refresh_market: move |item_ids| {
+                                request_tree_market_quotes(
+                                    item_ids,
+                                    tree_market_quotes,
+                                    tree_market_loading,
+                                    tree_market_failed,
+                                    true,
+                                );
+                            },
+                            on_move: move |(source_id, drop_target): (String, TreeDropTarget)| {
+                                let mut next = state();
+                                next.tree = move_tree_node(
+                                    &next.tree,
+                                    &source_id,
+                                    Some(&drop_target.node_id),
+                                    drop_target.position,
+                                );
+                                state.set(next);
+                                if drop_target.position == TreeDropPosition::Inside {
+                                    let mut expanded = expanded_folders();
+                                    expanded.insert(drop_target.node_id);
+                                    expanded_folders.set(expanded);
+                                }
                             },
                         }
                     }
@@ -3763,46 +4946,54 @@ pub fn NotesPage() -> Element {
                 main { class: "min-h-[560px] overflow-hidden bg-background lg:min-h-0",
                     if let (Some(data), Some(engine)) = (data.as_ref(), engine.clone()) {
                         div { class: "flex h-full min-h-[560px] flex-col lg:min-h-0",
-                            div { class: "flex flex-wrap items-center justify-between gap-3 border-b p-4",
+                            div { class: "flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3",
                                 div { class: "min-w-0",
                                     div { class: "truncate text-base font-semibold",
-                                        "制作分析"
+                                        "制作分析详情"
                                     }
-                                    div { class: "mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground",
-                                        Badge { variant: BadgeVariant::Outline,
-                                            Icon { kind: IconKind::Hammer, class: "mr-1 h-3 w-3" }
-                                            "已选 {selected_analyses.len()} 项"
+                                    if let Some(selection) = active_analysis.as_ref() {
+                                        div { class: "mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground",
+                                            Badge { variant: BadgeVariant::Outline,
+                                                Icon { kind: IconKind::Hammer, class: "mr-1 h-3 w-3" }
+                                                if selected_analyses.len() == 1 { "单项" } else { "汇总 {selected_analyses.len()} 项" }
+                                            }
+                                            span { class: "min-w-0 truncate", "{selection.title}" }
                                         }
-                                    }
-                                }
-                                div { class: "flex items-center gap-2",
-                                    div { class: "flex rounded-md border bg-muted/30 p-0.5",
-                                        Button { size: ButtonSize::Sm, variant: if view_mode() == NotesViewMode::Summary { ButtonVariant::Primary } else { ButtonVariant::Ghost }, onclick: move |_| view_mode.set(NotesViewMode::Summary), Icon { kind: IconKind::Layers3, class: "h-3.5 w-3.5" }, "汇总" }
-                                        Button { size: ButtonSize::Sm, variant: if view_mode() == NotesViewMode::Items { ButtonVariant::Primary } else { ButtonVariant::Ghost }, onclick: move |_| view_mode.set(NotesViewMode::Items), Icon { kind: IconKind::ListTree, class: "h-3.5 w-3.5" }, "单项" }
                                     }
                                 }
                             }
 
-                            div { class: "min-h-0 flex-1 overflow-y-auto p-3",
+                            div { class: "min-h-0 flex-1 overflow-y-auto p-3 xl:overflow-hidden",
                                 if selected_analyses.is_empty() {
                                     EmptyState {
                                         icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
                                         title: "选择一个物品开始".to_string(),
                                         description: "左侧树支持 Ctrl 多选、Shift 连选，也可以直接拖动条目整理目录。".to_string(),
                                     }
-                                } else if view_mode() == NotesViewMode::Summary {
-                                    if let Some(selection) = combined_analysis.clone() {
+                                } else if let Some(selection) = active_analysis.clone() {
                                         CraftAnalysisView {
                                             key: "{selection.id}",
                                             data: data.clone(),
                                             engine: engine.clone(),
-                                            active: true,
-                                            show_actions: false,
                                             source_choices: choice_record_to_map(&selection.source_choices),
                                             selection,
-                                            on_select: move |_| {},
-                                            on_edit: move |_| {},
-                                            on_remove: move |_| {},
+                                            market_priority: market_priority_snapshot().is_some(),
+                                            on_market_priority_change: {
+                                                let snapshot_choices = active_analysis
+                                                    .as_ref()
+                                                    .map(|analysis| choice_record_to_map(&analysis.source_choices))
+                                                    .unwrap_or_default();
+                                                move |enabled| {
+                                                    if enabled {
+                                                        if market_priority_snapshot.peek().is_none() {
+                                                            market_priority_snapshot.set(Some(snapshot_choices.clone()));
+                                                        }
+                                                    } else {
+                                                        market_priority_snapshot.set(None);
+                                                    }
+                                                }
+                                            },
+                                            buy_suggestions: buy_suggestions.clone(),
                                             on_toggle_collapsed_item: {
                                                 let selected_ids = selected_ids.clone();
                                                 move |(item_id, collapsed)| {
@@ -3815,24 +5006,35 @@ pub fn NotesPage() -> Element {
                                                     state.set(next);
                                                 }
                                             },
-                                            on_apply_source_choices: {
+                                            on_choose_source: {
                                                 let selected_ids = selected_ids.clone();
-                                                move |choices: HashMap<u32, SourceChoice>| {
+                                                let choose_data = data.clone();
+                                                let choose_engine = engine.clone();
+                                                let choose_selection = active_analysis.clone();
+                                                move |(item_id, choice): (u32, Option<SourceChoice>)| {
                                                     let mut next = state();
-                                                    for entry_id in &selected_ids {
-                                                        if let Some(item) = next.items.get_mut(entry_id) {
-                                                            for (item_id, choice) in &choices {
-                                                                item.source_choices.insert(item_id.to_string(), choice.clone());
+                                                    if let Some(snapshot) = market_priority_snapshot() {
+                                                        market_priority_snapshot.set(None);
+                                                        let materialized = choose_selection
+                                                            .as_ref()
+                                                            .map(|selection| {
+                                                                let materials = summarize_card_materials(&choose_engine, selection)
+                                                                    .into_iter()
+                                                                    .filter(|material| !is_crystal_resource(&choose_data, material.item_id))
+                                                                    .collect::<Vec<_>>();
+                                                                materialize_market_priority(&choose_data, &materials, &snapshot)
+                                                            })
+                                                            .unwrap_or_else(|| snapshot.clone());
+                                                        for entry_id in &selected_ids {
+                                                            if let Some(item) = next.items.get_mut(entry_id) {
+                                                                for (material_id, material_choice) in &materialized {
+                                                                    if matches!(material_choice, SourceChoice::Market) {
+                                                                        item.source_choices.insert(material_id.to_string(), material_choice.clone());
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                    state.set(next);
-                                                }
-                                            },
-                                            on_choose_source: {
-                                                let selected_ids = selected_ids.clone();
-                                                move |(item_id, choice): (u32, Option<SourceChoice>)| {
-                                                    let mut next = state();
                                                     for entry_id in &selected_ids {
                                                         if let Some(item) = next.items.get_mut(entry_id) {
                                                             if let Some(choice) = choice.clone() {
@@ -3847,32 +5049,6 @@ pub fn NotesPage() -> Element {
                                             },
                                             on_inspect: move |target| detail_target.set(Some(target)),
                                         }
-                                    }
-                                } else {
-                                    div { class: "grid w-full gap-3",
-                                        for (entry_id, analysis) in selected_analyses.clone() {
-                                            {
-                                                let source_choices = choice_record_to_map(&analysis.source_choices);
-                                                rsx! {
-                                                    CraftAnalysisView {
-                                                        key: "{entry_id}",
-                                                        data: data.clone(),
-                                                        engine: engine.clone(),
-                                                        active: true,
-                                                        source_choices,
-                                                        selection: analysis,
-                                                        on_select: move |_| {},
-                                                        on_edit: { let entry_id = entry_id.clone(); move |_| { add_item_parent_id.set(find_parent_folder_id(&state().tree, &entry_id)); editing_item_id.set(Some(entry_id.clone())); } },
-                                                        on_remove: { let entry_id = entry_id.clone(); move |_| confirm_dialog.set(Some(ConfirmDialogKind::DeleteNode { node_id: entry_id.clone() })) },
-                                                        on_toggle_collapsed_item: { let entry_id = entry_id.clone(); move |(item_id, collapsed)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { item.collapsed = target_with_collapsed_item(&CraftSummaryTarget { id: item.id.clone(), recipe_id: item.recipe_id, item_id: item.item_id, amount: item.amount, collapsed: item.collapsed.clone() }, item_id, collapsed).collapsed; } state.set(next); } },
-                                                        on_apply_source_choices: { let entry_id = entry_id.clone(); move |choices: HashMap<u32, SourceChoice>| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { for (item_id, choice) in choices { item.source_choices.insert(item_id.to_string(), choice); } } state.set(next); } },
-                                                        on_choose_source: { let entry_id = entry_id.clone(); move |(item_id, choice): (u32, Option<SourceChoice>)| { let mut next = state(); if let Some(item) = next.items.get_mut(&entry_id) { if let Some(choice) = choice { item.source_choices.insert(item_id.to_string(), choice); } else { item.source_choices.remove(&item_id.to_string()); } } state.set(next); } },
-                                                        on_inspect: move |target| detail_target.set(Some(target)),
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }

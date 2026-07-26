@@ -134,6 +134,7 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
     let class_job_categories = game.load_named_rows("ClassJobCategory")?;
     let item_action_types = game.load_item_action_types()?;
     let explicit_equipment_sets = game.load_explicit_equipment_sets()?;
+    let equipment_set_items = game.load_equipment_set_items()?;
     let mut classification_audit = CollectionClassificationAudit::default();
     let mut items = game.load_collection_items(
         &class_job_categories,
@@ -153,6 +154,7 @@ pub fn export_collection_catalog_from_resource<R: Resource>(
         classification_audit.candidate_count, classification_audit.other_unlocks_by_action_type
     );
     assign_equipment_sets(&mut items, &explicit_equipment_sets);
+    assign_equipment_set_items(&mut items, &equipment_set_items);
     sort_collection_items(&mut items);
     let mut counts = CollectionCatalogCounts::default();
     counts.items = items.len();
@@ -346,6 +348,20 @@ impl<R: Resource> GameExcel<R> {
         Ok(sets)
     }
 
+    fn load_equipment_set_items(&mut self) -> Result<HashMap<String, Vec<u32>>> {
+        let sheet = self.sheet("Item", Language::ChineseSimplified)?;
+        let mut set_items = HashMap::<String, Vec<u32>>::new();
+        for_each_row(&sheet, |row_id, row| {
+            let Some(name) = string_value(row, 0).filter(|name| !name.is_empty()) else {
+                return;
+            };
+            if number_value(row, 15) == 112 {
+                set_items.entry(name.to_owned()).or_default().push(row_id);
+            }
+        });
+        Ok(set_items)
+    }
+
     pub fn load_collection_items(
         &mut self,
         class_job_category_names: &HashMap<u32, String>,
@@ -419,6 +435,7 @@ impl<R: Resource> GameExcel<R> {
                 item_series,
                 set_id,
                 set_name,
+                set_item_ids: Vec::new(),
                 expansion: "未归档".to_string(),
                 patch: "未归档版本".to_string(),
                 model_main,
@@ -873,6 +890,20 @@ fn assign_equipment_sets(items: &mut [CollectionItem], explicit_sets: &[Equipmen
     }
 }
 
+fn assign_equipment_set_items(
+    items: &mut [CollectionItem],
+    set_items_by_name: &HashMap<String, Vec<u32>>,
+) {
+    for item in items {
+        if item.kind != CollectionKind::Equipment {
+            continue;
+        }
+        if let Some(set_item_ids) = set_items_by_name.get(&item.set_name) {
+            item.set_item_ids.clone_from(set_item_ids);
+        }
+    }
+}
+
 fn distinct_equipment_slots(items: &[CollectionItem], indices: &[usize]) -> usize {
     indices
         .iter()
@@ -1155,6 +1186,27 @@ mod collection_tests {
     }
 
     #[test]
+    fn equipment_set_items_are_attached_by_canonical_set_name() {
+        let mut items = vec![
+            equipment_item(52_406, "新生国民卫衣", 3),
+            equipment_item(52_407, "新生国民短裤", 6),
+            equipment_item(52_408, "新生国民鞋", 7),
+        ];
+        let definitions = vec![EquipmentSetDefinition {
+            id: "fitting:1000501".to_string(),
+            name: Some("新生国民套装".to_string()),
+            item_ids: vec![52_406, 52_407, 52_408],
+        }];
+        assign_equipment_sets(&mut items, &definitions);
+        assign_equipment_set_items(
+            &mut items,
+            &HashMap::from([("新生国民套装".to_string(), vec![52_596])]),
+        );
+
+        assert!(items.iter().all(|item| item.set_item_ids == vec![52_596]));
+    }
+
+    #[test]
     fn inferred_sets_keep_upgrade_variants_separate() {
         let mut items = vec![
             equipment_item(40, "元素御敌头盔+1", 2),
@@ -1189,6 +1241,7 @@ mod collection_tests {
             item_series: 0,
             set_id: format!("item:{id}"),
             set_name: name.to_string(),
+            set_item_ids: Vec::new(),
             expansion: String::new(),
             patch: String::new(),
             model_main: 0,

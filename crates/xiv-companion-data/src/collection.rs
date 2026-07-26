@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 14;
+pub const COLLECTION_CATALOG_SCHEMA_VERSION: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +149,8 @@ pub struct CollectionItem {
     pub item_series: u32,
     pub set_id: String,
     pub set_name: String,
+    #[serde(default)]
+    pub set_item_ids: Vec<u32>,
     pub expansion: String,
     pub patch: String,
     pub model_main: u64,

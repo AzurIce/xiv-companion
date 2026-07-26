@@ -504,6 +504,7 @@ mod tests {
                 item_series: 0,
                 set_id: "item:1".to_string(),
                 set_name: "旧版物品".to_string(),
+                set_item_ids: Vec::new(),
                 expansion: String::new(),
                 patch: String::new(),
                 model_main: 0,

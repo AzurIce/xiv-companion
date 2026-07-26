@@ -201,18 +201,18 @@ pub fn AppShell(route: Signal<Route>) -> Element {
 
     let current = route();
     let shell_class = if collapsed() {
-        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[72px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
+        "grid h-dvh min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground lg:grid-cols-[72px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     } else {
-        "min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
+        "grid h-dvh min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground lg:grid-cols-[240px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     };
 
     rsx! {
         div {
             class: shell_class,
             DesktopSidebar { current, collapsed }
-            div { class: "flex min-w-0 flex-col",
+            div { class: "flex min-h-0 min-w-0 flex-col overflow-hidden",
                 MobileHeader { current }
-                main { class: "min-w-0 flex-1",
+                main { class: "min-h-0 min-w-0 flex-1 overflow-y-auto",
                     PageContent { current }
                 }
             }
@@ -234,7 +234,7 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
     };
 
     rsx! {
-        aside { class: "relative z-50 hidden min-h-screen min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
+        aside { class: "relative z-50 hidden h-dvh min-h-0 min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
             div { class: brand_class,
                 div { class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground",
                     Icon { kind: IconKind::LayoutDashboard, class: "h-4 w-4" }

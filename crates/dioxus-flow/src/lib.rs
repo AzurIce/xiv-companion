@@ -222,11 +222,9 @@ pub fn FlowCanvas(
     let drag_for_canvas_down = drag.clone();
     let drag_for_canvas_move = drag.clone();
     let drag_for_canvas_up = drag.clone();
-    let by_id = nodes
-        .iter()
-        .cloned()
-        .map(|node| (node.id.clone(), node))
-        .collect::<HashMap<_, _>>();
+    let canvas_element = use_hook(|| Rc::new(RefCell::new(None::<web_sys::Element>)));
+    let canvas_for_mount = canvas_element.clone();
+    let canvas_for_wheel = canvas_element.clone();
     let current_viewport = viewport();
     let background_size = 20.0 * current_viewport.zoom;
     let background_position = format!(
@@ -239,16 +237,22 @@ pub fn FlowCanvas(
         div {
             class: class.clone(),
             style: "position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; touch-action: none; user-select: none; cursor: grab; background-image: radial-gradient(circle, color-mix(in srgb, currentColor 18%, transparent) 1px, transparent 1px); background-size: {background_size}px {background_size}px; background-position: {background_position};",
+            onmounted: move |event| {
+                *canvas_for_mount.borrow_mut() =
+                    event.data().downcast::<web_sys::Element>().cloned();
+            },
             onwheel: move |event| {
                 let event_data = event.data();
                 let Some(native) = event_data.downcast::<web_sys::WheelEvent>() else { return; };
-                let Some(element) = native.current_target().and_then(|target| target.dyn_into::<web_sys::Element>().ok()) else { return; };
+                let Some(element) = canvas_for_wheel.borrow().clone() else { return; };
                 let rect = element.get_bounding_client_rect();
                 let anchor = Point::new(native.client_x() as f64 - rect.left(), native.client_y() as f64 - rect.top());
                 let factor = (-native.delta_y() * 0.0015).exp();
-                let next_zoom = clamp_zoom(viewport().zoom * factor, min_zoom, max_zoom);
+                let current = viewport();
+                let next_zoom = clamp_zoom(current.zoom * factor, min_zoom, max_zoom);
                 event.prevent_default();
-                viewport.set(zoom_at(viewport(), anchor, next_zoom));
+                event.stop_propagation();
+                viewport.set(zoom_at(current, anchor, next_zoom));
             },
             onmousedown: move |event| {
                 let event_data = event.data();
@@ -305,48 +309,87 @@ pub fn FlowCanvas(
             onmouseup: move |_| *drag_for_canvas_up.borrow_mut() = None,
 
             div {
-                style: "position: absolute; left: 0; top: 0; transform: translate({current_viewport.x}px, {current_viewport.y}px) scale({current_viewport.zoom}); transform-origin: 0 0;",
-                svg {
-                    style: "position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none;",
-                    width: "1",
-                    height: "1",
-                    defs {
-                        marker {
-                            id: marker_id.clone(),
-                            marker_width: "10",
-                            marker_height: "10",
-                            ref_x: "9",
-                            ref_y: "5",
-                            orient: "auto",
-                            path { d: "M0,0 L10,5 L0,10 Z", fill: edge_color.clone() }
-                        }
+                style: "position: absolute; left: {current_viewport.x}px; top: {current_viewport.y}px;",
+                div {
+                    style: "zoom: {current_viewport.zoom};",
+                    FlowScene {
+                        nodes: nodes.clone(),
+                        edges,
+                        marker_id,
+                        edge_color,
+                        drag: drag.clone(),
+                        render_node,
+                        on_node_click,
                     }
-                    for edge in edges.iter() {
-                        if let (Some(source), Some(target)) = (by_id.get(&edge.source), by_id.get(&edge.target)) {
-                            {
-                                let x1 = source.position.x + source.size.width;
-                                let y1 = source.position.y + source.size.height / 2.0 + edge.source_offset;
-                                let x2 = target.position.x;
-                                let y2 = target.position.y + target.size.height / 2.0 + edge.target_offset;
-                                let mid_x = (x1 + x2) / 2.0;
-                                let path = format!("M {x1} {y1} C {mid_x} {y1}, {mid_x} {y2}, {x2} {y2}");
-                                let label_x = x1 + (x2 - x1) * 0.68 - 22.0;
-                                let label_y = y1 + (y2 - y1) * 0.68 - 10.0;
-                                rsx! {
-                                    g { key: "{edge.id}",
-                                        path {
-                                            d: path,
-                                            fill: "none",
-                                            stroke: edge_color.clone(),
-                                            stroke_opacity: "0.68",
-                                            stroke_width: "1.75",
-                                            marker_end: "url(#{marker_id})",
-                                        }
-                                        if let Some(label) = edge.label.as_ref() {
-                                            foreignObject { x: "{label_x}", y: "{label_y}", width: "44", height: "20",
-                                                div { style: "display: flex; height: 20px; align-items: center; justify-content: center;",
-                                                    span { style: "border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 3px; background: color-mix(in srgb, Canvas 90%, transparent); padding: 2px 4px; color: color-mix(in srgb, currentColor 70%, transparent); font-size: 9px; font-weight: 500; line-height: 1; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);", {label.clone()} }
-                                                }
+                }
+            }
+
+            if nodes.is_empty() {
+                div { style: "position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;", {empty} }
+            }
+        }
+    }
+}
+
+#[component]
+fn FlowScene(
+    nodes: Vec<FlowNode>,
+    edges: Vec<FlowEdge>,
+    marker_id: String,
+    edge_color: String,
+    drag: Rc<RefCell<Option<DragState>>>,
+    render_node: Callback<NodeId, Element>,
+    on_node_click: EventHandler<NodeId>,
+) -> Element {
+    let by_id = nodes
+        .iter()
+        .cloned()
+        .map(|node| (node.id.clone(), node))
+        .collect::<HashMap<_, _>>();
+
+    rsx! {
+        div {
+            style: "position: absolute; left: 0; top: 0; contain: layout style;",
+            svg {
+                style: "position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none;",
+                width: "1",
+                height: "1",
+                defs {
+                    marker {
+                        id: marker_id.clone(),
+                        marker_width: "10",
+                        marker_height: "10",
+                        ref_x: "9",
+                        ref_y: "5",
+                        orient: "auto",
+                        path { d: "M0,0 L10,5 L0,10 Z", fill: edge_color.clone() }
+                    }
+                }
+                for edge in edges.iter() {
+                    if let (Some(source), Some(target)) = (by_id.get(&edge.source), by_id.get(&edge.target)) {
+                        {
+                            let x1 = source.position.x + source.size.width;
+                            let y1 = source.position.y + source.size.height / 2.0 + edge.source_offset;
+                            let x2 = target.position.x;
+                            let y2 = target.position.y + target.size.height / 2.0 + edge.target_offset;
+                            let mid_x = (x1 + x2) / 2.0;
+                            let path = format!("M {x1} {y1} C {mid_x} {y1}, {mid_x} {y2}, {x2} {y2}");
+                            let label_x = x1 + (x2 - x1) * 0.68 - 22.0;
+                            let label_y = y1 + (y2 - y1) * 0.68 - 10.0;
+                            rsx! {
+                                g { key: "{edge.id}",
+                                    path {
+                                        d: path,
+                                        fill: "none",
+                                        stroke: edge_color.clone(),
+                                        stroke_opacity: "0.68",
+                                        stroke_width: "1.75",
+                                        marker_end: "url(#{marker_id})",
+                                    }
+                                    if let Some(label) = edge.label.as_ref() {
+                                        foreignObject { x: "{label_x}", y: "{label_y}", width: "44", height: "20",
+                                            div { style: "display: flex; height: 20px; align-items: center; justify-content: center;",
+                                                span { style: "border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 3px; background: color-mix(in srgb, Canvas 90%, transparent); padding: 2px 4px; color: color-mix(in srgb, currentColor 70%, transparent); font-size: 9px; font-weight: 500; line-height: 1; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);", {label.clone()} }
                                             }
                                         }
                                     }
@@ -355,50 +398,46 @@ pub fn FlowCanvas(
                         }
                     }
                 }
+            }
 
-                for node in nodes.iter() {
-                    {
-                        let node_for_drag = node.clone();
-                        let id = node.id.clone();
-                        let drag_for_node_down = drag.clone();
-                        let drag_for_node_up = drag.clone();
-                        rsx! {
-                            div {
-                                key: "{id.0}",
-                                style: "position: absolute; left: {node.position.x}px; top: {node.position.y}px; width: {node.size.width}px; height: {node.size.height}px; cursor: grab;",
-                                onmousedown: move |event| {
-                                    let event_data = event.data();
-                                    let Some(native) = event_data.downcast::<web_sys::MouseEvent>() else { return; };
-                                    if native.button() != 0 { return; }
-                                    event.stop_propagation();
-                                    let targets_no_drag = native
-                                        .target()
-                                        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
-                                        .and_then(|element| element.closest("[data-flow-no-drag]").ok().flatten())
-                                        .is_some();
-                                    if targets_no_drag { return; }
-                                    *drag_for_node_down.borrow_mut() = Some(DragState::Node {
-                                        id: node_for_drag.id.clone(),
-                                        start: client_point(&event),
-                                        origin: node_for_drag.position,
-                                        moved: false,
-                                    });
-                                },
-                                onmouseup: move |_| {
-                                    let interaction = drag_for_node_up.borrow_mut().take();
-                                    if matches!(interaction, Some(DragState::Node { id: ref node_id, moved: false, .. }) if node_id == &id) {
-                                        on_node_click.call(id.clone());
-                                    }
-                                },
-                                {render_node.call(node.id.clone())}
-                            }
+            for node in nodes.iter() {
+                {
+                    let node_for_drag = node.clone();
+                    let id = node.id.clone();
+                    let drag_for_node_down = drag.clone();
+                    let drag_for_node_up = drag.clone();
+                    rsx! {
+                        div {
+                            key: "{id.0}",
+                            style: "position: absolute; left: {node.position.x}px; top: {node.position.y}px; width: {node.size.width}px; height: {node.size.height}px; cursor: grab;",
+                            onmousedown: move |event| {
+                                let event_data = event.data();
+                                let Some(native) = event_data.downcast::<web_sys::MouseEvent>() else { return; };
+                                if native.button() != 0 { return; }
+                                event.stop_propagation();
+                                let targets_no_drag = native
+                                    .target()
+                                    .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                                    .and_then(|element| element.closest("[data-flow-no-drag]").ok().flatten())
+                                    .is_some();
+                                if targets_no_drag { return; }
+                                *drag_for_node_down.borrow_mut() = Some(DragState::Node {
+                                    id: node_for_drag.id.clone(),
+                                    start: client_point(&event),
+                                    origin: node_for_drag.position,
+                                    moved: false,
+                                });
+                            },
+                            onmouseup: move |_| {
+                                let interaction = drag_for_node_up.borrow_mut().take();
+                                if matches!(interaction, Some(DragState::Node { id: ref node_id, moved: false, .. }) if node_id == &id) {
+                                    on_node_click.call(id.clone());
+                                }
+                            },
+                            {render_node.call(node.id.clone())}
                         }
                     }
                 }
-            }
-
-            if nodes.is_empty() {
-                div { style: "position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;", {empty} }
             }
         }
     }

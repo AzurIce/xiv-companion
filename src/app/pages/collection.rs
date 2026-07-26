@@ -13,7 +13,8 @@ use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
 use crate::app::inventory_state::{PersistedInventoryState, load_inventory_state};
 use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, DialogKeyAction, EmptyState,
+    dialog_key_action, input_class,
 };
 use crate::app::utils::format_integer;
 
@@ -757,12 +758,31 @@ fn CollectionSyncDialog(
 ) -> Element {
     let can_confirm = matches!(&state, CollectionSyncDialogState::Preview(preview) if !preview.added_items.is_empty() || !preview.removed_items.is_empty())
         && !applying;
+    let keyboard_state = state.clone();
 
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4",
             role: "dialog",
             aria_modal: "true",
+            tabindex: "-1",
+            autofocus: true,
+            onkeydown: {
+                let state = keyboard_state.clone();
+                move |event| match dialog_key_action(&event, can_confirm) {
+                    Some(DialogKeyAction::Confirm) => {
+                        if let CollectionSyncDialogState::Preview(preview) = &state {
+                            on_confirm.call(CollectionSyncApplication {
+                                replacement_ids: preview.replacement_ids.clone(),
+                                added_count: preview.added_items.len(),
+                                removed_count: preview.removed_items.len(),
+                            });
+                        }
+                    }
+                    Some(DialogKeyAction::Close) if !applying => on_close.call(()),
+                    _ => {}
+                }
+            },
             onclick: move |_| {
                 if !applying {
                     on_close.call(());

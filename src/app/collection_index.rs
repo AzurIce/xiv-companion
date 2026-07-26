@@ -278,6 +278,7 @@ mod tests {
             item_series: 9,
             set_id: "series:9".to_string(),
             set_name: "测试套装".to_string(),
+            set_item_ids: Vec::new(),
             expansion: "晓月之终途".to_string(),
             patch: "6.0".to_string(),
             model_main: 1,

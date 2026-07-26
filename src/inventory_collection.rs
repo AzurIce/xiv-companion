@@ -16,7 +16,14 @@ pub fn inventory_collection_item_ids(
 ) -> HashSet<u32> {
     catalog
         .iter()
-        .filter(|item| item.kind == CollectionKind::Equipment && owned_item_ids.contains(&item.id))
+        .filter(|item| {
+            item.kind == CollectionKind::Equipment
+                && (owned_item_ids.contains(&item.id)
+                    || item
+                        .set_item_ids
+                        .iter()
+                        .any(|set_item_id| owned_item_ids.contains(set_item_id)))
+        })
         .map(|item| item.id)
         .collect()
 }
@@ -83,6 +90,7 @@ mod tests {
             item_series: 0,
             set_id: String::new(),
             set_name: String::new(),
+            set_item_ids: Vec::new(),
             expansion: String::new(),
             patch: String::new(),
             model_main: 0,
@@ -122,5 +130,21 @@ mod tests {
         assert_eq!(sync.added_ids, HashSet::from([40]));
         assert_eq!(sync.removed_ids, HashSet::from([10]));
         assert_eq!(sync.next_collection_ids, HashSet::from([20, 30, 40]));
+    }
+
+    #[test]
+    fn owning_an_unopened_set_item_detects_every_equipment_piece() {
+        let mut top = item(52_406, CollectionKind::Equipment);
+        top.set_item_ids = vec![52_596];
+        let mut bottoms = item(52_407, CollectionKind::Equipment);
+        bottoms.set_item_ids = vec![52_596];
+        let mut shoes = item(52_408, CollectionKind::Equipment);
+        shoes.set_item_ids = vec![52_596];
+        let catalog = vec![top, bottoms, shoes];
+
+        assert_eq!(
+            inventory_collection_item_ids(&HashSet::from([52_596]), &catalog),
+            HashSet::from([52_406, 52_407, 52_408])
+        );
     }
 }

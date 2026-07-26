@@ -37,10 +37,6 @@ impl InventoryBridgeConnection {
         on_update: impl FnMut(InventoryBridgeUpdate) + 'static,
     ) -> Result<Rc<Self>, String> {
         let url = url.trim();
-        if !url.starts_with("ws://127.0.0.1:") && !url.starts_with("ws://localhost:") {
-            return Err("桥接地址必须使用本机 ws://127.0.0.1 或 ws://localhost".to_string());
-        }
-
         let socket = WebSocket::new(url).map_err(js_error)?;
         let callback: Rc<RefCell<dyn FnMut(InventoryBridgeUpdate)>> =
             Rc::new(RefCell::new(on_update));

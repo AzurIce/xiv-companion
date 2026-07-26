@@ -13,6 +13,7 @@ mod inventory_bridge;
 mod inventory_state;
 mod load_progress;
 mod log;
+mod market;
 #[cfg(target_arch = "wasm32")]
 mod model_canvas_renderer;
 mod modules;

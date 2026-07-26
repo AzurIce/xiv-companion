@@ -2,6 +2,23 @@ use dioxus::prelude::*;
 
 use super::utils::cx;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogKeyAction {
+    Confirm,
+    Close,
+}
+
+pub fn dialog_key_action(event: &KeyboardEvent, confirm_enabled: bool) -> Option<DialogKeyAction> {
+    let action = match event.key() {
+        Key::Enter if confirm_enabled => DialogKeyAction::Confirm,
+        Key::Escape => DialogKeyAction::Close,
+        _ => return None,
+    };
+    event.prevent_default();
+    event.stop_propagation();
+    Some(action)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum ButtonVariant {

@@ -3,8 +3,7 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use xiv_companion::{
     CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CraftDataId,
-    CraftDataResource, ItemIconId, ItemIconResource, ResourceError, ResourceErrorKind,
-    ResourceOrigin, ResourceSource, ResourceStatus, WeaponCatalogId, WeaponCatalogResource,
+    CraftDataResource, ResourceOrigin, ResourceStatus, WeaponCatalogId, WeaponCatalogResource,
 };
 
 use crate::app::data::{
@@ -14,26 +13,16 @@ use crate::app::data::{
 use crate::app::icons::{Icon, IconKind};
 use crate::app::load_progress::{self, CraftDataLoadProgress};
 use crate::app::log;
-use crate::app::modules::APP_MODULES;
 use crate::app::resource_settings::{
     ResourceSettings, SourcePreference, configured_web_resource_hub_for, is_user_local_path_usable,
     load_resource_settings, path_user_local_provider_available_for_runtime, save_resource_settings,
 };
-use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, CardContent, CardHeader,
-    CardTitle, input_class,
-};
+use crate::app::ui::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, input_class};
 use crate::app::user_local_directory::{
     AuthorizedDirectoryLayout, AuthorizedUserLocalDirectory, authorize_user_local_directory,
     restore_user_local_directory, save_current_user_local_directory_handle,
 };
 use crate::app::utils::{cx, format_integer};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ResourceTestResult {
-    Ok(String),
-    Err(ResourceDiagnostic),
-}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum ResourceActionState {
@@ -60,27 +49,11 @@ enum UserLocalStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ResourceDiagnostic {
-    title: String,
-    summary: String,
-    action: String,
-    details: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsValidation {
     valid: bool,
     user_local_status: UserLocalStatus,
     message: String,
     details: Vec<String>,
-}
-
-fn source_name(source: ResourceSource) -> &'static str {
-    match source {
-        ResourceSource::Builtin => "Builtin",
-        ResourceSource::IndexedDb => "IndexedDB",
-        ResourceSource::UserLocal => "UserLocal",
-    }
 }
 
 fn preference_sources(value: SourcePreference) -> &'static str {
@@ -255,186 +228,11 @@ fn validate_resource_settings(
     }
 }
 
-fn error_kind_label(kind: ResourceErrorKind) -> &'static str {
-    match kind {
-        ResourceErrorKind::DecodeFailed => "解码失败",
-        ResourceErrorKind::NotFound => "文件未找到",
-        ResourceErrorKind::NoSourceAvailable => "无可用来源",
-        ResourceErrorKind::PermissionMissing => "缺少权限",
-        ResourceErrorKind::ProviderFailed => "来源读取失败",
-        ResourceErrorKind::Unsupported => "来源不支持",
-        ResourceErrorKind::VersionMismatch => "版本不匹配",
-    }
-}
-
-fn diagnose_resource_error(
-    resource_label: &'static str,
-    source: ResourceSource,
-    settings: &ResourceSettings,
-    error: ResourceError,
-) -> ResourceDiagnostic {
-    let mut details = vec![
-        format!("资源类型: {resource_label}"),
-        format!("请求来源: {}", source_name(source)),
-        format!("错误类别: {}", error_kind_label(error.kind)),
-        format!("内部错误: {error}"),
-    ];
-
-    if source == ResourceSource::UserLocal {
-        details.push(format!(
-            "UserLocal 状态: {}",
-            user_local_status_label(user_local_status(settings, None))
-        ));
-        details.push(format!(
-            "UserLocal 路径: {}",
-            settings.user_local_path.trim()
-        ));
-    }
-
-    if source == ResourceSource::UserLocal && error.kind == ResourceErrorKind::Unsupported {
-        let status = user_local_status(settings, None);
-
-        let (title, summary) = match status {
-            UserLocalStatus::PathProviderUnavailable => (
-                "UserLocal provider 未接入",
-                "当前没有可用的浏览器目录 handle，UserLocal provider 不会匹配资源。",
-            ),
-            UserLocalStatus::MissingPath => (
-                "UserLocal 路径未配置",
-                "没有选择游戏目录时，浏览器本地 provider 不会注册为可用来源。",
-            ),
-            UserLocalStatus::IncompletePath => (
-                "UserLocal 路径不完整",
-                "当前 Native 路径像目录名或相对路径，不能注册为可用本地来源。",
-            ),
-            UserLocalStatus::Configured => (
-                "UserLocal provider 未匹配该资源",
-                "当前已配置路径，但没有 provider 声明可以提供这个资源类型。",
-            ),
-        };
-
-        return ResourceDiagnostic {
-            title: title.to_string(),
-            summary: summary.to_string(),
-            action: user_local_next_action(status).to_string(),
-            details,
-        };
-    }
-
-    if source == ResourceSource::UserLocal {
-        let error_text = error.to_string();
-        if error.kind == ResourceErrorKind::ProviderFailed
-            && error_text.contains("failed to find sqpack")
-        {
-            return ResourceDiagnostic {
-                title: "没有找到 sqpack".to_string(),
-                summary: "UserLocal provider 已启动，但当前路径下没有 sqpack，也没有 game\\sqpack。"
-                    .to_string(),
-                action: "如果路径来自“授权浏览器目录”，它只是目录名，不是实际路径；请手动输入完整 FF14 game 目录或安装根目录路径。"
-                    .to_string(),
-                details,
-            };
-        }
-
-        let (title, summary, action) = match error.kind {
-            ResourceErrorKind::NotFound => (
-                "本地资源文件未找到",
-                "ResourceHub 已调用 UserLocal provider，但没有在本地游戏目录中找到对应文件。",
-                "确认路径指向 FF14 的 game 目录，并检查游戏资源是否完整。",
-            ),
-            ResourceErrorKind::ProviderFailed => (
-                "本地资源读取失败",
-                "UserLocal provider 已启动，但读取或转换本地游戏数据时失败。",
-                "确认路径有效，并检查路径下是否存在 sqpack 或 game\\sqpack。",
-            ),
-            ResourceErrorKind::DecodeFailed => (
-                "本地资源解码失败",
-                "已读取到本地资源，但转换成应用数据结构时失败。",
-                "保留错误详情并检查资源版本或解码流程。",
-            ),
-            ResourceErrorKind::PermissionMissing => (
-                "缺少本地资源权限",
-                "运行环境没有读取本地游戏目录所需的权限。",
-                "重新选择目录授权，或在具备本地文件权限的运行环境中启动。",
-            ),
-            _ => (
-                "UserLocal 读取失败",
-                "本地资源来源返回错误。",
-                "查看详情中的内部错误，再决定是修路径、修 provider，还是切回 Builtin。",
-            ),
-        };
-
-        return ResourceDiagnostic {
-            title: title.to_string(),
-            summary: summary.to_string(),
-            action: action.to_string(),
-            details,
-        };
-    }
-
-    ResourceDiagnostic {
-        title: format!("{} 读取失败", source_name(source)),
-        summary: "资源来源返回错误。".to_string(),
-        action:
-            "查看详情中的内部错误；如果 Builtin 失败，通常需要检查 bundled asset 或网络可用性。"
-                .to_string(),
-        details,
-    }
-}
-
-async fn test_craft_data(settings: ResourceSettings, source: ResourceSource) -> ResourceTestResult {
-    let hub = configured_web_resource_hub_for(&settings);
-    match hub
-        .load_from::<CraftDataResource>(source, CraftDataId::Default)
-        .await
-    {
-        Ok(data) => ResourceTestResult::Ok(format!(
-            "{} / 物品 {} / 配方 {}",
-            data.game_version,
-            format_integer(data.counts.items as f64),
-            format_integer(data.counts.recipes as f64)
-        )),
-        Err(error) => ResourceTestResult::Err(diagnose_resource_error(
-            "CraftData",
-            source,
-            &settings,
-            error,
-        )),
-    }
-}
-
-async fn test_item_icon(settings: ResourceSettings, source: ResourceSource) -> ResourceTestResult {
-    if source == ResourceSource::UserLocal {
-        return ResourceTestResult::Err(ResourceDiagnostic {
-            title: "ItemIcon 固定使用 Builtin/API".to_string(),
-            summary: "Web 版不再从本地 SqPack 解码 .tex 图标。".to_string(),
-            action: "图标会使用浏览器原生 <img> 加载 API/Builtin URL；本地 UserLocal 保留给 CraftData 和未来模型等游戏数据。".to_string(),
-            details: vec![
-                "避免批量 TEX 解码造成主线程卡顿和 WASM 内存峰值。".to_string(),
-                "如需验证图标，请测试 Builtin 来源。".to_string(),
-            ],
-        });
-    }
-
-    let hub = configured_web_resource_hub_for(&settings);
-    match hub
-        .load_from::<ItemIconResource>(source, ItemIconId { icon_id: 65000 })
-        .await
-    {
-        Ok(info) => ResourceTestResult::Ok(format!("{} builtin URLs", info.urls.len())),
-        Err(error) => ResourceTestResult::Err(diagnose_resource_error(
-            "ItemIcon", source, &settings, error,
-        )),
-    }
-}
-
 #[component]
 pub(super) fn ResourceSettingsSection() -> Element {
     let mut settings = use_signal(load_resource_settings);
     let mut applied_settings = use_signal(load_resource_settings);
     let mut settings_revision = use_signal(|| 0_u64);
-    let mut craft_test = use_signal(|| None::<(ResourceSource, ResourceTestResult)>);
-    let mut icon_test = use_signal(|| None::<(ResourceSource, ResourceTestResult)>);
     let mut directory_pick_error = use_signal(|| None::<String>);
     let mut authorized_user_local_directory = use_signal(|| None::<AuthorizedUserLocalDirectory>);
     let mut directory_dirty = use_signal(|| false);
@@ -552,8 +350,6 @@ pub(super) fn ResourceSettingsSection() -> Element {
                 craft_data,
                 weapon_catalog,
                 collection_catalog,
-                craft_test: craft_test(),
-                icon_test: icon_test(),
                 directory_pick_error: directory_pick_error(),
                 authorized_user_local_directory: authorized_directory_snapshot,
                 craft_progress: craft_data_progress(),
@@ -569,9 +365,6 @@ pub(super) fn ResourceSettingsSection() -> Element {
                 on_settings_change: move |next| {
                     settings.set(next);
                     load_progress::clear_craft_data_progress();
-
-                    craft_test.set(None);
-                    icon_test.set(None);
                     directory_pick_error.set(None);
                     save_feedback.set(None);
                 },
@@ -604,9 +397,6 @@ pub(super) fn ResourceSettingsSection() -> Element {
                 on_cancel: move |_| {
                     settings.set(applied_settings());
                     load_progress::clear_craft_data_progress();
-
-                    craft_test.set(None);
-                    icon_test.set(None);
                     directory_pick_error.set(None);
                     spawn(async move {
                         match restore_user_local_directory().await {
@@ -624,24 +414,6 @@ pub(super) fn ResourceSettingsSection() -> Element {
                         collection_catalog.restart();
                     });
                 },
-                on_test_craft: move |source| {
-                    let snapshot = settings();
-                    load_progress::clear_craft_data_progress();
-
-                    spawn(async move {
-                        let result = test_craft_data(snapshot, source).await;
-                        craft_test.set(Some((source, result)));
-                    });
-                },
-                on_test_icon: move |source| {
-                    let snapshot = settings();
-                    load_progress::clear_craft_data_progress();
-
-                    spawn(async move {
-                        let result = test_item_icon(snapshot, source).await;
-                        icon_test.set(Some((source, result)));
-                    });
-                },
                 on_choose_user_local_dir: move |_| {
                     directory_pick_error.set(None);
                     load_progress::clear_craft_data_progress();
@@ -651,8 +423,6 @@ pub(super) fn ResourceSettingsSection() -> Element {
                             Ok(directory) => {
                                 clear_item_icon_cache();
                                 authorized_user_local_directory.set(Some(directory));
-                                craft_test.set(None);
-                                icon_test.set(None);
                                 save_feedback.set(None);
                                 directory_dirty.set(true);
                                 settings_revision.set(settings_revision() + 1);
@@ -777,49 +547,7 @@ pub(super) fn ResourceSettingsSection() -> Element {
                 },
             }
 
-            section { class: "space-y-3",
-                div {
-                    div { class: "text-sm font-medium", "工具" }
-                    div { class: "mt-1 text-sm text-muted-foreground", "当前可用的工作区" }
-                }
-
-                div { class: "grid gap-4 md:grid-cols-2 xl:grid-cols-4",
-                    for module in APP_MODULES {
-                        a { href: format!("#{}", module.href), class: "block",
-                            Card { class: cx(["h-full transition-colors hover:border-foreground/20"]),
-                                CardHeader {
-                                    div { class: "flex h-10 w-10 items-center justify-center rounded-lg border bg-background text-muted-foreground",
-                                        Icon {
-                                            kind: match module.id {
-                                                "notes" => IconKind::BookOpen,
-                                                "weapon-models" => IconKind::Sword,
-                                                _ => IconKind::Wrench,
-                                            },
-                                            class: "h-5 w-5"
-                                        }
-                                    }
-                                }
-                                CardContent { class: "space-y-2".to_string(),
-                                    CardTitle { "{module.label}" }
-                                    div { class: "text-sm text-muted-foreground",
-                                        {module_description(module.id)}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
-    }
-}
-
-fn module_description(id: &str) -> &'static str {
-    match id {
-        "crafting" => "配方树、素材汇总、来源选择",
-        "notes" => "物品树、多选汇总、单项分析",
-        "weapon-models" => "本地 SqPack 武器检索和模型预览",
-        _ => "应用模块",
     }
 }
 
@@ -829,8 +557,6 @@ fn ResourcePanel(
     craft_data: Resource<Result<LoadedCraftData, String>>,
     weapon_catalog: Resource<Result<Rc<xiv_companion::WeaponCatalogPackage>, String>>,
     collection_catalog: Resource<Result<Rc<CollectionCatalogPackage>, String>>,
-    craft_test: Option<(ResourceSource, ResourceTestResult)>,
-    icon_test: Option<(ResourceSource, ResourceTestResult)>,
     directory_pick_error: Option<String>,
     authorized_user_local_directory: Option<AuthorizedUserLocalDirectory>,
     craft_progress: Option<CraftDataLoadProgress>,
@@ -846,8 +572,6 @@ fn ResourcePanel(
     on_settings_change: EventHandler<ResourceSettings>,
     on_save: EventHandler<()>,
     on_cancel: EventHandler<()>,
-    on_test_craft: EventHandler<ResourceSource>,
-    on_test_icon: EventHandler<ResourceSource>,
     on_choose_user_local_dir: EventHandler<()>,
     on_update_craft_data_from_local: EventHandler<()>,
     on_reset_craft_data_to_builtin: EventHandler<()>,
@@ -945,16 +669,6 @@ fn ResourcePanel(
                     on_reset_weapon_catalog_to_builtin,
                     on_update_collection_catalog_from_local,
                     on_reset_collection_catalog_to_builtin,
-                }
-
-                // Section: Testing
-                SectionLabel { label: "连接测试" }
-                ResourceTestSection {
-                    craft_test,
-                    icon_test,
-                    user_local_disabled: local_status != UserLocalStatus::Configured,
-                    on_test_craft,
-                    on_test_icon,
                 }
 
                 if let Some(progress) = craft_progress {
@@ -1336,124 +1050,6 @@ fn ResourceStatusStaticRow(
                 "{status}"
             }
             div { class: "flex justify-end md:justify-start gap-2" }
-        }
-    }
-}
-
-/// Test section — per-resource test buttons with inline results.
-#[component]
-fn ResourceTestSection(
-    craft_test: Option<(ResourceSource, ResourceTestResult)>,
-    icon_test: Option<(ResourceSource, ResourceTestResult)>,
-    user_local_disabled: bool,
-    on_test_craft: EventHandler<ResourceSource>,
-    on_test_icon: EventHandler<ResourceSource>,
-) -> Element {
-    rsx! {
-        div { class: "space-y-3",
-            // CraftData test
-            ResourceTestRow {
-                label: "CraftData",
-                description: "配方与物品数据",
-                result: craft_test,
-                user_local_disabled,
-                on_test_builtin: move |_| on_test_craft.call(ResourceSource::Builtin),
-                on_test_local: move |_| on_test_craft.call(ResourceSource::UserLocal),
-            }
-
-            // ItemIcon test
-            ResourceTestRow {
-                label: "ItemIcon",
-                description: "物品图标 URL（固定 Builtin/API，id=65000）",
-                result: icon_test,
-                user_local_disabled: true,
-                on_test_builtin: move |_| on_test_icon.call(ResourceSource::Builtin),
-                on_test_local: move |_| on_test_icon.call(ResourceSource::UserLocal),
-            }
-
-            if user_local_disabled {
-                div { class: "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900",
-                    div { class: "font-medium", "UserLocal 暂不可测试" }
-                    div { class: "mt-1", "请先在「数据来源 → UserLocal」中配置有效的游戏目录路径。" }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn ResourceTestRow(
-    label: &'static str,
-    description: &'static str,
-    result: Option<(ResourceSource, ResourceTestResult)>,
-    user_local_disabled: bool,
-    on_test_builtin: EventHandler<MouseEvent>,
-    on_test_local: EventHandler<MouseEvent>,
-) -> Element {
-    rsx! {
-        div { class: "rounded-lg border bg-card p-3",
-            div { class: "flex flex-wrap items-center justify-between gap-3",
-                div { class: "min-w-0",
-                    div { class: "text-sm font-medium", "{label}" }
-                    div { class: "text-xs text-muted-foreground", "{description}" }
-                }
-                div { class: "flex gap-2",
-                    Button {
-                        variant: ButtonVariant::Outline,
-                        size: ButtonSize::Sm,
-                        onclick: move |event| on_test_builtin.call(event),
-                        "Builtin"
-                    }
-                    Button {
-                        variant: ButtonVariant::Outline,
-                        size: ButtonSize::Sm,
-                        disabled: user_local_disabled,
-                        onclick: move |event| on_test_local.call(event),
-                        "UserLocal"
-                    }
-                }
-            }
-
-            // Inline result
-            {match &result {
-                Some((source, ResourceTestResult::Ok(message))) => rsx! {
-                    div { class: "mt-2 flex items-center gap-2 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs",
-                        div { class: "flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-200 text-emerald-700",
-                            span { class: "text-[10px] font-bold", "✓" }
-                        }
-                        span { class: "font-medium text-emerald-800", "{source_name(*source)}" }
-                        span { class: "text-emerald-700", "{message}" }
-                    }
-                },
-                Some((source, ResourceTestResult::Err(diag))) => rsx! {
-                    div { class: "mt-2 space-y-1.5",
-                        div { class: "flex items-center gap-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs",
-                            div { class: "flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700",
-                                span { class: "text-[10px] font-bold", "✗" }
-                            }
-                            span { class: "font-medium text-red-800", "{source_name(*source)}" }
-                            span { class: "text-red-700", "{diag.title}" }
-                        }
-                        div { class: "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900",
-                            div { "{diag.summary}" }
-                            div { class: "mt-1 text-amber-800", "{diag.action}" }
-                            if !diag.details.is_empty() {
-                                details { class: "mt-1.5",
-                                    summary { class: "cursor-pointer font-medium text-amber-800", "详情" }
-                                    div { class: "mt-1 space-y-0.5",
-                                        for detail in &diag.details {
-                                            div { class: "break-all text-amber-900", "{detail}" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                None => rsx! {
-                    div { class: "mt-2 text-xs text-muted-foreground", "点击按钮测试数据读取" }
-                },
-            }}
         }
     }
 }

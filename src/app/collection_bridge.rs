@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use serde_json::json;
@@ -36,10 +36,6 @@ impl CollectionBridgeConnection {
         on_update: impl FnMut(BridgeUpdate) + 'static,
     ) -> Result<Rc<Self>, String> {
         let url = url.trim();
-        if !url.starts_with("ws://127.0.0.1:") && !url.starts_with("ws://localhost:") {
-            return Err("桥接地址必须使用本机 ws://127.0.0.1 或 ws://localhost".to_string());
-        }
-
         let socket = WebSocket::new(url).map_err(js_error)?;
         let callback: Rc<RefCell<dyn FnMut(BridgeUpdate)>> = Rc::new(RefCell::new(on_update));
         let unlock_item_ids = catalog
@@ -59,13 +55,29 @@ impl CollectionBridgeConnection {
         ));
         let collected_item_ids = Rc::new(RefCell::new(HashSet::<u32>::new()));
         let completed = Rc::new(Cell::new(false));
-        let equipment_item_ids = Rc::new(
-            catalog
-                .iter()
-                .filter(|item| item.kind == CollectionKind::Equipment)
-                .map(|item| item.id)
+        let mut equipment_ids_by_source_id = HashMap::<u32, Vec<u32>>::new();
+        for item in catalog
+            .iter()
+            .filter(|item| item.kind == CollectionKind::Equipment)
+        {
+            equipment_ids_by_source_id
+                .entry(item.id)
+                .or_default()
+                .push(item.id);
+            for set_item_id in &item.set_item_ids {
+                equipment_ids_by_source_id
+                    .entry(*set_item_id)
+                    .or_default()
+                    .push(item.id);
+            }
+        }
+        let equipment_source_item_ids = Rc::new(
+            equipment_ids_by_source_id
+                .keys()
+                .copied()
                 .collect::<HashSet<_>>(),
         );
+        let equipment_ids_by_source_id = Rc::new(equipment_ids_by_source_id);
 
         let open_socket = socket.clone();
         let open_callback = callback.clone();
@@ -98,7 +110,8 @@ impl CollectionBridgeConnection {
         socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
         let message_callback = callback.clone();
-        let message_equipment_ids = equipment_item_ids.clone();
+        let message_equipment_ids = equipment_source_item_ids.clone();
+        let message_equipment_ids_by_source_id = equipment_ids_by_source_id.clone();
         let message_pending_ids = pending_response_ids.clone();
         let message_collected_ids = collected_item_ids.clone();
         let message_completed = completed.clone();
@@ -116,7 +129,18 @@ impl CollectionBridgeConnection {
                     if !message_pending_ids.borrow_mut().remove(&id) {
                         return;
                     }
-                    message_collected_ids.borrow_mut().extend(item_ids);
+                    if id == "collection-sources" {
+                        message_collected_ids
+                            .borrow_mut()
+                            .extend(item_ids.into_iter().flat_map(|item_id| {
+                                message_equipment_ids_by_source_id
+                                    .get(&item_id)
+                                    .cloned()
+                                    .unwrap_or_default()
+                            }));
+                    } else {
+                        message_collected_ids.borrow_mut().extend(item_ids);
+                    }
                     if message_pending_ids.borrow().is_empty() {
                         message_completed.set(true);
                         let mut item_ids = message_collected_ids

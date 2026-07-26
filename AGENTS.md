@@ -27,6 +27,13 @@ Do not start a local development server unless the user explicitly asks for one.
 verification, use build, check, and test commands only. Do not infer permission to start a server
 from a request to change or verify frontend code.
 
+## Dialog Keyboard Interaction
+
+All modal dialogs must provide keyboard behavior in addition to pointer controls. `Escape` closes or
+cancels the dialog, and `Enter` activates its enabled primary action. Informational dialogs without a
+distinct primary action may treat `Enter` as close. Keyboard handling must work while focus is inside
+the dialog's form controls and must not submit or activate the action twice.
+
 ## Changelog
 
 Keep `CHANGELOG.md` in reverse chronological order. The `开发中` section must remain at the top,
