@@ -288,12 +288,25 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                 }
             }
             div { class: "border-t p-3",
-                NavButton {
-                    label: "设置",
-                    route: Route::Settings,
-                    active: current == Route::Settings,
-                    icon: IconKind::Settings,
-                    collapsed: collapsed(),
+                div { class: "flex items-center gap-1.5",
+                    div { class: "min-w-0 flex-1",
+                        NavButton {
+                            label: "设置",
+                            route: Route::Settings,
+                            active: current == Route::Settings,
+                            icon: IconKind::Settings,
+                            collapsed: collapsed(),
+                        }
+                    }
+                    a {
+                        href: "https://github.com/AzurIce/xiv-companion",
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        title: "GitHub 仓库",
+                        aria_label: "GitHub 仓库",
+                        class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                        Icon { kind: IconKind::Github, class: "h-4 w-4" }
+                    }
                 }
             }
         }
