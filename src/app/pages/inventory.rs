@@ -84,31 +84,36 @@ pub fn InventoryPage() -> Element {
         if hydrated() {
             return;
         }
-        #[cfg(target_arch = "wasm32")]
-        let Some(result) = persisted.read().as_ref().cloned() else {
-            return;
-        };
+        // 持久化存储（IndexedDB）仅在 wasm32 存在；宿主端直接视为水合完成
         #[cfg(not(target_arch = "wasm32"))]
-        let result: Result<Option<PersistedInventoryState>, String> = Ok(None);
-
-        match result {
-            Ok(Some(state)) => {
-                let mut restored_containers = state.containers;
-                restored_containers.sort_by_key(container_sort_key);
-                selected.set(
-                    restored_containers
-                        .first()
-                        .map(|container| container.container_id.clone()),
-                );
-                directory_revision.set(state.directory_revision);
-                containers.set(restored_containers);
-                snapshots.set(state.snapshots);
-                saved_at.set(Some(state.saved_at));
-            }
-            Ok(None) => {}
-            Err(error) => storage_error.set(Some(error)),
+        {
+            hydrated.set(true);
+            return;
         }
-        hydrated.set(true);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some(result) = persisted.read().as_ref().cloned() else {
+                return;
+            };
+            match result {
+                Ok(Some(state)) => {
+                    let mut restored_containers = state.containers;
+                    restored_containers.sort_by_key(container_sort_key);
+                    selected.set(
+                        restored_containers
+                            .first()
+                            .map(|container| container.container_id.clone()),
+                    );
+                    directory_revision.set(state.directory_revision);
+                    containers.set(restored_containers);
+                    snapshots.set(state.snapshots);
+                    saved_at.set(Some(state.saved_at));
+                }
+                Ok(None) => {}
+                Err(error) => storage_error.set(Some(error)),
+            }
+            hydrated.set(true);
+        }
     });
 
     use_effect(move || {

@@ -3239,6 +3239,7 @@ fn CraftFlowCanvas(
             source_offset: edge.from_offset,
             target_offset: edge.to_offset,
             label: Some(format!("×{}", format_integer(edge.edge.amount as f64))),
+            ..Default::default()
         })
         .collect::<Vec<_>>();
     let nodes_by_id = layout
