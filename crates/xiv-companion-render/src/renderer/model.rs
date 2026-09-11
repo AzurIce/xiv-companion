@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use half::f16;
 use wgpu::util::DeviceExt;
 use xiv_companion_data::MaterialSpecularType;
@@ -180,7 +182,11 @@ impl ModelRenderOptions {
     }
 }
 
-pub struct ModelRenderer {
+/// 模型无关的 GPU 渲染上下文：device/queue、全部渲染管线、shader module、
+/// bind group layout、相机 uniform 与后处理状态。创建代价集中在管线编译，
+/// 应在同一渲染目标上跨模型复用；模型相关状态由 [`ModelRenderContext::create_model`]
+/// 生成 [`ModelInstance`]，切换模型时只重建 instance。
+pub struct ModelRenderContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
@@ -200,22 +206,33 @@ pub struct ModelRenderer {
     lightshaft_culled_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     compose_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    transparent_index_buffer: wgpu::Buffer,
-    draw_batches: Vec<DrawBatch>,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     material_bind_group_layout: wgpu::BindGroupLayout,
-    material_bind_groups: Vec<wgpu::BindGroup>,
     post_sampler: wgpu::Sampler,
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
     post_process: Option<PostProcessState>,
     format: wgpu::TextureFormat,
+}
+
+/// 单个模型的 GPU 实例：顶点/索引缓冲、透明索引缓冲、绘制批次、材质 bind
+/// group（含按批次去重的纹理缓存，随实例生命周期）与模型包围盒。由
+/// [`ModelRenderContext::create_model`] 同步创建，切换模型时整体替换。
+pub struct ModelInstance {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    transparent_index_buffer: wgpu::Buffer,
+    draw_batches: Vec<DrawBatch>,
+    material_bind_groups: Vec<wgpu::BindGroup>,
     bounds_center: [f32; 3],
     bounds_radius: f32,
+}
+
+pub struct ModelRenderer {
+    context: ModelRenderContext,
+    instance: ModelInstance,
 }
 
 impl ModelRenderer {
@@ -241,6 +258,83 @@ impl ModelRenderer {
         model: &M,
         prepared_options: PreparedModelOptions,
     ) -> Self {
+        let context = ModelRenderContext::new(device, queue, format);
+        Self::from_context(context, model, prepared_options)
+    }
+
+    /// 在既有 context 上为 `model` 创建实例。复用调用方持有的管线与后处理
+    /// 状态，避免跨模型切换时重复初始化设备与编译管线。
+    pub fn from_context<M: ModelRenderData + ?Sized>(
+        context: ModelRenderContext,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+    ) -> Self {
+        let instance = context.create_model(model, prepared_options);
+        Self { context, instance }
+    }
+
+    pub fn context(&self) -> &ModelRenderContext {
+        &self.context
+    }
+
+    /// 复用 context 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与
+    /// 材质 bind group，不触碰设备、管线与后处理状态。
+    pub fn set_model<M: ModelRenderData + ?Sized>(
+        &mut self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+    ) {
+        self.instance = self.context.create_model(model, prepared_options);
+    }
+
+    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
+        self.instance.update_materials(&self.context, model);
+    }
+
+    pub fn render_to(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+    ) {
+        self.context.render(
+            &self.instance,
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        );
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        self.context.device()
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        self.context.queue()
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.context.format()
+    }
+
+    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+    pub(crate) fn hdr_scene_texture(&self) -> Option<&wgpu::Texture> {
+        self.context.hdr_scene_texture()
+    }
+}
+
+impl ModelRenderContext {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("model.wgsl").into()),
@@ -782,37 +876,6 @@ impl ModelRenderer {
             format,
         );
 
-        let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
-        let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
-            .unwrap_or((model.bounds().center, model.bounds().radius));
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("weapon vertex buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("weapon index buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let transparent_index_count = draw_batches
-            .iter()
-            .map(|batch| batch.transparent_triangles.len() * 3)
-            .sum::<usize>();
-        let transparent_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("weapon transparent index buffer"),
-            size: (transparent_index_count.max(1) * std::mem::size_of::<u32>())
-                as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let material_bind_groups = create_material_bind_groups(
-            &device,
-            &queue,
-            &material_bind_group_layout,
-            model,
-            &draw_batches,
-        );
         let post_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("weapon postprocess sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -851,37 +914,76 @@ impl ModelRenderer {
             lightshaft_culled_pipeline,
             blur_pipeline,
             compose_pipeline,
-            vertex_buffer,
-            index_buffer,
-            transparent_index_buffer,
-            draw_batches,
             camera_buffer,
             camera_bind_group,
             material_bind_group_layout,
-            material_bind_groups,
             post_sampler,
             compose_uniform_buffer,
             blur_bind_group_layout,
             compose_bind_group_layout,
             post_process: None,
             format,
+        }
+    }
+
+    /// 为 `model` 同步创建 GPU 实例：展平几何、上传顶点/索引缓冲并构建全部
+    /// 材质 bind group（批次间共享去重纹理，缓存随实例生命周期）。只使用
+    /// context 中的 device/queue 与 bind group layout，不编译任何管线，
+    /// 可重复调用来切换模型。
+    pub fn create_model<M: ModelRenderData + ?Sized>(
+        &self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+    ) -> ModelInstance {
+        let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
+        let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
+            .unwrap_or((model.bounds().center, model.bounds().radius));
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("weapon vertex buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("weapon index buffer"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+        let transparent_index_count = draw_batches
+            .iter()
+            .map(|batch| batch.transparent_triangles.len() * 3)
+            .sum::<usize>();
+        let transparent_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon transparent index buffer"),
+            size: (transparent_index_count.max(1) * std::mem::size_of::<u32>())
+                as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let material_bind_groups = create_material_bind_groups(
+            &self.device,
+            &self.queue,
+            &self.material_bind_group_layout,
+            model,
+            &draw_batches,
+        );
+        ModelInstance {
+            vertex_buffer,
+            index_buffer,
+            transparent_index_buffer,
+            draw_batches,
+            material_bind_groups,
             bounds_center,
             bounds_radius,
         }
     }
 
-    pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
-        self.material_bind_groups = create_material_bind_groups(
-            &self.device,
-            &self.queue,
-            &self.material_bind_group_layout,
-            model,
-            &self.draw_batches,
-        );
-    }
-
-    pub fn render_to(
+    pub fn render(
         &mut self,
+        model: &ModelInstance,
         target_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         viewport: [u32; 2],
@@ -892,8 +994,8 @@ impl ModelRenderer {
         options: ModelRenderOptions,
     ) {
         let uniform = camera_uniform(
-            self.bounds_center,
-            self.bounds_radius,
+            model.bounds_center,
+            model.bounds_radius,
             viewport,
             yaw,
             pitch,
@@ -910,10 +1012,10 @@ impl ModelRenderer {
                 params: compose_post_params(options.bloom_strength(), self.format),
             }),
         );
-        let sorted_transparent = sorted_transparent_triangles(&self.draw_batches, yaw, pitch);
+        let sorted_transparent = sorted_transparent_triangles(&model.draw_batches, yaw, pitch);
         if !sorted_transparent.indices.is_empty() {
             self.queue.write_buffer(
-                &self.transparent_index_buffer,
+                &model.transparent_index_buffer,
                 0,
                 bytemuck::cast_slice(&sorted_transparent.indices),
             );
@@ -962,10 +1064,10 @@ impl ModelRenderer {
             });
 
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-            for batch in self
+            for batch in model
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
@@ -975,10 +1077,10 @@ impl ModelRenderer {
                 } else {
                     &self.culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
 
-            for batch in self
+            for batch in model
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
@@ -988,10 +1090,10 @@ impl ModelRenderer {
                 } else {
                     &self.cutout_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
 
-            for batch in self
+            for batch in model
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.uses_dither_depth_prepass())
@@ -1001,24 +1103,24 @@ impl ModelRenderer {
                 } else {
                     &self.dither_depth_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
 
             render_pass.set_pipeline(&self.outline_pipeline);
-            for batch in self
+            for batch in model
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.uses_outline_pass())
             {
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
 
             render_pass.set_index_buffer(
-                self.transparent_index_buffer.slice(..),
+                model.transparent_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
             for draw in &sorted_transparent.draws {
-                let batch = &self.draw_batches[draw.batch_index];
+                let batch = &model.draw_batches[draw.batch_index];
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
                     if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
                         if batch.render_backfaces() {
@@ -1039,15 +1141,15 @@ impl ModelRenderer {
                 render_pass.set_pipeline(pipeline);
                 draw_model_batch_range(
                     &mut render_pass,
-                    &self.material_bind_groups,
+                    &model.material_bind_groups,
                     batch,
                     draw.index_start,
                     draw.index_count,
                 );
             }
 
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in self
+            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for batch in model
                 .draw_batches
                 .iter()
                 .filter(|batch| batch.pass().uses_additive_pipeline())
@@ -1062,7 +1164,7 @@ impl ModelRenderer {
                 } else {
                     &self.additive_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &self.material_bind_groups, batch);
+                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
         }
 
@@ -1172,6 +1274,24 @@ impl ModelRenderer {
     #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
     pub(crate) fn hdr_scene_texture(&self) -> Option<&wgpu::Texture> {
         self.post_process.as_ref().map(|post| &post.scene_texture)
+    }
+}
+
+impl ModelInstance {
+    /// 按当前模型数据重建材质 bind group（染色等材质增量更新路径）。
+    /// 纹理去重缓存随本次重建重新填充，批次共享语义与创建时一致。
+    pub fn update_materials<M: ModelRenderData + ?Sized>(
+        &mut self,
+        context: &ModelRenderContext,
+        model: &M,
+    ) {
+        self.material_bind_groups = create_material_bind_groups(
+            &context.device,
+            &context.queue,
+            &context.material_bind_group_layout,
+            model,
+            &self.draw_batches,
+        );
     }
 }
 
@@ -1854,6 +1974,102 @@ fn create_post_bind_group(
     })
 }
 
+/// GPU texture cache shared by every draw batch of one model. Batches sharing a
+/// material would otherwise each upload their own copy of every bound texture
+/// (including full mip chains), multiplying VRAM usage by the batch count and
+/// exhausting GPU memory on models with many submeshes. The key carries the
+/// `model.textures()` index plus every parameter that affects the created
+/// texture, so the same source bound under a different semantic stays a
+/// distinct entry; per batch only the cheap `TextureView` is created.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum MaterialTextureKey {
+    /// `create_mipped_rgba_texture` uploaded from `model.textures()[index]`.
+    Mipped {
+        index: usize,
+        semantic: RgbaMipSemantic,
+    },
+    /// 1×1 constant `create_mipped_rgba_texture` fallback.
+    MippedFallback {
+        rgba: [u8; 4],
+        semantic: RgbaMipSemantic,
+    },
+    /// `create_rgba_texture` uploaded from `model.textures()[index]`.
+    Rgba {
+        index: usize,
+        format: wgpu::TextureFormat,
+    },
+    /// 1×1 constant `create_rgba_texture` fallback.
+    RgbaFallback {
+        rgba: [u8; 4],
+        format: wgpu::TextureFormat,
+    },
+    /// `create_float_ramp_texture` sourced from `model.textures()[index]`;
+    /// `neutral` is the per-channel fallback color as `f32::to_bits`.
+    FloatRamp { index: usize, neutral: [u32; 4] },
+    /// Neutral-only `create_float_ramp_texture` without a usable source.
+    FloatRampFallback { neutral: [u32; 4] },
+    /// `create_tile_matrix_texture` sourced from `model.textures()[index]`;
+    /// `None` creates the neutral identity matrix.
+    TileMatrix { index: Option<usize> },
+}
+
+type MaterialTextureCache = HashMap<MaterialTextureKey, wgpu::Texture>;
+
+fn cached_material_texture<'a>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    textures: &[ModelTexture],
+    cache: &'a mut MaterialTextureCache,
+    key: MaterialTextureKey,
+    label: &str,
+) -> &'a wgpu::Texture {
+    cache.entry(key).or_insert_with(|| match key {
+        MaterialTextureKey::Mipped { index, semantic } => {
+            let texture = &textures[index];
+            create_mipped_rgba_texture(
+                device,
+                queue,
+                label,
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                semantic,
+            )
+        }
+        MaterialTextureKey::MippedFallback { rgba, semantic } => {
+            create_mipped_rgba_texture(device, queue, label, 1, 1, &rgba, semantic)
+        }
+        MaterialTextureKey::Rgba { index, format } => {
+            let texture = &textures[index];
+            create_rgba_texture(
+                device,
+                queue,
+                label,
+                texture.width.max(1) as u32,
+                texture.height.max(1) as u32,
+                &texture.rgba,
+                format,
+            )
+        }
+        MaterialTextureKey::RgbaFallback { rgba, format } => {
+            create_rgba_texture(device, queue, label, 1, 1, &rgba, format)
+        }
+        MaterialTextureKey::FloatRamp { index, neutral } => create_float_ramp_texture(
+            device,
+            queue,
+            label,
+            Some(&textures[index]),
+            neutral.map(f32::from_bits),
+        ),
+        MaterialTextureKey::FloatRampFallback { neutral } => {
+            create_float_ramp_texture(device, queue, label, None, neutral.map(f32::from_bits))
+        }
+        MaterialTextureKey::TileMatrix { index } => {
+            create_tile_matrix_texture(device, queue, label, index.map(|index| &textures[index]))
+        }
+    })
+}
+
 fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1895,6 +2111,11 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     let detail_array_pair_view =
         detail_array_pair_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+    // Batches typically share materials; cache the uploaded GPU textures across
+    // the whole batch loop so each distinct source/semantic combination is
+    // created (and uploaded) only once per model.
+    let mut texture_cache = MaterialTextureCache::new();
+
     draw_batches
         .iter()
         .map(|batch| {
@@ -1913,6 +2134,7 @@ fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
                 batch.draw_role,
                 &tile_array_pair_view,
                 &detail_array_pair_view,
+                &mut texture_cache,
             )
         })
         .collect()
@@ -1928,6 +2150,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     draw_role: ModelMeshDrawRole,
     tile_array_pair_view: &wgpu::TextureView,
     detail_array_pair_view: &wgpu::TextureView,
+    texture_cache: &mut MaterialTextureCache,
 ) -> wgpu::BindGroup {
     let effective_mask_texture = effective_mask_texture(material);
     let effective_normal_texture = effective_normal_texture(material, prepared_material);
@@ -2050,208 +2273,244 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
-    let texture_view = material
+    let (base_color_key, base_color_label) = material
         .base_color_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
             let label = format!("weapon texture {}", texture.path);
             if texture.rgba_f32.is_some() {
-                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [1.0; 4].map(f32::to_bits),
+                    },
+                    label,
+                )
             } else {
-                create_mipped_rgba_texture(
-                    device,
-                    queue,
-                    &label,
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    mip_semantic_for_color_space(
-                        prepared_material.texture_sampling.base_color.color_space,
-                    ),
+                (
+                    MaterialTextureKey::Mipped {
+                        index,
+                        semantic: mip_semantic_for_color_space(
+                            prepared_material.texture_sampling.base_color.color_space,
+                        ),
+                    },
+                    label,
                 )
             }
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon white texture",
-                1,
-                1,
-                &[255, 255, 255, 255],
-                RgbaMipSemantic::SrgbColor,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [255, 255, 255, 255],
+                    semantic: RgbaMipSemantic::SrgbColor,
+                },
+                "weapon white texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let mask_texture_view = effective_mask_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon mask texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::LinearData,
+        });
+    let texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        base_color_key,
+        &base_color_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (mask_key, mask_label) = effective_mask_texture
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Mipped {
+                    index,
+                    semantic: RgbaMipSemantic::LinearData,
+                },
+                format!("weapon mask texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon neutral mask texture",
-                1,
-                1,
-                &[255, 128, 0, 255],
-                RgbaMipSemantic::LinearData,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [255, 128, 0, 255],
+                    semantic: RgbaMipSemantic::LinearData,
+                },
+                "weapon neutral mask texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let emissive_texture_view = material
+        });
+    let mask_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        mask_key,
+        &mask_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (emissive_key, emissive_label) = material
         .emissive_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
             let label = format!("weapon emissive texture {}", texture.path);
             if texture.rgba_f32.is_some() {
-                create_float_ramp_texture(
-                    device,
-                    queue,
-                    &label,
-                    Some(texture),
-                    [0.0, 0.0, 0.0, 1.0],
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [0.0, 0.0, 0.0, 1.0].map(f32::to_bits),
+                    },
+                    label,
                 )
             } else {
-                create_mipped_rgba_texture(
-                    device,
-                    queue,
-                    &label,
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    mip_semantic_for_color_space(
-                        prepared_material.texture_sampling.emissive.color_space,
-                    ),
+                (
+                    MaterialTextureKey::Mipped {
+                        index,
+                        semantic: mip_semantic_for_color_space(
+                            prepared_material.texture_sampling.emissive.color_space,
+                        ),
+                    },
+                    label,
                 )
             }
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon black emissive texture",
-                1,
-                1,
-                &[0, 0, 0, 255],
-                RgbaMipSemantic::SrgbColor,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [0, 0, 0, 255],
+                    semantic: RgbaMipSemantic::SrgbColor,
+                },
+                "weapon black emissive texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let normal_texture_view = effective_normal_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                &format!("weapon normal texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                RgbaMipSemantic::PackedNormalRg,
+        });
+    let emissive_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        emissive_key,
+        &emissive_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (normal_key, normal_label) = effective_normal_texture
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Mipped {
+                    index,
+                    semantic: RgbaMipSemantic::PackedNormalRg,
+                },
+                format!("weapon normal texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon flat normal texture",
-                1,
-                1,
-                &[128, 128, 255, 255],
-                RgbaMipSemantic::PackedNormalRg,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [128, 128, 255, 255],
+                    semantic: RgbaMipSemantic::PackedNormalRg,
+                },
+                "weapon flat normal texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let material_properties_texture_view = material
+        });
+    let normal_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        normal_key,
+        &normal_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (material_properties_key, material_properties_label) = material
         .material_properties_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
             let label = format!("weapon material properties texture {}", texture.path);
             if texture.rgba_f32.is_some() {
-                create_float_ramp_texture(
-                    device,
-                    queue,
-                    &label,
-                    Some(texture),
-                    [0.0, 1.0, 1.0, 1.0],
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [0.0, 1.0, 1.0, 1.0].map(f32::to_bits),
+                    },
+                    label,
                 )
             } else {
-                create_mipped_rgba_texture(
-                    device,
-                    queue,
-                    &label,
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    RgbaMipSemantic::LinearData,
+                (
+                    MaterialTextureKey::Mipped {
+                        index,
+                        semantic: RgbaMipSemantic::LinearData,
+                    },
+                    label,
                 )
             }
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon neutral material properties texture",
-                1,
-                1,
-                &[
-                    unorm_byte(material.metalness),
-                    unorm_byte(material.roughness),
-                    255,
-                    255,
-                ],
-                RgbaMipSemantic::LinearData,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [
+                        unorm_byte(material.metalness),
+                        unorm_byte(material.roughness),
+                        255,
+                        255,
+                    ],
+                    semantic: RgbaMipSemantic::LinearData,
+                },
+                "weapon neutral material properties texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let specular_texture_view = material
+        });
+    let material_properties_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        material_properties_key,
+        &material_properties_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (specular_key, specular_label) = material
         .specular_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
             let label = format!("weapon specular texture {}", texture.path);
             if texture.rgba_f32.is_some() {
-                create_float_ramp_texture(device, queue, &label, Some(texture), [1.0; 4])
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [1.0; 4].map(f32::to_bits),
+                    },
+                    label,
+                )
             } else {
-                create_mipped_rgba_texture(
-                    device,
-                    queue,
-                    &label,
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    mip_semantic_for_color_space(
-                        prepared_material.texture_sampling.specular.color_space,
-                    ),
+                (
+                    MaterialTextureKey::Mipped {
+                        index,
+                        semantic: mip_semantic_for_color_space(
+                            prepared_material.texture_sampling.specular.color_space,
+                        ),
+                    },
+                    label,
                 )
             }
         })
         .unwrap_or_else(|| {
-            create_mipped_rgba_texture(
-                device,
-                queue,
-                "weapon neutral specular texture",
-                1,
-                1,
-                &[
-                    unorm_byte(material.specular_color[0]),
-                    unorm_byte(material.specular_color[1]),
-                    unorm_byte(material.specular_color[2]),
-                    255,
-                ],
-                RgbaMipSemantic::LinearData,
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [
+                        unorm_byte(material.specular_color[0]),
+                        unorm_byte(material.specular_color[1]),
+                        unorm_byte(material.specular_color[2]),
+                        255,
+                    ],
+                    semantic: RgbaMipSemantic::LinearData,
+                },
+                "weapon neutral specular texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        });
+    let specular_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        specular_key,
+        &specular_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let uses_secondary_maps = prepared_material.feature_flags.uses_secondary_maps;
     let tile_binding_texture = if uses_secondary_maps {
         material.secondary_base_color_texture
@@ -2269,221 +2528,278 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             .tile_properties
             .color_space
     });
-    let tile_properties_texture_view = tile_binding_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon tile/secondary color texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                tile_binding_format,
+    let (tile_key, tile_label) = tile_binding_texture
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Rgba {
+                    index,
+                    format: tile_binding_format,
+                },
+                format!("weapon tile/secondary color texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral tile/secondary color texture",
-                1,
-                1,
-                if uses_secondary_maps {
-                    &[255, 255, 255, 255]
-                } else {
-                    &[0, 255, 255, 255]
+            (
+                MaterialTextureKey::RgbaFallback {
+                    rgba: if uses_secondary_maps {
+                        [255, 255, 255, 255]
+                    } else {
+                        [0, 255, 255, 255]
+                    },
+                    format: tile_binding_format,
                 },
-                tile_binding_format,
+                "weapon neutral tile/secondary color texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        });
+    let tile_properties_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        tile_key,
+        &tile_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
     let sheen_binding_texture = if uses_secondary_maps {
         material.secondary_normal_texture
     } else {
         material.sheen_properties_texture
     };
-    let sheen_binding_texture = sheen_binding_texture.and_then(|index| model.textures().get(index));
-    let sheen_properties_texture_view = if uses_secondary_maps {
-        sheen_binding_texture.map_or_else(
+    let sheen_binding_index =
+        sheen_binding_texture.filter(|&index| model.textures().get(index).is_some());
+    let (sheen_key, sheen_label) = if uses_secondary_maps {
+        sheen_binding_index.map_or_else(
             || {
-                create_rgba_texture(
-                    device,
-                    queue,
-                    "weapon neutral secondary normal texture",
-                    1,
-                    1,
-                    &[128, 128, 255, 255],
-                    wgpu::TextureFormat::Rgba8Unorm,
+                (
+                    MaterialTextureKey::RgbaFallback {
+                        rgba: [128, 128, 255, 255],
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    "weapon neutral secondary normal texture".to_string(),
                 )
             },
-            |texture| {
-                create_rgba_texture(
-                    device,
-                    queue,
-                    &format!("weapon secondary normal texture {}", texture.path),
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    wgpu::TextureFormat::Rgba8Unorm,
+            |index| {
+                (
+                    MaterialTextureKey::Rgba {
+                        index,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    format!(
+                        "weapon secondary normal texture {}",
+                        model.textures()[index].path
+                    ),
                 )
             },
         )
     } else {
-        create_float_ramp_texture(
-            device,
-            queue,
-            sheen_binding_texture
-                .map(|texture| format!("weapon sheen texture {}", texture.path))
-                .as_deref()
-                .unwrap_or("weapon neutral sheen texture"),
-            sheen_binding_texture,
-            [0.0, 0.0, 0.0, 1.0],
+        sheen_binding_index.map_or_else(
+            || {
+                (
+                    MaterialTextureKey::FloatRampFallback {
+                        neutral: [0.0, 0.0, 0.0, 1.0].map(f32::to_bits),
+                    },
+                    "weapon neutral sheen texture".to_string(),
+                )
+            },
+            |index| {
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [0.0, 0.0, 0.0, 1.0].map(f32::to_bits),
+                    },
+                    format!("weapon sheen texture {}", model.textures()[index].path),
+                )
+            },
         )
-    }
+    };
+    let sheen_properties_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        sheen_key,
+        &sheen_label,
+    )
     .create_view(&wgpu::TextureViewDescriptor::default());
     let sphere_binding_texture = if uses_secondary_maps {
         material.secondary_specular_texture
     } else {
         material.sphere_properties_texture
     };
-    let sphere_binding_texture =
-        sphere_binding_texture.and_then(|index| model.textures().get(index));
-    let sphere_properties_texture_view = if uses_secondary_maps {
-        sphere_binding_texture.map_or_else(
+    let sphere_binding_index =
+        sphere_binding_texture.filter(|&index| model.textures().get(index).is_some());
+    let (sphere_key, sphere_label) = if uses_secondary_maps {
+        sphere_binding_index.map_or_else(
             || {
-                let neutral_pixels = [
-                    unorm_byte(material.specular_color[0]),
-                    unorm_byte(material.specular_color[1]),
-                    unorm_byte(material.specular_color[2]),
-                    255,
-                ];
-                create_rgba_texture(
-                    device,
-                    queue,
-                    "weapon neutral secondary specular texture",
-                    1,
-                    1,
-                    &neutral_pixels,
-                    wgpu::TextureFormat::Rgba8Unorm,
+                (
+                    MaterialTextureKey::RgbaFallback {
+                        rgba: [
+                            unorm_byte(material.specular_color[0]),
+                            unorm_byte(material.specular_color[1]),
+                            unorm_byte(material.specular_color[2]),
+                            255,
+                        ],
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    "weapon neutral secondary specular texture".to_string(),
                 )
             },
-            |texture| {
-                create_rgba_texture(
-                    device,
-                    queue,
-                    &format!("weapon secondary specular texture {}", texture.path),
-                    texture.width.max(1) as u32,
-                    texture.height.max(1) as u32,
-                    &texture.rgba,
-                    wgpu::TextureFormat::Rgba8Unorm,
+            |index| {
+                (
+                    MaterialTextureKey::Rgba {
+                        index,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    format!(
+                        "weapon secondary specular texture {}",
+                        model.textures()[index].path
+                    ),
                 )
             },
         )
     } else {
-        create_float_ramp_texture(
-            device,
-            queue,
-            sphere_binding_texture
-                .map(|texture| format!("weapon sphere texture {}", texture.path))
-                .as_deref()
-                .unwrap_or("weapon neutral sphere texture"),
-            sphere_binding_texture,
-            [0.0, 0.0, 1.0, 1.0],
+        sphere_binding_index.map_or_else(
+            || {
+                (
+                    MaterialTextureKey::FloatRampFallback {
+                        neutral: [0.0, 0.0, 1.0, 1.0].map(f32::to_bits),
+                    },
+                    "weapon neutral sphere texture".to_string(),
+                )
+            },
+            |index| {
+                (
+                    MaterialTextureKey::FloatRamp {
+                        index,
+                        neutral: [0.0, 0.0, 1.0, 1.0].map(f32::to_bits),
+                    },
+                    format!("weapon sphere texture {}", model.textures()[index].path),
+                )
+            },
         )
-    }
-    .create_view(&wgpu::TextureViewDescriptor::default());
-    let tile_matrix_texture = material
-        .tile_matrix_texture
-        .and_then(|index| model.textures().get(index));
-    let tile_matrix_texture_view = create_tile_matrix_texture(
+    };
+    let sphere_properties_texture_view = cached_material_texture(
         device,
         queue,
-        tile_matrix_texture
-            .map(|texture| format!("weapon tile matrix texture {}", texture.path))
-            .as_deref()
-            .unwrap_or("weapon neutral tile matrix texture"),
-        tile_matrix_texture,
+        model.textures(),
+        texture_cache,
+        sphere_key,
+        &sphere_label,
     )
     .create_view(&wgpu::TextureViewDescriptor::default());
-    let index_texture_view = material
+    let tile_matrix_index = material
+        .tile_matrix_texture
+        .filter(|&index| model.textures().get(index).is_some());
+    let tile_matrix_label = tile_matrix_index
+        .map(|index| {
+            format!(
+                "weapon tile matrix texture {}",
+                model.textures()[index].path
+            )
+        })
+        .unwrap_or_else(|| "weapon neutral tile matrix texture".to_string());
+    let tile_matrix_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        MaterialTextureKey::TileMatrix {
+            index: tile_matrix_index,
+        },
+        &tile_matrix_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (index_key, index_label) = material
         .index_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon ColorTable index texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Rgba {
+                    index,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                format!("weapon ColorTable index texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral ColorTable index texture",
-                1,
-                1,
-                &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+            (
+                MaterialTextureKey::RgbaFallback {
+                    rgba: [0, 0, 0, 255],
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                "weapon neutral ColorTable index texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let material_map_texture_view = material
+        });
+    let index_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        index_key,
+        &index_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (material_map_key, material_map_label) = material
         .material_map_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon material map texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Rgba {
+                    index,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                format!("weapon material map texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral material map texture",
-                1,
-                1,
-                &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+            (
+                MaterialTextureKey::RgbaFallback {
+                    rgba: [0, 0, 0, 255],
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                "weapon neutral material map texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let multi_map_texture_view = material
+        });
+    let material_map_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        material_map_key,
+        &material_map_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let (multi_map_key, multi_map_label) = material
         .multi_map_texture
-        .and_then(|index| model.textures().get(index))
-        .map(|texture| {
-            create_rgba_texture(
-                device,
-                queue,
-                &format!("weapon multi map texture {}", texture.path),
-                texture.width.max(1) as u32,
-                texture.height.max(1) as u32,
-                &texture.rgba,
-                wgpu::TextureFormat::Rgba8Unorm,
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Rgba {
+                    index,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                format!("weapon multi map texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
-            create_rgba_texture(
-                device,
-                queue,
-                "weapon neutral multi map texture",
-                1,
-                1,
-                &[0, 0, 0, 255],
-                wgpu::TextureFormat::Rgba8Unorm,
+            (
+                MaterialTextureKey::RgbaFallback {
+                    rgba: [0, 0, 0, 255],
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                "weapon neutral multi map texture".to_string(),
             )
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        });
+    let multi_map_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        multi_map_key,
+        &multi_map_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
 
     let base_color_sampler = create_sampler_for_sampling(
         device,
@@ -2967,7 +3283,7 @@ fn create_array_pair_texture(
     texture
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum RgbaMipSemantic {
     SrgbColor,
     LinearData,

@@ -229,6 +229,13 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         .output_dir
         .join(format!("{}.png", sanitize_file_stem(&options.name)));
 
+    // libvulkan 的 ICD 扫描在多个线程并发 vkCreateInstance 时存在已知竞态
+    // （loader_icd_scan 空函数指针，NVIDIA 等 dlopen 重 ICD 环境下随机 SIGSEGV），
+    // 串行化实例创建；adapter/device 请求与渲染不受影响，可继续并行。
+    static INSTANCE_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _instance_init_guard = INSTANCE_INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -241,6 +248,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         })
         .await
         .map_err(|error| WeaponModelSnapshotError::RequestAdapter(format!("{error:?}")))?;
+    drop(_instance_init_guard);
     let adapter_info = adapter.get_info();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
