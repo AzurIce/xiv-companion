@@ -8,16 +8,19 @@ use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
 };
 use crate::app::resources::{
+    load_chara_model_from_local, load_equipment_model_from_local, load_furniture_model_from_local,
     load_weapon_model_from_local, load_weapon_staining_templates_from_local,
 };
 use xiv_companion::{
-    CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CraftDataId,
-    CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe, CraftTreeNode,
-    ItemIconId, ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary,
-    ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogItem,
-    WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId,
-    WeaponStainingTemplates, apply_weapon_model_stains, build_craft_tree,
-    craftable_recipes as planner_craftable_recipes, create_craft_data_index,
+    CharaCatalogId, CharaCatalogItem, CharaCatalogPackage, CharaCatalogResource, CharaModelId,
+    CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CollectionItem,
+    CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
+    CraftTreeNode, EquipmentModelId, FurnitureCatalogId, FurnitureCatalogItem,
+    FurnitureCatalogPackage, FurnitureCatalogResource, FurnitureModelId, ItemIconId,
+    ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary, ResourceMetadata,
+    ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogPackage, WeaponCatalogResource,
+    WeaponModelData, WeaponModelId, WeaponStainingTemplates, apply_weapon_model_stains,
+    build_craft_tree, craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
     source_label as planner_source_label, source_priority as planner_source_priority,
@@ -99,16 +102,54 @@ pub async fn load_weapon_catalog() -> Result<Rc<WeaponCatalogPackage>, String> {
     Ok(Rc::new(data))
 }
 
-pub async fn load_weapon_model_with_stains(
-    item: WeaponCatalogItem,
-    stain_ids: [u8; 2],
-) -> Result<Rc<WeaponModelData>, String> {
+pub async fn load_weapon_model(item: &CollectionItem) -> Result<Rc<WeaponModelData>, String> {
     let data = load_weapon_model_from_local(WeaponModelId {
         item_id: item.id,
-        item_name: item.name,
+        item_name: item.name.clone(),
         model_main: item.model_main,
         model_sub: item.model_sub,
-        stain_ids,
+        stain_ids: [0, 0],
+    })
+    .await?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_equipment_model(
+    item: &CollectionItem,
+    race_id: u16,
+) -> Result<Rc<WeaponModelData>, String> {
+    let data = load_equipment_model_from_local(EquipmentModelId {
+        item_id: item.id,
+        item_name: item.name.clone(),
+        model_main: item.model_main,
+        model_sub: item.model_sub,
+        equip_slot_category: item.equip_slot_category,
+        race_id,
+        stain_ids: [0, 0],
+    })
+    .await?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_furniture_model(
+    item: &FurnitureCatalogItem,
+) -> Result<Rc<WeaponModelData>, String> {
+    let data = load_furniture_model_from_local(FurnitureModelId {
+        item_id: item.id,
+        item_name: item.name.clone(),
+        kind: item.kind,
+        model_key: item.model_key,
+    })
+    .await?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_chara_model(item: &CharaCatalogItem) -> Result<Rc<WeaponModelData>, String> {
+    let data = load_chara_model_from_local(CharaModelId {
+        item_id: item.id,
+        item_name: item.name.clone(),
+        kind: item.kind,
+        model: item.model,
     })
     .await?;
     Ok(Rc::new(data))
@@ -142,6 +183,22 @@ pub async fn load_collection_catalog() -> Result<Rc<CollectionCatalogPackage>, S
     Ok(Rc::new(data))
 }
 
+pub async fn load_furniture_catalog() -> Result<Rc<FurnitureCatalogPackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<FurnitureCatalogResource>(FurnitureCatalogId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
+pub async fn load_chara_catalog() -> Result<Rc<CharaCatalogPackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<CharaCatalogResource>(CharaCatalogId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
 pub async fn load_collection_catalog_with_metadata() -> Result<LoadedCollectionCatalog, String> {
     let loaded = configured_web_resource_hub()
         .load_with_source::<CollectionCatalogResource>(CollectionCatalogId::Default)
@@ -151,10 +208,6 @@ pub async fn load_collection_catalog_with_metadata() -> Result<LoadedCollectionC
         metadata: loaded.metadata,
         data: Rc::new(loaded.value),
     })
-}
-
-pub async fn load_weapon_model(item: WeaponCatalogItem) -> Result<Rc<WeaponModelData>, String> {
-    load_weapon_model_with_stains(item, [0, 0]).await
 }
 
 pub fn create_craft_data_engine(data: Rc<CraftDataPackage>) -> CraftDataEngine {

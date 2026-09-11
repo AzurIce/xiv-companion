@@ -866,10 +866,18 @@ pub struct PreparedModelRuntimeGeometryRequirements {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedModelOptions {
+    /// 显式启用的 submesh attribute 位；`None` 按游戏默认（全部未启用，= 0）处理，
+    /// 带 attribute 的 submesh 默认隐藏，无 attribute 的 submesh 不受影响。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_attribute_mask: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_shape_mask: Option<u32>,
+    /// 隔离预览：为 true 且模型含 attribute submesh 时，无 attribute 的 submesh
+    /// （本体）一律隐藏，只渲染带 attribute 的部件（部件仍按
+    /// `enabled_attribute_mask` 判定显隐）；模型无 attribute submesh 或为
+    /// false 时行为完全不变。
+    #[serde(default)]
+    pub attribute_parts_only: bool,
 }
 
 impl PreparedModelOptions {
@@ -880,6 +888,11 @@ impl PreparedModelOptions {
 
     pub fn with_enabled_shape_mask(mut self, enabled_shape_mask: u32) -> Self {
         self.enabled_shape_mask = Some(enabled_shape_mask);
+        self
+    }
+
+    pub fn with_attribute_parts_only(mut self, attribute_parts_only: bool) -> Self {
+        self.attribute_parts_only = attribute_parts_only;
         self
     }
 }
@@ -1564,12 +1577,76 @@ pub fn model_mesh_vertices_with_shape_mask(
     vertices
 }
 
+/// 模型的 attribute 部件变体选项：`bit` 是单 bit 掩码值（`1 << attribute index`），
+/// `names` 是该 bit 涉及的属性名（通常 1 个；多个 submesh 以不同名字引用同一
+/// bit 时全部列出）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAttributeOption {
+    pub bit: u32,
+    pub names: Vec<String>,
+}
+
+/// 枚举模型全部 mesh 的 submesh attribute 选项：按 bit 聚合所有
+/// [`ModelSubmeshInfo::attribute_index_mask`] 非 0 的 submesh，名字去重，按
+/// bit 升序返回；无 attribute submesh 时返回空。submesh 的 `attribute_names`
+/// 按 mask 置位升序与 bit 一一对应（第 k 个置位 ↔ names\[k\]，见
+/// `mdl_metadata::attribute_names`）。
+pub fn model_attribute_options<M: ModelRenderData + ?Sized>(
+    model: &M,
+) -> Vec<ModelAttributeOption> {
+    let mut options: Vec<ModelAttributeOption> = Vec::new();
+    for mesh in model.meshes() {
+        let Some(submesh) = &mesh.submesh else {
+            continue;
+        };
+        let mask = submesh.attribute_index_mask;
+        if mask == 0 {
+            continue;
+        }
+        let mut names = submesh.attribute_names.iter();
+        for bit_index in 0..u32::BITS {
+            let bit = 1_u32 << bit_index;
+            if mask & bit == 0 {
+                continue;
+            }
+            let position = options
+                .iter()
+                .position(|option| option.bit == bit)
+                .unwrap_or(options.len());
+            if position == options.len() {
+                options.push(ModelAttributeOption {
+                    bit,
+                    names: Vec::new(),
+                });
+            }
+            let Some(name) = names.next() else {
+                continue;
+            };
+            if !options[position]
+                .names
+                .iter()
+                .any(|existing| existing == name)
+            {
+                options[position].names.push(name.clone());
+            }
+        }
+    }
+    options.sort_by_key(|option| option.bit);
+    options
+}
+
 pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
     model: &M,
     options: PreparedModelOptions,
 ) -> PreparedModel {
     let runtime_geometry_requirements =
         prepared_model_runtime_geometry_requirements(model, options);
+    let has_attribute_submeshes = model.meshes().iter().any(|mesh| {
+        mesh.submesh
+            .as_ref()
+            .is_some_and(|submesh| submesh.attribute_index_mask != 0)
+    });
     PreparedModel {
         meshes: model
             .meshes()
@@ -1577,8 +1654,29 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
             .enumerate()
             .map(|(mesh_index, mesh)| {
                 let draw_role = mesh_draw_role_for_category(mesh.mesh_category.as_deref());
-                let visibility =
-                    prepared_mesh_visibility(mesh.submesh.as_ref(), options.enabled_attribute_mask);
+                // 仅当模型含 attribute submesh 时套用可见性规则：游戏内属性部件
+                // 默认全部未启用（Meddle 默认 EnabledAttributeMask=0），未显式给出
+                // mask 时按 0 处理，带 attribute 的 submesh 默认隐藏。
+                let visibility = if has_attribute_submeshes {
+                    let mut visibility = prepared_mesh_visibility(
+                        mesh.submesh.as_ref(),
+                        Some(options.enabled_attribute_mask.unwrap_or(0)),
+                    );
+                    // 隔离预览：只渲染带 attribute 的部件，无属性本体隐藏。
+                    if options.attribute_parts_only
+                        && mesh
+                            .submesh
+                            .as_ref()
+                            .map(|submesh| submesh.attribute_index_mask)
+                            .unwrap_or(0)
+                            == 0
+                    {
+                        visibility.submesh_attributes_visible = false;
+                    }
+                    visibility
+                } else {
+                    PreparedMeshVisibility::default()
+                };
                 let shape_influence_state = prepared_mesh_shape_influences(
                     &mesh.shape_influences,
                     options.enabled_shape_mask,
@@ -2829,13 +2927,37 @@ impl ModelRenderData for WeaponModelData {
     }
 }
 
+/// 网格的预览 component 序号。武器/装备按主（0）副（1）模型路径区分；
+/// 无主次之分的多 MDL 合并模型（家具/庭具，model_sub 恒为 None）按 MDL 在
+/// 网格列表中首次出现的顺序编号，单 MDL 模型恒为 0。
 pub fn weapon_model_mesh_component_index(model: &WeaponModelData, mesh: &ModelMesh) -> u16 {
-    let Some(secondary) = model.model_sub else {
-        return 0;
-    };
-    let secondary_match = weapon_model_path_matches(&mesh.path, secondary);
-    let primary_match = weapon_model_path_matches(&mesh.path, model.model_main);
-    u16::from(secondary_match && !primary_match)
+    if let Some(secondary) = model.model_sub {
+        let secondary_match = weapon_model_path_matches(&mesh.path, secondary);
+        let primary_match = weapon_model_path_matches(&mesh.path, model.model_main);
+        return u16::from(secondary_match && !primary_match);
+    }
+    mdl_mesh_component_ordinal(model, mesh)
+}
+
+/// 按 mesh path 的 MDL 根（`#part-...` 后缀之前的部分）在网格列表中首次
+/// 出现的顺序给出 component 序号。
+fn mdl_mesh_component_ordinal(model: &WeaponModelData, mesh: &ModelMesh) -> u16 {
+    let target = mdl_mesh_path_root(&mesh.path);
+    let mut roots: Vec<&str> = Vec::new();
+    for candidate in &model.meshes {
+        let root = mdl_mesh_path_root(&candidate.path);
+        if root == target {
+            return roots.len() as u16;
+        }
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    0
+}
+
+fn mdl_mesh_path_root(path: &str) -> &str {
+    path.split_once('#').map(|(root, _)| root).unwrap_or(path)
 }
 
 fn weapon_model_path_matches(path: &str, model: PackedModelId) -> bool {
@@ -3394,6 +3516,190 @@ fn human_body_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> 
     Some((race_id.parse().ok()?, body_id.parse().ok()?))
 }
 
+/// 装备模型路径的兜底 race code（中原人男）。
+///
+/// 完整 race code 表（依据 xivModdingFramework `XivRace` 枚举）：0101/0201
+/// 中原人男/女，0301/0401 高地人男/女，0501/0601 精灵男/女，0701/0801 猫魅
+/// 男/女，0901/1001 鲁加男/女，1101/1201 拉拉菲尔男/女，1301/1401 敖龙男/女，
+/// 1501/1601 硌狮男/女，1701/1801 维埃拉男/女。
+pub const EQUIPMENT_MODEL_FALLBACK_RACE_ID: u16 = 101;
+
+/// 装备 Item Model{Main/Sub} raw u64 的解码结果。
+///
+/// 依据 xivModdingFramework `Gear.GetUnCachedGearList`：raw 按 4 个 u16 段读取，
+/// 第三段（quad[2]）非 0 时是武器，为 0 时是装备；装备的套装 id（e####/a####）
+/// 在第一段，IMC 子集 id（材质版本 v#### 的首选猜测）在第二段。与武器的
+/// (model_id, body_id, variant_id) 三段语义不同，因此不复用 [`PackedModelId`]。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackedEquipmentModelId {
+    pub raw: u64,
+    pub set_id: u16,
+    pub variant_id: u16,
+}
+
+impl PackedEquipmentModelId {
+    pub fn from_raw(raw: u64) -> Self {
+        Self {
+            raw,
+            set_id: (raw & 0xffff) as u16,
+            variant_id: ((raw >> 16) & 0xffff) as u16,
+        }
+    }
+}
+
+/// 有 3D 模型的装备槽位：模型/材质文件名中的槽位缩写与路径根类型。
+///
+/// 依据 xivModdingFramework `Mdl.SlotAbbreviationDictionary` 与
+/// `ItemType.GetItemRootFolder`：头/身/手/腿/脚在 `chara/equipment/e####` 下，
+/// 饰品在 `chara/accessory/a####` 下。腰带（6）自 6.0 起没有模型；组合槽位
+/// （15/16/18/20-23）覆盖多个槽位的模型，暂不支持；戒指不区分左右，统一用
+/// 右戒缩写 rir（左戒 ril 只是同模型的另一引用）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EquipmentSlotInfo {
+    pub abbreviation: &'static str,
+    pub is_accessory: bool,
+}
+
+pub fn equipment_slot_info(category: u32) -> Option<EquipmentSlotInfo> {
+    let (abbreviation, is_accessory) = match category {
+        3 => ("met", false),
+        4 => ("top", false),
+        5 => ("glv", false),
+        7 => ("dwn", false),
+        8 => ("sho", false),
+        9 => ("ear", true),
+        10 => ("nek", true),
+        11 => ("wrs", true),
+        12 => ("rir", true),
+        _ => return None,
+    };
+    Some(EquipmentSlotInfo {
+        abbreviation,
+        is_accessory,
+    })
+}
+
+pub fn equipment_model_candidate_paths(
+    model: PackedEquipmentModelId,
+    slot: EquipmentSlotInfo,
+    race_id: u16,
+) -> Vec<String> {
+    if model.set_id == 0 {
+        return Vec::new();
+    }
+
+    // 请求的 race 优先，c0101 兜底；各 race 是否有模型由 EQDP 决定，这里不做
+    // 解析，缺失时由加载方按候选顺序尝试下一个。
+    let mut race_ids = Vec::new();
+    for candidate in [race_id, EQUIPMENT_MODEL_FALLBACK_RACE_ID] {
+        if candidate != 0 && !race_ids.contains(&candidate) {
+            race_ids.push(candidate);
+        }
+    }
+
+    let (root, type_prefix) = if slot.is_accessory {
+        ("chara/accessory/a", 'a')
+    } else {
+        ("chara/equipment/e", 'e')
+    };
+    race_ids
+        .into_iter()
+        .map(|race_id| {
+            format!(
+                "{root}{set_id:04}/model/c{race_id:04}{type_prefix}{set_id:04}_{slot}.mdl",
+                set_id = model.set_id,
+                slot = slot.abbreviation,
+            )
+        })
+        .collect()
+}
+
+pub fn equipment_material_candidate_paths(
+    model: PackedEquipmentModelId,
+    model_path: &str,
+    material_name: &str,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let normalized_name = normalize_resource_path(material_name);
+    if normalized_name.is_empty() {
+        return candidates;
+    }
+
+    push_unique_path(&mut candidates, normalized_name.clone());
+    if normalized_name.starts_with("chara/") {
+        return candidates;
+    }
+
+    let normalized_model_path = normalize_resource_path(model_path);
+    let Some((object_root, _)) = normalized_model_path.split_once("/model/") else {
+        return candidates;
+    };
+    let material_root = format!("{object_root}/material");
+
+    if normalized_name.starts_with("v") {
+        push_unique_path(
+            &mut candidates,
+            format!("{material_root}/{normalized_name}"),
+        );
+    }
+
+    let material_file = normalized_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized_name.as_str());
+    let mut material_roots = vec![material_root];
+    if let Some((is_accessory, set_id)) = equipment_ids_from_material_file(material_file) {
+        let root = if is_accessory {
+            "chara/accessory/a"
+        } else {
+            "chara/equipment/e"
+        };
+        push_unique_path(&mut material_roots, format!("{root}{set_id:04}/material"));
+    }
+    if let Some((race_id, body_id)) = human_body_ids_from_material_file(material_file) {
+        push_unique_path(
+            &mut material_roots,
+            format!("chara/human/c{race_id:04}/obj/body/b{body_id:04}/material"),
+        );
+    }
+
+    // 材质版本目录由 IMC 条目的 MaterialSet 决定；不解析 IMC 时用物品的 IMC
+    // 子集 id（variant）作为首选，v0001 兜底，并保留无版本目录的形式。
+    let mut versions = Vec::new();
+    for version in [model.variant_id, 1] {
+        if version != 0 && !versions.contains(&version) {
+            versions.push(version);
+        }
+    }
+
+    for material_root in material_roots {
+        for version in &versions {
+            push_unique_path(
+                &mut candidates,
+                format!("{material_root}/v{version:04}/{material_file}"),
+            );
+        }
+        push_unique_path(&mut candidates, format!("{material_root}/{material_file}"));
+    }
+    candidates
+}
+
+/// 解析 `mt_c{race}{e|a}{set}_....mtrl` 形式的装备/饰品材质文件名，返回
+/// （是否为饰品，set_id）。皮肤材质 `mt_c{race}b{body}_...` 由
+/// [`human_body_ids_from_material_file`] 处理。
+fn equipment_ids_from_material_file(material_file: &str) -> Option<(bool, u16)> {
+    let tail = material_file.strip_prefix("mt_c")?;
+    let (_, tail) = tail.split_at_checked(4)?;
+    let is_accessory = match tail.chars().next() {
+        Some('e') => false,
+        Some('a') => true,
+        _ => return None,
+    };
+    let (set_id, _) = tail.get(1..)?.split_at_checked(4)?;
+    Some((is_accessory, set_id.parse().ok()?))
+}
+
 pub fn weapon_slot_label(category: u32) -> &'static str {
     match category {
         1 => "主手",
@@ -3507,6 +3813,36 @@ mod color_table_bake_tests {
 
         assert_eq!(model.mesh_component_index(0), 0);
         assert_eq!(model.mesh_component_index(1), 1);
+    }
+
+    #[test]
+    fn furniture_meshes_are_assigned_components_by_mdl_order() {
+        let mesh = |path: &str| {
+            let mut mesh = test_model_mesh(Some("normal"), 0);
+            mesh.path = path.to_string();
+            mesh
+        };
+        let model = WeaponModelData {
+            item_id: 19770,
+            item_name: "测试家具".to_string(),
+            model_main: PackedModelId::from_raw(42),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: ModelBounds::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: vec![
+                mesh("bgcommon/hou/indoor/general/002a/model/fun_b0_m0042_a.mdl"),
+                mesh("bgcommon/hou/indoor/general/002a/model/fun_b0_m0042_a.mdl#part-1-submesh-0"),
+                mesh("bgcommon/hou/indoor/general/002a/model/fun_b0_m0042_b.mdl"),
+            ],
+        };
+
+        assert_eq!(model.mesh_component_index(0), 0);
+        assert_eq!(model.mesh_component_index(1), 0);
+        assert_eq!(model.mesh_component_index(2), 1);
     }
 
     #[test]
@@ -5009,7 +5345,12 @@ mod color_table_bake_tests {
         let mut glass_material = test_material();
         glass_material.shader_package_name = Some("characterglass.shpk".to_string());
         let mut normal_mesh = test_model_mesh(None, 0);
-        normal_mesh.submesh = Some(test_model_submesh_info());
+        normal_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x00000000".to_string(),
+            attribute_names: Vec::new(),
+            ..test_model_submesh_info()
+        });
         let model = crate::ModelData {
             bounds: crate::ModelBounds::default(),
             materials: vec![test_material(), glass_material],
@@ -5025,10 +5366,7 @@ mod color_table_bake_tests {
         assert_eq!(prepared.meshes.len(), 3);
         assert_eq!(
             prepared.runtime_geometry_requirements,
-            PreparedModelRuntimeGeometryRequirements {
-                enabled_attribute_mask: true,
-                ..PreparedModelRuntimeGeometryRequirements::default()
-            }
+            PreparedModelRuntimeGeometryRequirements::default()
         );
         assert_eq!(prepared.meshes[0].mesh_index, 0);
         assert_eq!(prepared.meshes[0].material_slot, 0);
@@ -5038,7 +5376,15 @@ mod color_table_bake_tests {
             prepared.meshes[0].visibility,
             PreparedMeshVisibility::default()
         );
-        assert_eq!(prepared.meshes[0].submesh, Some(test_model_submesh_info()));
+        assert_eq!(
+            prepared.meshes[0].submesh,
+            Some(ModelSubmeshInfo {
+                attribute_index_mask: 0,
+                attribute_index_mask_hex: "0x00000000".to_string(),
+                attribute_names: Vec::new(),
+                ..test_model_submesh_info()
+            })
+        );
         assert_eq!(
             prepared.meshes[0].prepared_material.render_pass,
             PreparedRenderPass::Opaque
@@ -5124,6 +5470,197 @@ mod color_table_bake_tests {
             }
         );
         assert!(prepared.meshes[2].renders_in_main_pass);
+    }
+
+    #[test]
+    fn prepared_model_hides_attribute_submeshes_by_default() {
+        // 游戏内属性部件默认全部未启用：未显式给出 enabled_attribute_mask 时
+        // 带 attribute 的 submesh 隐藏（如自走人偶的 atr_bv_a 变体部件），
+        // 无 attribute 的 submesh 不受影响。
+        let mut tagged_mesh = test_model_mesh(None, 0);
+        tagged_mesh.submesh = Some(test_model_submesh_info());
+        let mut untagged_mesh = test_model_mesh(None, 0);
+        untagged_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x00000000".to_string(),
+            attribute_names: Vec::new(),
+            ..test_model_submesh_info()
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![tagged_mesh, untagged_mesh],
+        };
+
+        let prepared = prepare_model_for_render(&model);
+        assert!(
+            prepared
+                .runtime_geometry_requirements
+                .enabled_attribute_mask
+        );
+        assert!(!prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].visibility,
+            PreparedMeshVisibility {
+                submesh_attributes_visible: false,
+                enabled_attribute_mask: Some(0),
+                missing_attribute_mask: 0x0000_0005,
+            }
+        );
+        assert!(prepared.meshes[1].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[1].visibility.submesh_attributes_visible,
+            true
+        );
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_attribute_mask(0x0000_0005),
+        );
+        assert!(prepared.meshes[0].renders_in_main_pass);
+    }
+
+    #[test]
+    fn model_attribute_options_aggregate_bits_across_meshes() {
+        let mut mesh_a = test_model_mesh(None, 0);
+        mesh_a.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0x0000_0001,
+            attribute_index_mask_hex: "0x00000001".to_string(),
+            attribute_names: vec!["atr_a".to_string()],
+            ..test_model_submesh_info()
+        });
+        let mut mesh_b = test_model_mesh(None, 0);
+        // mask 0b101：names 按置位升序对应 bit0/bit2；bit0 的重名与 mesh_a 去重。
+        mesh_b.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0x0000_0005,
+            attribute_index_mask_hex: "0x00000005".to_string(),
+            attribute_names: vec!["atr_a".to_string(), "atr_c".to_string()],
+            ..test_model_submesh_info()
+        });
+        let mut mesh_c = test_model_mesh(None, 0);
+        // 同一 bit 的另一个名字来源；mask 无对应名字的置位（bit1）允许无名。
+        mesh_c.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0x0000_0007,
+            attribute_index_mask_hex: "0x00000007".to_string(),
+            attribute_names: vec!["atr_a2".to_string(), "atr_b".to_string()],
+            ..test_model_submesh_info()
+        });
+        let no_attribute_mesh = test_model_mesh(None, 0);
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![mesh_a, mesh_b, mesh_c, no_attribute_mesh],
+        };
+
+        assert_eq!(
+            model_attribute_options(&model),
+            [
+                ModelAttributeOption {
+                    bit: 0x0000_0001,
+                    names: vec!["atr_a".to_string(), "atr_a2".to_string()],
+                },
+                ModelAttributeOption {
+                    bit: 0x0000_0002,
+                    names: vec!["atr_b".to_string()],
+                },
+                ModelAttributeOption {
+                    bit: 0x0000_0004,
+                    names: vec!["atr_c".to_string()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn model_attribute_options_empty_without_attribute_submeshes() {
+        let mut mesh = test_model_mesh(None, 0);
+        mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x00000000".to_string(),
+            attribute_names: Vec::new(),
+            ..test_model_submesh_info()
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![test_model_mesh(None, 0), mesh],
+        };
+
+        assert!(model_attribute_options(&model).is_empty());
+    }
+
+    #[test]
+    fn attribute_parts_only_hides_untagged_meshes() {
+        // tagged：mask 0b101（bit0/bit2，attr_a/attr_c）；untagged：mask 0。
+        let mut tagged_mesh = test_model_mesh(None, 0);
+        tagged_mesh.submesh = Some(test_model_submesh_info());
+        let mut untagged_mesh = test_model_mesh(None, 0);
+        untagged_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x00000000".to_string(),
+            attribute_names: Vec::new(),
+            ..test_model_submesh_info()
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![tagged_mesh, untagged_mesh],
+        };
+
+        // 关闭隔离时行为不变：tagged 按 mask 判定，untagged 恒可见。
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default()
+                .with_enabled_attribute_mask(0x0000_0005)
+                .with_attribute_parts_only(false),
+        );
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert!(prepared.meshes[1].renders_in_main_pass);
+
+        // 开启隔离：无属性 mesh 隐藏，带属性 mesh 按 mask 显隐。
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default()
+                .with_enabled_attribute_mask(0x0000_0005)
+                .with_attribute_parts_only(true),
+        );
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert!(!prepared.meshes[1].renders_in_main_pass);
+        assert!(!prepared.meshes[1].visibility.submesh_attributes_visible);
+
+        // bit2 未启用 → tagged mesh 隐藏（missing mask 非 0）。
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default()
+                .with_enabled_attribute_mask(0x0000_0001)
+                .with_attribute_parts_only(true),
+        );
+        assert!(!prepared.meshes[0].renders_in_main_pass);
+        assert!(!prepared.meshes[1].renders_in_main_pass);
+    }
+
+    #[test]
+    fn attribute_parts_only_is_inert_without_attribute_submeshes() {
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![test_model_mesh(None, 0)],
+        };
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_attribute_parts_only(true),
+        );
+        assert!(prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].visibility,
+            PreparedMeshVisibility::default()
+        );
     }
 
     #[test]
@@ -6152,5 +6689,152 @@ mod color_table_bake_tests {
         assert!(candidates.iter().any(|path| {
             path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
         }));
+    }
+
+    #[test]
+    fn packed_equipment_model_uses_set_then_variant_order() {
+        // 商城拳套的 raw：quad[0]=套装 8822，quad[1]=IMC 子集（材质版本）1，
+        // quad[2]==0 是装备与武器位段语义的分界。
+        let model = PackedEquipmentModelId::from_raw(0x0000_0000_0001_2276);
+        assert_eq!(model.set_id, 8_822);
+        assert_eq!(model.variant_id, 1);
+    }
+
+    #[test]
+    fn equipment_model_candidates_prefer_requested_race_with_fallback() {
+        let model = PackedEquipmentModelId::from_raw(0x0000_0000_0001_2276);
+        let slot = equipment_slot_info(5).expect("glv slot");
+
+        let candidates = equipment_model_candidate_paths(model, slot, 401);
+        assert_eq!(
+            candidates,
+            vec![
+                "chara/equipment/e8822/model/c0401e8822_glv.mdl".to_string(),
+                "chara/equipment/e8822/model/c0101e8822_glv.mdl".to_string(),
+            ]
+        );
+
+        let candidates =
+            equipment_model_candidate_paths(model, slot, EQUIPMENT_MODEL_FALLBACK_RACE_ID);
+        assert_eq!(
+            candidates,
+            vec!["chara/equipment/e8822/model/c0101e8822_glv.mdl".to_string()]
+        );
+
+        assert!(
+            equipment_model_candidate_paths(PackedEquipmentModelId::default(), slot, 101)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn equipment_slot_info_covers_model_slots_only() {
+        assert_eq!(
+            equipment_slot_info(3),
+            Some(EquipmentSlotInfo {
+                abbreviation: "met",
+                is_accessory: false,
+            })
+        );
+        assert_eq!(
+            equipment_slot_info(12),
+            Some(EquipmentSlotInfo {
+                abbreviation: "rir",
+                is_accessory: true,
+            })
+        );
+        // 腰带没有模型，武器槽与组合槽位不走装备路径。
+        assert_eq!(equipment_slot_info(6), None);
+        assert_eq!(equipment_slot_info(1), None);
+        assert_eq!(equipment_slot_info(16), None);
+    }
+
+    #[test]
+    fn accessory_model_candidates_use_accessory_root() {
+        let model = PackedEquipmentModelId::from_raw(123);
+        let slot = equipment_slot_info(9).expect("ear slot");
+        assert_eq!(
+            equipment_model_candidate_paths(model, slot, 101),
+            vec!["chara/accessory/a0123/model/c0101a0123_ear.mdl".to_string()]
+        );
+    }
+
+    #[test]
+    fn equipment_material_candidates_use_variant_then_default_versions() {
+        let model = PackedEquipmentModelId {
+            raw: 0,
+            set_id: 123,
+            variant_id: 2,
+        };
+        let candidates = equipment_material_candidate_paths(
+            model,
+            "chara/equipment/e0123/model/c0101e0123_top.mdl",
+            "/mt_c0101e0123_top_a.mtrl",
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                "mt_c0101e0123_top_a.mtrl".to_string(),
+                "chara/equipment/e0123/material/v0002/mt_c0101e0123_top_a.mtrl".to_string(),
+                "chara/equipment/e0123/material/v0001/mt_c0101e0123_top_a.mtrl".to_string(),
+                "chara/equipment/e0123/material/mt_c0101e0123_top_a.mtrl".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn equipment_material_candidates_follow_material_file_set_id() {
+        // 材质名引用其他套装时（共享材质），按文件名里的套装 id 反推根目录。
+        let model = PackedEquipmentModelId {
+            raw: 0,
+            set_id: 123,
+            variant_id: 1,
+        };
+        let candidates = equipment_material_candidate_paths(
+            model,
+            "chara/equipment/e0123/model/c0101e0123_top.mdl",
+            "/mt_c0101e0456_top_a.mtrl",
+        );
+
+        assert!(candidates.contains(
+            &"chara/equipment/e0456/material/v0001/mt_c0101e0456_top_a.mtrl".to_string()
+        ));
+    }
+
+    #[test]
+    fn equipment_material_candidates_include_skin_root() {
+        let model = PackedEquipmentModelId {
+            raw: 0,
+            set_id: 123,
+            variant_id: 1,
+        };
+        let candidates = equipment_material_candidate_paths(
+            model,
+            "chara/equipment/e0123/model/c0101e0123_glv.mdl",
+            "/mt_c0101b0001_a.mtrl",
+        );
+
+        assert!(candidates.iter().any(|path| {
+            path == "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl"
+        }));
+    }
+
+    #[test]
+    fn accessory_material_candidates_use_accessory_root() {
+        let model = PackedEquipmentModelId {
+            raw: 0,
+            set_id: 321,
+            variant_id: 1,
+        };
+        let candidates = equipment_material_candidate_paths(
+            model,
+            "chara/accessory/a0321/model/c0101a0321_rir.mdl",
+            "mt_c0101a0321_rir_a.mtrl",
+        );
+
+        assert!(candidates.contains(
+            &"chara/accessory/a0321/material/v0001/mt_c0101a0321_rir_a.mtrl".to_string()
+        ));
     }
 }

@@ -31,8 +31,10 @@ mod wasm;
 
 pub use model::*;
 pub use planner::*;
+pub use resources::chara_catalog::*;
 pub use resources::collection_catalog::*;
 pub use resources::craft_data::*;
+pub use resources::furniture_catalog::*;
 pub use resources::item_icon::*;
 pub use resources::weapon_model::*;
 pub use resources::*;
@@ -41,5 +43,7 @@ pub use resources::*;
 // spec and UI can use them through the main crate.
 pub use solver::*;
 pub use weapon_models::*;
+pub use xiv_companion_data::chara_models::*;
 pub use xiv_companion_data::collection::*;
 pub use xiv_companion_data::collection_classification::*;
+pub use xiv_companion_data::furniture::*;

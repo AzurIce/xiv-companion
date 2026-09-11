@@ -1,25 +1,40 @@
 pub use crate::model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialCharacterScrollVariant,
-    MaterialDecalColorMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType,
-    MaterialLightingMode, MaterialRenderMode, MaterialSkinValueMode, MaterialSpecularType,
-    MaterialSubColorMode, MaterialValueMode, ModelBounds, ModelColorDyeTable, ModelData,
-    ModelDawntrailColorDyeTableRow, ModelLegacyColorDyeTableRow, ModelMaterial,
-    ModelMaterialReferenceFallback, ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays,
-    ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta,
-    ModelStainingApplication, ModelSubmeshInfo, ModelTexture, ModelTextureKind,
-    ModelTextureTexelLayout, ModelVertex, PackedModelId, PreparedMeshVisibility,
-    PreparedModelOptions, StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem,
-    WeaponCatalogPackage, WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds,
-    WeaponModelData, WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus,
-    WeaponModelLoadDiagnostic, WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh,
-    WeaponModelTexture, WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps,
-    calculate_model_bounds, is_weapon_equip_slot_category, material_color,
-    mesh_draw_role_for_category, weapon_material_candidate_paths, weapon_model_candidate_paths,
-    weapon_slot_label,
+    BakedColorTableMaps, ColorTableRowColors, EQUIPMENT_MODEL_FALLBACK_RACE_ID, EquipmentSlotInfo,
+    MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialDrawDepthMode,
+    MaterialFlowMode, MaterialLightShaftType, MaterialLightingMode, MaterialRenderMode,
+    MaterialSkinValueMode, MaterialSpecularType, MaterialSubColorMode, MaterialValueMode,
+    ModelBounds, ModelColorDyeTable, ModelData, ModelDawntrailColorDyeTableRow,
+    ModelLegacyColorDyeTableRow, ModelMaterial, ModelMaterialReferenceFallback,
+    ModelMaterialReferenceFallbackKind, ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole,
+    ModelRenderData, ModelShapeTarget, ModelShapeVertexDelta, ModelStainingApplication,
+    ModelSubmeshInfo, ModelTexture, ModelTextureKind, ModelTextureTexelLayout, ModelVertex,
+    PackedEquipmentModelId, PackedModelId, PreparedMeshVisibility, PreparedModelOptions,
+    StainingApplicationReport, WeaponCatalogCounts, WeaponCatalogItem, WeaponCatalogPackage,
+    WeaponMaterialAlphaMode, WeaponMaterialRenderMode, WeaponModelBounds, WeaponModelData,
+    WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
+    WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
+    WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
+    equipment_material_candidate_paths, equipment_model_candidate_paths, equipment_slot_info,
+    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
+    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "game-data")]
+use std::rc::Rc;
+
+#[cfg(feature = "game-data")]
+use crate::furniture::{
+    FurnitureCatalogItem, FurnitureModelKind, extract_sgb_asset_paths,
+    furniture_material_candidate_paths, furniture_sgb_path,
+};
+
+#[cfg(feature = "game-data")]
+use crate::chara_models::{
+    CharaCatalogItem, CharaModelKind, PackedCharaModelId, chara_material_candidate_paths,
+    chara_model_candidate_paths,
+};
 
 #[cfg(feature = "game-data")]
 use crate::model::{MaterialShaderFamily, material_shader_family};
@@ -264,9 +279,13 @@ impl WeaponModelLoadRequest {
     }
 
     fn normalized_stain_ids(&self) -> [u8; 2] {
-        self.stain_ids
-            .map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0))
+        normalize_stain_ids(self.stain_ids)
     }
+}
+
+#[cfg(feature = "game-data")]
+fn normalize_stain_ids(stain_ids: [u8; 2]) -> [u8; 2] {
+    stain_ids.map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0))
 }
 
 #[cfg(feature = "game-data")]
@@ -281,6 +300,66 @@ impl From<&WeaponCatalogItem> for WeaponModelLoadRequest {
         }
     }
 }
+
+/// 装备模型加载请求。`model_main`/`model_sub` 是 Item 表的原始 u64，按
+/// [`PackedEquipmentModelId`] 的装备语义解码（套装 id + IMC 子集 id）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EquipmentModelLoadRequest {
+    pub item_id: u32,
+    pub item_name: String,
+    pub model_main: u64,
+    pub model_sub: u64,
+    pub equip_slot_category: u32,
+    pub race_id: u16,
+    pub stain_ids: [u8; 2],
+}
+
+#[cfg(feature = "game-data")]
+impl EquipmentModelLoadRequest {
+    pub fn primary_model(&self) -> PackedEquipmentModelId {
+        PackedEquipmentModelId::from_raw(self.model_main)
+    }
+
+    pub fn secondary_model(&self) -> Option<PackedEquipmentModelId> {
+        (self.model_sub != 0).then(|| PackedEquipmentModelId::from_raw(self.model_sub))
+    }
+
+    pub fn with_race_id(mut self, race_id: u16) -> Self {
+        self.race_id = race_id;
+        self
+    }
+
+    pub fn with_stain_ids(mut self, stain_ids: [u8; 2]) -> Self {
+        self.stain_ids = stain_ids;
+        self
+    }
+
+    fn normalized_stain_ids(&self) -> [u8; 2] {
+        normalize_stain_ids(self.stain_ids)
+    }
+}
+
+#[cfg(feature = "game-data")]
+impl From<&WeaponCatalogItem> for EquipmentModelLoadRequest {
+    fn from(item: &WeaponCatalogItem) -> Self {
+        Self {
+            item_id: item.id,
+            item_name: item.name.clone(),
+            model_main: item.model_main,
+            model_sub: item.model_sub,
+            equip_slot_category: item.equip_slot_category,
+            race_id: EQUIPMENT_MODEL_FALLBACK_RACE_ID,
+            stain_ids: [0, 0],
+        }
+    }
+}
+
+/// 装备模型加载结果直接复用武器的结果结构。`model_main`/`model_sub` 保留原始
+/// raw 值，但 [`PackedModelId`] 的字段按武器三段语义解读；装备的套装 id 与
+/// IMC 子集 id 应以 [`PackedEquipmentModelId`] 重新解码。
+#[cfg(feature = "game-data")]
+pub type EquipmentModelData = WeaponModelData;
 
 #[cfg(feature = "game-data")]
 #[derive(Clone, Debug, Default)]
@@ -1302,9 +1381,9 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
     let staining =
         load_weapon_staining_templates_from_resource(resource, stain_ids, &mut loaded_paths);
 
-    load_weapon_model_meshes_from_resource(
+    load_model_meshes_from_resource(
         resource,
-        model_main,
+        ModelPathContext::Weapon(model_main),
         &staining,
         &mut loaded_paths,
         &mut materials,
@@ -1316,9 +1395,9 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
 
     if let Some(model_sub) = model_sub {
         if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
-            if let Err(failure) = load_weapon_model_meshes_from_resource(
+            if let Err(failure) = load_model_meshes_from_resource(
                 resource,
-                model_sub,
+                ModelPathContext::Weapon(model_sub),
                 &staining,
                 &mut loaded_paths,
                 &mut materials,
@@ -1350,6 +1429,97 @@ pub fn load_weapon_model_from_resource_request<R: physis::resource::Resource>(
         item_name: request.item_name.clone(),
         model_main,
         model_sub,
+        stain_ids,
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+#[cfg(feature = "game-data")]
+pub fn load_equipment_model_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &EquipmentModelLoadRequest,
+) -> anyhow::Result<EquipmentModelData> {
+    let Some(slot) = equipment_slot_info(request.equip_slot_category) else {
+        return Err(anyhow::anyhow!(
+            "equip slot category {} has no equipment model",
+            request.equip_slot_category
+        ));
+    };
+    let model_main = request.primary_model();
+    let model_sub = request.secondary_model();
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_resource(resource, stain_ids, &mut loaded_paths);
+
+    let main_context = ModelPathContext::Equipment(EquipmentModelPathContext {
+        model: model_main,
+        slot,
+        race_id: request.race_id,
+    });
+    load_model_meshes_from_resource(
+        resource,
+        main_context.clone(),
+        &staining,
+        &mut loaded_paths,
+        &mut materials,
+        &mut textures,
+        &mut meshes,
+        &mut color_table_sources,
+    )
+    .map_err(WeaponModelMeshLoadFailure::into_error)?;
+
+    if let Some(model_sub) = model_sub {
+        if model_sub.raw != model_main.raw {
+            let sub_context = ModelPathContext::Equipment(EquipmentModelPathContext {
+                model: model_sub,
+                slot,
+                race_id: request.race_id,
+            });
+            if let Err(failure) = load_model_meshes_from_resource(
+                resource,
+                sub_context,
+                &staining,
+                &mut loaded_paths,
+                &mut materials,
+                &mut textures,
+                &mut meshes,
+                &mut color_table_sources,
+            ) {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: main_context.diagnostic_model(),
+        model_sub: model_sub.map(|model| PackedModelId::from_raw(model.raw)),
         stain_ids,
         load_diagnostics,
         loaded_paths,
@@ -2497,10 +2667,103 @@ fn model_color_dye_table(
     }
 }
 
+/// 模型/材质候选路径的来源：武器按 [`PackedModelId`]，装备按套装、槽位与
+/// race，家具按 SGB 给出的精确 MDL 路径（材质优先匹配 SGB 引用文件列表），
+/// 宠物/坐骑按 ModelChara 三元组（demihuman 多 MDL 由加载方逐槽位探测）。
+/// 四条加载链共用同一套 MDL/MTRL 读取与染色逻辑，仅在路径候选上分叉。
 #[cfg(feature = "game-data")]
-fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
+#[derive(Clone, Debug)]
+enum ModelPathContext {
+    Weapon(PackedModelId),
+    Equipment(EquipmentModelPathContext),
+    Furniture(FurnitureModelPathContext),
+    Chara(CharaModelPathContext),
+}
+
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug)]
+struct EquipmentModelPathContext {
+    model: PackedEquipmentModelId,
+    slot: EquipmentSlotInfo,
+    race_id: u16,
+}
+
+/// 家具路径上下文：SGB 给出的精确 MDL 路径 + 同一家具全部 SGB 引用文件
+/// （.mtrl/.tex 等），材质候选先按文件名匹配后者，缺失再按 MDL 目录推导。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug)]
+struct FurnitureModelPathContext {
+    model_key: u16,
+    model_path: String,
+    sgb_files: Rc<[String]>,
+}
+
+/// 宠物/坐骑路径上下文：单个精确 MDL 路径（monster 唯一，demihuman 每槽位
+/// 一个，由加载方循环探测合并）+ ModelChara 三元组（材质版本回退与诊断用）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug)]
+struct CharaModelPathContext {
+    model: PackedCharaModelId,
+    model_path: String,
+}
+
+#[cfg(feature = "game-data")]
+impl ModelPathContext {
+    fn model_candidate_paths(&self) -> Vec<String> {
+        match self {
+            Self::Weapon(model) => weapon_model_candidate_paths(*model),
+            Self::Equipment(context) => {
+                equipment_model_candidate_paths(context.model, context.slot, context.race_id)
+            }
+            Self::Furniture(context) => vec![context.model_path.clone()],
+            Self::Chara(context) => vec![context.model_path.clone()],
+        }
+    }
+
+    fn material_candidate_paths(&self, model_path: &str, material_name: &str) -> Vec<String> {
+        match self {
+            Self::Weapon(model) => {
+                weapon_material_candidate_paths(*model, model_path, material_name)
+            }
+            Self::Equipment(context) => {
+                equipment_material_candidate_paths(context.model, model_path, material_name)
+            }
+            Self::Furniture(context) => {
+                furniture_material_candidate_paths(model_path, material_name, &context.sgb_files)
+            }
+            Self::Chara(context) => {
+                chara_material_candidate_paths(context.model, model_path, material_name)
+            }
+        }
+    }
+
+    /// 诊断信息用的模型标识；装备的 raw 原样保留（字段按武器语义解读），
+    /// 家具打包 housing ModelKey（model_id = ModelKey，其余段为 0），宠物/坐骑
+    /// 打包 ModelChara 三元组（model/base/variant 对应武器三段布局）。
+    fn diagnostic_model(&self) -> PackedModelId {
+        match self {
+            Self::Weapon(model) => *model,
+            Self::Equipment(context) => PackedModelId::from_raw(context.model.raw),
+            Self::Furniture(context) => PackedModelId::from_raw(context.model_key as u64),
+            Self::Chara(context) => chara_diagnostic_model(context.model),
+        }
+    }
+}
+
+/// 宠物/坐骑模型标识打包成武器三段布局的 raw（model | base<<16 | variant<<32）。
+#[cfg(feature = "game-data")]
+fn chara_diagnostic_model(model: PackedCharaModelId) -> PackedModelId {
+    PackedModelId::from_raw(
+        u64::from(model.model_id)
+            | (u64::from(model.base_id) << 16)
+            | (u64::from(model.variant_id) << 32),
+    )
+}
+
+#[cfg(feature = "game-data")]
+fn load_model_meshes_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
@@ -2511,7 +2774,7 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
     use anyhow::Context;
 
     let mut candidates = Vec::new();
-    for path in weapon_model_candidate_paths(model) {
+    for path in paths.model_candidate_paths() {
         let Some(bytes) = resource.read(&path) else {
             candidates.push(model_load_candidate(
                 path,
@@ -2531,13 +2794,16 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
                     WeaponModelLoadCandidateStatus::ParseError,
                     format!("{error:#}"),
                 ));
-                return Err(WeaponModelMeshLoadFailure::new(model, candidates));
+                return Err(WeaponModelMeshLoadFailure::new(
+                    paths.diagnostic_model(),
+                    candidates,
+                ));
             }
         };
         push_loaded_path(loaded_paths, path.clone());
-        assign_weapon_materials_from_resource(
+        assign_model_materials_from_resource(
             resource,
-            model,
+            paths,
             &path,
             staining,
             &mut path_meshes,
@@ -2550,13 +2816,16 @@ fn load_weapon_model_meshes_from_resource<R: physis::resource::Resource>(
         return Ok(());
     }
 
-    Err(WeaponModelMeshLoadFailure::new(model, candidates))
+    Err(WeaponModelMeshLoadFailure::new(
+        paths.diagnostic_model(),
+        candidates,
+    ))
 }
 
 #[cfg(feature = "game-data")]
-fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
+fn assign_model_materials_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     model_path: &str,
     staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
@@ -2578,9 +2847,9 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
 
     for (material_index, material_name) in material_specs {
         let slot = materials.len();
-        let material = load_weapon_material_from_resource(
+        let material = load_model_material_from_resource(
             resource,
-            model,
+            paths.clone(),
             model_path,
             staining,
             material_index,
@@ -2607,9 +2876,9 @@ fn assign_weapon_materials_from_resource<R: physis::resource::Resource>(
 }
 
 #[cfg(feature = "game-data")]
-fn load_weapon_material_from_resource<R: physis::resource::Resource>(
+fn load_model_material_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     model_path: &str,
     staining: &WeaponStainingTemplates,
     material_index: u16,
@@ -2623,7 +2892,7 @@ fn load_weapon_material_from_resource<R: physis::resource::Resource>(
     use physis::ReadableFile;
 
     let fallback = material_color(material_index);
-    let candidates = weapon_material_candidate_paths(model, model_path, &material_name);
+    let candidates = paths.material_candidate_paths(model_path, &material_name);
     for path in candidates {
         let Some(bytes) = resource.read(&path) else {
             continue;
@@ -3053,9 +3322,9 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         load_weapon_staining_templates_from_async_resource(resource, stain_ids, &mut loaded_paths)
             .await;
 
-    load_weapon_model_meshes_from_async_resource(
+    load_model_meshes_from_async_resource(
         resource,
-        model_main,
+        ModelPathContext::Weapon(model_main),
         &staining,
         &mut loaded_paths,
         &mut materials,
@@ -3068,9 +3337,9 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
 
     if let Some(model_sub) = model_sub {
         if model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw {
-            if let Err(failure) = load_weapon_model_meshes_from_async_resource(
+            if let Err(failure) = load_model_meshes_from_async_resource(
                 resource,
-                model_sub,
+                ModelPathContext::Weapon(model_sub),
                 &staining,
                 &mut loaded_paths,
                 &mut materials,
@@ -3106,6 +3375,581 @@ pub async fn load_weapon_model_from_async_resource<R: AsyncGameResource>(
         model_main,
         model_sub,
         stain_ids,
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+#[cfg(feature = "game-data")]
+pub async fn load_equipment_model_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &EquipmentModelLoadRequest,
+) -> anyhow::Result<EquipmentModelData> {
+    let Some(slot) = equipment_slot_info(request.equip_slot_category) else {
+        return Err(anyhow::anyhow!(
+            "equip slot category {} has no equipment model",
+            request.equip_slot_category
+        ));
+    };
+    let model_main = request.primary_model();
+    let model_sub = request.secondary_model();
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let stain_ids = request.normalized_stain_ids();
+    let staining =
+        load_weapon_staining_templates_from_async_resource(resource, stain_ids, &mut loaded_paths)
+            .await;
+
+    let main_context = ModelPathContext::Equipment(EquipmentModelPathContext {
+        model: model_main,
+        slot,
+        race_id: request.race_id,
+    });
+    load_model_meshes_from_async_resource(
+        resource,
+        main_context.clone(),
+        &staining,
+        &mut loaded_paths,
+        &mut materials,
+        &mut textures,
+        &mut meshes,
+        &mut color_table_sources,
+    )
+    .await
+    .map_err(WeaponModelMeshLoadFailure::into_error)?;
+
+    if let Some(model_sub) = model_sub {
+        if model_sub.raw != model_main.raw {
+            let sub_context = ModelPathContext::Equipment(EquipmentModelPathContext {
+                model: model_sub,
+                slot,
+                race_id: request.race_id,
+            });
+            if let Err(failure) = load_model_meshes_from_async_resource(
+                resource,
+                sub_context,
+                &staining,
+                &mut loaded_paths,
+                &mut materials,
+                &mut textures,
+                &mut meshes,
+                &mut color_table_sources,
+            )
+            .await
+            {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: main_context.diagnostic_model(),
+        model_sub: model_sub.map(|model| PackedModelId::from_raw(model.raw)),
+        stain_ids,
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+/// 家具/庭具模型加载请求。`model_key` 是 HousingFurniture/HousingYardObject 的
+/// ModelKey（模型 id），`kind` 决定室内/庭具 SGB 根路径。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FurnitureModelLoadRequest {
+    pub item_id: u32,
+    pub item_name: String,
+    pub kind: FurnitureModelKind,
+    pub model_key: u16,
+}
+
+#[cfg(feature = "game-data")]
+impl FurnitureModelLoadRequest {
+    pub fn sgb_path(&self) -> String {
+        furniture_sgb_path(self.kind, self.model_key)
+    }
+}
+
+#[cfg(feature = "game-data")]
+impl From<&FurnitureCatalogItem> for FurnitureModelLoadRequest {
+    fn from(item: &FurnitureCatalogItem) -> Self {
+        Self {
+            item_id: item.id,
+            item_name: item.name.clone(),
+            kind: item.kind,
+            model_key: item.model_key,
+        }
+    }
+}
+
+/// 家具模型加载结果复用武器的结果结构。`model_main` 打包 housing ModelKey
+/// （model_id = ModelKey，其余段为 0），`model_sub` 恒为 None，染色固定关闭；
+/// SGB 引用的全部 MDL 按顺序合并进 `meshes`，渲染时 component 按 MDL 序号区分
+/// （见 [`weapon_model_mesh_component_index`]）。
+#[cfg(feature = "game-data")]
+pub type FurnitureModelData = WeaponModelData;
+
+/// 递归提取一个 housing SGB 及其关联 SGB 引用的全部资源。`models` 按提取
+/// 顺序去重，`scanned_sgbs` 记录实际读取的 SGB（含根），scanned set 防止
+/// 关联 SGB 成环导致死循环。根 SGB 读不到时报错；关联 SGB 读不到时按上游
+/// 语义（`FileExists` 检查）静默跳过。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FurnitureSgbAssets {
+    models: Vec<String>,
+    /// SGB 引用的其余文件（.mtrl/.tex 等），供材质候选按文件名匹配。
+    files: Vec<String>,
+    scanned_sgbs: Vec<String>,
+}
+
+#[cfg(feature = "game-data")]
+async fn collect_furniture_sgb_assets_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    root_sgb_path: &str,
+) -> Result<FurnitureSgbAssets, String> {
+    let mut assets = FurnitureSgbAssets::default();
+    let mut scanned = HashSet::new();
+    let mut pending = vec![root_sgb_path.to_string()];
+    let mut is_root = true;
+    while let Some(sgb_path) = pending.pop() {
+        if !scanned.insert(sgb_path.clone()) {
+            continue;
+        }
+        let bytes = match resource.read(&sgb_path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if is_root {
+                    return Err(format!("failed to read {sgb_path}: {error}"));
+                }
+                continue;
+            }
+        };
+        is_root = false;
+        let extracted = extract_sgb_asset_paths(&bytes);
+        assets.scanned_sgbs.push(sgb_path);
+        for model in extracted.models {
+            push_unique_path(&mut assets.models, model);
+        }
+        for file in extracted.others {
+            push_unique_path(&mut assets.files, file);
+        }
+        for related in extracted.related_sgbs.into_iter().rev() {
+            pending.push(related);
+        }
+    }
+    Ok(assets)
+}
+
+#[cfg(feature = "game-data")]
+fn collect_furniture_sgb_assets_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    root_sgb_path: &str,
+) -> Result<FurnitureSgbAssets, String> {
+    let mut assets = FurnitureSgbAssets::default();
+    let mut scanned = HashSet::new();
+    let mut pending = vec![root_sgb_path.to_string()];
+    let mut is_root = true;
+    while let Some(sgb_path) = pending.pop() {
+        if !scanned.insert(sgb_path.clone()) {
+            continue;
+        }
+        let Some(bytes) = resource.read(&sgb_path) else {
+            if is_root {
+                return Err(format!(
+                    "failed to read {sgb_path}: resource read returned no bytes"
+                ));
+            }
+            continue;
+        };
+        is_root = false;
+        let extracted = extract_sgb_asset_paths(&bytes);
+        assets.scanned_sgbs.push(sgb_path);
+        for model in extracted.models {
+            push_unique_path(&mut assets.models, model);
+        }
+        for file in extracted.others {
+            push_unique_path(&mut assets.files, file);
+        }
+        for related in extracted.related_sgbs.into_iter().rev() {
+            pending.push(related);
+        }
+    }
+    Ok(assets)
+}
+
+/// 家具模型加载：读 SGB → 递归收集全部 MDL → 逐个加载合并网格（首个 MDL
+/// 失败报错，其余失败记为 Secondary 诊断，对齐武器 main/sub 处理）→ 材质优先
+/// 按 SGB 引用文件列表匹配，缺失回退 MDL 目录推导 → 纹理走通用候选推导。
+#[cfg(feature = "game-data")]
+pub async fn load_furniture_model_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &FurnitureModelLoadRequest,
+) -> anyhow::Result<FurnitureModelData> {
+    let sgb_path = request.sgb_path();
+    let sgb_assets = collect_furniture_sgb_assets_from_async_resource(resource, &sgb_path)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to collect housing assets: {error}"))?;
+
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = sgb_assets.scanned_sgbs.clone();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    if sgb_assets.models.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes (SGB {sgb_path} references no MDL)",
+            request.item_name
+        ));
+    }
+    let sgb_files: Rc<[String]> = sgb_assets.files.into();
+    let mut is_primary = true;
+    for model_path in &sgb_assets.models {
+        let context = ModelPathContext::Furniture(FurnitureModelPathContext {
+            model_key: request.model_key,
+            model_path: model_path.clone(),
+            sgb_files: sgb_files.clone(),
+        });
+        let result = load_model_meshes_from_async_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await;
+        if is_primary {
+            result.map_err(WeaponModelMeshLoadFailure::into_error)?;
+            is_primary = false;
+        } else if let Err(failure) = result {
+            load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+        }
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: PackedModelId::from_raw(request.model_key as u64),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+/// [`load_furniture_model_from_async_resource`] 的同步 Resource 版本，对齐
+/// [`load_equipment_model_from_resource`]。
+#[cfg(feature = "game-data")]
+pub fn load_furniture_model_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &FurnitureModelLoadRequest,
+) -> anyhow::Result<FurnitureModelData> {
+    let sgb_path = request.sgb_path();
+    let sgb_assets = collect_furniture_sgb_assets_from_resource(resource, &sgb_path)
+        .map_err(|error| anyhow::anyhow!("failed to collect housing assets: {error}"))?;
+
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = sgb_assets.scanned_sgbs.clone();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    if sgb_assets.models.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes (SGB {sgb_path} references no MDL)",
+            request.item_name
+        ));
+    }
+    let sgb_files: Rc<[String]> = sgb_assets.files.into();
+    let mut is_primary = true;
+    for model_path in &sgb_assets.models {
+        let context = ModelPathContext::Furniture(FurnitureModelPathContext {
+            model_key: request.model_key,
+            model_path: model_path.clone(),
+            sgb_files: sgb_files.clone(),
+        });
+        let result = load_model_meshes_from_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        );
+        if is_primary {
+            result.map_err(WeaponModelMeshLoadFailure::into_error)?;
+            is_primary = false;
+        } else if let Err(failure) = result {
+            load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+        }
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: PackedModelId::from_raw(request.model_key as u64),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+/// 宠物/坐骑模型加载请求。`model` 是 ModelChara 三元组（目录条目直接携带），
+/// `kind` 仅用于展示与诊断；monster 单 MDL 必须读到，demihuman 逐槽位探测
+/// 合并所有存在的 MDL。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CharaModelLoadRequest {
+    pub item_id: u32,
+    pub item_name: String,
+    pub kind: CharaModelKind,
+    pub model: PackedCharaModelId,
+}
+
+#[cfg(feature = "game-data")]
+impl From<&CharaCatalogItem> for CharaModelLoadRequest {
+    fn from(item: &CharaCatalogItem) -> Self {
+        Self {
+            item_id: item.id,
+            item_name: item.name.clone(),
+            kind: item.kind,
+            model: item.model,
+        }
+    }
+}
+
+/// 宠物/坐骑模型加载结果复用武器的结果结构。`model_main` 打包 ModelChara
+/// 三元组（model/base/variant 对应武器三段布局），`model_sub` 恒为 None，
+/// 染色固定关闭；demihuman 的全部槽位 MDL 按顺序合并进 `meshes`，渲染时
+/// component 按 MDL 序号区分（见 [`weapon_model_mesh_component_index`]）。
+#[cfg(feature = "game-data")]
+pub type CharaModelData = WeaponModelData;
+
+/// demihuman 槽位探测时的“文件不存在”失败：全部候选都是读不到（Missing/
+/// ReadError），与 MDL 存在但解析失败（ParseError，记诊断）区分。
+#[cfg(feature = "game-data")]
+fn chara_probe_failure_is_absent(failure: &WeaponModelMeshLoadFailure) -> bool {
+    failure.candidates.iter().all(|candidate| {
+        matches!(
+            candidate.status,
+            WeaponModelLoadCandidateStatus::Missing | WeaponModelLoadCandidateStatus::ReadError
+        )
+    })
+}
+
+/// 宠物/坐骑模型加载：monster 单 MDL 必须成功；demihuman 按槽位候选逐个
+/// 探测，读不到的槽位静默跳过，解析失败记 Secondary 诊断，全部槽位 MDL
+/// 合并网格；材质按 ModelChara 三元组多版本回退，纹理走通用候选推导。
+#[cfg(feature = "game-data")]
+pub async fn load_chara_model_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &CharaModelLoadRequest,
+) -> anyhow::Result<CharaModelData> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    let model_paths = chara_model_candidate_paths(request.model);
+    let single_model = model_paths.len() == 1;
+    for model_path in &model_paths {
+        let context = ModelPathContext::Chara(CharaModelPathContext {
+            model: request.model,
+            model_path: model_path.clone(),
+        });
+        let result = load_model_meshes_from_async_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await;
+        match (single_model, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {}
+        }
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: chara_diagnostic_model(request.model),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics,
+        loaded_paths,
+        bounds: calculate_model_bounds(&meshes),
+        materials,
+        textures,
+        meshes,
+    })
+}
+
+/// [`load_chara_model_from_async_resource`] 的同步 Resource 版本，对齐
+/// [`load_furniture_model_from_resource`]。
+#[cfg(feature = "game-data")]
+pub fn load_chara_model_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &CharaModelLoadRequest,
+) -> anyhow::Result<CharaModelData> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    let model_paths = chara_model_candidate_paths(request.model);
+    let single_model = model_paths.len() == 1;
+    for model_path in &model_paths {
+        let context = ModelPathContext::Chara(CharaModelPathContext {
+            model: request.model,
+            model_path: model_path.clone(),
+        });
+        let result = load_model_meshes_from_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        );
+        match (single_model, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {}
+        }
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.item_name
+        ));
+    }
+
+    Ok(WeaponModelData {
+        item_id: request.item_id,
+        item_name: request.item_name.clone(),
+        model_main: chara_diagnostic_model(request.model),
+        model_sub: None,
+        stain_ids: [0, 0],
         load_diagnostics,
         loaded_paths,
         bounds: calculate_model_bounds(&meshes),
@@ -3304,9 +4148,9 @@ fn preview_emissive_color_for_material(
 }
 
 #[cfg(feature = "game-data")]
-async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
+async fn load_model_meshes_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     staining: &WeaponStainingTemplates,
     loaded_paths: &mut Vec<String>,
     materials: &mut Vec<WeaponModelMaterial>,
@@ -3317,7 +4161,7 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
     use anyhow::Context;
 
     let mut candidates = Vec::new();
-    for path in weapon_model_candidate_paths(model) {
+    for path in paths.model_candidate_paths() {
         let bytes = match resource.read(&path).await {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -3340,13 +4184,16 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
                     WeaponModelLoadCandidateStatus::ParseError,
                     format!("{error:#}"),
                 ));
-                return Err(WeaponModelMeshLoadFailure::new(model, candidates));
+                return Err(WeaponModelMeshLoadFailure::new(
+                    paths.diagnostic_model(),
+                    candidates,
+                ));
             }
         };
         push_loaded_path(loaded_paths, path.clone());
-        assign_weapon_materials_from_async_resource(
+        assign_model_materials_from_async_resource(
             resource,
-            model,
+            paths,
             &path,
             staining,
             &mut path_meshes,
@@ -3360,13 +4207,16 @@ async fn load_weapon_model_meshes_from_async_resource<R: AsyncGameResource>(
         return Ok(());
     }
 
-    Err(WeaponModelMeshLoadFailure::new(model, candidates))
+    Err(WeaponModelMeshLoadFailure::new(
+        paths.diagnostic_model(),
+        candidates,
+    ))
 }
 
 #[cfg(feature = "game-data")]
-async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
+async fn assign_model_materials_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     model_path: &str,
     staining: &WeaponStainingTemplates,
     meshes: &mut [WeaponModelMesh],
@@ -3388,9 +4238,9 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
 
     for (material_index, material_name) in material_specs {
         let slot = materials.len();
-        let material = load_weapon_material_from_async_resource(
+        let material = load_model_material_from_async_resource(
             resource,
-            model,
+            paths.clone(),
             model_path,
             staining,
             material_index,
@@ -3418,9 +4268,9 @@ async fn assign_weapon_materials_from_async_resource<R: AsyncGameResource>(
 }
 
 #[cfg(feature = "game-data")]
-async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
+async fn load_model_material_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
-    model: PackedModelId,
+    paths: ModelPathContext,
     model_path: &str,
     staining: &WeaponStainingTemplates,
     material_index: u16,
@@ -3434,7 +4284,7 @@ async fn load_weapon_material_from_async_resource<R: AsyncGameResource>(
     use physis::ReadableFile;
 
     let fallback = material_color(material_index);
-    let candidates = weapon_material_candidate_paths(model, model_path, &material_name);
+    let candidates = paths.material_candidate_paths(model_path, &material_name);
     for path in candidates {
         let Ok(bytes) = resource.read(&path).await else {
             continue;
@@ -4522,11 +5372,24 @@ fn weapon_material_alpha_mode(
         WeaponMaterialAlphaMode::Blend
     } else if alpha_test && apply_alpha_test_material_key_applies(&shader) {
         WeaponMaterialAlphaMode::Mask
-    } else if texture_set.has_alpha {
+    } else if texture_set.has_alpha && !bg_color_change_alpha_is_dye_mask(&shader) {
         WeaponMaterialAlphaMode::Blend
     } else {
         WeaponMaterialAlphaMode::Opaque
     }
+}
+
+/// bg 变色（家具染色）材质的漫反射 alpha 是染色遮罩而非透明度：
+/// 遮罩为 0 的区域（非可染部件）在游戏中照常不透明渲染，
+/// 不能因纹理含 alpha 通道而落入 Blend 透明显示。
+#[cfg(feature = "game-data")]
+fn bg_color_change_alpha_is_dye_mask(shader_package_name: &str) -> bool {
+    let shader = shader_package_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(shader_package_name)
+        .to_ascii_lowercase();
+    matches!(shader.as_str(), "bgcolorchange.shpk" | "bgcrestchange.shpk")
 }
 
 #[cfg(feature = "game-data")]
@@ -6409,6 +7272,34 @@ mod weapon_material_tests {
 
         assert_eq!(request.normalized_stain_ids(), [MAX_STAIN_ID, 0]);
         assert_eq!(request.clone().with_stain_ids([17, 93]).stain_ids, [17, 93]);
+    }
+
+    #[test]
+    fn equipment_model_load_request_decodes_and_builds() {
+        let item = WeaponCatalogItem {
+            id: 7,
+            name: "test gloves".to_string(),
+            description: String::new(),
+            icon: 0,
+            item_ui_category: 0,
+            item_search_category: 0,
+            equip_slot_category: 5,
+            price_mid: 0,
+            price_low: 0,
+            model_main: 0x0000_0000_0001_2276,
+            model_sub: 0,
+        };
+        let request = EquipmentModelLoadRequest::from(&item)
+            .with_race_id(401)
+            .with_stain_ids([1, u8::MAX]);
+
+        assert_eq!(request.equip_slot_category, 5);
+        assert_eq!(request.race_id, 401);
+        let model = request.primary_model();
+        assert_eq!(model.set_id, 8_822);
+        assert_eq!(model.variant_id, 1);
+        assert!(request.secondary_model().is_none());
+        assert_eq!(request.normalized_stain_ids(), [1, 0]);
     }
 
     #[test]
@@ -9581,6 +10472,41 @@ mod weapon_material_tests {
     }
 
     #[test]
+    fn bg_color_change_texture_alpha_is_dye_mask_not_transparency() {
+        let texture_set = WeaponTextureSet {
+            has_alpha: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            weapon_material_alpha_mode("bgcolorchange.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Opaque
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("bgcrestchange.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Opaque
+        );
+        assert_eq!(
+            weapon_material_alpha_mode(
+                "bgcommon/hou/material/bgcolorchange.shpk",
+                0,
+                &texture_set,
+                false
+            ),
+            WeaponMaterialAlphaMode::Opaque
+        );
+        // 显式 alpha test 仍按 MTRL 数据走 cutout；其它 bg 包的 alpha 行为不变。
+        assert_eq!(
+            weapon_material_alpha_mode("bgcolorchange.shpk", 0, &texture_set, true),
+            WeaponMaterialAlphaMode::Mask
+        );
+        assert_eq!(
+            weapon_material_alpha_mode("bg.shpk", 0, &texture_set, false),
+            WeaponMaterialAlphaMode::Blend
+        );
+    }
+
+    #[test]
     fn srgb_multiply_uses_linear_space() {
         assert_eq!(multiply_srgb_channels(255, 128), 128);
         assert_ne!(multiply_srgb_channels(128, 128), 64);
@@ -10280,5 +11206,373 @@ mod weapon_material_tests {
             physis::Platform::PS3 => value.to_be_bytes(),
             _ => value.to_le_bytes(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "game-data"))]
+mod furniture_loader_tests {
+    use super::*;
+    use crate::furniture::synthetic_sgb;
+
+    #[derive(Default)]
+    struct MockAsyncResource {
+        files: HashMap<String, Vec<u8>>,
+    }
+
+    impl MockAsyncResource {
+        fn with_sgb(mut self, path: &str, entries: &[&str]) -> Self {
+            self.files.insert(path.to_string(), synthetic_sgb(entries));
+            self
+        }
+    }
+
+    impl AsyncGameResource for MockAsyncResource {
+        type Error = String;
+        type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
+
+        fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
+            std::future::ready(
+                self.files
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| format!("not found: {path}")),
+            )
+        }
+
+        fn platform(&self) -> physis::Platform {
+            physis::Platform::Win32
+        }
+    }
+
+    fn furniture_request() -> FurnitureModelLoadRequest {
+        FurnitureModelLoadRequest {
+            item_id: 19770,
+            item_name: "测试木桌".to_string(),
+            kind: FurnitureModelKind::Indoor,
+            model_key: 1,
+        }
+    }
+
+    #[test]
+    fn furniture_request_builds_sgb_path_and_loads_from_catalog_item() {
+        let request = furniture_request();
+        assert_eq!(
+            request.sgb_path(),
+            "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001.sgb"
+        );
+
+        let item = FurnitureCatalogItem {
+            id: 9710,
+            kind: FurnitureModelKind::Outdoor,
+            name: "测试庭具石灯".to_string(),
+            icon: 59002,
+            model_key: 1234,
+        };
+        let request = FurnitureModelLoadRequest::from(&item);
+        assert_eq!(
+            request,
+            FurnitureModelLoadRequest {
+                item_id: 9710,
+                item_name: "测试庭具石灯".to_string(),
+                kind: FurnitureModelKind::Outdoor,
+                model_key: 1234,
+            }
+        );
+        assert_eq!(
+            request.sgb_path(),
+            "bgcommon/hou/outdoor/general/1234/asset/gar_b0_m1234.sgb"
+        );
+    }
+
+    #[test]
+    fn sgb_collection_merges_related_sgbs_and_guards_cycles() {
+        let root = "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001.sgb";
+        let related_a = "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001_a.sgb";
+        let related_b = "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001_b.sgb";
+        let mut resource = MockAsyncResource::default()
+            .with_sgb(
+                root,
+                &[
+                    "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001.mdl",
+                    "bgcommon/hou/indoor/general/0001/material/v0001/mt_fun_b0_m0001_a.mtrl",
+                    related_a,
+                    related_b,
+                ],
+            )
+            // related_a 回指 root 并重复引用 related_b，验证 scanned set 防环与去重。
+            .with_sgb(
+                related_a,
+                &[
+                    "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001_a.mdl",
+                    root,
+                    related_b,
+                ],
+            )
+            .with_sgb(
+                related_b,
+                &[
+                    "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001_a.mdl",
+                    "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001_b.mdl",
+                ],
+            );
+
+        let assets = futures_executor::block_on(collect_furniture_sgb_assets_from_async_resource(
+            &mut resource,
+            root,
+        ))
+        .expect("sgb assets should load");
+
+        assert_eq!(
+            assets.models,
+            [
+                "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001.mdl",
+                "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001_a.mdl",
+                "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001_b.mdl",
+            ]
+        );
+        assert_eq!(
+            assets.files,
+            ["bgcommon/hou/indoor/general/0001/material/v0001/mt_fun_b0_m0001_a.mtrl"]
+        );
+        assert_eq!(assets.scanned_sgbs, [root, related_a, related_b]);
+    }
+
+    #[test]
+    fn sgb_collection_skips_missing_related_but_not_missing_root() {
+        let root = "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001.sgb";
+        let mut resource = MockAsyncResource::default().with_sgb(
+            root,
+            &[
+                "bgcommon/hou/indoor/general/0001/model/fun_b0_m0001.mdl",
+                "bgcommon/hou/indoor/general/0001/asset/missing.sgb",
+            ],
+        );
+
+        let assets = futures_executor::block_on(collect_furniture_sgb_assets_from_async_resource(
+            &mut resource,
+            root,
+        ))
+        .expect("missing related sgb should be skipped");
+        assert_eq!(assets.scanned_sgbs, [root]);
+        assert_eq!(assets.models.len(), 1);
+
+        let mut empty = MockAsyncResource::default();
+        let error = futures_executor::block_on(collect_furniture_sgb_assets_from_async_resource(
+            &mut empty, root,
+        ))
+        .expect_err("missing root sgb must fail");
+        assert!(error.contains(root));
+    }
+
+    #[test]
+    fn furniture_load_reports_sgb_without_models() {
+        let root = "bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001.sgb";
+        let mut resource = MockAsyncResource::default().with_sgb(root, &[]);
+
+        let error = futures_executor::block_on(load_furniture_model_from_async_resource(
+            &mut resource,
+            &furniture_request(),
+        ))
+        .expect_err("sgb without mdl references must fail");
+        assert!(format!("{error:#}").contains("references no MDL"));
+    }
+
+    #[test]
+    fn furniture_load_reports_missing_sgb() {
+        let mut resource = MockAsyncResource::default();
+        let error = futures_executor::block_on(load_furniture_model_from_async_resource(
+            &mut resource,
+            &furniture_request(),
+        ))
+        .expect_err("missing sgb must fail");
+        assert!(
+            format!("{error:#}")
+                .contains("bgcommon/hou/indoor/general/0001/asset/fun_b0_m0001.sgb")
+        );
+    }
+}
+
+#[cfg(all(test, feature = "game-data"))]
+mod chara_loader_tests {
+    use super::*;
+    use crate::chara_models::CharaModelType;
+    use crate::mdl_geometry::tests::fixture_mdl_with_normal_and_glass_mesh;
+    use crate::model::weapon_model_mesh_component_index;
+
+    #[derive(Default)]
+    struct MockAsyncResource {
+        files: HashMap<String, Vec<u8>>,
+    }
+
+    impl MockAsyncResource {
+        fn with_bytes(mut self, path: &str, bytes: Vec<u8>) -> Self {
+            self.files.insert(path.to_string(), bytes);
+            self
+        }
+    }
+
+    impl AsyncGameResource for MockAsyncResource {
+        type Error = String;
+        type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
+
+        fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
+            std::future::ready(
+                self.files
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| format!("not found: {path}")),
+            )
+        }
+
+        fn platform(&self) -> physis::Platform {
+            physis::Platform::Win32
+        }
+    }
+
+    fn monster_request() -> CharaModelLoadRequest {
+        CharaModelLoadRequest {
+            item_id: 100,
+            item_name: "爆弹仔".to_string(),
+            kind: CharaModelKind::Minion,
+            model: PackedCharaModelId {
+                model_id: 8003,
+                base_id: 1,
+                variant_id: 1,
+                chara_type: CharaModelType::Monster,
+            },
+        }
+    }
+
+    fn demihuman_request() -> CharaModelLoadRequest {
+        CharaModelLoadRequest {
+            item_id: 200,
+            item_name: "专属陆行鸟".to_string(),
+            kind: CharaModelKind::Mount,
+            model: PackedCharaModelId {
+                model_id: 1,
+                base_id: 1,
+                variant_id: 1,
+                chara_type: CharaModelType::Demihuman,
+            },
+        }
+    }
+
+    #[test]
+    fn chara_request_builds_from_catalog_item() {
+        let item = CharaCatalogItem {
+            id: 100,
+            kind: CharaModelKind::Minion,
+            name: "爆弹仔".to_string(),
+            icon: 2598,
+            model: PackedCharaModelId {
+                model_id: 8003,
+                base_id: 1,
+                variant_id: 1,
+                chara_type: CharaModelType::Monster,
+            },
+        };
+        assert_eq!(CharaModelLoadRequest::from(&item), monster_request());
+    }
+
+    #[test]
+    fn monster_load_merges_nothing_but_succeeds_with_single_mdl() {
+        let mdl = "chara/monster/m8003/obj/body/b0001/model/m8003b0001.mdl";
+        let mut resource =
+            MockAsyncResource::default().with_bytes(mdl, fixture_mdl_with_normal_and_glass_mesh());
+
+        let data = futures_executor::block_on(load_chara_model_from_async_resource(
+            &mut resource,
+            &monster_request(),
+        ))
+        .expect("monster mdl should load");
+
+        assert_eq!(data.meshes.len(), 2);
+        assert_eq!(data.loaded_paths, [mdl.to_string()]);
+        assert_eq!(data.model_main.model_id, 8003);
+        assert_eq!(data.model_main.body_id, 1);
+        assert_eq!(data.model_main.variant_id, 1);
+        assert!(data.model_sub.is_none());
+        assert!(data.load_diagnostics.is_empty());
+    }
+
+    #[test]
+    fn monster_load_reports_missing_mdl() {
+        let mut resource = MockAsyncResource::default();
+        let error = futures_executor::block_on(load_chara_model_from_async_resource(
+            &mut resource,
+            &monster_request(),
+        ))
+        .expect_err("missing monster mdl must fail");
+        assert!(format!("{error:#}").contains("m8003b0001.mdl"));
+    }
+
+    #[test]
+    fn demihuman_load_merges_existing_slots_and_skips_missing() {
+        let met = "chara/demihuman/d0001/obj/equipment/e0001/model/d0001e0001_met.mdl";
+        let top = "chara/demihuman/d0001/obj/equipment/e0001/model/d0001e0001_top.mdl";
+        let mut resource = MockAsyncResource::default()
+            .with_bytes(met, fixture_mdl_with_normal_and_glass_mesh())
+            .with_bytes(top, fixture_mdl_with_normal_and_glass_mesh());
+
+        let data = futures_executor::block_on(load_chara_model_from_async_resource(
+            &mut resource,
+            &demihuman_request(),
+        ))
+        .expect("existing demihuman slots should load");
+
+        // 两个槽位各 2 个网格，合并为一个模型，component 按 MDL 序号区分。
+        assert_eq!(data.meshes.len(), 4);
+        assert_eq!(
+            data.loaded_paths,
+            [met.to_string(), top.to_string()],
+            "glv/dwn/sho 缺失应静默跳过"
+        );
+        assert!(data.load_diagnostics.is_empty());
+        let components = data
+            .meshes
+            .iter()
+            .map(|mesh| weapon_model_mesh_component_index(&data, mesh))
+            .collect::<Vec<_>>();
+        assert_eq!(components, [0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn demihuman_load_records_parse_errors_but_not_absent_slots() {
+        let met = "chara/demihuman/d0001/obj/equipment/e0001/model/d0001e0001_met.mdl";
+        let top = "chara/demihuman/d0001/obj/equipment/e0001/model/d0001e0001_top.mdl";
+        let mut resource = MockAsyncResource::default()
+            .with_bytes(met, b"not an mdl".to_vec())
+            .with_bytes(top, fixture_mdl_with_normal_and_glass_mesh());
+
+        let data = futures_executor::block_on(load_chara_model_from_async_resource(
+            &mut resource,
+            &demihuman_request(),
+        ))
+        .expect("one valid slot is enough to load");
+
+        assert_eq!(data.meshes.len(), 2);
+        assert_eq!(data.load_diagnostics.len(), 1);
+        assert_eq!(
+            data.load_diagnostics[0].role,
+            WeaponModelLoadRole::Secondary
+        );
+        assert!(
+            data.load_diagnostics[0]
+                .candidates
+                .iter()
+                .any(|candidate| candidate.path == met
+                    && candidate.status == WeaponModelLoadCandidateStatus::ParseError)
+        );
+    }
+
+    #[test]
+    fn demihuman_load_reports_when_no_slot_exists() {
+        let mut resource = MockAsyncResource::default();
+        let error = futures_executor::block_on(load_chara_model_from_async_resource(
+            &mut resource,
+            &demihuman_request(),
+        ))
+        .expect_err("demihuman without any slot mdl must fail");
+        assert!(format!("{error:#}").contains("no renderable model meshes"));
     }
 }

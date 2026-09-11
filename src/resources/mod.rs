@@ -4,8 +4,10 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 
+pub mod chara_catalog;
 pub mod collection_catalog;
 pub mod craft_data;
+pub mod furniture_catalog;
 pub mod item_icon;
 pub mod weapon_model;
 

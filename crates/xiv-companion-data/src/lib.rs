@@ -1,6 +1,8 @@
+pub mod chara_models;
 pub mod collection;
 pub mod collection_classification;
 pub mod craft_data;
+pub mod furniture;
 #[cfg(feature = "game-data")]
 pub mod game_data;
 #[cfg(feature = "game-data")]
@@ -14,9 +16,11 @@ pub mod staining;
 mod texture_decode;
 pub mod weapon_models;
 
+pub use chara_models::*;
 pub use collection::*;
 pub use collection_classification::*;
 pub use craft_data::*;
+pub use furniture::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;
 pub use model::*;

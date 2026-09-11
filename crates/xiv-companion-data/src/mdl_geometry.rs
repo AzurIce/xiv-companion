@@ -630,7 +630,7 @@ fn read_f32_le(bytes: &[u8], offset: usize, label: &str) -> anyhow::Result<f32> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -944,7 +944,7 @@ mod tests {
         assert_eq!(default_model_vertex().flow1, None);
     }
 
-    fn fixture_mdl_with_normal_and_glass_mesh() -> Vec<u8> {
+    pub(crate) fn fixture_mdl_with_normal_and_glass_mesh() -> Vec<u8> {
         const MODEL_HEADER_SIZE: usize = 56;
         const LOD_SIZE: usize = 60;
         const EXTRA_LOD_SIZE: usize = 40;

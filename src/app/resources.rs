@@ -2,14 +2,19 @@ use dioxus::prelude::*;
 use physis::ReadableFile;
 use serde::Deserialize;
 use xiv_companion::{
-    AsyncGameResource, BuiltinItemIconProvider, ItemIconResourceInfo, LocalItemIconImage,
-    ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceMetadata, ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus,
-    WeaponModelLoadRequest, WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
-    load_weapon_model_from_async_resource, register_collection_catalog_resource,
-    register_craft_data_resource, register_item_icon_resource, register_weapon_model_resources,
+    AsyncGameResource, BuiltinItemIconProvider, CharaModelLoadRequest, EquipmentModelLoadRequest,
+    FurnitureModelLoadRequest, ItemIconResourceInfo, LocalItemIconImage, ProviderRequest,
+    ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub, ResourceMetadata,
+    ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus, WeaponModelLoadRequest,
+    WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
+    load_chara_model_from_async_resource, load_equipment_model_from_async_resource,
+    load_furniture_model_from_async_resource, load_weapon_model_from_async_resource,
+    register_chara_catalog_resource, register_collection_catalog_resource,
+    register_craft_data_resource, register_furniture_catalog_resource, register_item_icon_resource,
+    register_weapon_model_resources,
     resources::{
-        collection_catalog::CollectionCatalogKind, craft_data::CraftDataKind,
+        chara_catalog::CharaCatalogKind, collection_catalog::CollectionCatalogKind,
+        craft_data::CraftDataKind, furniture_catalog::FurnitureCatalogKind,
         item_icon::ItemIconKind, weapon_model::WeaponCatalogKind,
     },
 };
@@ -24,12 +29,16 @@ use crate::app::log;
 const BUNDLED_CRAFT_DATA_ASSET: Asset = asset!("/assets/craft-data.json");
 const BUNDLED_WEAPON_CATALOG_ASSET: Asset = asset!("/assets/weapon-catalog.json");
 const BUNDLED_COLLECTION_CATALOG_ASSET: Asset = asset!("/assets/collection-catalog.json");
+const BUNDLED_FURNITURE_CATALOG_ASSET: Asset = asset!("/assets/furniture-catalog.json");
+const BUNDLED_CHARA_CATALOG_ASSET: Asset = asset!("/assets/chara-catalog.json");
 const BUNDLED_RESOURCE_MANIFEST_ASSET: Asset = asset!("/assets/resource-manifest.json");
 const ITEM_ICON_READ_WINDOW: u64 = 2 * 1024 * 1024;
 
 const CACHED_CRAFT_DATA_KEY: &str = "craft-data";
 const CACHED_WEAPON_CATALOG_KEY: &str = "weapon-catalog";
 const CACHED_COLLECTION_CATALOG_KEY: &str = "collection-catalog";
+const CACHED_FURNITURE_CATALOG_KEY: &str = "furniture-catalog";
+const CACHED_CHARA_CATALOG_KEY: &str = "chara-catalog";
 
 #[derive(Clone, Debug)]
 struct CachedPackageInfo {
@@ -58,6 +67,8 @@ pub fn default_web_resource_hub() -> ResourceHub {
     let mut hub = ResourceHub::new();
     register_collection_catalog_resource(&mut hub);
     register_craft_data_resource(&mut hub);
+    register_furniture_catalog_resource(&mut hub);
+    register_chara_catalog_resource(&mut hub);
     register_item_icon_resource(&mut hub);
     register_weapon_model_resources(&mut hub);
     hub.add_provider(BundledProvider);
@@ -75,6 +86,10 @@ impl IndexedDbCachedProvider {
             xiv_companion::COLLECTION_CATALOG_SCHEMA_VERSION
         } else if request.kind == WeaponCatalogKind.into() {
             xiv_companion::WEAPON_CATALOG_SCHEMA_REVISION
+        } else if request.kind == FurnitureCatalogKind.into() {
+            xiv_companion::FURNITURE_CATALOG_SCHEMA_VERSION
+        } else if request.kind == CharaCatalogKind.into() {
+            xiv_companion::CHARA_CATALOG_SCHEMA_VERSION
         } else {
             1
         }
@@ -90,6 +105,12 @@ impl IndexedDbCachedProvider {
         if request.kind == CollectionCatalogKind.into() && request.key == "default" {
             return Some(CACHED_COLLECTION_CATALOG_KEY);
         }
+        if request.kind == FurnitureCatalogKind.into() && request.key == "default" {
+            return Some(CACHED_FURNITURE_CATALOG_KEY);
+        }
+        if request.kind == CharaCatalogKind.into() && request.key == "default" {
+            return Some(CACHED_CHARA_CATALOG_KEY);
+        }
         None
     }
 
@@ -102,6 +123,12 @@ impl IndexedDbCachedProvider {
         }
         if request.kind == CollectionCatalogKind.into() && request.key == "default" {
             return Some(BUNDLED_COLLECTION_CATALOG_ASSET);
+        }
+        if request.kind == FurnitureCatalogKind.into() && request.key == "default" {
+            return Some(BUNDLED_FURNITURE_CATALOG_ASSET);
+        }
+        if request.kind == CharaCatalogKind.into() && request.key == "default" {
+            return Some(BUNDLED_CHARA_CATALOG_ASSET);
         }
         None
     }
@@ -202,6 +229,40 @@ impl IndexedDbCachedProvider {
                         request.kind.clone(),
                         Some(ResourceSource::Builtin),
                         format!("failed to decode bundled CollectionCatalog for indexing: {error}"),
+                    )
+                });
+        }
+        if request.kind == FurnitureCatalogKind.into() {
+            return serde_json::from_slice::<xiv_companion::FurnitureCatalogPackage>(bytes)
+                .map(|package| CachedPackageInfo {
+                    game_version: package.game_version,
+                    revision: package.generated_at,
+                    record_count: package.counts.items,
+                    schema_revision: Some(package.schema_version),
+                })
+                .map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::DecodeFailed,
+                        request.kind.clone(),
+                        Some(ResourceSource::Builtin),
+                        format!("failed to decode bundled FurnitureCatalog for indexing: {error}"),
+                    )
+                });
+        }
+        if request.kind == CharaCatalogKind.into() {
+            return serde_json::from_slice::<xiv_companion::CharaCatalogPackage>(bytes)
+                .map(|package| CachedPackageInfo {
+                    game_version: package.game_version,
+                    revision: package.generated_at,
+                    record_count: package.counts.items,
+                    schema_revision: Some(package.schema_version),
+                })
+                .map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::DecodeFailed,
+                        request.kind.clone(),
+                        Some(ResourceSource::Builtin),
+                        format!("failed to decode bundled CharaCatalog for indexing: {error}"),
                     )
                 });
         }
@@ -1059,6 +1120,240 @@ pub async fn load_weapon_model_from_local(
     result
 }
 
+pub async fn load_equipment_model_from_local(
+    id: xiv_companion::EquipmentModelId,
+) -> Result<xiv_companion::EquipmentModelData, String> {
+    let started_at_ms = log::now_ms();
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        stage: "连接本地游戏目录".to_string(),
+        detail: id.item_name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: id.item_id,
+                stain_ids: id.stain_ids,
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+    let request = EquipmentModelLoadRequest {
+        item_id: id.item_id,
+        item_name: id.item_name,
+        model_main: id.model_main,
+        model_sub: id.model_sub,
+        equip_slot_category: id.equip_slot_category,
+        race_id: id.race_id,
+        stain_ids: id.stain_ids,
+    };
+
+    let result = load_equipment_model_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
+    let (stage, detail) = match &result {
+        Ok(data) => (
+            "模型资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理",
+                data.meshes.len(),
+                data.materials.len(),
+                data.textures.len()
+            ),
+        ),
+        Err(error) => ("模型读取失败", error.clone()),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    result
+}
+
+pub async fn load_furniture_model_from_local(
+    id: xiv_companion::FurnitureModelId,
+) -> Result<xiv_companion::FurnitureModelData, String> {
+    let started_at_ms = log::now_ms();
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        stage: "连接本地游戏目录".to_string(),
+        detail: id.item_name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: id.item_id,
+                stain_ids: [0, 0],
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+    let request = FurnitureModelLoadRequest {
+        item_id: id.item_id,
+        item_name: id.item_name,
+        kind: id.kind,
+        model_key: id.model_key,
+    };
+
+    let result = load_furniture_model_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
+    let (stage, detail) = match &result {
+        Ok(data) => (
+            "模型资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理",
+                data.meshes.len(),
+                data.materials.len(),
+                data.textures.len()
+            ),
+        ),
+        Err(error) => ("模型读取失败", error.clone()),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    result
+}
+
+pub async fn load_chara_model_from_local(
+    id: xiv_companion::CharaModelId,
+) -> Result<xiv_companion::CharaModelData, String> {
+    let started_at_ms = log::now_ms();
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        stage: "连接本地游戏目录".to_string(),
+        detail: id.item_name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id: id.item_id,
+                stain_ids: [0, 0],
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+    let request = CharaModelLoadRequest {
+        item_id: id.item_id,
+        item_name: id.item_name,
+        kind: id.kind,
+        model: id.model,
+    };
+
+    let result = load_chara_model_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
+    let (stage, detail) = match &result {
+        Ok(data) => (
+            "模型资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理",
+                data.meshes.len(),
+                data.materials.len(),
+                data.textures.len()
+            ),
+        ),
+        Err(error) => ("模型读取失败", error.clone()),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id: id.item_id,
+        stain_ids: [0, 0],
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    result
+}
+
 pub async fn load_weapon_staining_templates_from_local() -> Result<WeaponStainingTemplates, String>
 {
     let mut sqpack = BrowserSqPack::from_window_handle().await?;
@@ -1137,6 +1432,7 @@ fn weapon_model_resource_stage(path: &str) -> &'static str {
         "tex" | "atex" => "解码纹理",
         "stm" => "应用染色模板",
         "shpk" => "读取着色器信息",
+        "sgb" => "解析场景资源",
         _ => "读取本地资源",
     }
 }

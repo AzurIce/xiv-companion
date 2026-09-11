@@ -16,3 +16,6 @@ physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 tsify = { version = "0.5.6", default-features = false, optional = true }
 wasm-bindgen = { version = "0.2.121", optional = true }
+
+[dev-dependencies]
+futures-executor = "0.3.32"
