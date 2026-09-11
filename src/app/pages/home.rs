@@ -6,7 +6,7 @@ use crate::app::collection_bridge::{
     BridgeUpdate, CollectionBridgeConnection, load_bridge_url, mark_bridge_verified,
 };
 use crate::app::icons::{Icon, IconKind};
-use crate::app::ui::{Badge, BadgeVariant};
+use crate::app::ui::{Badge, BadgeVariant, GitHubRepoButton};
 use crate::app::user_local_directory::{AuthorizedDirectoryLayout, restore_user_local_directory};
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
@@ -64,8 +64,13 @@ pub fn HomePage() -> Element {
         main { class: "min-h-screen bg-background",
             div { class: "mx-auto max-w-5xl px-4 py-4 sm:px-5 lg:px-6",
                 header { class: "border-b pb-3",
-                    div { class: "text-xs text-muted-foreground", "首页" }
-                    h1 { class: "mt-0.5 text-xl font-semibold leading-tight", "XIV Companion" }
+                    div { class: "flex items-start justify-between gap-3",
+                        div {
+                            div { class: "text-xs text-muted-foreground", "首页" }
+                            h1 { class: "mt-0.5 text-xl font-semibold leading-tight", "XIV Companion" }
+                        }
+                        GitHubRepoButton {}
+                    }
                     p { class: "mt-1.5 max-w-3xl text-sm leading-relaxed text-muted-foreground",
                         "基础功能打开 Web 页面即可使用，数据保存在当前浏览器。模型预览和本地数据刷新需要授权 FFXIV 游戏目录；物品与当前角色状态需要 Dalamud 的 API Bridge 插件。"
                     }
@@ -96,7 +101,7 @@ pub fn HomePage() -> Element {
                             icon: IconKind::Database,
                             title: "本地游戏数据",
                             description: "读取 SqPack 中的模型、材质和游戏表数据，不包含当前角色状态。",
-                            features: "武器模型 · 合成数据刷新 · 图鉴资源刷新",
+                            features: "模型预览 · 合成数据刷新 · 图鉴资源刷新",
                             status: local_data_status(),
                             href: "#/settings?section=data",
                             action: "管理数据",

@@ -18,42 +18,83 @@ use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
 use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
 use crate::app::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, input_class,
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, GitHubRepoButton,
+    input_class,
 };
 use crate::app::utils::{cx, format_integer};
 use xiv_companion::renderer::{ModelDebugMode, ModelGlassBlendMode, WeaponRenderOptions};
 
 use xiv_companion::{
-    PackedModelId, WeaponCatalogItem, WeaponCatalogPackage, WeaponModelData,
-    WeaponModelTextureKind, WeaponStain, weapon_slot_label,
+    CharaCatalogItem, CharaCatalogPackage, CharaModelKind, CharaModelType,
+    CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
+    FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAttributeOption,
+    PackedCharaModelId, PackedEquipmentModelId, PackedModelId, WeaponModelData,
+    WeaponModelTextureKind, WeaponStain, equipment_slot_info, is_weapon_equip_slot_category,
+    model_attribute_options, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
 use crate::app::data::{
-    load_weapon_catalog, load_weapon_model, load_weapon_staining_templates, stain_weapon_model,
+    load_chara_catalog, load_chara_model, load_collection_catalog, load_equipment_model,
+    load_furniture_catalog, load_furniture_model, load_weapon_catalog, load_weapon_model,
+    load_weapon_staining_templates, stain_weapon_model,
 };
 use crate::app::load_progress::{self, WeaponModelLoadProgress};
 
 const RESULT_LIMIT: usize = 220;
+const WEAPON_MODELS_ROUTE_PATH: &str = "/weapon-models";
+const EQUIPMENT_MODELS_ROUTE_PATH: &str = "/equipment-models";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WeaponSlotFilter {
+enum ModelItemFilter {
     All,
+    Weapons,
     Main,
     Off,
     TwoHanded,
     Dual,
+    Armor,
+    Head,
+    Body,
+    Hands,
+    Legs,
+    Feet,
+    Accessories,
+    Ears,
+    Neck,
+    Wrists,
+    Rings,
+    Furniture,
+    Yard,
+    Minions,
+    Mounts,
 }
 
-impl WeaponSlotFilter {
+impl ModelItemFilter {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn key(self) -> &'static str {
         match self {
             Self::All => "all",
+            Self::Weapons => "weapons",
             Self::Main => "main",
             Self::Off => "off",
             Self::TwoHanded => "two",
             Self::Dual => "dual",
+            Self::Armor => "armor",
+            Self::Head => "head",
+            Self::Body => "body",
+            Self::Hands => "hands",
+            Self::Legs => "legs",
+            Self::Feet => "feet",
+            Self::Accessories => "accessories",
+            Self::Ears => "ears",
+            Self::Neck => "neck",
+            Self::Wrists => "wrists",
+            Self::Rings => "rings",
+            Self::Furniture => "furniture",
+            Self::Yard => "yard",
+            Self::Minions => "minions",
+            Self::Mounts => "mounts",
         }
     }
 
@@ -61,10 +102,26 @@ impl WeaponSlotFilter {
     fn from_key(value: &str) -> Option<Self> {
         match value {
             "all" => Some(Self::All),
+            "weapons" | "weapon" => Some(Self::Weapons),
             "main" => Some(Self::Main),
             "off" => Some(Self::Off),
             "two" | "two-handed" | "twohanded" => Some(Self::TwoHanded),
             "dual" => Some(Self::Dual),
+            "armor" => Some(Self::Armor),
+            "head" => Some(Self::Head),
+            "body" => Some(Self::Body),
+            "hands" => Some(Self::Hands),
+            "legs" => Some(Self::Legs),
+            "feet" => Some(Self::Feet),
+            "accessories" | "accessory" => Some(Self::Accessories),
+            "ears" => Some(Self::Ears),
+            "neck" => Some(Self::Neck),
+            "wrists" => Some(Self::Wrists),
+            "rings" | "ring" => Some(Self::Rings),
+            "furniture" => Some(Self::Furniture),
+            "yard" => Some(Self::Yard),
+            "minions" | "minion" => Some(Self::Minions),
+            "mounts" | "mount" => Some(Self::Mounts),
             _ => None,
         }
     }
@@ -72,57 +129,173 @@ impl WeaponSlotFilter {
     fn label(self) -> &'static str {
         match self {
             Self::All => "全部",
+            Self::Weapons => "武器",
             Self::Main => "主手",
             Self::Off => "副手",
             Self::TwoHanded => "双手",
             Self::Dual => "双持",
+            Self::Armor => "防具",
+            Self::Head => "头部",
+            Self::Body => "身体",
+            Self::Hands => "手部",
+            Self::Legs => "腿部",
+            Self::Feet => "脚部",
+            Self::Accessories => "饰品",
+            Self::Ears => "耳饰",
+            Self::Neck => "项链",
+            Self::Wrists => "手镯",
+            Self::Rings => "戒指",
+            Self::Furniture => "家具",
+            Self::Yard => "庭具",
+            Self::Minions => "宠物",
+            Self::Mounts => "坐骑",
         }
     }
 
-    fn matches(self, item: &WeaponCatalogItem) -> bool {
+    /// 组级过滤器（武器/防具/饰品）在二级槽位行里显示为“全部”。
+    fn chip_label(self) -> &'static str {
+        match self {
+            Self::Weapons | Self::Armor | Self::Accessories => "全部",
+            _ => self.label(),
+        }
+    }
+
+    /// 当前过滤器所属分组的二级槽位选项（grid 列 class + 选项）；
+    /// `全部` 与家具/庭具/宠物/坐骑没有二级行。
+    fn sub_filters(self) -> Option<(&'static str, &'static [ModelItemFilter])> {
+        const WEAPON_SUB_FILTERS: &[ModelItemFilter] = &[
+            ModelItemFilter::Weapons,
+            ModelItemFilter::Main,
+            ModelItemFilter::Off,
+            ModelItemFilter::TwoHanded,
+            ModelItemFilter::Dual,
+        ];
+        const ARMOR_SUB_FILTERS: &[ModelItemFilter] = &[
+            ModelItemFilter::Armor,
+            ModelItemFilter::Head,
+            ModelItemFilter::Body,
+            ModelItemFilter::Hands,
+            ModelItemFilter::Legs,
+            ModelItemFilter::Feet,
+        ];
+        const ACCESSORY_SUB_FILTERS: &[ModelItemFilter] = &[
+            ModelItemFilter::Accessories,
+            ModelItemFilter::Ears,
+            ModelItemFilter::Neck,
+            ModelItemFilter::Wrists,
+            ModelItemFilter::Rings,
+        ];
+        match self {
+            Self::Weapons | Self::Main | Self::Off | Self::TwoHanded | Self::Dual => {
+                Some(("grid-cols-5", WEAPON_SUB_FILTERS))
+            }
+            Self::Armor | Self::Head | Self::Body | Self::Hands | Self::Legs | Self::Feet => {
+                Some(("grid-cols-6", ARMOR_SUB_FILTERS))
+            }
+            Self::Accessories | Self::Ears | Self::Neck | Self::Wrists | Self::Rings => {
+                Some(("grid-cols-5", ACCESSORY_SUB_FILTERS))
+            }
+            Self::All | Self::Furniture | Self::Yard | Self::Minions | Self::Mounts => None,
+        }
+    }
+
+    /// 该过滤器是否覆盖装备（含武器）条目。
+    fn includes_equipment(self) -> bool {
+        !matches!(
+            self,
+            Self::Furniture | Self::Yard | Self::Minions | Self::Mounts
+        )
+    }
+
+    /// 该过滤器是否覆盖家具/庭具条目。
+    fn includes_furniture(self) -> bool {
+        matches!(self, Self::All | Self::Furniture | Self::Yard)
+    }
+
+    /// 该过滤器是否覆盖宠物/坐骑条目。
+    fn includes_chara(self) -> bool {
+        matches!(self, Self::All | Self::Minions | Self::Mounts)
+    }
+
+    fn matches_equipment(self, item: &CollectionItem) -> bool {
+        let category = item.equip_slot_category;
         match self {
             Self::All => true,
-            Self::Main => item.equip_slot_category == 1,
-            Self::Off => item.equip_slot_category == 2,
-            Self::TwoHanded => item.equip_slot_category == 13,
-            Self::Dual => item.equip_slot_category == 14,
+            Self::Weapons => is_weapon_equip_slot_category(category),
+            Self::Main => category == 1,
+            Self::Off => category == 2,
+            Self::TwoHanded => category == 13,
+            Self::Dual => category == 14,
+            Self::Armor => matches!(category, 3 | 4 | 5 | 7 | 8),
+            Self::Head => category == 3,
+            Self::Body => category == 4,
+            Self::Hands => category == 5,
+            Self::Legs => category == 7,
+            Self::Feet => category == 8,
+            Self::Accessories => matches!(category, 9..=12),
+            Self::Ears => category == 9,
+            Self::Neck => category == 10,
+            Self::Wrists => category == 11,
+            Self::Rings => category == 12,
+            Self::Furniture | Self::Yard | Self::Minions | Self::Mounts => false,
+        }
+    }
+
+    fn matches_furniture(self, item: &FurnitureCatalogItem) -> bool {
+        match self {
+            Self::All => true,
+            Self::Furniture => item.kind == FurnitureModelKind::Indoor,
+            Self::Yard => item.kind == FurnitureModelKind::Outdoor,
+            _ => false,
+        }
+    }
+
+    fn matches_chara(self, item: &CharaCatalogItem) -> bool {
+        match self {
+            Self::All => true,
+            Self::Minions => item.kind == CharaModelKind::Minion,
+            Self::Mounts => item.kind == CharaModelKind::Mount,
+            _ => false,
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-struct WeaponSearchResult {
+struct ModelSearchResult {
     total: usize,
-    items: Vec<WeaponCatalogItem>,
+    items: Vec<ModelCatalogItem>,
 }
 
 #[derive(Clone, Debug)]
-struct WeaponUrlState {
+struct ModelPreviewUrlState {
     query: String,
-    filter: WeaponSlotFilter,
+    filter: ModelItemFilter,
     item_id: Option<u32>,
     stain_ids: [u8; 2],
+    race_id: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct WeaponModelRequestKey {
+struct ModelRequestKey {
     item_id: u32,
+    race_id: u16,
     stain_ids: [u8; 2],
 }
 
 #[derive(Clone)]
-struct WeaponModelResourceResult {
+struct ModelResourceResult {
     item_id: u32,
+    race_id: u16,
     result: Result<Rc<WeaponModelData>, String>,
 }
 
 #[derive(Clone)]
-struct WeaponModelPreviewResult {
-    key: WeaponModelRequestKey,
+struct ModelPreviewResult {
+    key: ModelRequestKey,
     result: Result<Rc<WeaponModelData>, String>,
 }
 
-impl PartialEq for WeaponModelPreviewResult {
+impl PartialEq for ModelPreviewResult {
     fn eq(&self, other: &Self) -> bool {
         if self.key != other.key {
             return false;
@@ -135,53 +308,271 @@ impl PartialEq for WeaponModelPreviewResult {
     }
 }
 
+/// 可预览条目的统一视图：装备（含武器，来自图鉴目录）、家具/庭具（家具目录）
+/// 或宠物/坐骑（chara 目录）。
+#[derive(Clone, PartialEq)]
+enum ModelCatalogItem {
+    Equipment(CollectionItem),
+    Furniture(FurnitureCatalogItem),
+    Chara(CharaCatalogItem),
+}
+
+impl ModelCatalogItem {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Equipment(item) => item.id,
+            Self::Furniture(item) => item.id,
+            Self::Chara(item) => item.id,
+        }
+    }
+
+    fn icon(&self) -> u32 {
+        match self {
+            Self::Equipment(item) => item.icon,
+            Self::Furniture(item) => item.icon,
+            Self::Chara(item) => item.icon,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Equipment(item) => &item.name,
+            Self::Furniture(item) => &item.name,
+            Self::Chara(item) => &item.name,
+        }
+    }
+
+    fn description(&self) -> &str {
+        match self {
+            Self::Equipment(item) => &item.description,
+            Self::Furniture(_) | Self::Chara(_) => "",
+        }
+    }
+
+    /// 部位/类别标签：装备用槽位名，家具/宠物用各自 kind 的 `label()`。
+    fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Equipment(item) => equipment_slot_label(item.equip_slot_category),
+            Self::Furniture(item) => item.kind.label(),
+            Self::Chara(item) => item.kind.label(),
+        }
+    }
+
+    fn model_label(&self) -> Option<String> {
+        match self {
+            Self::Equipment(item) => format_item_model(item),
+            Self::Furniture(item) => Some(format_furniture_model(item.kind, item.model_key)),
+            Self::Chara(item) => Some(format_chara_model(&item.model)),
+        }
+    }
+
+    fn sub_model_label(&self) -> Option<String> {
+        match self {
+            Self::Equipment(item) => format_item_sub_model(item),
+            Self::Furniture(_) | Self::Chara(_) => None,
+        }
+    }
+
+    fn support(&self) -> ModelPreviewSupport {
+        match self {
+            Self::Equipment(item) => model_preview_support(item),
+            Self::Furniture(_) => ModelPreviewSupport::Furniture,
+            Self::Chara(_) => ModelPreviewSupport::Chara,
+        }
+    }
+}
+
+/// 可选种族模型（race code 依据 xivModdingFramework `XivRace`）。
+#[derive(Clone, Copy)]
+struct EquipmentRace {
+    id: u16,
+    label: &'static str,
+}
+
+const EQUIPMENT_RACES: &[EquipmentRace] = &[
+    EquipmentRace {
+        id: 101,
+        label: "中原人男",
+    },
+    EquipmentRace {
+        id: 201,
+        label: "中原人女",
+    },
+    EquipmentRace {
+        id: 301,
+        label: "高地人男",
+    },
+    EquipmentRace {
+        id: 401,
+        label: "高地人女",
+    },
+    EquipmentRace {
+        id: 501,
+        label: "精灵男",
+    },
+    EquipmentRace {
+        id: 601,
+        label: "精灵女",
+    },
+    EquipmentRace {
+        id: 701,
+        label: "猫魅族男",
+    },
+    EquipmentRace {
+        id: 801,
+        label: "猫魅族女",
+    },
+    EquipmentRace {
+        id: 901,
+        label: "鲁加族男",
+    },
+    EquipmentRace {
+        id: 1001,
+        label: "鲁加族女",
+    },
+    EquipmentRace {
+        id: 1101,
+        label: "拉拉菲尔族男",
+    },
+    EquipmentRace {
+        id: 1201,
+        label: "拉拉菲尔族女",
+    },
+    EquipmentRace {
+        id: 1301,
+        label: "敖龙族男",
+    },
+    EquipmentRace {
+        id: 1401,
+        label: "敖龙族女",
+    },
+    EquipmentRace {
+        id: 1501,
+        label: "硌狮族男",
+    },
+    EquipmentRace {
+        id: 1601,
+        label: "硌狮族女",
+    },
+    EquipmentRace {
+        id: 1701,
+        label: "维埃拉族男",
+    },
+    EquipmentRace {
+        id: 1801,
+        label: "维埃拉族女",
+    },
+];
+
+fn parse_equipment_race_id(value: &str) -> Option<u16> {
+    let digits = value.trim().trim_start_matches(['c', 'C']);
+    let race_id = digits.parse::<u16>().ok()?;
+    EQUIPMENT_RACES
+        .iter()
+        .any(|race| race.id == race_id)
+        .then_some(race_id)
+}
+
+/// 条目的模型预览支持度，决定加载链路与空态展示。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelPreviewSupport {
+    /// 武器槽位：走武器模型加载链路。
+    Weapon,
+    /// 有独立模型的防具/饰品槽位：走装备模型加载链路，按种族解析模型文件。
+    Equipment,
+    /// 家具/庭具：走 housing SGB → 多 MDL 加载链路，无染色与种族维度。
+    Furniture,
+    /// 宠物/坐骑：monster 单 MDL / demihuman 多槽位 MDL 链路，无染色与种族维度。
+    Chara,
+    /// 条目本身没有模型数据（ModelMain 为 0）。
+    NoModel,
+    /// 腰带与复合部位：没有可单独预览的模型。
+    UnsupportedSlot,
+}
+
+fn model_preview_support(item: &CollectionItem) -> ModelPreviewSupport {
+    if item.model_main == 0 {
+        return ModelPreviewSupport::NoModel;
+    }
+    if is_weapon_equip_slot_category(item.equip_slot_category) {
+        return ModelPreviewSupport::Weapon;
+    }
+    if equipment_slot_info(item.equip_slot_category).is_some() {
+        ModelPreviewSupport::Equipment
+    } else {
+        ModelPreviewSupport::UnsupportedSlot
+    }
+}
+
 #[component]
-pub fn WeaponModelsPage() -> Element {
-    let initial_url_state = initial_weapon_url_state();
+pub fn ModelPreviewPage() -> Element {
+    let initial_url_state = initial_model_preview_url_state();
     let initial_query = initial_url_state.query;
     let initial_filter = initial_url_state.filter;
     let initial_item_id = initial_url_state.item_id;
     let initial_stain_ids = initial_url_state.stain_ids;
+    let initial_race_id = initial_url_state.race_id;
 
-    let catalog = use_resource(load_weapon_catalog);
+    let collection_catalog = use_resource(load_collection_catalog);
+    let furniture_catalog = use_resource(load_furniture_catalog);
+    let chara_catalog = use_resource(load_chara_catalog);
+    let weapon_catalog = use_resource(load_weapon_catalog);
     let mut query = use_signal(move || initial_query.clone());
     let mut slot_filter = use_signal(move || initial_filter);
     let mut selected_id = use_signal(move || initial_item_id);
-    let mut selected_item = use_signal(|| None::<WeaponCatalogItem>);
+    let mut selected_item = use_signal(|| None::<ModelCatalogItem>);
     let mut stain_ids = use_signal(move || initial_stain_ids);
+    let mut race_id = use_signal(move || initial_race_id);
     let mut model_progress = use_signal(|| None::<WeaponModelLoadProgress>);
     let model = use_resource(move || {
         let item = selected_item();
+        let race_id = race_id();
         async move {
             let item = item?;
-            Some(WeaponModelResourceResult {
-                item_id: item.id,
-                result: load_weapon_model(item).await,
+            let result = match &item {
+                ModelCatalogItem::Equipment(equipment) => match model_preview_support(equipment) {
+                    ModelPreviewSupport::Weapon => load_weapon_model(equipment).await,
+                    ModelPreviewSupport::Equipment => {
+                        load_equipment_model(equipment, race_id).await
+                    }
+                    _ => return None,
+                },
+                ModelCatalogItem::Furniture(furniture) => load_furniture_model(furniture).await,
+                ModelCatalogItem::Chara(chara) => load_chara_model(chara).await,
+            };
+            Some(ModelResourceResult {
+                item_id: item.id(),
+                race_id,
+                result,
             })
         }
     });
     let staining_templates = use_resource(load_weapon_staining_templates);
     let preview_model = use_memo(move || {
         let item = selected_item()?;
+        let race_id = race_id();
         let stain_ids = stain_ids();
-        let key = WeaponModelRequestKey {
-            item_id: item.id,
+        let key = ModelRequestKey {
+            item_id: item.id(),
+            race_id,
             stain_ids,
         };
         let loaded = model.read().as_ref().cloned().flatten()?;
-        if loaded.item_id != item.id {
+        if loaded.item_id != item.id() || loaded.race_id != race_id {
             return None;
         }
+        // 家具与宠物/坐骑没有染色通道，始终展示基线模型。
+        let stainable = matches!(item, ModelCatalogItem::Equipment(_));
         let result = match loaded.result {
             Err(error) => Err(error),
-            Ok(base) if stain_ids == [0, 0] => Ok(base),
+            Ok(base) if stain_ids == [0, 0] || !stainable => Ok(base),
             Ok(base) => match staining_templates.read().as_ref().cloned() {
                 Some(Ok(templates)) => Ok(stain_weapon_model(&base, stain_ids, &templates)),
                 Some(Err(error)) => Err(error),
                 None => return None,
             },
         };
-        Some(WeaponModelPreviewResult { key, result })
+        Some(ModelPreviewResult { key, result })
     });
 
     use_effect(move || {
@@ -198,7 +589,7 @@ pub fn WeaponModelsPage() -> Element {
 
     use_effect(move || {
         let id = selected_id();
-        if selected_item().as_ref().map(|item| item.id) == id {
+        if selected_item().as_ref().map(|item| item.id()) == id {
             return;
         }
 
@@ -209,52 +600,88 @@ pub fn WeaponModelsPage() -> Element {
             return;
         };
 
-        if let Some(Ok(catalog)) = catalog.read().as_ref() {
-            if let Some(item) = catalog.items.iter().find(|item| item.id == id).cloned() {
-                selected_item.set(Some(item));
-            }
+        let resolved = {
+            let collection = collection_catalog.read();
+            let furniture = furniture_catalog.read();
+            let chara = chara_catalog.read();
+            resolve_model_catalog_item(
+                collection
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(Rc::as_ref),
+                furniture
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(Rc::as_ref),
+                chara
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(Rc::as_ref),
+                id,
+            )
+        };
+        if let Some(item) = resolved {
+            selected_item.set(Some(item));
         }
     });
 
     use_effect(move || {
-        sync_weapon_url_state(&query(), slot_filter(), selected_id(), stain_ids());
+        sync_model_preview_url_state(
+            &query(),
+            slot_filter(),
+            selected_id(),
+            stain_ids(),
+            race_id(),
+        );
     });
 
-    let catalog_snapshot = catalog.read().as_ref().cloned();
+    let collection_catalog_snapshot = collection_catalog.read().as_ref().cloned();
+    let furniture_catalog_snapshot = furniture_catalog.read().as_ref().cloned();
+    let chara_catalog_snapshot = chara_catalog.read().as_ref().cloned();
+    let weapon_catalog_snapshot = weapon_catalog.read().as_ref().cloned();
     let selected_snapshot = selected_item();
     let selected_id_snapshot = selected_id();
     let query_snapshot = query();
     let slot_filter_snapshot = slot_filter();
     let stain_ids_snapshot = stain_ids();
+    let race_id_snapshot = race_id();
     let model_progress_snapshot = model_progress();
 
     rsx! {
         div { class: "flex h-[calc(100dvh-3.5rem)] min-w-0 flex-col overflow-hidden bg-background lg:h-screen",
             div { class: "border-b px-4 py-2 sm:px-5 lg:px-6",
                 div { class: "flex flex-wrap items-center justify-between gap-2",
-                    div { class: "min-w-0 space-y-0.5",
-                        div { class: "text-xs text-muted-foreground", "预览" }
-                        div { class: "flex flex-wrap items-center gap-x-2 gap-y-1",
-                            h1 { class: "text-xl font-semibold leading-tight", "武器模型" }
-                            crate::app::modules::ModuleCapabilityBadges { module_id: "weapon-models" }
-                        }
+                    div { class: "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1",
+                        h1 { class: "text-xl font-semibold leading-tight", "模型预览" }
+                        crate::app::modules::ModuleCapabilityBadges { module_id: "equipment-models" }
                     }
-                    if let Some(Ok(catalog)) = &catalog_snapshot {
-                        div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
+                    div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
+                        if let Some(Ok(catalog)) = &collection_catalog_snapshot {
                             span { "{catalog.game_version}" }
-                            span { "{format_integer(catalog.counts.items as f64)} 件武器" }
+                            span { "{format_integer(catalog.counts.equipment as f64)} 件装备" }
+                        }
+                        if let Some(Ok(catalog)) = &furniture_catalog_snapshot {
+                            span { "{format_integer(catalog.counts.indoor as f64)} 件家具" }
+                            span { "{format_integer(catalog.counts.outdoor as f64)} 件庭具" }
+                        }
+                        if let Some(Ok(catalog)) = &chara_catalog_snapshot {
+                            span { "{format_integer(catalog.counts.minions as f64)} 只宠物" }
+                            span { "{format_integer(catalog.counts.mounts as f64)} 个坐骑" }
+                        }
+                        if let Some(Ok(catalog)) = &weapon_catalog_snapshot {
                             span { "{format_integer(catalog.counts.stains as f64)} 种染剂" }
                         }
+                        GitHubRepoButton {}
                     }
                 }
             }
 
-            match catalog_snapshot {
+            match collection_catalog_snapshot {
                 None => rsx! {
                     div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
                         div { class: "flex items-center gap-3 text-sm text-muted-foreground",
                             Icon { kind: IconKind::LoaderCircle, class: "h-4 w-4 animate-spin" }
-                            "正在读取本地武器目录"
+                            "正在读取本地图鉴目录"
                         }
                     }
                 },
@@ -262,7 +689,7 @@ pub fn WeaponModelsPage() -> Element {
                     div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
                         EmptyState {
                             icon: rsx! { Icon { kind: IconKind::Database, class: "h-6 w-6" } },
-                            title: "UserLocal 未就绪".to_string(),
+                            title: "图鉴目录不可用".to_string(),
                             description: Some(error),
                             action: rsx! {
                                 a { href: "#/",
@@ -278,29 +705,72 @@ pub fn WeaponModelsPage() -> Element {
                     }
                 },
                 Some(Ok(catalog)) => {
-                    let search = search_weapons(&catalog, &query_snapshot, slot_filter_snapshot);
+                    let furniture_package = furniture_catalog_snapshot
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok());
+                    let chara_package = chara_catalog_snapshot
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok());
+                    let search = search_model_items(
+                        &catalog,
+                        furniture_package.map(Rc::as_ref),
+                        chara_package.map(Rc::as_ref),
+                        &query_snapshot,
+                        slot_filter_snapshot,
+                    );
+                    let total_items = match slot_filter_snapshot {
+                        ModelItemFilter::All => {
+                            catalog.counts.equipment
+                                + furniture_package
+                                    .map(|package| package.counts.items)
+                                    .unwrap_or(0)
+                                + chara_package
+                                    .map(|package| package.counts.items)
+                                    .unwrap_or(0)
+                        }
+                        ModelItemFilter::Furniture => {
+                            furniture_package.map(|package| package.counts.indoor).unwrap_or(0)
+                        }
+                        ModelItemFilter::Yard => {
+                            furniture_package.map(|package| package.counts.outdoor).unwrap_or(0)
+                        }
+                        ModelItemFilter::Minions => {
+                            chara_package.map(|package| package.counts.minions).unwrap_or(0)
+                        }
+                        ModelItemFilter::Mounts => {
+                            chara_package.map(|package| package.counts.mounts).unwrap_or(0)
+                        }
+                        _ => catalog.counts.equipment,
+                    };
+                    let stains = weapon_catalog_snapshot
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .map(|catalog| catalog.stains.clone())
+                        .unwrap_or_default();
                     rsx! {
-                        div { class: "grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[380px_minmax(0,1fr)]",
-                            WeaponSearchPane {
-                                catalog: catalog.clone(),
+                        div { class: "grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[280px_minmax(0,1fr)]",
+                            ModelSearchPane {
+                                total_items,
                                 query: query_snapshot,
                                 filter: slot_filter_snapshot,
                                 result: search,
                                 selected_id: selected_id_snapshot,
                                 on_query_change: move |value| query.set(value),
                                 on_filter_change: move |value| slot_filter.set(value),
-                                on_select: move |item: WeaponCatalogItem| {
-                                    selected_id.set(Some(item.id));
+                                on_select: move |item: ModelCatalogItem| {
+                                    selected_id.set(Some(item.id()));
                                     selected_item.set(Some(item));
                                 },
                             }
-                            WeaponModelPane {
+                            ModelPreviewPane {
                                 selected: selected_snapshot,
                                 selection_pending: selected_id_snapshot.is_some(),
                                 model: preview_model(),
                                 progress: model_progress_snapshot,
-                                stains: catalog.stains.clone(),
+                                stains,
                                 stain_ids: stain_ids_snapshot,
+                                race_id: race_id_snapshot,
+                                on_race_change: move |value| race_id.set(value),
                                 on_stain_change: move |(channel, stain_id): (usize, u8)| {
                                     let mut next = stain_ids();
                                     if let Some(value) = next.get_mut(channel) {
@@ -317,37 +787,67 @@ pub fn WeaponModelsPage() -> Element {
     }
 }
 
+/// 按物品 id 解析预览条目：装备/家具/宠物坐骑共用物品 id 空间但互不重叠，
+/// 依次按装备（图鉴）目录、家具目录、宠物/坐骑目录解析。
+fn resolve_model_catalog_item(
+    collection: Option<&CollectionCatalogPackage>,
+    furniture: Option<&FurnitureCatalogPackage>,
+    chara: Option<&CharaCatalogPackage>,
+    item_id: u32,
+) -> Option<ModelCatalogItem> {
+    if let Some(item) = collection.and_then(|catalog| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.is_equipment() && item.id == item_id)
+    }) {
+        return Some(ModelCatalogItem::Equipment(item.clone()));
+    }
+    if let Some(item) =
+        furniture.and_then(|catalog| catalog.items.iter().find(|item| item.id == item_id))
+    {
+        return Some(ModelCatalogItem::Furniture(item.clone()));
+    }
+    chara
+        .and_then(|catalog| catalog.items.iter().find(|item| item.id == item_id))
+        .cloned()
+        .map(ModelCatalogItem::Chara)
+}
+
 #[component]
-fn WeaponSearchPane(
-    catalog: Rc<WeaponCatalogPackage>,
+fn ModelSearchPane(
+    total_items: usize,
     query: String,
-    filter: WeaponSlotFilter,
-    result: WeaponSearchResult,
+    filter: ModelItemFilter,
+    result: ModelSearchResult,
     selected_id: Option<u32>,
     on_query_change: EventHandler<String>,
-    on_filter_change: EventHandler<WeaponSlotFilter>,
-    on_select: EventHandler<WeaponCatalogItem>,
+    on_filter_change: EventHandler<ModelItemFilter>,
+    on_select: EventHandler<ModelCatalogItem>,
 ) -> Element {
     rsx! {
         aside { class: "flex min-h-0 flex-col border-b bg-card lg:border-b-0 lg:border-r",
-            div { class: "shrink-0 space-y-3 border-b p-4",
+            div { class: "shrink-0 space-y-2 border-b p-3",
                 div { class: "relative",
                     Icon { kind: IconKind::Search, class: "pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" }
                     input {
-                        class: input_class("pl-9"),
+                        class: "flex h-8 w-full rounded-md border border-input bg-background py-1 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
                         value: "{query}",
                         placeholder: "名称 / 物品 ID / 模型 ID",
                         oninput: move |event| on_query_change.call(event.value()),
                     }
                 }
 
-                div { class: "grid grid-cols-5 gap-1 rounded-md bg-muted p-1",
+                div { class: "grid grid-cols-8 gap-1 rounded-md bg-muted p-1",
                     for option in [
-                        WeaponSlotFilter::All,
-                        WeaponSlotFilter::Main,
-                        WeaponSlotFilter::Off,
-                        WeaponSlotFilter::TwoHanded,
-                        WeaponSlotFilter::Dual,
+                        ModelItemFilter::All,
+                        ModelItemFilter::Weapons,
+                        ModelItemFilter::Armor,
+                        ModelItemFilter::Accessories,
+                        ModelItemFilter::Furniture,
+                        ModelItemFilter::Yard,
+                        ModelItemFilter::Minions,
+                        ModelItemFilter::Mounts,
                     ] {
                         button {
                             r#type: "button",
@@ -358,26 +858,39 @@ fn WeaponSearchPane(
                     }
                 }
 
+                if let Some((grid_class, sub_filters)) = filter.sub_filters() {
+                    div { class: "grid {grid_class} gap-1 rounded-md bg-muted p-1",
+                        for option in sub_filters {
+                            button {
+                                r#type: "button",
+                                class: segment_button_class(filter == *option),
+                                onclick: move |_| on_filter_change.call(*option),
+                                "{option.chip_label()}"
+                            }
+                        }
+                    }
+                }
+
                 div { class: "flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground",
-                    span { "{format_integer(result.total as f64)} / {format_integer(catalog.counts.items as f64)}" }
+                    span { "{format_integer(result.total as f64)} / {format_integer(total_items as f64)}" }
                     if result.total > result.items.len() {
                         span { "显示前 {RESULT_LIMIT}" }
                     }
                 }
             }
 
-            div { class: "min-h-0 flex-1 overflow-y-auto p-2",
+            div { class: "min-h-0 flex-1 overflow-y-auto p-1.5",
                 if result.items.is_empty() {
                     EmptyState {
                         icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                        title: "没有匹配的武器".to_string(),
+                        title: "没有匹配的物品".to_string(),
                     }
                 } else {
                     div { class: "space-y-1",
                         for item in result.items {
-                            WeaponListRow {
-                                key: "{item.id}",
-                                active: selected_id == Some(item.id),
+                            ModelListRow {
+                                key: "{item.id()}",
+                                active: selected_id == Some(item.id()),
                                 item,
                                 on_select,
                             }
@@ -390,17 +903,18 @@ fn WeaponSearchPane(
 }
 
 #[component]
-fn WeaponListRow(
-    item: WeaponCatalogItem,
+fn ModelListRow(
+    item: ModelCatalogItem,
     active: bool,
-    on_select: EventHandler<WeaponCatalogItem>,
+    on_select: EventHandler<ModelCatalogItem>,
 ) -> Element {
     let row_item = item.clone();
+    let model_label = item.model_label();
     rsx! {
         button {
             r#type: "button",
             class: cx([
-                "flex w-full min-w-0 items-center gap-3 rounded-md border px-2.5 py-2 text-left transition-colors",
+                "flex w-full min-w-0 items-center gap-2.5 rounded-md border px-2 py-1.5 text-left transition-colors",
                 if active {
                     "border-foreground/20 bg-background shadow-sm"
                 } else {
@@ -408,13 +922,17 @@ fn WeaponListRow(
                 },
             ]),
             onclick: move |_| on_select.call(row_item.clone()),
-            ItemIcon { icon: item.icon, size: "sm" }
+            ItemIcon { icon: item.icon(), size: "sm" }
             div { class: "min-w-0 flex-1",
-                div { class: "truncate text-sm font-medium", "{item.name}" }
-                div { class: "mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground",
-                    span { "#{item.id}" }
-                    span { "{weapon_slot_label(item.equip_slot_category)}" }
-                    span { "{format_packed_model(PackedModelId::from_raw(item.model_main))}" }
+                div { class: "flex min-w-0 items-baseline gap-1.5",
+                    span { class: "truncate text-sm font-medium", "{item.name()}" }
+                    span { class: "shrink-0 text-[11px] text-muted-foreground", "#{item.id()}" }
+                }
+                div { class: "mt-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground",
+                    span { "{item.kind_label()}" }
+                    if let Some(model_label) = model_label {
+                        span { "{model_label}" }
+                    }
                 }
             }
         }
@@ -422,24 +940,45 @@ fn WeaponListRow(
 }
 
 #[component]
-fn WeaponModelPane(
-    selected: Option<WeaponCatalogItem>,
+fn ModelPreviewPane(
+    selected: Option<ModelCatalogItem>,
     selection_pending: bool,
-    model: Option<WeaponModelPreviewResult>,
+    model: Option<ModelPreviewResult>,
     progress: Option<WeaponModelLoadProgress>,
     stains: Vec<WeaponStain>,
     stain_ids: [u8; 2],
+    race_id: u16,
+    on_race_change: EventHandler<u16>,
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let render_options = use_signal(WeaponRenderOptions::default);
     let mut shape_selection = use_signal(|| (None::<u32>, None::<u32>));
-    let requested_key = selected.as_ref().map(|item| WeaponModelRequestKey {
-        item_id: item.id,
+    // 部件变体选择按物品 id 作用域存储（与 shape 选择同款模式）：切换物品
+    // 后读回 0=全部关闭（对应游戏默认状态）。
+    let mut attribute_selection = use_signal(|| (None::<u32>, 0_u32));
+    // 隔离预览开关同样按物品 id 作用域存储，切换物品后回到关闭。
+    let mut parts_only_selection = use_signal(|| (None::<u32>, false));
+    let support = selected.as_ref().map(ModelCatalogItem::support);
+    let stainable = matches!(
+        support,
+        Some(ModelPreviewSupport::Weapon | ModelPreviewSupport::Equipment)
+    );
+    let previewable = stainable
+        || matches!(
+            support,
+            Some(ModelPreviewSupport::Furniture | ModelPreviewSupport::Chara)
+        );
+    let race_selection = (support == Some(ModelPreviewSupport::Equipment)).then_some(race_id);
+    let requested_key = selected.as_ref().map(|item| ModelRequestKey {
+        item_id: item.id(),
+        race_id,
         stain_ids,
     });
     let current_model_result = requested_key.and_then(|key| {
         model
-            .filter(|snapshot| snapshot.key.item_id == key.item_id)
+            .filter(|snapshot| {
+                snapshot.key.item_id == key.item_id && snapshot.key.race_id == key.race_id
+            })
             .map(|snapshot| snapshot.result)
     });
     let current_progress =
@@ -450,87 +989,153 @@ fn WeaponModelPane(
             if let Some(item) = selected.clone() {
                 div { class: "shrink-0 border-b p-4",
                     div { class: "flex min-w-0 flex-wrap items-center gap-3",
-                        ItemIcon { icon: item.icon }
+                        ItemIcon { icon: item.icon() }
                         div { class: "min-w-0 flex-1",
-                            div { class: "truncate text-base font-semibold", "{item.name}" }
+                            div { class: "truncate text-base font-semibold", "{item.name()}" }
                             div { class: "mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                                Badge { variant: BadgeVariant::Outline, "#{item.id}" }
-                                Badge { variant: BadgeVariant::Secondary, "{weapon_slot_label(item.equip_slot_category)}" }
-                                span { "main {format_packed_model(item.primary_model())}" }
-                                if let Some(sub) = item.secondary_model() {
-                                    span { "sub {format_packed_model(sub)}" }
+                                Badge { variant: BadgeVariant::Outline, "#{item.id()}" }
+                                Badge { variant: BadgeVariant::Secondary, "{item.kind_label()}" }
+                                if let Some(model_label) = item.model_label() {
+                                    span { "main {model_label}" }
+                                }
+                                if let Some(sub_label) = item.sub_model_label() {
+                                    span { "sub {sub_label}" }
                                 }
                             }
                         }
                     }
-                    if !item.description.trim().is_empty() {
+                    if !item.description().trim().is_empty() {
                         div { class: "mt-3 max-w-3xl text-sm leading-relaxed text-muted-foreground",
-                            "{item.description}"
+                            "{item.description()}"
                         }
                     }
-                    WeaponStainControls {
-                        stains,
-                        stain_ids,
-                        on_stain_change,
+                    if stainable {
+                        WeaponStainControls {
+                            stains,
+                            stain_ids,
+                            race_id: race_selection,
+                            on_race_change,
+                            on_stain_change,
+                        }
                     }
                 }
 
-                div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
-                    div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
-                        match current_model_result.as_ref() {
-                            Some(Ok(data)) => {
+                if previewable {
+                    div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
+                        div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
+                            {
+                                // 画布在物品切换、加载中与出错期间始终挂载，加载与错误
+                                // 状态用浮层覆盖，避免切换物品时重复初始化 WebGPU。
+                                let canvas_model = current_model_result
+                                    .as_ref()
+                                    .and_then(|result| result.as_ref().ok())
+                                    .cloned();
                                 let requested_shape = shape_selection();
-                                let shape_mask = (requested_shape.0 == Some(item.id))
-                                    .then_some(requested_shape.1)
-                                    .flatten()
-                                    .filter(|mask| model_has_shape_mask(data, *mask));
-                                let key = model_canvas_key(data, shape_mask);
-                                let item_id = item.id;
+                                let shape_mask = canvas_model.as_ref().and_then(|data| {
+                                    (requested_shape.0 == Some(item.id()))
+                                        .then_some(requested_shape.1)
+                                        .flatten()
+                                        .filter(|mask| model_has_shape_mask(data, *mask))
+                                });
+                                let attribute_mask =
+                                    scoped_attribute_mask(attribute_selection(), item.id());
+                                let attribute_parts_only =
+                                    scoped_attribute_parts_only(parts_only_selection(), item.id());
                                 rsx! {
-                                    div { key: "{key}", class: "absolute inset-0",
-                                        WeaponModelCanvas {
-                                            model: data.clone(),
-                                            render_options,
-                                            shape_mask,
-                                        }
-                                        WeaponRenderControls {
-                                            options: render_options,
-                                            model: data.clone(),
-                                            shape_mask,
-                                            on_shape_change: move |mask| {
-                                                shape_selection.set((Some(item_id), mask));
-                                            },
-                                        }
+                                    WeaponModelCanvas {
+                                        model: canvas_model,
+                                        render_options,
+                                        shape_mask,
+                                        race_id,
+                                        attribute_mask,
+                                        attribute_parts_only,
+                                    }
+                                    match current_model_result.as_ref() {
+                                        Some(Ok(_)) => rsx! {},
+                                        Some(Err(error)) => rsx! {
+                                            div { class: "absolute inset-0 flex items-center justify-center bg-[#0e1117] p-6",
+                                                EmptyState {
+                                                    icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                                                    title: "模型读取失败".to_string(),
+                                                    description: Some(error.clone()),
+                                                }
+                                            }
+                                        },
+                                        _ => rsx! {
+                                            div { class: "absolute inset-0 bg-[#0e1117]",
+                                                WeaponModelLoadingView { progress: current_progress.clone() }
+                                            }
+                                        },
                                     }
                                 }
-                            },
-                            Some(Err(error)) => rsx! {
-                                div { class: "absolute inset-0 flex items-center justify-center p-6",
-                                    EmptyState {
-                                        icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
-                                        title: "模型读取失败".to_string(),
-                                        description: Some(error.clone()),
+                            }
+                        }
+
+                        aside { class: "h-64 shrink-0 overflow-y-auto border-t bg-card p-3 xl:h-auto xl:w-64 xl:border-l xl:border-t-0",
+                            match current_model_result.as_ref() {
+                                Some(Ok(data)) => {
+                                    let requested_shape = shape_selection();
+                                    let shape_mask = (requested_shape.0 == Some(item.id()))
+                                        .then_some(requested_shape.1)
+                                        .flatten()
+                                        .filter(|mask| model_has_shape_mask(data, *mask));
+                                    let item_id = item.id();
+                                    let attribute_mask =
+                                        scoped_attribute_mask(attribute_selection(), item_id);
+                                    let attribute_parts_only = scoped_attribute_parts_only(
+                                        parts_only_selection(),
+                                        item_id,
+                                    );
+                                    rsx! {
+                                        div { class: "space-y-4",
+                                            WeaponRenderControls {
+                                                options: render_options,
+                                                model: data.clone(),
+                                                shape_mask,
+                                                on_shape_change: move |mask| {
+                                                    shape_selection.set((Some(item_id), mask));
+                                                },
+                                            }
+                                            WeaponAttributeControls {
+                                                model: data.clone(),
+                                                attribute_mask,
+                                                attribute_parts_only,
+                                                on_attribute_change: move |mask| {
+                                                    attribute_selection.set((Some(item_id), mask));
+                                                },
+                                                on_parts_only_change: move |parts_only| {
+                                                    parts_only_selection
+                                                        .set((Some(item_id), parts_only));
+                                                },
+                                            }
+                                            WeaponModelStats { model: data.clone() }
+                                        }
                                     }
-                                }
-                            },
-                            _ => rsx! {
-                                WeaponModelLoadingView { progress: current_progress.clone() }
-                            },
+                                },
+                                _ => rsx! {
+                                    div { class: "space-y-3",
+                                        SkeletonLine {}
+                                        SkeletonLine {}
+                                        SkeletonLine {}
+                                    }
+                                },
+                            }
                         }
                     }
-
-                    aside { class: "h-56 shrink-0 overflow-y-auto border-t bg-card p-4 xl:h-auto xl:w-80 xl:border-l xl:border-t-0",
-                        match current_model_result.as_ref() {
-                            Some(Ok(data)) => rsx! {
-                                WeaponModelStats { model: data.clone() }
-                            },
-                            _ => rsx! {
-                                div { class: "space-y-3",
-                                    SkeletonLine {}
-                                    SkeletonLine {}
-                                    SkeletonLine {}
-                                }
-                            },
+                } else {
+                    div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
+                        if support == Some(ModelPreviewSupport::NoModel) {
+                            EmptyState {
+                                icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                                title: "该物品没有可预览的模型".to_string(),
+                                description: Some("该物品没有关联的模型数据。".to_string()),
+                            }
+                        } else {
+                            EmptyState {
+                                icon: rsx! { Icon { kind: IconKind::PackageSearch, class: "h-6 w-6" } },
+                                title: "该部位暂不支持预览".to_string(),
+                                description: Some("腰带与复合部位的装备没有可单独预览的模型。".to_string()),
+                            }
                         }
                     }
                 }
@@ -538,14 +1143,14 @@ fn WeaponModelPane(
                 div { class: "relative min-h-0 flex-1 bg-[#0e1117]",
                     WeaponModelLoadingView {
                         progress: None,
-                        stage: Some("正在定位武器".to_string()),
+                        stage: Some("正在定位物品".to_string()),
                     }
                 }
             } else {
                 div { class: "flex min-h-0 flex-1 items-center justify-center p-6",
                     EmptyState {
                         icon: rsx! { Icon { kind: IconKind::Sword, class: "h-6 w-6" } },
-                        title: "未选择武器".to_string(),
+                        title: "未选择物品".to_string(),
                     }
                 }
             }
@@ -644,7 +1249,7 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
     let bounds = model.bounds;
 
     rsx! {
-        div { class: "space-y-5",
+        div { class: "space-y-4",
             section { class: "space-y-2",
                 div { class: "text-sm font-semibold", "模型" }
                 StatRow { label: "Mesh", value: format_integer(mesh_count as f64) }
@@ -708,7 +1313,7 @@ fn WeaponModelStats(model: Rc<WeaponModelData>) -> Element {
 #[component]
 fn StatRow(label: &'static str, value: String) -> Element {
     rsx! {
-        div { class: "flex items-center justify-between gap-3 border-b border-border/60 py-1.5 text-xs last:border-b-0",
+        div { class: "flex items-center justify-between gap-2 border-b border-border/60 py-1 text-xs last:border-b-0",
             span { class: "text-muted-foreground", "{label}" }
             span { class: "min-w-0 truncate font-medium", "{value}" }
         }
@@ -801,14 +1406,12 @@ fn WeaponRenderControls(
     let shape_options = model_shape_options(&model);
 
     rsx! {
-        div {
-            class: "absolute right-2 top-4 z-10 rounded-md border border-border bg-background/90 p-3 text-xs shadow-md backdrop-blur",
-            style: "width: 14rem;",
-            div { class: "mb-2 flex items-center justify-between gap-3",
-                span { class: "font-medium", "渲染" }
+        section { class: "space-y-2 text-xs",
+            div { class: "flex items-center justify-between gap-3",
+                span { class: "text-sm font-semibold", "渲染" }
                 span { class: "text-[11px] text-muted-foreground", "{bloom_percent}%" }
             }
-            div { class: "space-y-2",
+            div { class: "space-y-1.5",
                 if !shape_options.is_empty() {
                     label { class: "flex items-center justify-between gap-3",
                         span { class: "text-muted-foreground", "Shape" }
@@ -941,6 +1544,68 @@ fn RenderCheckbox(label: &'static str, checked: bool, on_change: EventHandler<bo
     }
 }
 
+/// 部件变体（attribute submesh）勾选列表：模型无 attribute 选项时不渲染。
+/// 默认全部关闭，对应游戏默认状态。
+#[component]
+fn WeaponAttributeControls(
+    model: Rc<WeaponModelData>,
+    attribute_mask: u32,
+    attribute_parts_only: bool,
+    on_attribute_change: EventHandler<u32>,
+    on_parts_only_change: EventHandler<bool>,
+) -> Element {
+    let options = model_attribute_options(model.as_ref());
+    if options.is_empty() {
+        return rsx! {};
+    }
+
+    rsx! {
+        section { class: "space-y-2 text-xs",
+            div { class: "flex items-center justify-between gap-3",
+                span { class: "text-sm font-semibold", "部件变体" }
+                span { class: "text-[11px] text-muted-foreground", "默认全关" }
+            }
+            div { class: "space-y-1.5",
+                for option in options {
+                    AttributeCheckbox {
+                        key: "{option.bit}",
+                        label: attribute_option_label(&option),
+                        checked: attribute_mask & option.bit != 0,
+                        on_change: move |checked| {
+                            on_attribute_change
+                                .call(toggle_attribute_mask(attribute_mask, option.bit, checked));
+                        },
+                    }
+                }
+            }
+            // 变体部件按骨骼绑定姿势存放，与本体重叠是数据的真实状态；
+            // 隔离开关让用户只看选中的部件本身。
+            div { class: "border-t border-border/60 pt-1.5",
+                RenderCheckbox {
+                    label: "仅显示选中部件",
+                    checked: attribute_parts_only,
+                    on_change: move |checked| on_parts_only_change.call(checked),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn AttributeCheckbox(label: String, checked: bool, on_change: EventHandler<bool>) -> Element {
+    rsx! {
+        label { class: "flex items-center justify-between gap-3",
+            span { class: "truncate font-mono text-[11px] text-muted-foreground", title: "{label}", "{label}" }
+            input {
+                class: "h-4 w-4 shrink-0 accent-foreground",
+                r#type: "checkbox",
+                checked,
+                onchange: move |event| on_change.call(event.checked()),
+            }
+        }
+    }
+}
+
 fn parse_render_slider_value(value: &str) -> f32 {
     value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 160.0)
 }
@@ -949,11 +1614,19 @@ fn parse_render_slider_value(value: &str) -> f32 {
 fn WeaponStainControls(
     stains: Vec<WeaponStain>,
     stain_ids: [u8; 2],
+    race_id: Option<u16>,
+    on_race_change: EventHandler<u16>,
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
     let stains_available = !stains.is_empty();
     rsx! {
         div { class: "mt-3 flex flex-wrap items-end gap-3 border-t pt-3",
+            if let Some(race_id) = race_id {
+                EquipmentRaceControl {
+                    race_id,
+                    onchange: move |value| on_race_change.call(value),
+                }
+            }
             div { class: "pb-2 text-xs font-medium text-muted-foreground", "染色" }
             WeaponStainControl {
                 label: "通道 1",
@@ -969,7 +1642,29 @@ fn WeaponStainControls(
             }
             if !stains_available {
                 div { class: "pb-2 text-xs text-amber-700",
-                    "当前武器目录缺少染剂数据，请在数据来源中更新武器目录"
+                    "当前武器索引缺少染剂数据，请在数据来源中更新武器索引"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn EquipmentRaceControl(race_id: u16, onchange: EventHandler<u16>) -> Element {
+    let select_class = input_class("h-9 min-w-40 cursor-pointer py-1 text-xs");
+    rsx! {
+        label { class: "min-w-0 space-y-1",
+            span { class: "block text-[11px] text-muted-foreground", "种族模型" }
+            select {
+                class: "{select_class}",
+                value: "{race_id}",
+                onchange: move |event| {
+                    if let Some(race_id) = parse_equipment_race_id(&event.value()) {
+                        onchange.call(race_id);
+                    }
+                },
+                for race in EQUIPMENT_RACES {
+                    option { value: "{race.id}", "{race.label}" }
                 }
             }
         }
@@ -1117,19 +1812,19 @@ fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
     }
 }
 
+/// 模型画布的 DOM id。画布在物品切换、加载中与出错期间始终挂载，id 保持稳定；
+/// WebGPU context 只在画布首次挂载后初始化一次，之后切换模型走 `set_model`。
+const WEAPON_MODEL_CANVAS_ID: &str = "weapon-model-canvas";
+
 #[component]
 fn WeaponModelCanvas(
-    model: Rc<WeaponModelData>,
+    model: Option<Rc<WeaponModelData>>,
     render_options: Signal<WeaponRenderOptions>,
     shape_mask: Option<u32>,
+    race_id: u16,
+    attribute_mask: u32,
+    attribute_parts_only: bool,
 ) -> Element {
-    let canvas_id = format!(
-        "weapon-model-canvas-{}-{}-{}-{}",
-        model.item_id,
-        model.model_main.raw,
-        model.model_sub.map(|value| value.raw).unwrap_or(0),
-        shape_mask.unwrap_or(0),
-    );
     let init_error = use_signal(|| None::<String>);
     let ready = use_signal(|| false);
 
@@ -1137,28 +1832,33 @@ fn WeaponModelCanvas(
     {
         let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
         let init_generation = use_signal(|| 0_u64);
-        let init_key = (
-            model.item_id,
-            model.model_main.raw,
-            model.model_sub.map(|value| value.raw).unwrap_or(0),
-            shape_mask,
-        );
-        let effect_canvas_id = canvas_id.clone();
-        let effect_model = model.clone();
-        let effect_shape_mask = shape_mask;
+        let init_in_flight = use_signal(|| false);
+        let instance_key = model.as_ref().map(|model| {
+            model_instance_key(
+                model,
+                shape_mask,
+                race_id,
+                attribute_mask,
+                attribute_parts_only,
+            )
+        });
+        let renderer_ready = renderer.read().is_some();
+
+        // WebGPU context 一次性初始化：不依赖模型数据，与模型加载并行进行。
+        // 失败时下一次实例 key 变化重试，对齐画布重建时的重试行为。
         let mut effect_error = init_error;
         let mut effect_ready = ready;
         let mut effect_renderer = renderer;
         let mut effect_generation = init_generation;
-        use_effect(use_reactive((&init_key,), move |_| {
-            let canvas_id = effect_canvas_id.clone();
-            let model = effect_model.clone();
-            let options = render_options;
+        let mut effect_in_flight = init_in_flight;
+        use_effect(use_reactive((&instance_key,), move |_| {
+            if effect_renderer.peek().is_some() || *effect_in_flight.peek() {
+                return;
+            }
             let generation = *effect_generation.peek() + 1;
             effect_generation.set(generation);
-            effect_renderer.set(None);
-            effect_error.set(None);
-            effect_ready.set(false);
+            effect_in_flight.set(true);
+            let options = render_options;
             wasm_bindgen_futures::spawn_local(async move {
                 let result = async {
                     let window =
@@ -1167,17 +1867,15 @@ fn WeaponModelCanvas(
                         .document()
                         .ok_or_else(|| "当前运行环境没有 document".to_string())?;
                     let canvas = document
-                        .get_element_by_id(&canvas_id)
+                        .get_element_by_id(WEAPON_MODEL_CANVAS_ID)
                         .ok_or_else(|| "canvas 未挂载".to_string())?
                         .dyn_into::<HtmlCanvasElement>()
                         .map_err(|_| "canvas 元素类型错误".to_string())?;
-                    let prepared_options = effect_shape_mask
-                        .map(|mask| PreparedModelOptions::default().with_enabled_shape_mask(mask))
-                        .unwrap_or_default();
-                    WebWeaponCanvasRenderer::from_canvas(canvas, &model, prepared_options).await
+                    WebWeaponCanvasRenderer::from_canvas(canvas).await
                 }
                 .await;
 
+                effect_in_flight.set(false);
                 match result {
                     Ok(renderer) => {
                         if *effect_generation.peek() != generation {
@@ -1185,6 +1883,7 @@ fn WeaponModelCanvas(
                         }
                         let renderer = WasmRc::new(RefCell::new(renderer));
                         effect_renderer.set(Some(renderer.clone()));
+                        effect_error.set(None);
                         effect_ready.set(true);
                         start_weapon_render_loop(renderer, options, effect_generation, generation)
                     }
@@ -1196,20 +1895,55 @@ fn WeaponModelCanvas(
             });
         }));
 
-        let update_key = (model.item_id, model.stain_ids, shape_mask);
-        let update_model = model.clone();
-        use_effect(use_reactive((&update_key,), move |_| {
-            let Some(renderer) = renderer() else {
+        // 物品/模型/shape/种族/部件变体变化时同步重建 GPU 实例：复用常驻
+        // context，不再重新初始化设备与管线。物品/模型/种族变化重置轨道相机
+        // 视角（对齐画布重建的旧行为）；shape 与部件变体变化保持视角。
+        let set_model_key = (instance_key, renderer_ready);
+        let instance_model = model.clone();
+        let mut last_orbit_key = use_signal(|| None::<(u32, u64, u64, u16)>);
+        use_effect(use_reactive((&set_model_key,), move |_| {
+            let (Some(model), Some(_)) = (instance_model.clone(), instance_key) else {
                 return;
             };
-            renderer.borrow_mut().update_materials(&update_model);
+            let Some(renderer) = renderer.peek().clone() else {
+                return;
+            };
+            let mut prepared_options = PreparedModelOptions::default();
+            if let Some(mask) = shape_mask {
+                prepared_options = prepared_options.with_enabled_shape_mask(mask);
+            }
+            // 模型无 attribute submesh 时不设置 attribute 相关选项（保持
+            // None/false），由准备管线按游戏默认处理。
+            if model_has_attribute_submeshes(&model) {
+                prepared_options = prepared_options
+                    .with_enabled_attribute_mask(attribute_mask)
+                    .with_attribute_parts_only(attribute_parts_only);
+            }
+            let orbit_key = model_orbit_reset_key(&model, race_id);
+            let mut renderer = renderer.borrow_mut();
+            renderer.set_model(&model, prepared_options);
+            if *last_orbit_key.peek() != Some(orbit_key) {
+                renderer.reset_orbit();
+                last_orbit_key.set(Some(orbit_key));
+            }
+        }));
+
+        // 染色变化走增量材质更新，不重建实例。
+        let update_key = model.as_ref().map(|model| model.stain_ids);
+        let update_model = model.clone();
+        use_effect(use_reactive((&update_key,), move |_| {
+            let (Some(model), Some(renderer)) = (update_model.clone(), renderer.peek().clone())
+            else {
+                return;
+            };
+            renderer.borrow_mut().update_materials(&model);
         }));
     }
 
     rsx! {
         div { class: "absolute inset-0",
             canvas {
-                id: "{canvas_id}",
+                id: WEAPON_MODEL_CANVAS_ID,
                 class: "h-full w-full cursor-grab touch-none select-none bg-[#0e1117] active:cursor-grabbing",
             }
             if let Some(error) = init_error() {
@@ -1273,57 +2007,130 @@ fn start_weapon_render_loop(
     }
 }
 
-fn search_weapons(
-    catalog: &WeaponCatalogPackage,
+fn search_model_items(
+    collection: &CollectionCatalogPackage,
+    furniture: Option<&FurnitureCatalogPackage>,
+    chara: Option<&CharaCatalogPackage>,
     query: &str,
-    filter: WeaponSlotFilter,
-) -> WeaponSearchResult {
+    filter: ModelItemFilter,
+) -> ModelSearchResult {
     let needle = query.trim().to_lowercase();
     let mut total = 0;
     let mut items = Vec::new();
 
-    for item in &catalog.items {
-        if !filter.matches(item) || !weapon_matches_query(item, &needle) {
-            continue;
-        }
-        total += 1;
-        if items.len() < RESULT_LIMIT {
-            items.push(item.clone());
+    if filter.includes_equipment() {
+        for item in &collection.items {
+            if !item.is_equipment()
+                || !filter.matches_equipment(item)
+                || !equipment_matches_query(item, &needle)
+            {
+                continue;
+            }
+            total += 1;
+            if items.len() < RESULT_LIMIT {
+                items.push(ModelCatalogItem::Equipment(item.clone()));
+            }
         }
     }
 
-    WeaponSearchResult { total, items }
+    let furniture = furniture.filter(|_| filter.includes_furniture());
+    if let Some(furniture) = furniture {
+        for item in &furniture.items {
+            if !filter.matches_furniture(item) || !furniture_matches_query(item, &needle) {
+                continue;
+            }
+            total += 1;
+            if items.len() < RESULT_LIMIT {
+                items.push(ModelCatalogItem::Furniture(item.clone()));
+            }
+        }
+    }
+
+    let chara = chara.filter(|_| filter.includes_chara());
+    if let Some(chara) = chara {
+        for item in &chara.items {
+            if !filter.matches_chara(item) || !chara_matches_query(item, &needle) {
+                continue;
+            }
+            total += 1;
+            if items.len() < RESULT_LIMIT {
+                items.push(ModelCatalogItem::Chara(item.clone()));
+            }
+        }
+    }
+
+    ModelSearchResult { total, items }
 }
 
-fn weapon_matches_query(item: &WeaponCatalogItem, needle: &str) -> bool {
+fn equipment_matches_query(item: &CollectionItem, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-
-    let main = item.primary_model();
-    let sub = item.secondary_model();
-    item.name.to_lowercase().contains(needle)
+    if item.name.to_lowercase().contains(needle)
         || item.id.to_string().contains(needle)
         || item.model_main.to_string().contains(needle)
         || item.model_sub.to_string().contains(needle)
         || format!("{:x}", item.model_main).contains(needle)
         || format!("{:x}", item.model_sub).contains(needle)
-        || main.model_id.to_string().contains(needle)
-        || main.body_id.to_string().contains(needle)
-        || main.variant_id.to_string().contains(needle)
-        || sub
-            .map(|value| {
-                value.model_id.to_string().contains(needle)
-                    || value.body_id.to_string().contains(needle)
-                    || value.variant_id.to_string().contains(needle)
-            })
-            .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let segments: [u16; 6] = if is_weapon_equip_slot_category(item.equip_slot_category) {
+        let main = PackedModelId::from_raw(item.model_main);
+        let sub = PackedModelId::from_raw(item.model_sub);
+        [
+            main.model_id,
+            main.body_id,
+            main.variant_id,
+            sub.model_id,
+            sub.body_id,
+            sub.variant_id,
+        ]
+    } else {
+        let main = PackedEquipmentModelId::from_raw(item.model_main);
+        let sub = PackedEquipmentModelId::from_raw(item.model_sub);
+        [
+            main.set_id,
+            main.variant_id,
+            sub.set_id,
+            sub.variant_id,
+            0,
+            0,
+        ]
+    };
+    segments
+        .iter()
+        .any(|value| value.to_string().contains(needle))
 }
 
-fn initial_weapon_url_state() -> WeaponUrlState {
+fn furniture_matches_query(item: &FurnitureCatalogItem, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    item.name.to_lowercase().contains(needle)
+        || item.id.to_string().contains(needle)
+        || item.model_key.to_string().contains(needle)
+        || format!("{:04}", item.model_key).contains(needle)
+        || format_furniture_model(item.kind, item.model_key).contains(needle)
+}
+
+fn chara_matches_query(item: &CharaCatalogItem, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    item.name.to_lowercase().contains(needle)
+        || item.id.to_string().contains(needle)
+        || item.model.model_id.to_string().contains(needle)
+        || item.model.base_id.to_string().contains(needle)
+        || item.model.variant_id.to_string().contains(needle)
+        || format_chara_model(&item.model).contains(needle)
+}
+
+fn initial_model_preview_url_state() -> ModelPreviewUrlState {
     #[cfg(target_arch = "wasm32")]
     {
-        weapon_url_state_from_hash(
+        model_preview_url_state_from_hash(
             web_sys::window()
                 .and_then(|window| window.location().hash().ok())
                 .unwrap_or_default()
@@ -1333,27 +2140,26 @@ fn initial_weapon_url_state() -> WeaponUrlState {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        WeaponUrlState {
+        ModelPreviewUrlState {
             query: String::new(),
-            filter: WeaponSlotFilter::All,
+            filter: ModelItemFilter::All,
             item_id: None,
             stain_ids: [0, 0],
+            race_id: EQUIPMENT_MODEL_FALLBACK_RACE_ID,
         }
     }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
-    let mut state = WeaponUrlState {
+fn model_preview_url_state_from_hash(hash: &str) -> ModelPreviewUrlState {
+    let route = hash.trim_start_matches('#');
+    let (path, query) = route.split_once('?').unwrap_or((route, ""));
+    let mut state = ModelPreviewUrlState {
         query: String::new(),
-        filter: WeaponSlotFilter::All,
+        filter: default_filter_for_path(path),
         item_id: None,
         stain_ids: [0, 0],
-    };
-
-    let route = hash.trim_start_matches('#');
-    let Some((_, query)) = route.split_once('?') else {
-        return state;
+        race_id: EQUIPMENT_MODEL_FALLBACK_RACE_ID,
     };
 
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
@@ -1362,7 +2168,7 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
         match key {
             "q" | "query" | "search" => state.query = value,
             "f" | "filter" | "slot" => {
-                if let Some(filter) = WeaponSlotFilter::from_key(&value) {
+                if let Some(filter) = ModelItemFilter::from_key(&value) {
                     state.filter = filter;
                 }
             }
@@ -1371,11 +2177,26 @@ fn weapon_url_state_from_hash(hash: &str) -> WeaponUrlState {
             }
             "stain0" | "dye0" => state.stain_ids[0] = parse_stain_id(&value),
             "stain1" | "dye1" => state.stain_ids[1] = parse_stain_id(&value),
+            "race" => {
+                if let Some(race_id) = parse_equipment_race_id(&value) {
+                    state.race_id = race_id;
+                }
+            }
             _ => {}
         }
     }
 
     state
+}
+
+/// 旧 `/weapon-models` 路由进入时默认只看武器，保持原武器页的浏览习惯。
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn default_filter_for_path(path: &str) -> ModelItemFilter {
+    if path == WEAPON_MODELS_ROUTE_PATH {
+        ModelItemFilter::Weapons
+    } else {
+        ModelItemFilter::All
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -1394,16 +2215,34 @@ fn parse_stain_id(value: &str) -> u8 {
 }
 
 #[allow(unused_variables)]
-fn sync_weapon_url_state(
+fn sync_model_preview_url_state(
     query: &str,
-    filter: WeaponSlotFilter,
+    filter: ModelItemFilter,
     item_id: Option<u32>,
     stain_ids: [u8; 2],
+    race_id: u16,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
         let Some(window) = web_sys::window() else {
             return;
+        };
+        let current_path = window
+            .location()
+            .hash()
+            .ok()
+            .map(|hash| {
+                hash.trim_start_matches('#')
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let base = if current_path == WEAPON_MODELS_ROUTE_PATH {
+            WEAPON_MODELS_ROUTE_PATH
+        } else {
+            EQUIPMENT_MODELS_ROUTE_PATH
         };
 
         let mut params = Vec::new();
@@ -1411,7 +2250,7 @@ fn sync_weapon_url_state(
         if !trimmed_query.is_empty() {
             params.push(format!("q={}", urlencoding::encode(trimmed_query)));
         }
-        if filter != WeaponSlotFilter::All {
+        if filter != default_filter_for_path(base) {
             params.push(format!("f={}", filter.key()));
         }
         if let Some(item_id) = item_id {
@@ -1423,11 +2262,14 @@ fn sync_weapon_url_state(
         if stain_ids[1] != 0 {
             params.push(format!("stain1={}", stain_ids[1]));
         }
+        if race_id != EQUIPMENT_MODEL_FALLBACK_RACE_ID {
+            params.push(format!("race={race_id}"));
+        }
 
         let hash = if params.is_empty() {
-            "#/weapon-models".to_string()
+            format!("#{base}")
         } else {
-            format!("#/weapon-models?{}", params.join("&"))
+            format!("#{base}?{}", params.join("&"))
         };
 
         if window.location().hash().ok().as_deref() == Some(hash.as_str()) {
@@ -1447,10 +2289,49 @@ fn sync_weapon_url_state(
 
 fn segment_button_class(active: bool) -> &'static str {
     if active {
-        "flex h-8 items-center justify-center rounded bg-background text-xs font-medium text-foreground shadow-sm transition-colors"
+        "flex h-7 items-center justify-center rounded bg-background text-xs font-medium text-foreground shadow-sm transition-colors"
     } else {
-        "flex h-8 items-center justify-center rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        "flex h-7 items-center justify-center rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
     }
+}
+
+fn equipment_slot_label(category: u32) -> &'static str {
+    if is_weapon_equip_slot_category(category) {
+        return weapon_slot_label(category);
+    }
+    match category {
+        3 => "头部",
+        4 => "身体",
+        5 => "手部",
+        6 => "腰部",
+        7 => "腿部",
+        8 => "脚部",
+        9 => "耳饰",
+        10 => "项链",
+        11 => "手镯",
+        12 => "戒指",
+        _ => "复合部位",
+    }
+}
+
+fn format_item_model(item: &CollectionItem) -> Option<String> {
+    (item.model_main != 0).then(|| format_model_raw(item.equip_slot_category, item.model_main))
+}
+
+fn format_item_sub_model(item: &CollectionItem) -> Option<String> {
+    (item.model_sub != 0).then(|| format_model_raw(item.equip_slot_category, item.model_sub))
+}
+
+fn format_model_raw(equip_slot_category: u32, raw: u64) -> String {
+    if is_weapon_equip_slot_category(equip_slot_category) {
+        return format_packed_model(PackedModelId::from_raw(raw));
+    }
+    let model = PackedEquipmentModelId::from_raw(raw);
+    let prefix = match equipment_slot_info(equip_slot_category) {
+        Some(slot) if slot.is_accessory => "a",
+        _ => "e",
+    };
+    format!("{prefix}{:04} v{:04}", model.set_id, model.variant_id)
 }
 
 fn format_packed_model(model: PackedModelId) -> String {
@@ -1460,17 +2341,62 @@ fn format_packed_model(model: PackedModelId) -> String {
     )
 }
 
+/// 家具/庭具模型标签：SGB 资源文件名（`fun_b0_m####` / `gar_b0_m####`），
+/// 与 SqPack 加载路径直接对应。
+fn format_furniture_model(kind: FurnitureModelKind, model_key: u16) -> String {
+    let prefix = match kind {
+        FurnitureModelKind::Indoor => "fun_b0_m",
+        FurnitureModelKind::Outdoor => "gar_b0_m",
+    };
+    format!("{prefix}{model_key:04}")
+}
+
+/// 宠物/坐骑模型标签：模型种类 + 模型文件主名（monster `m####b####` /
+/// demihuman `d####e####`），与 SqPack 加载路径直接对应。
+fn format_chara_model(model: &PackedCharaModelId) -> String {
+    match model.chara_type {
+        CharaModelType::Monster => {
+            format!("monster m{:04}b{:04}", model.model_id, model.base_id)
+        }
+        CharaModelType::Demihuman => {
+            format!("demihuman d{:04}e{:04}", model.model_id, model.base_id)
+        }
+    }
+}
+
 fn format_vec3(value: [f32; 3]) -> String {
     format!("{:.3}, {:.3}, {:.3}", value[0], value[1], value[2])
 }
 
-fn model_canvas_key(model: &WeaponModelData, shape_mask: Option<u32>) -> String {
-    format!(
-        "{}-{}-{}-{}",
+/// GPU 实例 key：物品/模型/shape/种族/部件变体（含隔离预览）任一变化都需要经
+/// `set_model` 同步重建模型实例（复用常驻渲染 context）。染色不在其中——
+/// 染色走 `update_materials` 增量路径。
+fn model_instance_key(
+    model: &WeaponModelData,
+    shape_mask: Option<u32>,
+    race_id: u16,
+    attribute_mask: u32,
+    attribute_parts_only: bool,
+) -> (u32, u64, u64, Option<u32>, u16, u32, bool) {
+    (
         model.item_id,
         model.model_main.raw,
         model.model_sub.map(|value| value.raw).unwrap_or(0),
-        shape_mask.unwrap_or(0),
+        shape_mask,
+        race_id,
+        attribute_mask,
+        attribute_parts_only,
+    )
+}
+
+/// 轨道相机重置 key：物品/模型/种族变化时重置视角（对齐画布重建的旧行为），
+/// shape、部件变体与染色变化保持当前视角。
+fn model_orbit_reset_key(model: &WeaponModelData, race_id: u16) -> (u32, u64, u64, u16) {
+    (
+        model.item_id,
+        model.model_main.raw,
+        model.model_sub.map(|value| value.raw).unwrap_or(0),
+        race_id,
     )
 }
 
@@ -1509,19 +2435,102 @@ fn model_has_shape_mask(model: &WeaponModelData, shape_mask: u32) -> bool {
         .any(|shape| shape.shape_index_mask == shape_mask)
 }
 
+fn model_has_attribute_submeshes(model: &WeaponModelData) -> bool {
+    model.meshes.iter().any(|mesh| {
+        mesh.submesh
+            .as_ref()
+            .is_some_and(|submesh| submesh.attribute_index_mask != 0)
+    })
+}
+
+/// 部件变体选择按物品 id 作用域存储；切换到其他物品时读回 0（全部关闭，
+/// 对应游戏默认状态）。
+fn scoped_attribute_mask(selection: (Option<u32>, u32), item_id: u32) -> u32 {
+    if selection.0 == Some(item_id) {
+        selection.1
+    } else {
+        0
+    }
+}
+
+/// 隔离预览开关同样按物品 id 作用域存储；切换物品后回到关闭。
+fn scoped_attribute_parts_only(selection: (Option<u32>, bool), item_id: u32) -> bool {
+    selection.0 == Some(item_id) && selection.1
+}
+
+fn toggle_attribute_mask(mask: u32, bit: u32, enabled: bool) -> u32 {
+    if enabled { mask | bit } else { mask & !bit }
+}
+
+/// 变体勾选项的显示名：属性名并列；无名字的 bit 回退为位数编号。
+fn attribute_option_label(option: &ModelAttributeOption) -> String {
+    if option.names.is_empty() {
+        format!("Attribute {}", option.bit.trailing_zeros())
+    } else {
+        option.names.join(" / ")
+    }
+}
+
 #[cfg(test)]
-mod weapon_url_tests {
+mod model_preview_tests {
     use super::*;
 
     #[test]
-    fn parses_weapon_url_state_from_hash() {
-        let state = weapon_url_state_from_hash(
+    fn parses_model_preview_url_state_from_hash() {
+        let state = model_preview_url_state_from_hash(
+            "#/equipment-models?q=%E6%B5%AA%E6%BC%AB&f=head&item=45058&stain0=17&stain1=93&race=701",
+        );
+        assert_eq!(state.query, "浪漫");
+        assert_eq!(state.filter, ModelItemFilter::Head);
+        assert_eq!(state.item_id, Some(45058));
+        assert_eq!(state.stain_ids, [17, 93]);
+        assert_eq!(state.race_id, 701);
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?f=furniture&item=43570");
+        assert_eq!(state.filter, ModelItemFilter::Furniture);
+        assert_eq!(state.item_id, Some(43570));
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?f=yard");
+        assert_eq!(state.filter, ModelItemFilter::Yard);
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?f=minions&item=42722");
+        assert_eq!(state.filter, ModelItemFilter::Minions);
+        assert_eq!(state.item_id, Some(42722));
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?f=mounts");
+        assert_eq!(state.filter, ModelItemFilter::Mounts);
+    }
+
+    #[test]
+    fn weapon_models_route_defaults_to_weapon_filter() {
+        let state = model_preview_url_state_from_hash("#/weapon-models?item=45058");
+        assert_eq!(state.filter, ModelItemFilter::Weapons);
+        assert_eq!(state.item_id, Some(45058));
+
+        let state = model_preview_url_state_from_hash(
             "#/weapon-models?q=%E6%B5%AA%E6%BC%AB&f=two&item=45058&stain0=17&stain1=93",
         );
         assert_eq!(state.query, "浪漫");
-        assert_eq!(state.filter, WeaponSlotFilter::TwoHanded);
-        assert_eq!(state.item_id, Some(45058));
+        assert_eq!(state.filter, ModelItemFilter::TwoHanded);
         assert_eq!(state.stain_ids, [17, 93]);
+
+        let state = model_preview_url_state_from_hash("#/equipment-models");
+        assert_eq!(state.filter, ModelItemFilter::All);
+    }
+
+    #[test]
+    fn race_param_accepts_plain_and_c_prefixed_codes() {
+        assert_eq!(parse_equipment_race_id("701"), Some(701));
+        assert_eq!(parse_equipment_race_id("c0701"), Some(701));
+        assert_eq!(parse_equipment_race_id("C1801"), Some(1801));
+        assert_eq!(parse_equipment_race_id("999"), None);
+        assert_eq!(parse_equipment_race_id("invalid"), None);
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?race=c1301");
+        assert_eq!(state.race_id, 1301);
+
+        let state = model_preview_url_state_from_hash("#/equipment-models?race=999");
+        assert_eq!(state.race_id, EQUIPMENT_MODEL_FALLBACK_RACE_ID);
     }
 
     #[test]
@@ -1532,16 +2541,398 @@ mod weapon_url_tests {
     }
 
     #[test]
-    fn weapon_slot_filter_keys_round_trip() {
+    fn model_item_filter_keys_round_trip() {
         for filter in [
-            WeaponSlotFilter::All,
-            WeaponSlotFilter::Main,
-            WeaponSlotFilter::Off,
-            WeaponSlotFilter::TwoHanded,
-            WeaponSlotFilter::Dual,
+            ModelItemFilter::All,
+            ModelItemFilter::Weapons,
+            ModelItemFilter::Main,
+            ModelItemFilter::Off,
+            ModelItemFilter::TwoHanded,
+            ModelItemFilter::Dual,
+            ModelItemFilter::Armor,
+            ModelItemFilter::Head,
+            ModelItemFilter::Body,
+            ModelItemFilter::Hands,
+            ModelItemFilter::Legs,
+            ModelItemFilter::Feet,
+            ModelItemFilter::Accessories,
+            ModelItemFilter::Ears,
+            ModelItemFilter::Neck,
+            ModelItemFilter::Wrists,
+            ModelItemFilter::Rings,
+            ModelItemFilter::Furniture,
+            ModelItemFilter::Yard,
+            ModelItemFilter::Minions,
+            ModelItemFilter::Mounts,
         ] {
-            assert_eq!(WeaponSlotFilter::from_key(filter.key()), Some(filter));
+            assert_eq!(ModelItemFilter::from_key(filter.key()), Some(filter));
         }
+    }
+
+    #[test]
+    fn equipment_filters_match_their_equip_slot_categories() {
+        let weapon = test_collection_item(13, 100);
+        for filter in [
+            ModelItemFilter::All,
+            ModelItemFilter::Weapons,
+            ModelItemFilter::TwoHanded,
+        ] {
+            assert!(
+                filter.matches_equipment(&weapon),
+                "{filter:?} should match {weapon:?}"
+            );
+        }
+        assert!(!ModelItemFilter::Main.matches_equipment(&weapon));
+        assert!(!ModelItemFilter::Armor.matches_equipment(&weapon));
+
+        let armor = test_collection_item(4, 100);
+        assert!(ModelItemFilter::Armor.matches_equipment(&armor));
+        assert!(ModelItemFilter::Body.matches_equipment(&armor));
+        assert!(!ModelItemFilter::Weapons.matches_equipment(&armor));
+
+        let accessory = test_collection_item(12, 100);
+        assert!(ModelItemFilter::Accessories.matches_equipment(&accessory));
+        assert!(ModelItemFilter::Rings.matches_equipment(&accessory));
+        assert!(!ModelItemFilter::Armor.matches_equipment(&accessory));
+
+        // 腰带（6）与复合部位（15+）只在“全部”下出现。
+        for category in [6, 15, 16, 18, 21] {
+            let item = test_collection_item(category, 100);
+            assert!(ModelItemFilter::All.matches_equipment(&item));
+            assert!(!ModelItemFilter::Weapons.matches_equipment(&item));
+            assert!(!ModelItemFilter::Armor.matches_equipment(&item));
+            assert!(!ModelItemFilter::Accessories.matches_equipment(&item));
+        }
+    }
+
+    #[test]
+    fn furniture_filters_match_their_kinds() {
+        let indoor = test_furniture_item(1, FurnitureModelKind::Indoor, 7);
+        let outdoor = test_furniture_item(2, FurnitureModelKind::Outdoor, 9);
+
+        assert!(ModelItemFilter::All.matches_furniture(&indoor));
+        assert!(ModelItemFilter::Furniture.matches_furniture(&indoor));
+        assert!(!ModelItemFilter::Yard.matches_furniture(&indoor));
+        assert!(!ModelItemFilter::Weapons.matches_furniture(&indoor));
+        assert!(ModelItemFilter::Yard.matches_furniture(&outdoor));
+        assert!(!ModelItemFilter::Furniture.matches_furniture(&outdoor));
+
+        // 家具/庭具过滤器只覆盖家具目录，装备过滤器只覆盖装备目录；“全部”两者兼有。
+        assert!(ModelItemFilter::Furniture.includes_furniture());
+        assert!(!ModelItemFilter::Furniture.includes_equipment());
+        assert!(ModelItemFilter::Yard.includes_furniture());
+        assert!(!ModelItemFilter::Head.includes_furniture());
+        assert!(ModelItemFilter::All.includes_equipment());
+        assert!(ModelItemFilter::All.includes_furniture());
+        assert!(!ModelItemFilter::Furniture.matches_equipment(&test_collection_item(4, 100)));
+        assert!(!ModelItemFilter::Yard.matches_equipment(&test_collection_item(9, 100)));
+    }
+
+    #[test]
+    fn chara_filters_match_their_kinds() {
+        let minion = test_chara_item(1, CharaModelKind::Minion, 8003, CharaModelType::Monster);
+        let mount = test_chara_item(2, CharaModelKind::Mount, 1, CharaModelType::Demihuman);
+
+        assert!(ModelItemFilter::All.matches_chara(&minion));
+        assert!(ModelItemFilter::Minions.matches_chara(&minion));
+        assert!(!ModelItemFilter::Mounts.matches_chara(&minion));
+        assert!(!ModelItemFilter::Weapons.matches_chara(&minion));
+        assert!(ModelItemFilter::Mounts.matches_chara(&mount));
+        assert!(!ModelItemFilter::Minions.matches_chara(&mount));
+
+        // 宠物/坐骑过滤器只覆盖 chara 目录，其余目录过滤器不覆盖 chara；“全部”三者兼有。
+        assert!(ModelItemFilter::Minions.includes_chara());
+        assert!(!ModelItemFilter::Minions.includes_equipment());
+        assert!(!ModelItemFilter::Minions.includes_furniture());
+        assert!(ModelItemFilter::Mounts.includes_chara());
+        assert!(!ModelItemFilter::Furniture.includes_chara());
+        assert!(!ModelItemFilter::Head.includes_chara());
+        assert!(ModelItemFilter::All.includes_chara());
+        assert!(!ModelItemFilter::Minions.matches_equipment(&test_collection_item(4, 100)));
+        assert!(
+            !ModelItemFilter::Mounts.matches_furniture(&test_furniture_item(
+                3,
+                FurnitureModelKind::Indoor,
+                1
+            ))
+        );
+    }
+
+    #[test]
+    fn model_preview_support_classifies_items() {
+        assert_eq!(
+            model_preview_support(&test_collection_item(1, 100)),
+            ModelPreviewSupport::Weapon
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(14, 100)),
+            ModelPreviewSupport::Weapon
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(4, 100)),
+            ModelPreviewSupport::Equipment
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(9, 100)),
+            ModelPreviewSupport::Equipment
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(4, 0)),
+            ModelPreviewSupport::NoModel
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(6, 100)),
+            ModelPreviewSupport::UnsupportedSlot
+        );
+        assert_eq!(
+            model_preview_support(&test_collection_item(16, 100)),
+            ModelPreviewSupport::UnsupportedSlot
+        );
+
+        for kind in [FurnitureModelKind::Indoor, FurnitureModelKind::Outdoor] {
+            let item = ModelCatalogItem::Furniture(test_furniture_item(3, kind, 1));
+            assert_eq!(item.support(), ModelPreviewSupport::Furniture);
+        }
+        assert_eq!(
+            ModelCatalogItem::Equipment(test_collection_item(4, 100)).support(),
+            ModelPreviewSupport::Equipment
+        );
+
+        for (kind, chara_type) in [
+            (CharaModelKind::Minion, CharaModelType::Monster),
+            (CharaModelKind::Mount, CharaModelType::Demihuman),
+        ] {
+            let item = ModelCatalogItem::Chara(test_chara_item(5, kind, 1, chara_type));
+            assert_eq!(item.support(), ModelPreviewSupport::Chara);
+        }
+    }
+
+    #[test]
+    fn equipment_slot_label_covers_weapon_and_armor_slots() {
+        assert_eq!(equipment_slot_label(1), "主手");
+        assert_eq!(equipment_slot_label(13), "双手主手");
+        assert_eq!(equipment_slot_label(4), "身体");
+        assert_eq!(equipment_slot_label(12), "戒指");
+        assert_eq!(equipment_slot_label(6), "腰部");
+        assert_eq!(equipment_slot_label(21), "复合部位");
+    }
+
+    #[test]
+    fn item_model_label_uses_weapon_or_equipment_packing() {
+        // model_id=2001, body_id=102, variant_id=1
+        let weapon = test_collection_item(1, 0x0000_0001_0066_07D1);
+        assert_eq!(
+            format_item_model(&weapon),
+            Some("w2001 b0102 v0001".to_string())
+        );
+
+        let armor = test_collection_item(4, 0x0000_0000_0001_2276);
+        assert_eq!(format_item_model(&armor), Some("e8822 v0001".to_string()));
+
+        let accessory = test_collection_item(9, 0x0000_0000_0000_0010);
+        assert_eq!(
+            format_item_model(&accessory),
+            Some("a0016 v0000".to_string())
+        );
+
+        let no_model = test_collection_item(4, 0);
+        assert_eq!(format_item_model(&no_model), None);
+    }
+
+    #[test]
+    fn furniture_labels_use_sgb_asset_stem_and_kind_label() {
+        let indoor =
+            ModelCatalogItem::Furniture(test_furniture_item(3, FurnitureModelKind::Indoor, 1));
+        assert_eq!(indoor.model_label(), Some("fun_b0_m0001".to_string()));
+        assert_eq!(indoor.kind_label(), "室内家具");
+        assert_eq!(indoor.sub_model_label(), None);
+
+        let outdoor =
+            ModelCatalogItem::Furniture(test_furniture_item(4, FurnitureModelKind::Outdoor, 1234));
+        assert_eq!(outdoor.model_label(), Some("gar_b0_m1234".to_string()));
+        assert_eq!(outdoor.kind_label(), "庭具");
+    }
+
+    #[test]
+    fn chara_labels_use_type_and_model_file_stem() {
+        let minion = ModelCatalogItem::Chara(test_chara_item(
+            5,
+            CharaModelKind::Minion,
+            8003,
+            CharaModelType::Monster,
+        ));
+        assert_eq!(minion.model_label(), Some("monster m8003b0001".to_string()));
+        assert_eq!(minion.kind_label(), "宠物");
+        assert_eq!(minion.sub_model_label(), None);
+
+        let mount = ModelCatalogItem::Chara(test_chara_item(
+            6,
+            CharaModelKind::Mount,
+            1,
+            CharaModelType::Demihuman,
+        ));
+        assert_eq!(
+            mount.model_label(),
+            Some("demihuman d0001e0001".to_string())
+        );
+        assert_eq!(mount.kind_label(), "坐骑");
+    }
+
+    #[test]
+    fn chara_matches_query_covers_name_id_and_model() {
+        let item = CharaCatalogItem {
+            id: 42722,
+            kind: CharaModelKind::Minion,
+            name: "爆弹仔".to_string(),
+            icon: 0,
+            model: PackedCharaModelId {
+                model_id: 8003,
+                base_id: 1,
+                variant_id: 2,
+                chara_type: CharaModelType::Monster,
+            },
+        };
+        assert!(chara_matches_query(&item, ""));
+        assert!(chara_matches_query(&item, "爆弹"));
+        assert!(chara_matches_query(&item, "42722"));
+        assert!(chara_matches_query(&item, "8003"));
+        assert!(chara_matches_query(&item, "m8003b0001"));
+        assert!(chara_matches_query(&item, "monster"));
+        assert!(!chara_matches_query(&item, "demihuman"));
+        assert!(!chara_matches_query(&item, "古菩"));
+    }
+
+    #[test]
+    fn furniture_matches_query_covers_name_id_and_model_key() {
+        let item = FurnitureCatalogItem {
+            id: 43570,
+            kind: FurnitureModelKind::Indoor,
+            name: "春意衣柜".to_string(),
+            icon: 0,
+            model_key: 369,
+        };
+        assert!(furniture_matches_query(&item, ""));
+        assert!(furniture_matches_query(&item, "衣柜"));
+        assert!(furniture_matches_query(&item, "43570"));
+        assert!(furniture_matches_query(&item, "369"));
+        assert!(furniture_matches_query(&item, "0369"));
+        assert!(furniture_matches_query(&item, "fun_b0_m0369"));
+        assert!(!furniture_matches_query(&item, "gar_b0"));
+        assert!(!furniture_matches_query(&item, "书桌"));
+    }
+
+    #[test]
+    fn search_merges_all_catalogs_under_all() {
+        let collection = test_collection_catalog(vec![test_collection_item(4, 100)]);
+        let furniture = test_furniture_catalog(vec![
+            test_furniture_item(7, FurnitureModelKind::Indoor, 1),
+            test_furniture_item(8, FurnitureModelKind::Outdoor, 2),
+        ]);
+        let chara = test_chara_catalog(vec![
+            test_chara_item(11, CharaModelKind::Minion, 8003, CharaModelType::Monster),
+            test_chara_item(12, CharaModelKind::Mount, 1, CharaModelType::Demihuman),
+        ]);
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::All,
+        );
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 5);
+        assert!(matches!(result.items[0], ModelCatalogItem::Equipment(_)));
+        assert!(matches!(result.items[1], ModelCatalogItem::Furniture(_)));
+        assert!(matches!(result.items[3], ModelCatalogItem::Chara(_)));
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::Furniture,
+        );
+        assert_eq!(result.total, 1);
+        assert!(matches!(result.items[0], ModelCatalogItem::Furniture(_)));
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::Yard,
+        );
+        assert_eq!(result.total, 1);
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::Minions,
+        );
+        assert_eq!(result.total, 1);
+        assert!(matches!(result.items[0], ModelCatalogItem::Chara(_)));
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::Mounts,
+        );
+        assert_eq!(result.total, 1);
+
+        let result = search_model_items(
+            &collection,
+            Some(&furniture),
+            Some(&chara),
+            "",
+            ModelItemFilter::Body,
+        );
+        assert_eq!(result.total, 1);
+
+        // 家具/chara 目录不可用（未加载/加载失败）时装备检索不受影响，对应过滤器为空。
+        let result = search_model_items(&collection, None, None, "", ModelItemFilter::All);
+        assert_eq!(result.total, 1);
+        let result = search_model_items(&collection, None, None, "", ModelItemFilter::Furniture);
+        assert_eq!(result.total, 0);
+        let result = search_model_items(&collection, None, None, "", ModelItemFilter::Minions);
+        assert_eq!(result.total, 0);
+    }
+
+    #[test]
+    fn resolve_model_catalog_item_prefers_equipment_then_furniture_then_chara() {
+        let collection = test_collection_catalog(vec![test_collection_item(4, 100)]);
+        let furniture =
+            test_furniture_catalog(vec![test_furniture_item(7, FurnitureModelKind::Indoor, 1)]);
+        let chara = test_chara_catalog(vec![test_chara_item(
+            11,
+            CharaModelKind::Minion,
+            8003,
+            CharaModelType::Monster,
+        )]);
+
+        let resolved =
+            resolve_model_catalog_item(Some(&collection), Some(&furniture), Some(&chara), 42);
+        assert!(matches!(resolved, Some(ModelCatalogItem::Equipment(_))));
+
+        let resolved =
+            resolve_model_catalog_item(Some(&collection), Some(&furniture), Some(&chara), 7);
+        assert!(matches!(resolved, Some(ModelCatalogItem::Furniture(_))));
+
+        let resolved =
+            resolve_model_catalog_item(Some(&collection), Some(&furniture), Some(&chara), 11);
+        assert!(matches!(resolved, Some(ModelCatalogItem::Chara(_))));
+
+        let resolved = resolve_model_catalog_item(None, None, Some(&chara), 11);
+        assert!(matches!(resolved, Some(ModelCatalogItem::Chara(_))));
+
+        assert!(
+            resolve_model_catalog_item(Some(&collection), Some(&furniture), Some(&chara), 999)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1570,7 +2961,7 @@ mod weapon_url_tests {
     }
 
     #[test]
-    fn shape_options_are_unique_sorted_and_rebuild_the_canvas_key() {
+    fn shape_options_are_unique_sorted_and_change_the_instance_key() {
         let model = test_shape_model();
 
         assert_eq!(
@@ -1581,21 +2972,258 @@ mod weapon_url_tests {
         assert!(model_has_shape_mask(&model, 4));
         assert!(!model_has_shape_mask(&model, 2));
         assert_ne!(
-            model_canvas_key(&model, None),
-            model_canvas_key(&model, Some(1))
+            model_instance_key(&model, None, 101, 0, false),
+            model_instance_key(&model, Some(1), 101, 0, false)
+        );
+        // 种族维度在实例 key 内：装备按种族加载不同的模型文件。
+        assert_ne!(
+            model_instance_key(&model, None, 101, 0, false),
+            model_instance_key(&model, None, 701, 0, false)
         );
     }
 
     #[test]
-    fn stain_changes_keep_the_existing_canvas_key() {
+    fn stain_changes_keep_the_existing_instance_key() {
         let base = test_shape_model();
         let mut stained = base.clone();
         stained.stain_ids = [17, 93];
 
         assert_eq!(
-            model_canvas_key(&base, None),
-            model_canvas_key(&stained, None)
+            model_instance_key(&base, None, 101, 0, false),
+            model_instance_key(&stained, None, 101, 0, false)
         );
+    }
+
+    #[test]
+    fn orbit_reset_key_ignores_stain_but_tracks_item_and_race() {
+        let model = test_shape_model();
+        let mut stained = model.clone();
+        stained.stain_ids = [17, 93];
+
+        assert_eq!(
+            model_orbit_reset_key(&model, 101),
+            model_orbit_reset_key(&stained, 101)
+        );
+        assert_ne!(
+            model_orbit_reset_key(&model, 101),
+            model_orbit_reset_key(&model, 701)
+        );
+        let mut other = model.clone();
+        other.item_id = 43;
+        assert_ne!(
+            model_orbit_reset_key(&model, 101),
+            model_orbit_reset_key(&other, 101)
+        );
+    }
+
+    #[test]
+    fn attribute_mask_changes_the_instance_key_but_not_the_orbit_key() {
+        let model = test_shape_model();
+
+        assert_ne!(
+            model_instance_key(&model, None, 101, 0, false),
+            model_instance_key(&model, None, 101, 0x0000_0001, false)
+        );
+        // 部件变体切换保持视角：orbit key 不含 attribute mask 维度（按签名保证）。
+        assert_eq!(
+            model_orbit_reset_key(&model, 101),
+            (42, model.model_main.raw, 0, 101)
+        );
+    }
+
+    #[test]
+    fn parts_only_changes_the_instance_key_but_not_the_orbit_key() {
+        let model = test_shape_model();
+
+        assert_ne!(
+            model_instance_key(&model, None, 101, 0, false),
+            model_instance_key(&model, None, 101, 0, true)
+        );
+        assert_eq!(
+            model_orbit_reset_key(&model, 101),
+            (42, model.model_main.raw, 0, 101)
+        );
+    }
+
+    #[test]
+    fn attribute_options_pass_through_and_detect_submeshes() {
+        let mut model = test_shape_model();
+        assert!(!model_has_attribute_submeshes(&model));
+        assert!(model_attribute_options(&model).is_empty());
+
+        model.meshes[0].submesh = Some(test_attribute_submesh(
+            0x0000_0003,
+            &["atr_bv_a", "atr_lod"],
+        ));
+        assert!(model_has_attribute_submeshes(&model));
+        assert_eq!(
+            model_attribute_options(&model),
+            [
+                ModelAttributeOption {
+                    bit: 0x0000_0001,
+                    names: vec!["atr_bv_a".to_string()],
+                },
+                ModelAttributeOption {
+                    bit: 0x0000_0002,
+                    names: vec!["atr_lod".to_string()],
+                },
+            ]
+        );
+        assert_eq!(
+            attribute_option_label(&model_attribute_options(&model)[0]),
+            "atr_bv_a"
+        );
+        assert_eq!(
+            attribute_option_label(&ModelAttributeOption {
+                bit: 0x0000_0004,
+                names: Vec::new(),
+            }),
+            "Attribute 2"
+        );
+    }
+
+    #[test]
+    fn attribute_mask_toggle_and_item_scope_reset() {
+        let mut mask = 0_u32;
+        mask = toggle_attribute_mask(mask, 0x0000_0001, true);
+        mask = toggle_attribute_mask(mask, 0x0000_0004, true);
+        assert_eq!(mask, 0x0000_0005);
+        assert_eq!(toggle_attribute_mask(mask, 0x0000_0001, false), 0x0000_0004);
+
+        // 选择按物品 id 作用域：其他物品读回 0（全部关闭）。
+        let selection = (Some(42), 0x0000_0005);
+        assert_eq!(scoped_attribute_mask(selection, 42), 0x0000_0005);
+        assert_eq!(scoped_attribute_mask(selection, 43), 0);
+        assert_eq!(scoped_attribute_mask((None, 0x0000_0005), 42), 0);
+    }
+
+    #[test]
+    fn parts_only_selection_resets_on_item_switch() {
+        let selection = (Some(42), true);
+        assert!(scoped_attribute_parts_only(selection, 42));
+        assert!(!scoped_attribute_parts_only(selection, 43));
+        assert!(!scoped_attribute_parts_only((None, true), 42));
+    }
+
+    fn test_collection_item(equip_slot_category: u32, model_main: u64) -> CollectionItem {
+        CollectionItem {
+            id: 42,
+            kind: xiv_companion::CollectionKind::Equipment,
+            name: "test item".to_string(),
+            description: String::new(),
+            icon: 0,
+            item_ui_category: 0,
+            item_search_category: 0,
+            item_action: 0,
+            equip_slot_category,
+            slot_name: String::new(),
+            slot_order: 0,
+            level_item: 0,
+            level_equip: 0,
+            rarity: 0,
+            class_job_category: 0,
+            class_job_category_name: String::new(),
+            item_series: 0,
+            set_id: String::new(),
+            set_name: String::new(),
+            set_item_ids: Vec::new(),
+            expansion: String::new(),
+            patch: String::new(),
+            model_main,
+            model_sub: 0,
+            appearance_key: String::new(),
+        }
+    }
+
+    fn test_collection_catalog(items: Vec<CollectionItem>) -> CollectionCatalogPackage {
+        CollectionCatalogPackage {
+            schema_version: xiv_companion::COLLECTION_CATALOG_SCHEMA_VERSION,
+            generated_at: String::new(),
+            game_version: String::new(),
+            source: String::new(),
+            counts: xiv_companion::CollectionCatalogCounts {
+                items: items.len(),
+                equipment: items.len(),
+                ..Default::default()
+            },
+            items,
+        }
+    }
+
+    fn test_furniture_item(
+        id: u32,
+        kind: FurnitureModelKind,
+        model_key: u16,
+    ) -> FurnitureCatalogItem {
+        FurnitureCatalogItem {
+            id,
+            kind,
+            name: format!("furniture {id}"),
+            icon: 0,
+            model_key,
+        }
+    }
+
+    fn test_furniture_catalog(items: Vec<FurnitureCatalogItem>) -> FurnitureCatalogPackage {
+        let indoor = items
+            .iter()
+            .filter(|item| item.kind == FurnitureModelKind::Indoor)
+            .count();
+        FurnitureCatalogPackage {
+            schema_version: 1,
+            generated_at: String::new(),
+            game_version: String::new(),
+            source: String::new(),
+            counts: xiv_companion::FurnitureCatalogCounts {
+                items: items.len(),
+                indoor,
+                outdoor: items.len() - indoor,
+                skipped_missing_items: 0,
+            },
+            items,
+        }
+    }
+
+    fn test_chara_item(
+        id: u32,
+        kind: CharaModelKind,
+        model_id: u16,
+        chara_type: CharaModelType,
+    ) -> CharaCatalogItem {
+        CharaCatalogItem {
+            id,
+            kind,
+            name: format!("chara {id}"),
+            icon: 0,
+            model: PackedCharaModelId {
+                model_id,
+                base_id: 1,
+                variant_id: 1,
+                chara_type,
+            },
+        }
+    }
+
+    fn test_chara_catalog(items: Vec<CharaCatalogItem>) -> CharaCatalogPackage {
+        let minions = items
+            .iter()
+            .filter(|item| item.kind == CharaModelKind::Minion)
+            .count();
+        CharaCatalogPackage {
+            schema_version: 1,
+            generated_at: String::new(),
+            game_version: String::new(),
+            source: String::new(),
+            counts: xiv_companion::CharaCatalogCounts {
+                items: items.len(),
+                minions,
+                mounts: items.len() - minions,
+                skipped_empty_targets: 0,
+                skipped_unsupported_models: 0,
+                skipped_missing_items: 0,
+            },
+            items,
+        }
     }
 
     fn test_shape_model() -> WeaponModelData {
@@ -1641,6 +3269,18 @@ mod weapon_url_tests {
             shape_index_mask_hex: format!("0x{shape_index_mask:08X}"),
             shape_mesh_index: index,
             shape_value_count: 1,
+        }
+    }
+
+    fn test_attribute_submesh(mask: u32, names: &[&str]) -> xiv_companion::ModelSubmeshInfo {
+        xiv_companion::ModelSubmeshInfo {
+            index: 0,
+            table_index: 0,
+            attribute_index_mask: mask,
+            attribute_index_mask_hex: format!("0x{mask:08X}"),
+            attribute_names: names.iter().map(|name| name.to_string()).collect(),
+            bone_start_index: 0,
+            bone_count: 0,
         }
     }
 }

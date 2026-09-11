@@ -14,7 +14,7 @@ use crate::app::icons::{Icon, IconKind};
 use crate::app::inventory_state::{PersistedInventoryState, load_inventory_state};
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, DialogKeyAction, EmptyState,
-    dialog_key_action, input_class,
+    GitHubRepoButton, dialog_key_action, input_class,
 };
 use crate::app::utils::format_integer;
 
@@ -384,6 +384,7 @@ pub fn CollectionPage() -> Element {
                             span { "{format_integer(loaded.data.counts.items as f64)} 项" }
                             }
                         }
+                        GitHubRepoButton {}
                     }
                 }
                 if let Some(Ok(message)) = &storage_message_snapshot {

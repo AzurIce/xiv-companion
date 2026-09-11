@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{
-    CollectionPage, CraftingPage, HomePage, InventoryPage, NotesPage, SettingsPage,
-    WeaponModelsPage,
+    CollectionPage, CraftingPage, HomePage, InventoryPage, ModelPreviewPage, NotesPage,
+    SettingsPage,
 };
 use crate::app::ui::{Badge, BadgeVariant};
 
@@ -36,7 +36,7 @@ impl Route {
         match path {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
-            "/weapon-models" => Route::WeaponModels,
+            "/equipment-models" | "/weapon-models" => Route::WeaponModels,
             "/inventory" => Route::Inventory,
             "/collection" => Route::Collection,
             "/settings" => Route::Settings,
@@ -49,7 +49,7 @@ impl Route {
             Route::Home => "/",
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
-            Route::WeaponModels => "/weapon-models",
+            Route::WeaponModels => "/equipment-models",
             Route::Inventory => "/inventory",
             Route::Collection => "/collection",
             Route::Settings => "/settings",
@@ -61,7 +61,7 @@ impl Route {
             Route::Home => "首页",
             Route::Crafting => "合成检索",
             Route::Notes => "制作清单",
-            Route::WeaponModels => "武器模型",
+            Route::WeaponModels => "模型预览",
             Route::Inventory => "物品",
             Route::Collection => "图鉴",
             Route::Settings => "设置",
@@ -92,7 +92,7 @@ fn navigate(route: Route) {
 fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
-        "weapon-models" => IconKind::Sword,
+        "equipment-models" => IconKind::Box,
         "inventory" => IconKind::PackageSearch,
         "collection" => IconKind::BookOpen,
         "crafting" => IconKind::Wrench,
@@ -203,7 +203,7 @@ pub fn AppShell(route: Signal<Route>) -> Element {
     let shell_class = if collapsed() {
         "grid h-dvh min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground lg:grid-cols-[72px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     } else {
-        "grid h-dvh min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground lg:grid-cols-[240px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
+        "grid h-dvh min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground lg:grid-cols-[192px_minmax(0,1fr)] lg:transition-[grid-template-columns] lg:duration-300 lg:ease-out"
     };
 
     rsx! {
@@ -288,25 +288,12 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                 }
             }
             div { class: "border-t p-3",
-                div { class: "flex items-center gap-1.5",
-                    div { class: "min-w-0 flex-1",
-                        NavButton {
-                            label: "设置",
-                            route: Route::Settings,
-                            active: current == Route::Settings,
-                            icon: IconKind::Settings,
-                            collapsed: collapsed(),
-                        }
-                    }
-                    a {
-                        href: "https://github.com/AzurIce/xiv-companion",
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        title: "GitHub 仓库",
-                        aria_label: "GitHub 仓库",
-                        class: "flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                        Icon { kind: IconKind::Github, class: "h-4 w-4" }
-                    }
+                NavButton {
+                    label: "设置",
+                    route: Route::Settings,
+                    active: current == Route::Settings,
+                    icon: IconKind::Settings,
+                    collapsed: collapsed(),
                 }
             }
         }
@@ -330,6 +317,15 @@ fn MobileHeader(current: Route) -> Element {
                 div { class: "min-w-0 flex-1",
                     div { class: "text-sm font-semibold", "XIV Companion" }
                     div { class: "truncate text-xs text-muted-foreground", "{current.label()}" }
+                }
+                a {
+                    href: "https://github.com/AzurIce/xiv-companion",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    title: "GitHub 仓库",
+                    aria_label: "GitHub 仓库",
+                    class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                    Icon { kind: IconKind::Github, class: "h-4 w-4" }
                 }
             }
             nav { class: "flex gap-2 overflow-x-auto px-4 pb-3", aria_label: "模块",
@@ -373,10 +369,12 @@ fn PageContent(current: Route) -> Element {
             Route::Home => rsx! { HomePage {} },
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
-            Route::WeaponModels => rsx! { WeaponModelsPage {} },
+            Route::WeaponModels => rsx! { ModelPreviewPage {} },
             Route::Inventory => rsx! { InventoryPage {} },
             Route::Collection => rsx! { CollectionPage {} },
             Route::Settings => rsx! { SettingsPage {} },
         }
     }
 }
+
+

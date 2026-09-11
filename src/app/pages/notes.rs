@@ -25,7 +25,7 @@ use crate::app::market::{
 };
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, DialogKeyAction, EmptyState,
-    dialog_key_action, input_class,
+    GitHubRepoButton, dialog_key_action, input_class,
 };
 use crate::app::utils::{cx, format_integer};
 use xiv_companion::{
@@ -4850,6 +4850,7 @@ pub fn NotesPage() -> Element {
                             Badge { variant: BadgeVariant::Outline, "来源 {format_integer(data.counts.sources as f64)}" }
                         }
                     }
+                    GitHubRepoButton {}
                 }
             }
 

@@ -99,9 +99,9 @@ pub const APP_MODULES: &[AppModule] = &[
         capabilities: WEB_ONLY,
     },
     AppModule {
-        id: "weapon-models",
-        label: "武器模型",
-        href: "/weapon-models",
+        id: "equipment-models",
+        label: "模型预览",
+        href: "/equipment-models",
         group: ModuleGroup::Preview,
         status: ModuleStatus::Experimental,
         capabilities: LOCAL_DATA_REQUIRED,

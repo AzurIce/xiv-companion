@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::icons::{Icon, IconKind};
 use super::utils::cx;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,4 +180,19 @@ pub fn input_class(class: &str) -> String {
         "disabled:cursor-not-allowed disabled:opacity-50",
         class,
     ])
+}
+
+#[component]
+pub fn GitHubRepoButton() -> Element {
+    rsx! {
+        a {
+            href: "https://github.com/AzurIce/xiv-companion",
+            target: "_blank",
+            rel: "noopener noreferrer",
+            title: "GitHub 仓库",
+            aria_label: "GitHub 仓库",
+            class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+            Icon { kind: IconKind::Github, class: "h-4 w-4" }
+        }
+    }
 }

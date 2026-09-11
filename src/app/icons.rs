@@ -5,6 +5,7 @@ use dioxus_free_icons::{Icon as FreeIcon, IconShape};
 #[derive(Clone, Copy, PartialEq)]
 pub enum IconKind {
     BookOpen,
+    Box,
     ChevronDown,
     ChevronRight,
     CircleCheck,
@@ -50,6 +51,7 @@ pub enum IconKind {
 pub fn Icon(kind: IconKind, #[props(default = "h-4 w-4")] class: &'static str) -> Element {
     match kind {
         IconKind::BookOpen => render_icon(LdBookOpen, class),
+        IconKind::Box => render_icon(LdBox, class),
         IconKind::ChevronDown => render_icon(LdChevronDown, class),
         IconKind::ChevronRight => render_icon(LdChevronRight, class),
         IconKind::CircleCheck => render_icon(LdCircleCheck, class),

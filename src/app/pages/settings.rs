@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::app::collection_bridge::{load_bridge_url, mark_bridge_verified, save_bridge_url};
 use crate::app::icons::{Icon, IconKind};
-use crate::app::ui::{Button, ButtonVariant, input_class};
+use crate::app::ui::{Button, ButtonVariant, GitHubRepoButton, input_class};
 
 use super::settings_resources::ResourceSettingsSection;
 
@@ -29,8 +29,13 @@ pub fn SettingsPage() -> Element {
         div { class: "min-h-screen bg-background px-4 py-4 sm:px-5 lg:px-6",
             div { class: "mx-auto max-w-6xl space-y-4",
                 header { class: "border-b pb-2",
-                    div { class: "text-xs text-muted-foreground", "系统" }
-                    h1 { class: "text-xl font-semibold leading-tight", "设置" }
+                    div { class: "flex items-start justify-between gap-3",
+                        div {
+                            div { class: "text-xs text-muted-foreground", "系统" }
+                            h1 { class: "text-xl font-semibold leading-tight", "设置" }
+                        }
+                        GitHubRepoButton {}
+                    }
                 }
 
                 nav { class: "flex gap-1 border-b", aria_label: "设置分类",

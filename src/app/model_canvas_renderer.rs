@@ -8,7 +8,7 @@ use raw_window_handle::{
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
-use xiv_companion::renderer::{ModelRenderOptions, ModelRenderer};
+use xiv_companion::renderer::{ModelInstance, ModelRenderContext, ModelRenderOptions};
 use xiv_companion::{ModelRenderData, PreparedModelOptions};
 
 pub struct WebModelCanvasRenderer {
@@ -16,7 +16,8 @@ pub struct WebModelCanvasRenderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     depth_texture: wgpu::Texture,
-    renderer: ModelRenderer,
+    context: ModelRenderContext,
+    instance: Option<ModelInstance>,
     orbit: Rc<RefCell<OrbitState>>,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
     _on_mouse_move: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -26,11 +27,9 @@ pub struct WebModelCanvasRenderer {
 }
 
 impl WebModelCanvasRenderer {
-    pub async fn from_canvas<M: ModelRenderData + ?Sized>(
-        canvas: HtmlCanvasElement,
-        model: &M,
-        prepared_options: PreparedModelOptions,
-    ) -> Result<Self, String> {
+    /// 一次性异步初始化：WebGPU instance/surface/adapter/device 与模型无关的
+    /// 渲染 context（管线、后处理）。模型实例随后经 `set_model` 同步挂载。
+    pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -90,13 +89,7 @@ impl WebModelCanvasRenderer {
         };
         surface.configure(&device, &config);
         let depth_texture = create_depth_texture(&device, width, height);
-        let renderer = ModelRenderer::new_with_prepared_options(
-            device,
-            queue,
-            config.format,
-            model,
-            prepared_options,
-        );
+        let context = ModelRenderContext::new(device, queue, config.format);
         let orbit = Rc::new(RefCell::new(OrbitState::default()));
         let (on_mouse_down, on_mouse_move, on_mouse_up, on_wheel, on_context_menu) =
             install_orbit_handlers(&canvas, orbit.clone())?;
@@ -106,7 +99,8 @@ impl WebModelCanvasRenderer {
             surface,
             config,
             depth_texture,
-            renderer,
+            context,
+            instance: None,
             orbit,
             _on_mouse_down: on_mouse_down,
             _on_mouse_move: on_mouse_move,
@@ -116,8 +110,26 @@ impl WebModelCanvasRenderer {
         })
     }
 
+    /// 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与材质 bind group，
+    /// 不触碰设备、管线、surface 与轨道相机。
+    pub fn set_model<M: ModelRenderData + ?Sized>(
+        &mut self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+    ) {
+        self.instance = Some(self.context.create_model(model, prepared_options));
+    }
+
+    /// 物品切换时对齐重建画布的旧行为，重置轨道相机视角。
+    pub fn reset_orbit(&self) {
+        *self.orbit.borrow_mut() = OrbitState::default();
+    }
+
     pub fn render_with_options(&mut self, options: ModelRenderOptions) {
         self.resize_to_client();
+        let Some(instance) = &self.instance else {
+            return;
+        };
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -133,7 +145,8 @@ impl WebModelCanvasRenderer {
             .depth_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let orbit = self.orbit.borrow();
-        self.renderer.render_to(
+        self.context.render(
+            instance,
             &view,
             &depth_view,
             [self.config.width, self.config.height],
@@ -147,7 +160,9 @@ impl WebModelCanvasRenderer {
     }
 
     pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
-        self.renderer.update_materials(model);
+        if let Some(instance) = &mut self.instance {
+            instance.update_materials(&self.context, model);
+        }
     }
 
     pub fn canvas_connected(&self) -> bool {
@@ -164,8 +179,8 @@ impl WebModelCanvasRenderer {
             self.canvas.set_height(height);
             self.config.width = width;
             self.config.height = height;
-            self.surface.configure(self.renderer.device(), &self.config);
-            self.depth_texture = create_depth_texture(self.renderer.device(), width, height);
+            self.surface.configure(self.context.device(), &self.config);
+            self.depth_texture = create_depth_texture(self.context.device(), width, height);
         }
     }
 }

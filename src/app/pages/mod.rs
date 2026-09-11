@@ -13,4 +13,4 @@ pub use home::HomePage;
 pub use inventory::InventoryPage;
 pub use notes::NotesPage;
 pub use settings::SettingsPage;
-pub use weapon_models::WeaponModelsPage;
+pub use weapon_models::ModelPreviewPage;

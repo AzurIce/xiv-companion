@@ -18,7 +18,9 @@ use crate::app::inventory_bridge::{InventoryBridgeConnection, InventoryBridgeUpd
 use crate::app::inventory_state::{
     PersistedInventoryState, load_inventory_state, save_inventory_state,
 };
-use crate::app::ui::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, input_class};
+use crate::app::ui::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, GitHubRepoButton, input_class,
+};
 use crate::app::utils::format_integer;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,6 +190,7 @@ pub fn InventoryPage() -> Element {
                         Icon { kind: IconKind::RotateCcw, class: "h-4 w-4" }
                         if refreshing() { "刷新中" } else { "全量刷新" }
                     }
+                    GitHubRepoButton {}
                 }
             }
 
