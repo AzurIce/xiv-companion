@@ -20,6 +20,19 @@ When modifying `xiv-companion-data` parsing or texture/material baking, compare 
 against these references before changing assumptions. Keep fixes small and add focused tests for
 each semantic correction.
 
+Additional references:
+
+- `third_party/Meddle` is a shallow clone of `PassiveModding/Meddle` (gitignored) for machines
+  where the Windows paths above are unavailable. Note that Meddle resolves model paths at runtime
+  and does not construct them; for SqPack path construction semantics (equipment/accessory
+  `chara/equipment|accessory`, monster/demihuman `chara/monster|demihuman`, housing
+  `bgcommon/hou` SGB) the authority is
+  [xivModdingFramework](https://github.com/TexTools/xivModdingFramework) (`Models/FileTypes/Mdl.cs`,
+  `Materials/FileTypes/Mtrl.cs`, `Items/Categories/{Gear,Housing,Companions}.cs`,
+  `General/XivModelChara.cs`).
+- EXD table shapes without a game install: `ffxiv-datamining-cn` CSV exports (see README data
+  sources).
+
 ## Local Development Servers
 
 Do not start a local development server unless the user explicitly asks for one. This includes

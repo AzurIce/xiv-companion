@@ -21,6 +21,8 @@ Key 是资源类型的稳定字符串。目前存在：
 | `craft-data` | `CraftDataPackage` JSON |
 | `weapon-catalog` | `WeaponCatalogPackage` JSON |
 | `collection-catalog` | `CollectionCatalogPackage` JSON |
+| `furniture-catalog` | `FurnitureCatalogPackage` JSON |
+| `chara-catalog` | `CharaCatalogPackage` JSON |
 
 ### Value
 

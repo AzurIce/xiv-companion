@@ -60,6 +60,31 @@ the inner `game` directory with `--game-dir`. The optional
 The command writes the generated resource JSON files and audits exchange data
 by default.
 
+The furniture catalog does not require a game install; it joins the datamining
+`HousingFurniture.csv` / `HousingYardObject.csv` ModelKey→item mapping with the
+existing `craft-data.json`:
+
+```bash
+cargo run -p xtask-update-craft-data -- --furniture-catalog \
+  --housing-furniture-csv /path/to/HousingFurniture.csv \
+  --housing-yard-object-csv /path/to/HousingYardObject.csv
+```
+
+Without explicit CSV paths the files are read from `--datamining-repo` or
+downloaded from ffxiv-datamining-cn with `curl`.
+
+The chara catalog (minions and mounts) works the same way: it joins the
+datamining `ItemAction` / `Companion` / `Mount` / `ModelChara` tables with the
+item links already present in `collection-catalog.json`:
+
+```bash
+cargo run -p xtask-update-craft-data -- --chara-catalog \
+  --item-action-csv /path/to/ItemAction.csv \
+  --companion-csv /path/to/Companion.csv \
+  --mount-csv /path/to/Mount.csv \
+  --model-chara-csv /path/to/ModelChara.csv
+```
+
 ## Data Sources And Acknowledgements
 
 XIV Companion derives its primary game data from the user's local FINAL
@@ -67,8 +92,10 @@ FANTASY XIV installation. Release metadata that is not present directly in the
 current EXD tables is supplemented from these community projects:
 
 - [ffxiv-datamining-cn](https://github.com/thewakingsands/ffxiv-datamining-cn)
-  provides `Item.csv` history for first-seen patch detection and `ExVersion`
-  boundaries for expansion-level fallback.
+  provides `Item.csv` history for first-seen patch detection, `ExVersion`
+  boundaries for expansion-level fallback, and the `HousingFurniture` /
+  `HousingYardObject` / `ItemAction` / `Companion` / `Mount` / `ModelChara`
+  tables behind the furniture and chara catalogs.
 - [GarlandTools](https://github.com/ufx/GarlandTools) provides historical item
   patch metadata for releases before patch 4.45. The source is pinned to commit
   `04cadd2e1e0de86c20aa9303faa082c7971f8d8b`; newer release metadata is not

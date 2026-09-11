@@ -8,3 +8,5 @@ assets/version.json
 tmp_*.csv
 .direnv
 .codex-logs
+third_party/Meddle/
+third_party/MeddleTools/

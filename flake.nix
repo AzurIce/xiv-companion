@@ -51,10 +51,14 @@
               just
               lld
               tailwindcss_4
+              vulkan-loader
             ]
             ++ [
               (pkgs.callPackage ./wasm-bindgen-cli.nix { })
             ];
+
+          # native wgpu render tests dlopen libvulkan at runtime
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
         };
       }
     );
