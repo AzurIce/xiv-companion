@@ -5,10 +5,11 @@ pub mod renderer;
 pub mod test_support;
 
 pub use model::{
-    BakedColorTableMaps, ColorTableRowColors, MaterialAlphaMode, MaterialCharacterScrollVariant,
-    MaterialDecalColorMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightShaftType,
-    MaterialLightingMode, MaterialRenderMode, MaterialShaderFamily, MaterialSkinValueMode,
-    MaterialSubColorMode, MaterialValueMode, ModelBounds, ModelData, ModelMaterial,
+    BakedColorTableMaps, CharacterAppearanceColors, ColorTableRowColors, MaterialAlphaMode,
+    MaterialCharacterScrollVariant, MaterialDecalColorMode, MaterialDrawDepthMode,
+    MaterialFlowMode, MaterialLightShaftType, MaterialLightingMode, MaterialRenderMode,
+    MaterialShaderFamily, MaterialSkinValueMode, MaterialSubColorMode, MaterialValueMode,
+    ModelBounds, ModelData, ModelMaterial, ModelMaterialCharacterColors,
     ModelMaterialTextureArrays, ModelMesh, ModelMeshDrawRole, ModelRenderData, ModelShapeInfo,
     ModelShapeTarget, ModelShapeVertexDelta, ModelSubmeshInfo, ModelTexture, ModelTextureKind,
     ModelTextureTexelLayout, ModelVertex, PackedModelId, PreparedAlphaSource, PreparedMaterial,

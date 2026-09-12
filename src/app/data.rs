@@ -8,19 +8,22 @@ use crate::app::resource_settings::{
     ResourceSettings, configured_web_resource_hub, configured_web_resource_hub_for,
 };
 use crate::app::resources::{
-    load_chara_model_from_local, load_equipment_model_from_local, load_furniture_model_from_local,
-    load_weapon_model_from_local, load_weapon_staining_templates_from_local,
+    load_chara_model_with_skeleton_from_local, load_equipment_model_from_local,
+    load_furniture_model_from_local, load_weapon_model_from_local,
+    load_weapon_staining_templates_from_local,
 };
 use xiv_companion::{
     CharaCatalogId, CharaCatalogItem, CharaCatalogPackage, CharaCatalogResource, CharaModelId,
-    CollectionCatalogId, CollectionCatalogPackage, CollectionCatalogResource, CollectionItem,
-    CraftDataId, CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe,
-    CraftTreeNode, EquipmentModelId, FurnitureCatalogId, FurnitureCatalogItem,
-    FurnitureCatalogPackage, FurnitureCatalogResource, FurnitureModelId, ItemIconId,
-    ItemIconResource, ItemIconResourceInfo, ItemSource, MaterialSummary, ResourceMetadata,
-    ResourceSource, SourceChoice, WeaponCatalogId, WeaponCatalogPackage, WeaponCatalogResource,
-    WeaponModelData, WeaponModelId, WeaponStainingTemplates, apply_weapon_model_stains,
-    build_craft_tree, craftable_recipes as planner_craftable_recipes, create_craft_data_index,
+    CharacterMakeId, CharacterMakePackage, CharacterMakeResource, CharacterPaletteId,
+    CharacterPalettePackage, CharacterPaletteResource, CollectionCatalogId,
+    CollectionCatalogPackage, CollectionCatalogResource, CollectionItem, CraftDataId,
+    CraftDataIndex, CraftDataPackage, CraftDataResource, CraftItem, CraftRecipe, CraftTreeNode,
+    EquipmentModelId, FurnitureCatalogId, FurnitureCatalogItem, FurnitureCatalogPackage,
+    FurnitureCatalogResource, FurnitureModelId, ItemIconId, ItemIconResource, ItemIconResourceInfo,
+    ItemSource, MaterialSummary, ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId,
+    WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId,
+    WeaponStainingTemplates, apply_weapon_model_stains, build_craft_tree,
+    craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
     source_label as planner_source_label, source_priority as planner_source_priority,
@@ -144,15 +147,31 @@ pub async fn load_furniture_model(
     Ok(Rc::new(data))
 }
 
-pub async fn load_chara_model(item: &CharaCatalogItem) -> Result<Rc<WeaponModelData>, String> {
-    let data = load_chara_model_from_local(CharaModelId {
-        item_id: item.id,
-        item_name: item.name.clone(),
-        kind: item.kind,
-        model: item.model,
-    })
-    .await?;
-    Ok(Rc::new(data))
+/// 宠物/坐骑加载（动画增强版）：模型 + 骨架 + 动画集一并返回；骨架/动画集
+/// 缺失（sklb/pap 不可读）时为 `None`，不视为加载错误。
+pub async fn load_chara_model_with_animation_assets(
+    item: &CharaCatalogItem,
+) -> Result<
+    (
+        Rc<WeaponModelData>,
+        Option<Rc<xiv_companion::ModelSkeleton>>,
+        Option<Rc<xiv_companion::ModelAnimationSet>>,
+    ),
+    String,
+> {
+    let (data, skeleton, animations) =
+        load_chara_model_with_skeleton_from_local(CharaModelId {
+            item_id: item.id,
+            item_name: item.name.clone(),
+            kind: item.kind,
+            model: item.model,
+        })
+        .await?;
+    Ok((
+        Rc::new(data),
+        skeleton.map(Rc::new),
+        animations.map(Rc::new),
+    ))
 }
 
 pub async fn load_weapon_staining_templates() -> Result<Rc<WeaponStainingTemplates>, String> {
@@ -194,6 +213,24 @@ pub async fn load_furniture_catalog() -> Result<Rc<FurnitureCatalogPackage>, Str
 pub async fn load_chara_catalog() -> Result<Rc<CharaCatalogPackage>, String> {
     let data = configured_web_resource_hub()
         .load::<CharaCatalogResource>(CharaCatalogId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
+/// 加载捏脸菜单资产（角色组装器使用）。
+pub async fn load_character_make() -> Result<Rc<CharacterMakePackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<CharacterMakeResource>(CharacterMakeId::Default)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Rc::new(data))
+}
+
+/// 加载角色调色板资产（角色组装器使用）。
+pub async fn load_character_palette() -> Result<Rc<CharacterPalettePackage>, String> {
+    let data = configured_web_resource_hub()
+        .load::<CharacterPaletteResource>(CharacterPaletteId::Default)
         .await
         .map_err(|error| error.to_string())?;
     Ok(Rc::new(data))

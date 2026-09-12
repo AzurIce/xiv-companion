@@ -1,3 +1,4 @@
+mod character;
 pub mod collection;
 pub mod crafting;
 pub mod home;
@@ -7,6 +8,7 @@ pub mod settings;
 mod settings_resources;
 pub mod weapon_models;
 
+pub use character::CharacterPage;
 pub use collection::CollectionPage;
 pub use crafting::CraftingPage;
 pub use home::HomePage;

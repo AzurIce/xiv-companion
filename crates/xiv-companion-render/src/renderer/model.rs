@@ -6,12 +6,12 @@ use xiv_companion_data::MaterialSpecularType;
 
 use crate::{
     MaterialAlphaMode, MaterialDrawDepthMode, MaterialFlowMode, MaterialLightingMode,
-    MaterialRenderMode, MaterialShaderFamily, MaterialValueMode, ModelMaterial, ModelMeshDrawRole,
-    ModelRenderData, ModelTexture, ModelTextureKind, PreparedAlphaSource, PreparedMaterial,
-    PreparedMaterialUnsupportedInputs, PreparedModelOptions, PreparedRenderPass,
-    PreparedTextureAddressMode, PreparedTextureColorSpace, PreparedTextureFilter,
-    PreparedTextureSampling, PreparedUvSource, model_mesh_vertices_with_shape_mask,
-    prepare_model_for_render_with_options,
+    MaterialRenderMode, MaterialShaderFamily, MaterialSkinValueMode, MaterialValueMode,
+    ModelMaterial, ModelMeshDrawRole, ModelRenderData, ModelTexture, ModelTextureKind,
+    PreparedAlphaSource, PreparedMaterial, PreparedMaterialUnsupportedInputs, PreparedModelOptions,
+    PreparedRenderPass, PreparedTextureAddressMode, PreparedTextureColorSpace,
+    PreparedTextureFilter, PreparedTextureSampling, PreparedUvSource, material_shader_family,
+    model_mesh_vertices_with_shape_mask, prepare_model_for_render_with_options,
 };
 
 // HDR intermediate format for the scene/bloom attachments. `Rgba16Float`
@@ -23,6 +23,14 @@ const DEFAULT_EXPOSURE: f32 = 1.0;
 /// Scene-linear bloom threshold: only HDR highlights (above display white)
 /// contribute to the bright pass.
 const BLOOM_THRESHOLD: f32 = 1.0;
+
+/// 实例 joint 表上限（bone storage buffer 预分配 256×64B）。FFXIV 模型骨骼数
+/// 远小于此（角色骨架约 200、怪物几十），超出截断并记日志。
+const MAX_JOINTS: usize = 256;
+/// joint storage buffer 头（u32 joint 数 + 12 字节对齐填充）大小。
+const JOINT_STORAGE_HEADER_SIZE: wgpu::BufferAddress = 16;
+/// joint storage buffer 总大小：头 + 256 个 mat4。
+const JOINT_STORAGE_BUFFER_SIZE: wgpu::BufferAddress = 16 + (MAX_JOINTS as u64) * 64;
 
 // Stable camera-relative preview-lighting contract. These coefficients define
 // the key direction in the camera basis and intentionally live outside
@@ -209,6 +217,7 @@ pub struct ModelRenderContext {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     material_bind_group_layout: wgpu::BindGroupLayout,
+    joint_bind_group_layout: wgpu::BindGroupLayout,
     post_sampler: wgpu::Sampler,
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
@@ -220,6 +229,8 @@ pub struct ModelRenderContext {
 /// 单个模型的 GPU 实例：顶点/索引缓冲、透明索引缓冲、绘制批次、材质 bind
 /// group（含按批次去重的纹理缓存，随实例生命周期）与模型包围盒。由
 /// [`ModelRenderContext::create_model`] 同步创建，切换模型时整体替换。
+/// 蒙皮 joint 矩阵在实例级 group(2) storage buffer（`update_joint_matrices`
+/// 增量更新，材质重建不影响）。
 pub struct ModelInstance {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -228,6 +239,10 @@ pub struct ModelInstance {
     material_bind_groups: Vec<wgpu::BindGroup>,
     bounds_center: [f32; 3],
     bounds_radius: f32,
+    joint_buffer: wgpu::Buffer,
+    joint_bind_group: wgpu::BindGroup,
+    joint_count: usize,
+    joint_names: Vec<String>,
 }
 
 pub struct ModelRenderer {
@@ -262,6 +277,19 @@ impl ModelRenderer {
         Self::from_context(context, model, prepared_options)
     }
 
+    /// [`new_with_prepared_options`] 的骨架版：实例携带 rest pose 关节矩阵。
+    pub fn new_with_skeleton_and_prepared_options<M: ModelRenderData + ?Sized>(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    ) -> Self {
+        let context = ModelRenderContext::new(device, queue, format);
+        Self::from_context_with_skeleton(context, model, prepared_options, skeleton)
+    }
+
     /// 在既有 context 上为 `model` 创建实例。复用调用方持有的管线与后处理
     /// 状态，避免跨模型切换时重复初始化设备与编译管线。
     pub fn from_context<M: ModelRenderData + ?Sized>(
@@ -270,6 +298,17 @@ impl ModelRenderer {
         prepared_options: PreparedModelOptions,
     ) -> Self {
         let instance = context.create_model(model, prepared_options);
+        Self { context, instance }
+    }
+
+    /// [`from_context`] 的骨架版。
+    pub fn from_context_with_skeleton<M: ModelRenderData + ?Sized>(
+        context: ModelRenderContext,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    ) -> Self {
+        let instance = context.create_model_with_skeleton(model, prepared_options, skeleton);
         Self { context, instance }
     }
 
@@ -287,8 +326,31 @@ impl ModelRenderer {
         self.instance = self.context.create_model(model, prepared_options);
     }
 
+    /// [`set_model`] 的骨架版：joint 表与 storage buffer 随实例重建。
+    pub fn set_model_with_skeleton<M: ModelRenderData + ?Sized>(
+        &mut self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    ) {
+        self.instance = self
+            .context
+            .create_model_with_skeleton(model, prepared_options, skeleton);
+    }
+
     pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
         self.instance.update_materials(&self.context, model);
+    }
+
+    /// 实例 joint 名表（顶点 joints 槽位对应顺序；无骨架为空）。
+    pub fn joint_names(&self) -> &[String] {
+        self.instance.joint_names()
+    }
+
+    /// 覆盖实例 joint 矩阵（世界 × inverse(bind world)，数据层
+    /// `joint_matrices`/`SkeletonInverseBindCache` 计算），立即生效于后续渲染。
+    pub fn update_joint_matrices(&mut self, matrices: &[[f32; 16]]) {
+        self.instance.update_joint_matrices(&self.context, matrices);
     }
 
     pub fn render_to(
@@ -629,7 +691,38 @@ impl ModelRenderContext {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 31,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 32,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
+            });
+
+        let joint_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("model joint bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
             });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -637,6 +730,7 @@ impl ModelRenderContext {
             bind_group_layouts: &[
                 Some(&camera_bind_group_layout),
                 Some(&material_bind_group_layout),
+                Some(&joint_bind_group_layout),
             ],
             immediate_size: 0,
         });
@@ -917,6 +1011,7 @@ impl ModelRenderContext {
             camera_buffer,
             camera_bind_group,
             material_bind_group_layout,
+            joint_bind_group_layout,
             post_sampler,
             compose_uniform_buffer,
             blur_bind_group_layout,
@@ -935,7 +1030,24 @@ impl ModelRenderContext {
         model: &M,
         prepared_options: PreparedModelOptions,
     ) -> ModelInstance {
-        let (vertices, indices, draw_batches) = flatten_model_with_options(model, prepared_options);
+        self.create_model_with_skeleton(model, prepared_options, None)
+    }
+
+    /// [`ModelRenderContext::create_model`] 的骨架版：`skeleton` 为 Some 时
+    /// 构建实例 joint 表（全部渲染 mesh bone_table 名并集，按名→骨骼索引），
+    /// 顶点 blend 索引重映射为实例 joint 下标，预分配 joint storage buffer 并
+    /// 上传 rest pose 关节矩阵（world × inverse(bind world)，rest 输出恒等）。
+    /// 无骨架时 joint 数 0，shader 走原路径。bone storage 上限 256 个 mat4，
+    /// 超出截断并记日志。材质更新（`ModelInstance::update_materials`）只重建
+    /// group(1)，joint 绑定在 group(2) 不受影响。
+    pub fn create_model_with_skeleton<M: ModelRenderData + ?Sized>(
+        &self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    ) -> ModelInstance {
+        let (vertices, indices, draw_batches, joint_names) =
+            flatten_model_with_options_and_skeleton(model, prepared_options, skeleton);
         let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
             .unwrap_or((model.bounds().center, model.bounds().radius));
         let vertex_buffer = self
@@ -970,6 +1082,8 @@ impl ModelRenderContext {
             model,
             &draw_batches,
         );
+        let (joint_buffer, joint_bind_group, joint_count) =
+            self.create_joint_binding(skeleton, &joint_names);
         ModelInstance {
             vertex_buffer,
             index_buffer,
@@ -978,7 +1092,66 @@ impl ModelRenderContext {
             material_bind_groups,
             bounds_center,
             bounds_radius,
+            joint_buffer,
+            joint_bind_group,
+            joint_count,
+            joint_names,
         }
+    }
+
+    /// 预分配 joint storage buffer（STORAGE|COPY_DST，头 + 256×64B）并构建
+    /// group(2) bind group。有骨架时上传 rest pose 关节矩阵；无骨架 joint 数 0。
+    fn create_joint_binding(
+        &self,
+        skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+        joint_names: &[String],
+    ) -> (wgpu::Buffer, wgpu::BindGroup, usize) {
+        let joint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("model joint storage buffer"),
+            size: JOINT_STORAGE_BUFFER_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let joint_count = match skeleton {
+            Some(_) => joint_names.len().min(MAX_JOINTS),
+            None => 0,
+        };
+        if joint_names.len() > MAX_JOINTS {
+            eprintln!(
+                "model skinning: joint table truncated from {} to {MAX_JOINTS}",
+                joint_names.len()
+            );
+        }
+        self.queue.write_buffer(
+            &joint_buffer,
+            0,
+            bytemuck::bytes_of(&JointStorageHeader {
+                count: joint_count as u32,
+                _pad: [0; 3],
+            }),
+        );
+        if let Some(skeleton) = skeleton.filter(|_| joint_count > 0) {
+            let rest_pose = xiv_companion_data::SkeletonPose::rest_pose(skeleton);
+            let matrices = xiv_companion_data::joint_matrices(
+                skeleton,
+                &rest_pose,
+                &joint_names[..joint_count],
+            );
+            self.queue.write_buffer(
+                &joint_buffer,
+                JOINT_STORAGE_HEADER_SIZE,
+                bytemuck::cast_slice(&matrices),
+            );
+        }
+        let joint_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("model joint bind group"),
+            layout: &self.joint_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: joint_buffer.as_entire_binding(),
+            }],
+        });
+        (joint_buffer, joint_bind_group, joint_count)
     }
 
     pub fn render(
@@ -1064,6 +1237,7 @@ impl ModelRenderContext {
             });
 
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(2, &model.joint_bind_group, &[]);
             render_pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
             render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -1280,6 +1454,7 @@ impl ModelRenderContext {
 impl ModelInstance {
     /// 按当前模型数据重建材质 bind group（染色等材质增量更新路径）。
     /// 纹理去重缓存随本次重建重新填充，批次共享语义与创建时一致。
+    /// joint 绑定在 group(2)，本操作不触碰。
     pub fn update_materials<M: ModelRenderData + ?Sized>(
         &mut self,
         context: &ModelRenderContext,
@@ -1291,6 +1466,31 @@ impl ModelInstance {
             &context.material_bind_group_layout,
             model,
             &self.draw_batches,
+        );
+    }
+
+    /// 蒙皮实例的 joint 名表（与顶点 joints 槽位一一对应）；无骨架实例为空。
+    pub fn joint_names(&self) -> &[String] {
+        &self.joint_names
+    }
+
+    /// 当前生效的 joint 数（≤256；无骨架为 0）。
+    pub fn joint_count(&self) -> usize {
+        self.joint_count
+    }
+
+    /// 覆盖 joint 矩阵（世界 × inverse(bind world)，由数据层
+    /// `joint_matrices`/`SkeletonInverseBindCache` 计算）。长度按实例 joint
+    /// 数截断，经 queue.write_buffer 写进 storage buffer。
+    pub fn update_joint_matrices(&mut self, context: &ModelRenderContext, matrices: &[[f32; 16]]) {
+        let count = matrices.len().min(self.joint_count).min(MAX_JOINTS);
+        if count == 0 {
+            return;
+        }
+        context.queue.write_buffer(
+            &self.joint_buffer,
+            JOINT_STORAGE_HEADER_SIZE,
+            bytemuck::cast_slice(&matrices[..count]),
         );
     }
 }
@@ -1394,17 +1594,33 @@ fn flatten_model<M: ModelRenderData + ?Sized>(
     flatten_model_with_options(model, PreparedModelOptions::default())
 }
 
+#[cfg(test)]
 fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_options: PreparedModelOptions,
 ) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
+    let (vertices, indices, draw_batches, _joint_names) =
+        flatten_model_with_options_and_skeleton(model, prepared_options, None);
+    (vertices, indices, draw_batches)
+}
+
+/// 展平几何 + 构建实例 joint 表。`skeleton` 为 Some 时，全部渲染 mesh 的
+/// bone_table 名按首见顺序并入实例 joint 表，顶点 blend 索引（bone_table
+/// 绝对下标）经 `bone_table 名 → joint 下标` 重映射；无骨架时 joint 表为空、
+/// 顶点写默认槽位（joint 数 0 的旧 shader 分支）。
+fn flatten_model_with_options_and_skeleton<M: ModelRenderData + ?Sized>(
+    model: &M,
+    prepared_options: PreparedModelOptions,
+    skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>, Vec<String>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
+    let mut joint_names: Vec<String> = Vec::new();
 
-    let prepared_model = prepare_model_for_render_with_options(model, prepared_options);
+    let prepared_model = prepare_model_for_render_with_options(model, prepared_options.clone());
     let component_offsets =
-        model_component_preview_offsets(model, &prepared_model, prepared_options);
+        model_component_preview_offsets(model, &prepared_model, &prepared_options);
     for prepared_mesh in &prepared_model.meshes {
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
@@ -1425,12 +1641,20 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
             .copied()
             .unwrap_or([0.0; 3]);
         let base = vertices.len() as u32;
+
+        let skinning = skeleton
+            .is_some_and(|skeleton| register_mesh_joint_names(mesh, skeleton, &mut joint_names));
+        let bone_table = skinning.then(|| mesh.bone_table.as_ref()).flatten();
         vertices.extend(mesh_vertices.iter().map(|vertex| {
-            let mut vertex = GpuVertex::from_model_vertex(vertex);
-            for (position, offset) in vertex.position.iter_mut().zip(component_offset) {
+            let mut gpu_vertex = GpuVertex::from_model_vertex(vertex);
+            for (position, offset) in gpu_vertex.position.iter_mut().zip(component_offset) {
                 *position += offset;
             }
-            vertex
+            if let Some(bone_table) = bone_table {
+                let (joints, weights) = remap_vertex_skinning(vertex, bone_table, &joint_names);
+                gpu_vertex = gpu_vertex.with_skinning(joints, weights);
+            }
+            gpu_vertex
         }));
         let index_start = indices.len() as u32;
         indices.extend(mesh.indices.iter().map(|index| base + *index));
@@ -1454,15 +1678,77 @@ fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
         });
     }
 
-    (vertices, indices, draw_batches)
+    (vertices, indices, draw_batches, joint_names)
+}
+
+/// mesh 的 bone_table 名按表序并入实例 joint 表（去重，首见顺序）。skeleton
+/// 参数仅用于确认按名匹配可用（缺失名回退单位阵 joint，见 joint_matrices）。
+fn register_mesh_joint_names(
+    mesh: &crate::ModelMesh,
+    _skeleton: &xiv_companion_data::ModelSkeleton,
+    joint_names: &mut Vec<String>,
+) -> bool {
+    let Some(bone_table) = &mesh.bone_table else {
+        return false;
+    };
+    for name in bone_table.bone_names.iter().flatten() {
+        if joint_names.len() >= MAX_JOINTS {
+            eprintln!(
+                "model skinning: joint table truncated at {MAX_JOINTS} bones (mesh {})",
+                mesh.path
+            );
+            break;
+        }
+        if !joint_names.iter().any(|existing| existing == name) {
+            joint_names.push(name.clone());
+        }
+    }
+    true
+}
+
+/// 顶点 blend 数据 → 8 槽实例 joint 索引 + 原始权重。blend 索引是 **MDL
+/// bone_table 的绝对下标**（submesh 的 bone_start_index/bone_count 只是该
+/// submesh 引用窗口的声明，不参与重映射——对 d0001e0001_dwn 实测：按窗口
+/// 偏移重映射会把 submesh 网格撕碎，绝对下标边长守恒）。名缺失/越界回退
+/// joint 0（该 joint 矩阵由数据层回退为单位阵语义由 joint_matrices 保证；
+/// 真实数据不会触发）。
+fn remap_vertex_skinning(
+    vertex: &crate::ModelVertex,
+    bone_table: &xiv_companion_data::ModelBoneTable,
+    joint_names: &[String],
+) -> ([u8; 8], [f32; 8]) {
+    let default = ([0u8; 8], [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let (Some(blend_weights), Some(blend_indices)) = (vertex.blend_weights, vertex.blend_indices)
+    else {
+        return default;
+    };
+    let slots = usize::from(blend_weights.count).clamp(1, 8);
+    let mut joints = [0u8; 8];
+    let mut weights = [0.0f32; 8];
+    for slot in 0..slots {
+        let window = usize::from(blend_indices.values[slot]);
+        joints[slot] = bone_table
+            .bone_names
+            .get(window)
+            .and_then(|name| name.as_ref())
+            .and_then(|name| joint_names.iter().position(|existing| existing == name))
+            .map(|joint| joint.min(u8::MAX as usize) as u8)
+            .unwrap_or(0);
+        weights[slot] = blend_weights.values[slot];
+    }
+    (joints, weights)
 }
 
 fn model_component_preview_offsets<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_model: &crate::PreparedModel,
-    prepared_options: PreparedModelOptions,
+    prepared_options: &PreparedModelOptions,
 ) -> Vec<[f32; 3]> {
     let mut offsets = vec![[0.0; 3]; model.meshes().len()];
+    // 角色拼装等原位布局：全零偏移，全部件按游戏坐标重叠。
+    if !prepared_options.component_preview_layout {
+        return offsets;
+    }
     let Some(max_component) = prepared_model
         .meshes
         .iter()
@@ -2157,6 +2443,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     let uv_sources = material_uv_source_params(prepared_material);
     let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
     let sheen_sphere_params = material_sheen_sphere_params(material, prepared_material);
+    let character_channels = material_character_color_channels(material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -2217,7 +2504,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         render: [
             render_mode_value(material.render_mode),
             material.opacity,
-            alpha_mode_value(material.alpha_mode),
+            alpha_mode_value_for_pass(material, prepared_material),
             material.alpha_threshold.clamp(0.0, 1.0),
         ],
         alpha_params: material_alpha_params(material),
@@ -2266,6 +2553,16 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         draw_role_params: draw_role_params(draw_role),
         debug_color: draw_role_debug_color(draw_role),
         unsupported_color: unsupported_inputs_diagnostic_color(prepared_material),
+        character_skin: character_channels.skin,
+        character_lip: character_channels.lip,
+        character_main: character_channels.main,
+        character_mesh: character_channels.mesh,
+        character_left_iris: character_channels.left_iris,
+        character_right_iris: character_channels.right_iris,
+        character_option: character_channels.option,
+        character_decal: character_channels.decal,
+        character_decal_uv: character_channels.decal_uv,
+        character_params: character_channels.params,
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -2888,6 +3185,49 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         "weapon detail array pair sampler",
         prepared_material.texture_sampling.detail_diffuse_array,
     );
+    // 面妆 decal：仅 skin family 且数据层挂接了 decal 贴图时非退化；其余材质
+    // 绑定 1×1 全零透明占位（has-texture 标记为 0，WGSL 不采样其内容）。
+    let (decal_key, decal_label) = material
+        .character_colors
+        .as_ref()
+        .and_then(|character| character.decal_texture)
+        .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
+        .map(|(index, texture)| {
+            (
+                MaterialTextureKey::Mipped {
+                    index,
+                    semantic: RgbaMipSemantic::SrgbColor,
+                },
+                format!("weapon face decal texture {}", texture.path),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                MaterialTextureKey::MippedFallback {
+                    rgba: [255, 255, 255, 0],
+                    semantic: RgbaMipSemantic::SrgbColor,
+                },
+                "weapon transparent face decal texture".to_string(),
+            )
+        });
+    let decal_texture_view = cached_material_texture(
+        device,
+        queue,
+        model.textures(),
+        texture_cache,
+        decal_key,
+        &decal_label,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let decal_sampler = create_sampler_for_sampling(
+        device,
+        "weapon face decal sampler",
+        PreparedTextureSampling {
+            color_space: PreparedTextureColorSpace::Srgb,
+            filter: PreparedTextureFilter::Linear,
+            address_mode: PreparedTextureAddressMode::ClampToEdge,
+        },
+    );
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("weapon material bind group"),
@@ -3016,6 +3356,14 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 30,
                 resource: wgpu::BindingResource::Sampler(&detail_array_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 31,
+                resource: wgpu::BindingResource::TextureView(&decal_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 32,
+                resource: wgpu::BindingResource::Sampler(&decal_sampler),
             },
         ],
     })
@@ -3942,6 +4290,7 @@ fn fallback_material() -> ModelMaterial {
         color_dye_table: None,
         color_table_rows: None,
         staining_application: None,
+        character_colors: None,
         texture_arrays: crate::ModelMaterialTextureArrays::default(),
         fallback_color: [0.78, 0.72, 0.64],
         diffuse_color: [0.78, 0.72, 0.64],
@@ -4226,6 +4575,30 @@ fn material_is_character_legacy(material: &ModelMaterial) -> bool {
         .is_some_and(|name| name.eq_ignore_ascii_case("characterlegacy.shpk"))
 }
 
+/// 皮肤族材质（skin/hair/iris/charactertattoo/characterocclusion）：皮肤与毛发
+/// 是介电质，mask 通道语义为族别数据（皮肤 B≈次表面强度、毛发 R=明暗渐变/
+/// G=挑染区域），不能把 mask.b 当金属度（敖龙 mask.b≈0.61 渲染成铜金属实证）。
+fn material_is_skin_family(material: &ModelMaterial) -> bool {
+    matches!(
+        material_shader_family(material.shader_package_name.as_deref()),
+        MaterialShaderFamily::Skin
+            | MaterialShaderFamily::Hair
+            | MaterialShaderFamily::Iris
+            | MaterialShaderFamily::CharacterTattoo
+            | MaterialShaderFamily::CharacterOcclusion
+    )
+}
+
+/// hair.shpk：family_params.w 标记。头发 alpha clip 不走固定阈值硬裁（发丝
+/// 边缘渐变带会被整片削碎），WGSL 按 4x4 screen-door 抖动近似
+/// alpha-to-coverage（软边缘、不透头皮）。
+fn material_is_hair_family(material: &ModelMaterial) -> bool {
+    matches!(
+        material_shader_family(material.shader_package_name.as_deref()),
+        MaterialShaderFamily::Hair
+    )
+}
+
 fn material_has_character_colortable_final(material: &ModelMaterial) -> bool {
     material.color_table_rows.is_some()
         && material.shader_package_name.as_deref().is_some_and(|name| {
@@ -4407,9 +4780,94 @@ fn material_family_params(material: &ModelMaterial) -> [f32; 4] {
         } else {
             0.0
         },
-        0.0,
-        0.0,
+        if material_is_skin_family(material) {
+            1.0
+        } else {
+            0.0
+        },
+        if material_is_hair_family(material) {
+            1.0
+        } else {
+            0.0
+        },
     ]
+}
+
+/// 角色颜色 uniform 通道（MaterialUniform 尾部 9 个 vec4）。逐材质按 shader
+/// family 从 `ModelMaterial::character_colors` 填充：skin 全收（肤色恒激活；
+/// 唇妆按 lipstick 开关；面妆按 decal 贴图存在性），hair 收发色/挑染（挑染按
+/// highlights 开关），iris 收左右眼色，charactertattoo 收特征色；其余 family
+/// 或无 character_colors 时全零（WGSL 分支不激活，武器/装备渲染不受影响）。
+/// RGB 为 squared RGB 线性色（数据侧已定），W 为激活/强度标记。
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+struct CharacterColorChannels {
+    skin: [f32; 4],
+    lip: [f32; 4],
+    main: [f32; 4],
+    mesh: [f32; 4],
+    left_iris: [f32; 4],
+    right_iris: [f32; 4],
+    option: [f32; 4],
+    decal: [f32; 4],
+    decal_uv: [f32; 4],
+    params: [f32; 4],
+}
+
+fn material_character_color_channels(material: &ModelMaterial) -> CharacterColorChannels {
+    let mut channels = CharacterColorChannels::default();
+    let Some(character) = material.character_colors.as_ref() else {
+        return channels;
+    };
+    let colors = &character.colors;
+    let with_flag = |color: [f32; 4], active: f32| [color[0], color[1], color[2], active];
+    match material_shader_family(material.shader_package_name.as_deref()) {
+        MaterialShaderFamily::Skin => {
+            channels.skin = with_flag(colors.skin, 1.0);
+            // LipColor 只落在脸材质（唇形遮罩只在脸漫反射 alpha 上有意义）；
+            // GetMaterialValue=Face 或路径在 obj/face 下的 skin 材质视为脸变体。
+            let is_face_material = material.skin_value_mode == MaterialSkinValueMode::Face
+                || material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/obj/face/"));
+            if colors.lipstick && is_face_material {
+                channels.lip = colors.lip;
+            }
+            if character.decal_texture.is_some() {
+                channels.decal = colors.decal;
+                // FacePaintUVMultiplier/Offset 是运行态 cbuffer 值（无离线来源），
+                // 按恒等 UV 处理；reversed 仅透传标记。
+                channels.decal_uv = [
+                    1.0,
+                    0.0,
+                    if colors.face_paint_reversed { 1.0 } else { 0.0 },
+                    1.0,
+                ];
+            }
+        }
+        MaterialShaderFamily::Hair => {
+            channels.main = with_flag(colors.main, 1.0);
+            if colors.highlights {
+                channels.mesh = with_flag(colors.mesh, 1.0);
+            }
+            // 头发/尾/兔耳的 mask R 通道是发丝明暗渐变（AO）；眉毛/睫毛等脸部
+            // hair 材质（obj/face 下）的 mask 是数据通道（rgb 非颜色），只取发色平色。
+            let mask_is_color_detail = material
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.contains("/obj/face/"));
+            channels.params = [if mask_is_color_detail { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
+        }
+        MaterialShaderFamily::Iris => {
+            channels.left_iris = colors.left_iris;
+            channels.right_iris = colors.right_iris;
+        }
+        MaterialShaderFamily::CharacterTattoo => {
+            channels.option = with_flag(colors.option, 1.0);
+        }
+        _ => {}
+    }
+    channels
 }
 
 fn material_secondary_map_params<M: ModelRenderData + ?Sized>(
@@ -4608,6 +5066,21 @@ fn alpha_mode_value(mode: MaterialAlphaMode) -> f32 {
     }
 }
 
+/// render.z 编码：hair.shpk 的 Blend 按 Mask（alpha clip）编码——配合数据层
+/// 同规则（hair Blend → Cutout pass），使 WGSL 按 MTRL alpha_threshold 丢弃
+/// 发丝间隙（true blend 会透出头皮鳞片/皮肤纹理，敖龙前额鳞片透出实证）。
+fn alpha_mode_value_for_pass(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> f32 {
+    if matches!(prepared_material.shader_family, MaterialShaderFamily::Hair)
+        && matches!(material.alpha_mode, MaterialAlphaMode::Blend)
+    {
+        return alpha_mode_value(MaterialAlphaMode::Mask);
+    }
+    alpha_mode_value(material.alpha_mode)
+}
+
 fn camera_uniform(
     center: [f32; 3],
     radius: f32,
@@ -4739,12 +5212,34 @@ struct MaterialUniform {
     draw_role_params: [f32; 4],
     debug_color: [f32; 4],
     unsupported_color: [f32; 4],
+    // 角色颜色通道（尾部 16 字节对齐区）：RGB 为 squared RGB 线性色，W 为
+    // 激活/强度标记；无 character_colors 的材质全零，WGSL 分支不激活，
+    // 对武器/装备渲染零影响。面妆 decal 贴图绑在 binding 31/32。
+    character_skin: [f32; 4],
+    character_lip: [f32; 4],
+    character_main: [f32; 4],
+    character_mesh: [f32; 4],
+    character_left_iris: [f32; 4],
+    character_right_iris: [f32; 4],
+    character_option: [f32; 4],
+    character_decal: [f32; 4],
+    character_decal_uv: [f32; 4],
+    character_params: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PostUniform {
     params: [f32; 4],
+}
+
+/// joint storage buffer 头：实际 joint 数（0 = 实例无骨架，shader 走非蒙皮
+/// 旧分支）+ 对齐填充。
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct JointStorageHeader {
+    count: u32,
+    _pad: [u32; 3],
 }
 
 /// Compose uniform: bloom strength, exposure, and whether the shader must
@@ -4843,10 +5338,18 @@ struct GpuVertex {
     bitangent1: [f32; 4],
     flow0: [f32; 4],
     flow1: [f32; 4],
+    // 蒙皮槽位（0..3 在 joints.x 低字节，4..7 在 joints.y）。8 个 u8 索引打包
+    // 成一个 Uint32x2 顶点属性：设备 limits（含 WebGL2 互操作）max vertex
+    // attributes 只有 16，joints0/1 各占一个 location 会超限。无蒙皮数据时
+    // joints=0、weights0=(1,0,0,0)，走 shader 的 joint 数 0 旧分支，渲染与
+    // 非蒙皮路径逐位一致。u32 槽位排在 f32 前，保持 Pod 无填充对齐。
+    joints: [u32; 2],
+    weights0: [f32; 4],
+    weights1: [f32; 4],
 }
 
 impl GpuVertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 13] = [
+    const ATTRIBUTES: [wgpu::VertexAttribute; 16] = [
         wgpu::VertexAttribute {
             offset: std::mem::offset_of!(GpuVertex, position) as wgpu::BufferAddress,
             shader_location: 0,
@@ -4912,6 +5415,21 @@ impl GpuVertex {
             shader_location: 12,
             format: wgpu::VertexFormat::Float32x4,
         },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, joints) as wgpu::BufferAddress,
+            shader_location: 13,
+            format: wgpu::VertexFormat::Uint32x2,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, weights0) as wgpu::BufferAddress,
+            shader_location: 14,
+            format: wgpu::VertexFormat::Float32x4,
+        },
+        wgpu::VertexAttribute {
+            offset: std::mem::offset_of!(GpuVertex, weights1) as wgpu::BufferAddress,
+            shader_location: 15,
+            format: wgpu::VertexFormat::Float32x4,
+        },
     ];
 
     fn from_model_vertex(vertex: &crate::ModelVertex) -> Self {
@@ -4929,7 +5447,22 @@ impl GpuVertex {
             bitangent1: vertex.bitangent1.unwrap_or(vertex.bitangent),
             flow0: vertex.flow0.unwrap_or([0.0; 4]),
             flow1: vertex.flow1.unwrap_or([0.0; 4]),
+            joints: [0; 2],
+            weights0: [1.0, 0.0, 0.0, 0.0],
+            weights1: [0.0; 4],
         }
+    }
+
+    /// 写入 8 槽 joint 索引（实例 joint 表下标，低字节在前的 u8×8 打包）与
+    /// 原始权重（GPU 按和归一）。
+    fn with_skinning(mut self, joints: [u8; 8], weights: [f32; 8]) -> Self {
+        self.joints = [
+            u32::from_le_bytes([joints[0], joints[1], joints[2], joints[3]]),
+            u32::from_le_bytes([joints[4], joints[5], joints[6], joints[7]]),
+        ];
+        self.weights0 = [weights[0], weights[1], weights[2], weights[3]];
+        self.weights1 = [weights[4], weights[5], weights[6], weights[7]];
+        self
     }
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -7571,7 +8104,27 @@ mod tests {
                     std::mem::offset_of!(GpuVertex, flow1) as wgpu::BufferAddress,
                     wgpu::VertexFormat::Float32x4
                 ),
+                (
+                    13,
+                    std::mem::offset_of!(GpuVertex, joints) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Uint32x2
+                ),
+                (
+                    14,
+                    std::mem::offset_of!(GpuVertex, weights0) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
+                (
+                    15,
+                    std::mem::offset_of!(GpuVertex, weights1) as wgpu::BufferAddress,
+                    wgpu::VertexFormat::Float32x4
+                ),
             ]
+        );
+        assert_eq!(
+            std::mem::size_of::<GpuVertex>(),
+            204,
+            "u32 槽位排在 f32 前，全部字段 4 字节对齐、无填充"
         );
     }
 
@@ -7648,6 +8201,154 @@ mod tests {
         assert_eq!(vertices[1].bitangent1, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(vertices[1].flow0, [0.0; 4]);
         assert_eq!(vertices[1].flow1, [0.0; 4]);
+        // 无蒙皮数据的默认槽位：joint 0 + 全重 1.0 在 slot0（joint 数 0 的旧
+        // shader 分支下不读取，渲染与非蒙皮路径逐位一致）。
+        assert_eq!(vertices[0].joints, [0; 2]);
+        assert_eq!(vertices[0].weights0, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(vertices[0].weights1, [0.0; 4]);
+    }
+
+    fn skinned_test_mesh() -> crate::ModelMesh {
+        let mut mesh = test_mesh("normal", 0.0);
+        mesh.submesh = Some(xiv_companion_data::ModelSubmeshInfo {
+            index: 0,
+            table_index: 0,
+            attribute_index_mask: 0,
+            attribute_index_mask_hex: "0x0".to_string(),
+            attribute_names: Vec::new(),
+            bone_start_index: 0,
+            bone_count: 2,
+        });
+        mesh.bone_table = Some(xiv_companion_data::ModelBoneTable {
+            index: 0,
+            bone_count: 2,
+            bone_indices: vec![0, 1],
+            bone_names: vec![Some("n_root".to_string()), Some("n_spine".to_string())],
+        });
+        mesh.vertices[0].blend_weights = Some(xiv_companion_data::ModelBlendWeights {
+            count: 2,
+            values: [0.8, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        mesh.vertices[0].blend_indices = Some(xiv_companion_data::ModelBlendIndices {
+            count: 2,
+            values: [0, 1, 0, 0, 0, 0, 0, 0],
+        });
+        mesh.vertices[1].blend_weights = Some(xiv_companion_data::ModelBlendWeights {
+            count: 1,
+            values: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        mesh.vertices[1].blend_indices = Some(xiv_companion_data::ModelBlendIndices {
+            count: 1,
+            values: [1, 0, 0, 0, 0, 0, 0, 0],
+        });
+        mesh
+    }
+
+    fn skinned_test_skeleton() -> xiv_companion_data::ModelSkeleton {
+        xiv_companion_data::ModelSkeleton {
+            bone_names: vec!["n_root".to_string(), "n_spine".to_string()],
+            parent_indices: vec![-1, 0],
+            rest_pose: vec![xiv_companion_data::BoneTransform::IDENTITY; 2],
+        }
+    }
+
+    #[test]
+    fn flatten_model_with_skeleton_builds_joint_table_and_remaps_vertices() {
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![skinned_test_mesh()],
+        };
+        let skeleton = skinned_test_skeleton();
+
+        let (vertices, _, _, joint_names) = flatten_model_with_options_and_skeleton(
+            &model,
+            PreparedModelOptions::default(),
+            Some(&skeleton),
+        );
+
+        assert_eq!(joint_names, ["n_root", "n_spine"]);
+        // 顶点 0：双骨权重按 bone_table 绝对下标 0/1 映射到 joint 0/1，
+        // 原始量化权重原样传递（GPU 按和归一）；8 个 u8 索引低字节在前打包。
+        assert_eq!(
+            vertices[0].joints,
+            [
+                u32::from_le_bytes([0, 1, 0, 0]),
+                u32::from_le_bytes([0, 0, 0, 0])
+            ]
+        );
+        assert_eq!(vertices[0].weights0, [0.8, 0.2, 0.0, 0.0]);
+        // 顶点 1：单骨 n_spine → joint 1。
+        assert_eq!(vertices[1].joints, [u32::from_le_bytes([1, 0, 0, 0]), 0]);
+        assert_eq!(vertices[1].weights0, [1.0, 0.0, 0.0, 0.0]);
+        // 顶点 2 无 blend 数据 → 默认槽位。
+        assert_eq!(vertices[2].joints, [0; 2]);
+        assert_eq!(vertices[2].weights0, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn flatten_model_with_skeleton_merges_bone_names_across_meshes() {
+        let mut second = skinned_test_mesh();
+        second.bone_table = Some(xiv_companion_data::ModelBoneTable {
+            index: 0,
+            bone_count: 1,
+            bone_indices: vec![1],
+            bone_names: vec![Some("n_spine".to_string())],
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![skinned_test_mesh(), second],
+        };
+        let skeleton = skinned_test_skeleton();
+
+        let (vertices, _, _, joint_names) = flatten_model_with_options_and_skeleton(
+            &model,
+            PreparedModelOptions::default(),
+            Some(&skeleton),
+        );
+
+        // 跨 mesh 同名骨骼只进一次 joint 表；第二个 mesh 的 n_spine 引用映射到 joint 1。
+        assert_eq!(joint_names, ["n_root", "n_spine"]);
+        assert_eq!(vertices[3].joints, [u32::from_le_bytes([1, 0, 0, 0]), 0]);
+    }
+
+    #[test]
+    fn remap_vertex_skinning_uses_absolute_bone_table_index() {
+        let mut vertex = test_vertex([0.0; 3]);
+        vertex.blend_weights = Some(xiv_companion_data::ModelBlendWeights {
+            count: 1,
+            values: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        vertex.blend_indices = Some(xiv_companion_data::ModelBlendIndices {
+            count: 1,
+            values: [2, 0, 0, 0, 0, 0, 0, 0],
+        });
+        let bone_table = xiv_companion_data::ModelBoneTable {
+            index: 0,
+            bone_count: 4,
+            bone_indices: vec![0, 1, 2, 3],
+            bone_names: vec![
+                Some("a".to_string()),
+                Some("b".to_string()),
+                Some("c".to_string()),
+                Some("d".to_string()),
+            ],
+        };
+        // blend 索引是 bone_table 的绝对下标（d0001e0001_dwn 实测：submesh
+        // 窗口基址 bone_start_index 不参与重映射，按窗口偏移会把网格撕碎）。
+        // 索引 2 → bone_table[2] = "c"，与 submesh 声明的窗口无关。
+        let joint_names = vec![
+            "x".to_string(),
+            "y".to_string(),
+            "c".to_string(),
+            "z".to_string(),
+        ];
+        let (joints, weights) = remap_vertex_skinning(&vertex, &bone_table, &joint_names);
+        assert_eq!(joints[0], 2);
+        assert_eq!(weights[0], 1.0);
     }
 
     #[test]
@@ -7676,6 +8377,159 @@ mod tests {
             secondary_min - primary_max >= 0.04,
             "components must keep a visible preview gap"
         );
+    }
+
+    #[test]
+    fn flatten_model_overlaps_components_when_preview_layout_disabled() {
+        // 角色拼装：component_preview_layout=false 时全部件原位重叠（全零偏移）。
+        let model = std::rc::Rc::new(ComponentTestModel {
+            data: crate::ModelData {
+                bounds: crate::ModelBounds::default(),
+                materials: vec![fallback_material()],
+                textures: Vec::new(),
+                meshes: vec![test_mesh("normal", 0.0), test_mesh("normal", 5.0)],
+            },
+            components: vec![0, 1],
+        });
+
+        let (vertices, _, _) = flatten_model_with_options(
+            &model,
+            PreparedModelOptions::default().with_component_preview_layout(false),
+        );
+        assert_eq!(vertices[0].position, [0.0, 0.0, 0.0]);
+        assert_eq!(vertices[3].position, [5.0, 0.0, 0.0]);
+
+        let (vertices, _, _) = flatten_model_with_options(
+            &model,
+            PreparedModelOptions::default().with_component_preview_layout(true),
+        );
+        assert!(
+            (vertices[3].position[0] - 5.0).abs() > 0.04,
+            "layout enabled must spread components apart from their source positions"
+        );
+    }
+
+    #[test]
+    fn material_character_color_channels_follow_shader_family() {
+        let appearance = crate::CharacterAppearanceColors {
+            skin: [0.60, 0.45, 0.35, 1.0],
+            lip: [0.70, 0.30, 0.30, 0.80],
+            main: [0.20, 0.15, 0.10, 1.0],
+            mesh: [0.90, 0.85, 0.70, 1.0],
+            left_iris: [0.10, 0.50, 0.20, 1.0],
+            right_iris: [0.50, 0.20, 0.60, 1.0],
+            option: [0.40, 0.60, 0.80, 1.0],
+            decal: [0.30, 0.30, 0.35, 0.70],
+            lipstick: true,
+            highlights: true,
+            face_paint_reversed: true,
+        };
+        let mut material = fallback_material();
+        assert_eq!(
+            material_character_color_channels(&material),
+            CharacterColorChannels::default(),
+            "materials without character colors keep every channel zeroed"
+        );
+
+        material.character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: appearance,
+            decal_texture: Some(3),
+        });
+        // 非消费 family（character）不写通道。
+        material.shader_package_name = Some("character.shpk".to_string());
+        assert_eq!(
+            material_character_color_channels(&material),
+            CharacterColorChannels::default()
+        );
+
+        // skin family 全收：脸材质吃唇妆与面妆。
+        material.shader_package_name = Some("skin.shpk".to_string());
+        material.path =
+            Some("chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_fac_a.mtrl".to_string());
+        let channels = material_character_color_channels(&material);
+        assert_eq!(channels.skin, [0.60, 0.45, 0.35, 1.0]);
+        assert_eq!(channels.lip, [0.70, 0.30, 0.30, 0.80]);
+        assert_eq!(channels.decal, [0.30, 0.30, 0.35, 0.70]);
+        assert_eq!(channels.decal_uv, [1.0, 0.0, 1.0, 1.0]);
+        assert_eq!(channels.main, [0.0; 4]);
+        assert_eq!(channels.option, [0.0; 4]);
+        // 身体 skin 材质不吃唇妆（无唇形遮罩）。
+        material.path = Some(
+            "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl".to_string(),
+        );
+        let channels = material_character_color_channels(&material);
+        assert_eq!(
+            channels.lip, [0.0; 4],
+            "body skin must not consume lip color"
+        );
+        assert_eq!(channels.skin, [0.60, 0.45, 0.35, 1.0]);
+        // lipstick 关闭：脸材质也不吃唇妆。
+        material.path =
+            Some("chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_fac_a.mtrl".to_string());
+        material.character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: crate::CharacterAppearanceColors {
+                lipstick: false,
+                ..appearance
+            },
+            decal_texture: None,
+        });
+        let channels = material_character_color_channels(&material);
+        assert_eq!(channels.lip, [0.0; 4]);
+        assert_eq!(
+            channels.decal, [0.0; 4],
+            "missing decal texture keeps decal inactive"
+        );
+        assert_eq!(channels.decal_uv, [0.0; 4]);
+
+        // hair family：收发色与挑染；mask 细节标记按材质路径（脸部 hair 材质关闭）。
+        material.shader_package_name = Some("hair.shpk".to_string());
+        material.path = Some(
+            "chara/human/c1801/obj/hair/h0002/material/v0001/mt_c1801h0002_hir_a.mtrl".to_string(),
+        );
+        material.character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: appearance,
+            decal_texture: None,
+        });
+        let channels = material_character_color_channels(&material);
+        assert_eq!(channels.main, [0.20, 0.15, 0.10, 1.0]);
+        assert_eq!(channels.mesh, [0.90, 0.85, 0.70, 1.0]);
+        assert_eq!(channels.skin, [0.0; 4]);
+        assert_eq!(
+            channels.params,
+            [1.0, 0.0, 0.0, 0.0],
+            "hair part uses mask R channel as AO detail"
+        );
+        // 脸部 hair 材质（眉毛）：mask 是数据通道，只取发色平色。
+        material.path =
+            Some("chara/human/c1801/obj/face/f0001/material/mt_c1801f0001_etc_a.mtrl".to_string());
+        assert_eq!(
+            material_character_color_channels(&material).params,
+            [0.0; 4]
+        );
+        // highlights 关闭：挑染通道不激活。
+        material.character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: crate::CharacterAppearanceColors {
+                highlights: false,
+                ..appearance
+            },
+            decal_texture: None,
+        });
+        assert_eq!(material_character_color_channels(&material).mesh, [0.0; 4]);
+
+        // iris family：左右眼色，激活标记取角膜环强度。
+        material.shader_package_name = Some("iris.shpk".to_string());
+        material.character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: appearance,
+            decal_texture: None,
+        });
+        let channels = material_character_color_channels(&material);
+        assert_eq!(channels.left_iris, [0.10, 0.50, 0.20, 1.0]);
+        assert_eq!(channels.right_iris, [0.50, 0.20, 0.60, 1.0]);
+
+        // charactertattoo family：收特征色。
+        material.shader_package_name = Some("charactertattoo.shpk".to_string());
+        let channels = material_character_color_channels(&material);
+        assert_eq!(channels.option, [0.40, 0.60, 0.80, 1.0]);
     }
 
     #[test]

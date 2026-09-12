@@ -192,7 +192,19 @@ pub fn render_model_snapshot_with_options<M: ModelRenderData + ?Sized>(
     options: ModelSnapshotOptions,
     model: &M,
 ) -> Result<ModelSnapshot, ModelSnapshotError> {
-    pollster::block_on(render_model_snapshot_async(options, model))
+    render_model_snapshot_with_skeleton_and_pose(options, model, None, None)
+}
+
+/// [`render_model_snapshot_with_options`] 的骨架/姿势版：`skeleton` 为 Some 时
+/// 走蒙皮路径（实例 joint 表 + rest pose 关节矩阵上传）；`pose` 为 Some 时按
+/// 实例 joint 名表重算关节矩阵覆盖（姿势更新冒烟用）。`pose` 需提供 `skeleton`。
+pub fn render_model_snapshot_with_skeleton_and_pose<M: ModelRenderData + ?Sized>(
+    options: ModelSnapshotOptions,
+    model: &M,
+    skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    pose: Option<&xiv_companion_data::SkeletonPose>,
+) -> Result<ModelSnapshot, ModelSnapshotError> {
+    pollster::block_on(render_model_snapshot_async(options, model, skeleton, pose))
 }
 
 pub fn render_weapon_model_snapshot(
@@ -212,6 +224,8 @@ pub fn render_weapon_model_snapshot_with_options(
 async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     options: WeaponModelSnapshotOptions,
     model: &M,
+    skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    pose: Option<&xiv_companion_data::SkeletonPose>,
 ) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
     if options.width == 0 || options.height == 0 {
         return Err(WeaponModelSnapshotError::InvalidViewport {
@@ -266,13 +280,20 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     let depth = create_depth_texture(&device, options.width, options.height);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = ModelRenderer::new_with_prepared_options(
+    let mut renderer = ModelRenderer::new_with_skeleton_and_prepared_options(
         device,
         queue,
         format,
         model,
         options.prepared_model_options,
+        skeleton,
     );
+    if let (Some(skeleton), Some(pose)) = (skeleton, pose) {
+        let joint_names = renderer.joint_names().to_vec();
+        let mut cache = xiv_companion_data::SkeletonInverseBindCache::new();
+        let matrices = cache.joint_matrices(skeleton, pose, &joint_names);
+        renderer.update_joint_matrices(&matrices);
+    }
     renderer.render_to(
         &target_view,
         &depth_view,

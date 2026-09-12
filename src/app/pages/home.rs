@@ -101,7 +101,7 @@ pub fn HomePage() -> Element {
                             icon: IconKind::Database,
                             title: "本地游戏数据",
                             description: "读取 SqPack 中的模型、材质和游戏表数据，不包含当前角色状态。",
-                            features: "模型预览 · 合成数据刷新 · 图鉴资源刷新",
+                            features: "模型预览 · 角色组装 · 合成数据刷新 · 图鉴资源刷新",
                             status: local_data_status(),
                             href: "#/settings?section=data",
                             action: "管理数据",

@@ -10,6 +10,47 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
 
 ## P0 - Visible Correctness
 
+- [ ] Stop downsampling the diffuse texture to ColorTable index resolution in Compatibility
+  `base × colorset` composition.
+  - Symptom: models with a ColorTable whose index texture is much smaller than the diffuse render
+    with large hard-edged color blocks (nearest-magnified texels) instead of smooth shading.
+    Confirmed case: monster `m0694b0001` (mount whistle item 32841, 大壳蟹角笛), whose material
+    `mt_m0694b0001_a.mtrl` (`characterlegacy.shpk`, Compatibility, 32-row ColorTable) references
+    the shared index texture `chara/common/texture/id_16.tex` at 32×32 while the real diffuse
+    `v01_m0694b0001_d.tex` is 256×512.
+  - Root cause chain: the baked colorset ramp takes the index texture's dimensions
+    (`bake_weapon_color_table_textures`, `crates/xiv-companion-data/src/weapon_models.rs:5877-5894`,
+    → 64×32 here); `combine_base_with_colorset_texture`
+    (`crates/xiv-companion-data/src/weapon_models.rs:6572-6626`) then emits the pre-multiplied
+    `baked://...#base-times-colorset` at the colorset resolution, nearest-downsampling the 256×512
+    diffuse to 64×32 (`:6591-6594`); the renderer samples the `ColorTableRampAb` layout with
+    `textureLoad` at mip 0 plus `floor()` and no filtering
+    (`crates/xiv-companion-render/src/renderer/model.wgsl:1524-1535`, `:1562-1566`), which is
+    deliberate A/B-bleed avoidance (`docs/weapon-render-pipeline.md:199`) but turns the 64×32
+    thumbnail into full-screen blocks. The A/B blend weight is also quantized by the Nearest +
+    LOD 0 index sample (`model.wgsl:537`; Nearest policy from
+    `prepared_texture_sampling_for_kind(ModelTextureKind::Index)`,
+    `crates/xiv-companion-data/src/model.rs:2650-2662`).
+  - The game instead multiplies per pixel at render time: the diffuse is sampled bilinearly at
+    full resolution and the ColorTable row color is looked up separately (A/B lerp via the
+    bilinearly interpolated index G channel), so diffuse spatial detail survives.
+  - Fix direction: move the multiply into the shader — sample the real diffuse at full resolution
+    with the normal filtered path and multiply by the ramp row color fetched via `textureLoad`;
+    keep the pre-multiplied composite only for materials without a real diffuse. Evaluate bilinear
+    sampling of the index G blend against installed evidence. Expect broad native snapshot
+    baseline updates; this is a pipeline-level design change.
+  - Investigation artifacts (2026-09-12, native reproduction identical to the browser screenshot):
+    `target/weapon-render-snapshots/probe-m0694b0001.png` and `target/tmp/m0694-probe/`
+    (regenerable by loading `m0694b0001` via `load_chara_model_from_resource` with
+    `CharaModelLoadRequest { model_id: 694, base_id: 1, variant_id: 1, Monster }` and rendering
+    with `render_weapon_model_snapshot_with_options`; requires `XIV_GAME_DIR`).
+  - Relevant code: `crates/xiv-companion-data/src/weapon_models.rs`
+    (`combine_base_with_colorset_texture`, `bake_weapon_color_table_textures`,
+    `color_table_diffuse_composition`) and
+    `crates/xiv-companion-render/src/renderer/model.wgsl` (`packed_ramp_texel`, `load_packed_base`,
+    `sample_color_table_base`). Design history: `docs/weapon-render-pipeline.md:203`,
+    `docs/weapon-render-review-history.md:402`.
+
 - [x] Use a per-fragment view direction under the perspective camera.
   - Pass camera position and interpolated world position to fragment shading instead of reusing the
     model-center `view_dir` for the whole viewport.
@@ -245,6 +286,26 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
   - `cargo test -p xiv-companion-render` currently does not compile the renderer module.
   - Include `cargo test -p xiv-companion-render --features renderer` in CI or the repository's
     standard verification command.
+
+## App / Browser Integration
+
+- [ ] Re-authorize the saved local game directory handle instead of forcing a re-pick after
+  browser restart.
+  - Symptom: after a full browser restart, restoring the saved directory reports permission
+    `prompt` and the UI tells the user to re-select the game directory every session.
+  - Root cause: File System Access API handle grants are session-scoped (Chromium security
+    model); the `FileSystemDirectoryHandle` persists in IndexedDB but the read permission resets
+    to `prompt` on browser restart. `restore_user_local_directory`
+    (`src/app/user_local_directory.rs:63-71`) treats `prompt` as a hard failure instead of
+    requesting permission again.
+  - Fix direction: when the restored handle's permission is `prompt`, surface a
+    re-authorize action in the settings UI that calls `handle.requestPermission({mode: "read"})`
+    from a real user gesture (click) and continues with the existing handle on `granted`; keep
+    the directory picker only for missing handles or `denied`. Optionally document the
+    installed-PWA persistent-permission path ("allow on every visit").
+  - Relevant code: `src/app/user_local_directory.rs` (`restore_user_local_directory`,
+    `query_directory_read_permission`), `src/app/pages/settings_resources.rs:314-337` (restore
+    effect), `src/app/pages/home.rs:44`.
 
 ## Reference Files
 

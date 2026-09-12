@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use xiv_companion::{
-    CharaCatalogKind, CollectionCatalogKind, CraftDataKind, FurnitureCatalogKind, ItemIconKind,
-    ResourceHub, ResourceSource, SourcePolicy, WeaponCatalogKind,
+    CharaCatalogKind, CharacterMakeKind, CharacterPaletteKind, CollectionCatalogKind,
+    CraftDataKind, FurnitureCatalogKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy,
+    WeaponCatalogKind,
 };
 #[cfg(feature = "game-data")]
 use xiv_companion::{LocalCraftDataProvider, LocalItemIconProvider};
@@ -154,6 +155,14 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
             SourcePolicy::Fixed(ResourceSource::IndexedDb),
         );
         hub.set_policy(
+            CharacterMakeKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
+            CharacterPaletteKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
             ItemIconKind.into(),
             SourcePolicy::Fixed(ResourceSource::Builtin),
         );
@@ -176,6 +185,14 @@ pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceH
         );
         hub.set_policy(
             CharaCatalogKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
+            CharacterMakeKind.into(),
+            SourcePolicy::Fixed(ResourceSource::IndexedDb),
+        );
+        hub.set_policy(
+            CharacterPaletteKind.into(),
             SourcePolicy::Fixed(ResourceSource::IndexedDb),
         );
         hub.set_policy(

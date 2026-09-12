@@ -58,8 +58,13 @@ impl WebModelCanvasRenderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
+                // downlevel_webgl2_defaults 把 storage buffer 相关 limits 全设 0，
+                // 蒙皮 joint storage buffer 需要至少 1 个 binding 位与 16400B
+                // 绑定尺寸；在分辨率对齐 adapter 的基础上补这两个下限（WebGPU
+                // 后端实际能力均远超此值）。
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                    .using_resolution(adapter.limits())
+                    .with_storage_buffer_limits_for_skinning(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             })
@@ -162,6 +167,22 @@ impl WebModelCanvasRenderer {
     pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
         if let Some(instance) = &mut self.instance {
             instance.update_materials(&self.context, model);
+        }
+    }
+
+    /// 实例 joint 名表（蒙皮实例为空表）；动画播放驱动按名计算关节矩阵。
+    pub fn joint_names(&self) -> Vec<String> {
+        self.instance
+            .as_ref()
+            .map(|instance| instance.joint_names().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// 覆盖实例 joint 矩阵（动画采样结果，`update_joint_matrices` 增量上传，
+    /// 立即生效于后续渲染）；无蒙皮实例为空操作。
+    pub fn update_joint_matrices(&mut self, matrices: &[[f32; 16]]) {
+        if let Some(instance) = &mut self.instance {
+            instance.update_joint_matrices(&self.context, matrices);
         }
     }
 
@@ -341,4 +362,18 @@ fn format_js_error(error: wasm_bindgen::JsValue) -> String {
         .and_then(|value| value.as_string())
         .or_else(|| error.as_string())
         .unwrap_or_else(|| "browser event call failed".to_string())
+}
+
+/// 蒙皮 joint storage buffer 的 device limits 下限：group(2) 每 stage 至少 1
+/// 个 storage buffer、绑定尺寸至少容纳 storage 头 + 256×64B joint 矩阵。
+trait StorageBufferLimitsForSkinning {
+    fn with_storage_buffer_limits_for_skinning(self) -> Self;
+}
+
+impl StorageBufferLimitsForSkinning for wgpu::Limits {
+    fn with_storage_buffer_limits_for_skinning(mut self) -> Self {
+        self.max_storage_buffers_per_shader_stage = self.max_storage_buffers_per_shader_stage.max(1);
+        self.max_storage_buffer_binding_size = self.max_storage_buffer_binding_size.max(16_400);
+        self
+    }
 }

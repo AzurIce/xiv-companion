@@ -51,6 +51,25 @@ struct Args {
     #[arg(long)]
     chara_catalog: bool,
 
+    /// Generate the character palette asset from human.cmp in a game install.
+    #[arg(long)]
+    character_palette: bool,
+
+    /// Generate the character make-type asset (default customize + menus) from
+    /// CharaMakeType.csv and a game install's version.
+    #[arg(long)]
+    character_make: bool,
+
+    /// CharaMakeType.csv used for --character-make. Overrides
+    /// --datamining-repo and the default download from ffxiv-datamining-cn.
+    #[arg(long, value_name = "FILE")]
+    chara_make_type_csv: Option<PathBuf>,
+
+    /// CharaMakeCustomize.csv used for --character-make (hair/face paint
+    /// option lists). Overrides --datamining-repo and the default download.
+    #[arg(long, value_name = "FILE")]
+    chara_make_customize_csv: Option<PathBuf>,
+
     /// HousingFurniture.csv used for --furniture-catalog. Overrides
     /// --datamining-repo and the default download from ffxiv-datamining-cn.
     #[arg(long, value_name = "FILE")]
@@ -113,6 +132,14 @@ fn main() -> Result<()> {
 
     if args.chara_catalog {
         return export_chara_catalog(&out_dir, &args);
+    }
+
+    if args.character_palette {
+        return export_character_palette(&out_dir, &args);
+    }
+
+    if args.character_make {
+        return export_character_make(&out_dir, &args);
     }
 
     let game_dir = args
@@ -405,6 +432,324 @@ fn export_chara_catalog(out_dir: &Path, args: &Args) -> Result<()> {
         catalog.counts.skipped_missing_items,
     );
     println!("Output: {}", catalog_path.display());
+    Ok(())
+}
+
+const HUMAN_CMP_PATH: &str = "chara/xls/charamake/human.cmp";
+const CHARA_MAKE_TYPE_CSV: &str = "CharaMakeType.csv";
+const CHARA_MAKE_CUSTOMIZE_CSV: &str = "CharaMakeCustomize.csv";
+
+/// 生成角色调色板资产：从 --game-dir SqPack 读 human.cmp，按
+/// `character_make` 的解析器（Ktisis/Anamnesis 布局）导出全部色板段为
+/// character-palette.json。只更新 resource-manifest.json 的 character-palette 条目。
+fn export_character_palette(out_dir: &Path, args: &Args) -> Result<()> {
+    use physis::resource::Resource;
+
+    let game_dir = args
+        .game_dir
+        .as_ref()
+        .ok_or_else(|| anyhow!("--game-dir is required for --character-palette"))?;
+    let game_dir = xiv_companion::game_data::normalize_game_dir(game_dir)?;
+    let mut resource = physis::resource::SqPackResource::from_existing(
+        game_dir
+            .to_str()
+            .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?,
+    );
+    let bytes = resource.read(HUMAN_CMP_PATH).ok_or_else(|| {
+        anyhow!(
+            "failed to read {HUMAN_CMP_PATH} from {}",
+            game_dir.display()
+        )
+    })?;
+    let palette = xiv_companion::character_palette_from_cmp_bytes(&bytes)
+        .map_err(|error| anyhow!("failed to parse {HUMAN_CMP_PATH}: {error}"))?;
+
+    let generated_at = chrono_like_timestamp();
+    let game_version = xiv_companion::game_data::game_version(&game_dir);
+    let package = xiv_companion::CharacterPalettePackage {
+        schema_version: xiv_companion::CHARACTER_PALETTE_SCHEMA_VERSION,
+        generated_at: generated_at.clone(),
+        game_version: game_version.clone(),
+        source: format!("{HUMAN_CMP_PATH} (SqPack)"),
+        meta: xiv_companion::CharacterPaletteMeta {
+            channel_order: "rgba".to_string(),
+            encoding: "u8".to_string(),
+            squared_rgb: false,
+            layout: "common: eye(192)@block0, highlight(208)@block1, lip@block13[0..96], \
+                     feature=eye, facepaint@block13[128..224]; tribe blocks: skin@+3(192), \
+                     hair@+4(192 hrothgar / 208 others)"
+                .to_string(),
+        },
+        palette,
+    };
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+    let palette_path = out_dir.join("character-palette.json");
+    fs::write(&palette_path, serde_json::to_string(&package)?)
+        .with_context(|| format!("failed to write {}", palette_path.display()))?;
+
+    let mut manifest_entries = serde_json::Map::new();
+    manifest_entries.insert(
+        "character-palette".to_string(),
+        json!({
+            "gameVersion": game_version,
+            "revision": generated_at,
+            "schemaRevision": xiv_companion::CHARACTER_PALETTE_SCHEMA_VERSION,
+            "recordCount": package.palette.tribes.len() + 5,
+        }),
+    );
+    write_resource_manifest(out_dir, manifest_entries)?;
+
+    println!(
+        "CharacterPalette common(eye/highlight/lip/feature/facepaint) = {}/{}/{}/{}/{} tribes: {} ({} bytes)",
+        package.palette.common.eye.len(),
+        package.palette.common.highlight.len(),
+        package.palette.common.lip.len(),
+        package.palette.common.feature.len(),
+        package.palette.common.face_paint.len(),
+        package.palette.tribes.len(),
+        palette_path.metadata().map(|m| m.len()).unwrap_or(0),
+    );
+    println!("Output: {}", palette_path.display());
+    Ok(())
+}
+
+/// 生成捏脸菜单资产：CharaMakeType.csv（显式路径 > --datamining-repo > 下载）
+/// 提取 32 组（Race × Tribe × Gender）的菜单、默认值与特征图标数据，游戏版本
+/// 取 --game-dir 的 ffxivgame.ver（无 --game-dir 时用 craft-data.json 的版本）。
+/// 只更新 resource-manifest.json 的 character-make 条目。
+fn export_character_make(out_dir: &Path, args: &Args) -> Result<()> {
+    let csv_path = obtain_datamining_csv(
+        args.chara_make_type_csv.as_deref(),
+        args.datamining_repo.as_deref(),
+        CHARA_MAKE_TYPE_CSV,
+    )?;
+    let customize_csv_path = obtain_datamining_csv(
+        args.chara_make_customize_csv.as_deref(),
+        args.datamining_repo.as_deref(),
+        CHARA_MAKE_CUSTOMIZE_CSV,
+    )?;
+    let mut rows = parse_chara_make_type_rows(&read_csv_text(&csv_path)?)?;
+    if rows.len() != 32 {
+        return Err(anyhow!(
+            "{CHARA_MAKE_TYPE_CSV} should have 32 data rows, got {}",
+            rows.len()
+        ));
+    }
+    attach_chara_make_customize_options(&mut rows, &read_csv_text(&customize_csv_path)?)?;
+
+    let game_version = match args.game_dir.as_ref() {
+        Some(game_dir) => {
+            let game_dir = xiv_companion::game_data::normalize_game_dir(game_dir)?;
+            xiv_companion::game_data::game_version(&game_dir)
+        }
+        None => {
+            let craft_data_path = out_dir.join("craft-data.json");
+            serde_json::from_str::<CraftDataPackage>(
+                &fs::read_to_string(&craft_data_path)
+                    .with_context(|| format!("failed to read {}", craft_data_path.display()))?,
+            )
+            .with_context(|| format!("failed to parse {}", craft_data_path.display()))?
+            .game_version
+        }
+    };
+    let generated_at = chrono_like_timestamp();
+    let package = xiv_companion::build_character_make_package(
+        &rows,
+        generated_at.clone(),
+        game_version.clone(),
+        format!("{CHARA_MAKE_TYPE_CSV} (ffxiv-datamining-cn)"),
+    );
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+    let make_path = out_dir.join("character-make.json");
+    fs::write(&make_path, serde_json::to_string(&package)?)
+        .with_context(|| format!("failed to write {}", make_path.display()))?;
+
+    let mut manifest_entries = serde_json::Map::new();
+    manifest_entries.insert(
+        "character-make".to_string(),
+        json!({
+            "gameVersion": game_version,
+            "revision": generated_at,
+            "schemaRevision": xiv_companion::CHARACTER_MAKE_SCHEMA_VERSION,
+            "recordCount": package.groups.len(),
+        }),
+    );
+    write_resource_manifest(out_dir, manifest_entries)?;
+
+    println!(
+        "CharacterMake groups: {} menus: {} ({} bytes)",
+        package.groups.len(),
+        package
+            .groups
+            .iter()
+            .map(|group| group.menus.len())
+            .sum::<usize>(),
+        make_path.metadata().map(|m| m.len()).unwrap_or(0),
+    );
+    println!("Output: {}", make_path.display());
+    Ok(())
+}
+
+/// CharaMakeType.csv → 原始行。CSV 3 行表头（key 行 / # 名称行 / 类型行）后接
+/// 32 行数据；列按 `#` 名称行定位（Menu[i]/InitVal[i]/SubMenuType[i]/
+/// SubMenuNum[i]/Customize[i]/FacialFeatureOption[i][j]）。
+fn parse_chara_make_type_rows(csv: &str) -> Result<Vec<xiv_companion::CharacterMakeCsvRow>> {
+    let mut records = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv.as_bytes())
+        .records()
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to parse {CHARA_MAKE_TYPE_CSV}"))?;
+    if records.len() < 4 {
+        return Err(anyhow!("{CHARA_MAKE_TYPE_CSV} has no data rows"));
+    }
+    // 名称行（`#,Race,Tribe,Gender,Menu[0]...`）在 key 行之后。
+    let header: Vec<String> = records
+        .remove(1)
+        .iter()
+        .map(|field| field.trim().to_string())
+        .collect();
+    let column = |name: &str| -> Result<usize> {
+        header
+            .iter()
+            .position(|field| field == name)
+            .ok_or_else(|| anyhow!("{CHARA_MAKE_TYPE_CSV} is missing column {name}"))
+    };
+    let parse_u8 = |record: &csv::StringRecord, name: &str| -> Result<u8> {
+        Ok(record
+            .get(column(name)?)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u16>()
+            .with_context(|| format!("invalid u8 column {name}"))?
+            .min(u16::from(u8::MAX)) as u8)
+    };
+    let parse_u16 = |record: &csv::StringRecord, name: &str| -> Result<u16> {
+        record
+            .get(column(name)?)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u16>()
+            .with_context(|| format!("invalid u16 column {name}"))
+    };
+    let parse_u32 = |record: &csv::StringRecord, name: &str| -> Result<u32> {
+        record
+            .get(column(name)?)
+            .unwrap_or_default()
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("invalid u32 column {name}"))
+    };
+
+    let mut rows = Vec::new();
+    for record in records.into_iter().skip(1) {
+        let key = match record.get(0).unwrap_or_default().trim().parse::<u32>() {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+        let mut menus = Vec::new();
+        for slot in 0..28 {
+            let menu = parse_u32(&record, &format!("Menu[{slot}]"))?;
+            if menu == 0 {
+                continue;
+            }
+            menus.push(xiv_companion::CharacterMakeCsvMenu {
+                menu,
+                init_val: parse_u16(&record, &format!("InitVal[{slot}]"))?,
+                sub_menu_type: parse_u8(&record, &format!("SubMenuType[{slot}]"))?,
+                sub_menu_num: parse_u16(&record, &format!("SubMenuNum[{slot}]"))?,
+                byte_offset: parse_u16(&record, &format!("Customize[{slot}]"))? as usize,
+            });
+        }
+        let mut facial_feature_options = Vec::with_capacity(56);
+        for i in 0..8 {
+            for j in 0..7 {
+                facial_feature_options.push(parse_u16(
+                    &record,
+                    &format!("FacialFeatureOption[{i}][{j}]"),
+                )?);
+            }
+        }
+        rows.push(xiv_companion::CharacterMakeCsvRow {
+            key,
+            race: parse_u8(&record, "Race")?,
+            tribe: parse_u8(&record, "Tribe")?,
+            gender: parse_u8(&record, "Gender")?,
+            menus,
+            hair_options: Vec::new(),
+            face_paint_options: Vec::new(),
+            facial_feature_options,
+        });
+    }
+    Ok(rows)
+}
+
+/// CharaMakeCustomize.csv → 各（c 编码, 性别）槽的发型/面妆选项 ID 列表。
+/// 真实结构（已对真实发型文件集合验证）：18 槽，槽 i 占 keys
+/// `[1 + 130*i, 1 + 130*i + 129]`，槽序即 c 编码序；发型 Data prefix
+/// 131..=138（= 130 + Race byte），面妆 250/251；选项顺序 = Data 序号
+/// 升序（槽尾部存在发型/面妆行交错，不能按行序切）。CSV 数据列实为
+/// key,FeatureID,Data,...（表头的 Icon 列在实际数据中不存在）。
+fn attach_chara_make_customize_options(
+    rows: &mut [xiv_companion::CharacterMakeCsvRow],
+    csv: &str,
+) -> Result<()> {
+    let records = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv.as_bytes())
+        .records()
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to parse {CHARA_MAKE_CUSTOMIZE_CSV}"))?;
+    let customize_rows: Vec<xiv_companion::CharacterMakeCustomizeRow> = records
+        .iter()
+        .skip(3)
+        .filter_map(|record| {
+            let key = record.get(0)?.trim().parse::<u32>().ok()?;
+            Some(xiv_companion::CharacterMakeCustomizeRow {
+                key,
+                feature_id: record
+                    .get(1)
+                    .unwrap_or_default()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0),
+                data: record
+                    .get(2)
+                    .unwrap_or_default()
+                    .trim()
+                    .parse()
+                    .unwrap_or(0),
+            })
+        })
+        .collect();
+    let slots = xiv_companion::parse_chara_make_customize_slots(&customize_rows);
+    if slots.len() != xiv_companion::CHARA_MAKE_CUSTOMIZE_SLOT_COUNT
+        || slots.iter().any(|slot| slot.hair_options.is_empty())
+    {
+        return Err(anyhow!(
+            "{CHARA_MAKE_CUSTOMIZE_CSV} should yield {} non-empty hair slots",
+            xiv_companion::CHARA_MAKE_CUSTOMIZE_SLOT_COUNT,
+        ));
+    }
+    for row in rows.iter_mut() {
+        let race_code = xiv_companion::CharacterCustomize::race_code_from_parts(
+            row.race, row.tribe, row.gender,
+        );
+        let Some(slot_index) = xiv_companion::chara_make_customize_slot_index(race_code) else {
+            return Err(anyhow!(
+                "race code {race_code} (key {}) has no CharaMakeCustomize slot",
+                row.key
+            ));
+        };
+        row.hair_options = slots[slot_index].hair_options.clone();
+        row.face_paint_options = slots[slot_index].face_paint_options.clone();
+    }
     Ok(())
 }
 

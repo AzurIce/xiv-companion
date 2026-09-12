@@ -5,6 +5,8 @@ use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 
 pub mod chara_catalog;
+pub mod character_make;
+pub mod character_palette;
 pub mod collection_catalog;
 pub mod craft_data;
 pub mod furniture_catalog;

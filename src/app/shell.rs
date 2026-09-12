@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{
-    CollectionPage, CraftingPage, HomePage, InventoryPage, ModelPreviewPage, NotesPage,
-    SettingsPage,
+    CharacterPage, CollectionPage, CraftingPage, HomePage, InventoryPage, ModelPreviewPage,
+    NotesPage, SettingsPage,
 };
 use crate::app::ui::{Badge, BadgeVariant};
 
@@ -14,6 +14,7 @@ pub enum Route {
     Crafting,
     Notes,
     WeaponModels,
+    Character,
     Inventory,
     Collection,
     Settings,
@@ -37,6 +38,7 @@ impl Route {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
             "/equipment-models" | "/weapon-models" => Route::WeaponModels,
+            "/character" => Route::Character,
             "/inventory" => Route::Inventory,
             "/collection" => Route::Collection,
             "/settings" => Route::Settings,
@@ -50,6 +52,7 @@ impl Route {
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
             Route::WeaponModels => "/equipment-models",
+            Route::Character => "/character",
             Route::Inventory => "/inventory",
             Route::Collection => "/collection",
             Route::Settings => "/settings",
@@ -62,6 +65,7 @@ impl Route {
             Route::Crafting => "合成检索",
             Route::Notes => "制作清单",
             Route::WeaponModels => "模型预览",
+            Route::Character => "角色",
             Route::Inventory => "物品",
             Route::Collection => "图鉴",
             Route::Settings => "设置",
@@ -93,6 +97,7 @@ fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
         "equipment-models" => IconKind::Box,
+        "character" => IconKind::PersonStanding,
         "inventory" => IconKind::PackageSearch,
         "collection" => IconKind::BookOpen,
         "crafting" => IconKind::Wrench,
@@ -370,11 +375,10 @@ fn PageContent(current: Route) -> Element {
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
             Route::WeaponModels => rsx! { ModelPreviewPage {} },
+            Route::Character => rsx! { CharacterPage {} },
             Route::Inventory => rsx! { InventoryPage {} },
             Route::Collection => rsx! { CollectionPage {} },
             Route::Settings => rsx! { SettingsPage {} },
         }
     }
 }
-
-

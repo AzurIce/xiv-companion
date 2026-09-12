@@ -37,7 +37,23 @@ use crate::chara_models::{
 };
 
 #[cfg(feature = "game-data")]
-use crate::model::{MaterialShaderFamily, material_shader_family};
+use crate::skeleton::{
+    ModelSkeleton, RaceDeform, bake_race_deform, character_skeleton_path,
+    load_skeleton_from_sklb_bytes, skeleton_path_for_chara_model,
+};
+
+#[cfg(feature = "game-data")]
+use crate::chara_assemble::{
+    CharacterCustomize, CharacterPartKind, character_material_candidate_paths,
+    character_part_paths, face_paint_decal_texture_candidates,
+    race_code_from_character_model_path,
+};
+
+#[cfg(feature = "game-data")]
+use crate::character_make::CharacterAppearanceColors;
+
+#[cfg(feature = "game-data")]
+use crate::model::{MaterialShaderFamily, ModelMaterialCharacterColors, material_shader_family};
 
 #[cfg(feature = "game-data")]
 use crate::staining::{
@@ -2669,8 +2685,9 @@ fn model_color_dye_table(
 
 /// 模型/材质候选路径的来源：武器按 [`PackedModelId`]，装备按套装、槽位与
 /// race，家具按 SGB 给出的精确 MDL 路径（材质优先匹配 SGB 引用文件列表），
-/// 宠物/坐骑按 ModelChara 三元组（demihuman 多 MDL 由加载方逐槽位探测）。
-/// 四条加载链共用同一套 MDL/MTRL 读取与染色逻辑，仅在路径候选上分叉。
+/// 宠物/坐骑按 ModelChara 三元组（demihuman 多 MDL 由加载方逐槽位探测），
+/// 角色拼装按部件类别 + 捏脸数据（human 域材质特例）。
+/// 五条加载链共用同一套 MDL/MTRL 读取与染色逻辑，仅在路径候选上分叉。
 #[cfg(feature = "game-data")]
 #[derive(Clone, Debug)]
 enum ModelPathContext {
@@ -2678,6 +2695,7 @@ enum ModelPathContext {
     Equipment(EquipmentModelPathContext),
     Furniture(FurnitureModelPathContext),
     Chara(CharaModelPathContext),
+    Character(CharacterModelPathContext),
 }
 
 #[cfg(feature = "game-data")]
@@ -2707,6 +2725,17 @@ struct CharaModelPathContext {
     model_path: String,
 }
 
+/// 角色拼装路径上下文：单个部件的全部模型候选（首选 + 备选，共享发型）+
+/// 部件类别与捏脸数据（材质候选的 human 域特例由 `chara_assemble` 按部件类别
+/// 处理）。材质候选按实际命中的模型路径推导。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug)]
+struct CharacterModelPathContext {
+    customize: CharacterCustomize,
+    part: CharacterPartKind,
+    model_candidates: Vec<String>,
+}
+
 #[cfg(feature = "game-data")]
 impl ModelPathContext {
     fn model_candidate_paths(&self) -> Vec<String> {
@@ -2717,6 +2746,7 @@ impl ModelPathContext {
             }
             Self::Furniture(context) => vec![context.model_path.clone()],
             Self::Chara(context) => vec![context.model_path.clone()],
+            Self::Character(context) => context.model_candidates.clone(),
         }
     }
 
@@ -2734,18 +2764,28 @@ impl ModelPathContext {
             Self::Chara(context) => {
                 chara_material_candidate_paths(context.model, model_path, material_name)
             }
+            Self::Character(context) => character_material_candidate_paths(
+                &context.customize,
+                context.part,
+                model_path,
+                material_name,
+            ),
         }
     }
 
     /// 诊断信息用的模型标识；装备的 raw 原样保留（字段按武器语义解读），
     /// 家具打包 housing ModelKey（model_id = ModelKey，其余段为 0），宠物/坐骑
-    /// 打包 ModelChara 三元组（model/base/variant 对应武器三段布局）。
+    /// 打包 ModelChara 三元组（model/base/variant 对应武器三段布局），角色拼装
+    /// 打包 race code（c 编码）。
     fn diagnostic_model(&self) -> PackedModelId {
         match self {
             Self::Weapon(model) => *model,
             Self::Equipment(context) => PackedModelId::from_raw(context.model.raw),
             Self::Furniture(context) => PackedModelId::from_raw(context.model_key as u64),
             Self::Chara(context) => chara_diagnostic_model(context.model),
+            Self::Character(context) => {
+                PackedModelId::from_raw(u64::from(context.customize.race_code()))
+            }
         }
     }
 }
@@ -3129,6 +3169,7 @@ fn load_model_material_from_resource<R: physis::resource::Resource>(
             color_dye_table,
             color_table_rows: base_color_table_rows,
             staining_application,
+            character_colors: None,
             texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
@@ -3820,6 +3861,18 @@ pub async fn load_chara_model_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
     request: &CharaModelLoadRequest,
 ) -> anyhow::Result<CharaModelData> {
+    load_chara_model_with_skeleton_from_async_resource(resource, request)
+        .await
+        .map(|(data, _skeleton)| data)
+}
+
+/// [`load_chara_model_with_skeleton_from_resource`] 的异步 Resource 版本：
+/// 随模型返回 rest pose 骨架（sklb 缺失/解析失败 → `None` + 诊断日志）。
+#[cfg(feature = "game-data")]
+pub async fn load_chara_model_with_skeleton_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &CharaModelLoadRequest,
+) -> anyhow::Result<(CharaModelData, Option<ModelSkeleton>)> {
     let mut load_diagnostics = Vec::new();
     let mut loaded_paths = Vec::new();
     let mut materials = Vec::new();
@@ -3872,19 +3925,29 @@ pub async fn load_chara_model_from_async_resource<R: AsyncGameResource>(
         ));
     }
 
-    Ok(WeaponModelData {
-        item_id: request.item_id,
-        item_name: request.item_name.clone(),
-        model_main: chara_diagnostic_model(request.model),
-        model_sub: None,
-        stain_ids: [0, 0],
-        load_diagnostics,
-        loaded_paths,
-        bounds: calculate_model_bounds(&meshes),
-        materials,
-        textures,
-        meshes,
-    })
+    let skeleton = load_optional_skeleton_from_async_resource(
+        resource,
+        &skeleton_path_for_chara_model(request.model),
+        &request.item_name,
+    )
+    .await;
+
+    Ok((
+        WeaponModelData {
+            item_id: request.item_id,
+            item_name: request.item_name.clone(),
+            model_main: chara_diagnostic_model(request.model),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics,
+            loaded_paths,
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        },
+        skeleton,
+    ))
 }
 
 /// [`load_chara_model_from_async_resource`] 的同步 Resource 版本，对齐
@@ -3894,6 +3957,18 @@ pub fn load_chara_model_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
     request: &CharaModelLoadRequest,
 ) -> anyhow::Result<CharaModelData> {
+    load_chara_model_with_skeleton_from_resource(resource, request).map(|(data, _skeleton)| data)
+}
+
+/// [`load_chara_model_from_resource`] 的骨架并行版：加载模型后顺手读取对应
+/// sklb（monster/demihuman 按模型 id 推导路径）构建 rest pose 骨架一并返回。
+/// sklb 缺失或解析失败返回 `None` 并输出诊断，不视为加载错误（静态预览可降级
+/// 为非蒙皮渲染）。骨架不进 serde/IndexedDB，仅随本次加载内存存活。
+#[cfg(feature = "game-data")]
+pub fn load_chara_model_with_skeleton_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &CharaModelLoadRequest,
+) -> anyhow::Result<(CharaModelData, Option<ModelSkeleton>)> {
     let mut load_diagnostics = Vec::new();
     let mut loaded_paths = Vec::new();
     let mut materials = Vec::new();
@@ -3944,19 +4019,591 @@ pub fn load_chara_model_from_resource<R: physis::resource::Resource>(
         ));
     }
 
-    Ok(WeaponModelData {
-        item_id: request.item_id,
-        item_name: request.item_name.clone(),
-        model_main: chara_diagnostic_model(request.model),
-        model_sub: None,
-        stain_ids: [0, 0],
-        load_diagnostics,
-        loaded_paths,
-        bounds: calculate_model_bounds(&meshes),
-        materials,
-        textures,
-        meshes,
-    })
+    let skeleton = load_optional_skeleton_from_resource(
+        resource,
+        &skeleton_path_for_chara_model(request.model),
+        &request.item_name,
+    );
+
+    Ok((
+        WeaponModelData {
+            item_id: request.item_id,
+            item_name: request.item_name.clone(),
+            model_main: chara_diagnostic_model(request.model),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics,
+            loaded_paths,
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        },
+        skeleton,
+    ))
+}
+
+/// 读取 sklb 并解析为 rest pose 骨架；文件缺失/解析失败输出诊断并返回 None。
+/// vendored havok 解析的 panic 已在 `load_skeleton_from_sklb_bytes` 内转为 Err。
+#[cfg(feature = "game-data")]
+fn load_optional_skeleton_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    path: &str,
+    owner: &str,
+) -> Option<ModelSkeleton> {
+    let Some(bytes) = resource.read(path) else {
+        eprintln!("skeleton unavailable for {owner}: sklb missing at {path}");
+        return None;
+    };
+    match load_skeleton_from_sklb_bytes(&bytes) {
+        Ok(skeleton) => Some(skeleton),
+        Err(error) => {
+            eprintln!("skeleton unavailable for {owner}: {path}: {error}");
+            None
+        }
+    }
+}
+
+/// [`load_optional_skeleton_from_resource`] 的异步版本：读不到（缺失或读取
+/// 失败）同样静默降级为 None（动画/蒙皮是 best-effort 增强）。
+#[cfg(feature = "game-data")]
+async fn load_optional_skeleton_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    path: &str,
+    owner: &str,
+) -> Option<ModelSkeleton> {
+    let bytes = match resource.read(path).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("skeleton unavailable for {owner}: sklb missing at {path}");
+            return None;
+        }
+    };
+    match load_skeleton_from_sklb_bytes(&bytes) {
+        Ok(skeleton) => Some(skeleton),
+        Err(error) => {
+            eprintln!("skeleton unavailable for {owner}: {path}: {error}");
+            None
+        }
+    }
+}
+
+/// 角色拼装加载请求。`customize` 决定全部部件路径与材质候选（身体 5 槽 +
+/// 脸 + 发 + 种族可选尾/兔耳）；`name` 仅用于展示与诊断；`appearance` 提供时
+/// 在材质合成阶段把角色级颜色写入对应部件材质（按 shader family 落地，
+/// 见 `ModelMaterial::character_colors`），不提供则保持未染色语义。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CharacterAssemblyLoadRequest {
+    pub customize: CharacterCustomize,
+    pub name: String,
+    pub appearance: Option<CharacterAppearanceColors>,
+}
+
+#[cfg(feature = "game-data")]
+impl CharacterAssemblyLoadRequest {
+    pub fn new(customize: CharacterCustomize, name: impl Into<String>) -> Self {
+        Self {
+            customize,
+            name: name.into(),
+            appearance: None,
+        }
+    }
+
+    pub fn with_appearance(mut self, appearance: CharacterAppearanceColors) -> Self {
+        self.appearance = Some(appearance);
+        self
+    }
+}
+
+/// 角色拼装结果复用武器的结果结构（对齐装备/家具/宠物坐骑的别名模式）：
+/// `model_main` 打包 race code（c 编码，如 101 = 中原人男），`model_sub` 恒为
+/// None（无主次模型，所有部件拼在原位），染色固定关闭；小衣 top/dwn（+sho）+
+/// 裸肤 glv（+sho）+ 脸 + 发 + 尾/兔耳的全部 MDL 按部件顺序合并进 `meshes`。
+/// attribute 显隐按名判定（位是各 MDL 本地表序），启用集合见
+/// [`crate::chara_assemble::character_enabled_attribute_names`]；可用选项见
+/// [`crate::chara_assemble::character_assembly_attribute_options`]。
+#[cfg(feature = "game-data")]
+pub type CharacterAssemblyData = WeaponModelData;
+
+/// 角色拼装：按部件请求逐个加载合并。小衣 top/dwn、裸肤 glv、脸、发为必需
+/// 部件，失败即整体失败；sho/尾/兔耳为可选部件，文件缺失静默跳过，解析失败
+/// 记 Secondary 诊断。材质按 human 域特例推导（皮肤肤族根/脸与兔耳无版本
+/// 目录/头发共享根），纹理走通用候选推导。
+#[cfg(feature = "game-data")]
+pub fn load_character_assembly_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &CharacterAssemblyLoadRequest,
+) -> anyhow::Result<CharacterAssemblyData> {
+    load_character_assembly_with_skeleton_from_resource(resource, request)
+        .map(|(data, _skeleton)| data)
+}
+
+/// [`load_character_assembly_from_resource`] 的骨架并行版：部件合并后读取角色
+/// race code（`customize.race_code()`）对应 sklb 构建 rest pose 骨架一并返回。
+/// sklb 缺失或解析失败返回 `None` 并输出诊断，不视为加载错误。
+#[cfg(feature = "game-data")]
+pub fn load_character_assembly_with_skeleton_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &CharacterAssemblyLoadRequest,
+) -> anyhow::Result<(CharacterAssemblyData, Option<ModelSkeleton>)> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    for part in character_part_paths(&request.customize) {
+        let mut model_candidates = vec![part.model_path.clone()];
+        model_candidates.extend(part.alternate_model_paths.clone());
+        let context = ModelPathContext::Character(CharacterModelPathContext {
+            customize: request.customize,
+            part: part.kind,
+            model_candidates,
+        });
+        let materials_before = materials.len();
+        let result = load_model_meshes_from_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        );
+        match (part.required, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {
+                if let Some(appearance) = &request.appearance {
+                    let decal_texture = load_character_decal_texture_from_resource(
+                        resource,
+                        request.customize.face_paint,
+                        part.kind,
+                        &mut textures,
+                        &mut loaded_paths,
+                    );
+                    apply_character_appearance_to_materials(
+                        &mut materials[materials_before..],
+                        appearance,
+                        decal_texture,
+                    );
+                }
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.name
+        ));
+    }
+
+    let skeleton = load_optional_skeleton_from_resource(
+        resource,
+        &character_skeleton_path(request.customize.race_code()),
+        &request.name,
+    );
+    if let Some(target) = &skeleton {
+        bake_assembly_race_deforms_from_resource(
+            resource,
+            &mut meshes,
+            request.customize.race_code(),
+            target,
+            &request.name,
+        );
+    }
+
+    Ok((
+        WeaponModelData {
+            item_id: 0,
+            item_name: request.name.clone(),
+            model_main: PackedModelId::from_raw(u64::from(request.customize.race_code())),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics,
+            loaded_paths,
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        },
+        skeleton,
+    ))
+}
+
+/// 角色装配的种族骨变形烘焙：回退文件（mesh.path 的 race code ≠ 角色自身）
+/// 的网格从回退族骨架 rest 烘焙到自身骨架 rest——离线近似游戏的 PBD 骨变形
+/// （维埃拉小衣来自猫魅文件、裸肤手足来自中原/拉拉男文件等）。源族骨架缺失
+/// 时跳过该族（保持回退族比例，与未烘焙一致），不作为加载错误。
+#[cfg(feature = "game-data")]
+fn bake_assembly_race_deforms_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    meshes: &mut Vec<crate::model::ModelMesh>,
+    race_code: u16,
+    target_skeleton: &ModelSkeleton,
+    owner: &str,
+) {
+    let mut meshes_by_source_race: HashMap<u16, Vec<usize>> = HashMap::new();
+    for (index, mesh) in meshes.iter().enumerate() {
+        let Some(source_race) = race_code_from_character_model_path(&mesh.path) else {
+            continue;
+        };
+        if source_race != race_code {
+            meshes_by_source_race
+                .entry(source_race)
+                .or_default()
+                .push(index);
+        }
+    }
+    for (source_race, indices) in meshes_by_source_race {
+        let source_path = character_skeleton_path(source_race);
+        let Some(source_skeleton) =
+            load_optional_skeleton_from_resource(resource, &source_path, owner)
+        else {
+            eprintln!(
+                "race deform skipped for {owner}: {indices:?} meshes from c{source_race:04} (skeleton unavailable)"
+            );
+            continue;
+        };
+        let deform = RaceDeform::new(&source_skeleton, target_skeleton);
+        for index in indices {
+            let skipped =
+                bake_race_deform(&mut meshes[index], &source_skeleton, &deform);
+            if skipped > 0 {
+                eprintln!(
+                    "race deform for {owner}: {} keeps {} unskinned vertices (c{source_race:04})",
+                    meshes[index].path, skipped
+                );
+            }
+        }
+    }
+}
+
+/// [`load_character_assembly_from_resource`] 的异步 Resource 版本，对齐
+/// [`load_chara_model_from_async_resource`]。
+#[cfg(feature = "game-data")]
+pub async fn load_character_assembly_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &CharacterAssemblyLoadRequest,
+) -> anyhow::Result<CharacterAssemblyData> {
+    load_character_assembly_with_skeleton_from_async_resource(resource, request)
+        .await
+        .map(|(data, _skeleton)| data)
+}
+
+/// [`load_character_assembly_with_skeleton_from_resource`] 的异步 Resource
+/// 版本：随装配返回 race code 对应 sklb 的 rest pose 骨架（缺失 → None）。
+#[cfg(feature = "game-data")]
+pub async fn load_character_assembly_with_skeleton_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &CharacterAssemblyLoadRequest,
+) -> anyhow::Result<(CharacterAssemblyData, Option<ModelSkeleton>)> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    for part in character_part_paths(&request.customize) {
+        let mut model_candidates = vec![part.model_path.clone()];
+        model_candidates.extend(part.alternate_model_paths.clone());
+        let context = ModelPathContext::Character(CharacterModelPathContext {
+            customize: request.customize,
+            part: part.kind,
+            model_candidates,
+        });
+        let materials_before = materials.len();
+        let result = load_model_meshes_from_async_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await;
+        match (part.required, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {
+                if let Some(appearance) = &request.appearance {
+                    let decal_texture = load_character_decal_texture_from_async_resource(
+                        resource,
+                        request.customize.face_paint,
+                        part.kind,
+                        &mut textures,
+                        &mut loaded_paths,
+                    )
+                    .await;
+                    apply_character_appearance_to_materials(
+                        &mut materials[materials_before..],
+                        appearance,
+                        decal_texture,
+                    );
+                }
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.name
+        ));
+    }
+
+    let skeleton = load_optional_skeleton_from_async_resource(
+        resource,
+        &character_skeleton_path(request.customize.race_code()),
+        &request.name,
+    )
+    .await;
+    if let Some(target) = &skeleton {
+        bake_assembly_race_deforms_from_async_resource(
+            resource,
+            &mut meshes,
+            request.customize.race_code(),
+            target,
+            &request.name,
+        )
+        .await;
+    }
+
+    Ok((
+        WeaponModelData {
+            item_id: 0,
+            item_name: request.name.clone(),
+            model_main: PackedModelId::from_raw(u64::from(request.customize.race_code())),
+            model_sub: None,
+            stain_ids: [0, 0],
+            load_diagnostics,
+            loaded_paths,
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        },
+        skeleton,
+    ))
+}
+
+/// [`bake_assembly_race_deforms_from_resource`] 的异步版本。
+#[cfg(feature = "game-data")]
+async fn bake_assembly_race_deforms_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    meshes: &mut Vec<crate::model::ModelMesh>,
+    race_code: u16,
+    target_skeleton: &ModelSkeleton,
+    owner: &str,
+) {
+    let mut meshes_by_source_race: HashMap<u16, Vec<usize>> = HashMap::new();
+    for (index, mesh) in meshes.iter().enumerate() {
+        let Some(source_race) = race_code_from_character_model_path(&mesh.path) else {
+            continue;
+        };
+        if source_race != race_code {
+            meshes_by_source_race
+                .entry(source_race)
+                .or_default()
+                .push(index);
+        }
+    }
+    for (source_race, indices) in meshes_by_source_race {
+        let source_path = character_skeleton_path(source_race);
+        let Some(source_skeleton) =
+            load_optional_skeleton_from_async_resource(resource, &source_path, owner).await
+        else {
+            eprintln!(
+                "race deform skipped for {owner}: {indices:?} meshes from c{source_race:04} (skeleton unavailable)"
+            );
+            continue;
+        };
+        let deform = RaceDeform::new(&source_skeleton, target_skeleton);
+        for index in indices {
+            let skipped =
+                bake_race_deform(&mut meshes[index], &source_skeleton, &deform);
+            if skipped > 0 {
+                eprintln!(
+                    "race deform for {owner}: {} keeps {} unskinned vertices (c{source_race:04})",
+                    meshes[index].path, skipped
+                );
+            }
+        }
+    }
+}
+
+/// 面妆 decal 贴图加载：按 [`face_paint_decal_texture_candidates`] 降序尝试，
+/// 命中即解码为 BaseColor 纹理追加到模型纹理列表；无候选/全部缺失时返回 None
+/// （调用方按缺失降级，不报错）。仅脸部件携带面妆（`face_paint & 0x7F != 0`）。
+#[cfg(feature = "game-data")]
+fn load_character_decal_texture_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    face_paint: u8,
+    part: CharacterPartKind,
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Option<usize> {
+    use physis::ReadableFile;
+
+    if !matches!(part, CharacterPartKind::Face) || face_paint & 0x7F == 0 {
+        return None;
+    }
+    for path in face_paint_decal_texture_candidates(face_paint) {
+        if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+            return Some(index);
+        }
+        let Some(bytes) = resource.read(&path) else {
+            continue;
+        };
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
+            continue;
+        };
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
+            continue;
+        };
+        let index = textures.len();
+        textures.push(WeaponModelTexture {
+            path: path.clone(),
+            kind: WeaponModelTextureKind::BaseColor,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
+            rgba_f32: None,
+        });
+        push_loaded_path(loaded_paths, path);
+        return Some(index);
+    }
+    None
+}
+
+#[cfg(feature = "game-data")]
+async fn load_character_decal_texture_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    face_paint: u8,
+    part: CharacterPartKind,
+    textures: &mut Vec<WeaponModelTexture>,
+    loaded_paths: &mut Vec<String>,
+) -> Option<usize> {
+    use physis::ReadableFile;
+
+    if !matches!(part, CharacterPartKind::Face) || face_paint & 0x7F == 0 {
+        return None;
+    }
+    for path in face_paint_decal_texture_candidates(face_paint) {
+        if let Some(index) = textures.iter().position(|texture| texture.path == path) {
+            return Some(index);
+        }
+        let Ok(bytes) = resource.read(&path).await else {
+            continue;
+        };
+        let Some(mut texture) = physis::tex::Texture::from_existing(resource.platform(), &bytes)
+        else {
+            continue;
+        };
+        let Some(decoded) =
+            crate::texture_decode::decode_texture_rgba_with_layout(&mut texture, &bytes)
+        else {
+            continue;
+        };
+        let index = textures.len();
+        textures.push(WeaponModelTexture {
+            path: path.clone(),
+            kind: WeaponModelTextureKind::BaseColor,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: decoded.width,
+            height: decoded.height,
+            array_size: decoded.array_size,
+            array_layer_height: decoded.array_layer_height,
+            rgba: decoded.rgba,
+            rgba_f32: None,
+        });
+        push_loaded_path(loaded_paths, path);
+        return Some(index);
+    }
+    None
+}
+
+/// 把角色级颜色写入单个部件新增的材质（材质合成阶段的落地）。数据侧只按
+/// shader family 判断"该材质是否消费角色色"（skin 全收；hair 收发色/挑染；
+/// iris 收眼色；charactertattoo 收特征色），各通道的具体消费方式由渲染侧
+/// 按 family/GetMaterialValue 决定；其余 family（装备 character 等）不写入。
+#[cfg(feature = "game-data")]
+fn apply_character_appearance_to_materials(
+    materials: &mut [WeaponModelMaterial],
+    appearance: &CharacterAppearanceColors,
+    decal_texture: Option<usize>,
+) {
+    for material in materials.iter_mut() {
+        let consumes = matches!(
+            material_shader_family(material.shader_package_name.as_deref()),
+            MaterialShaderFamily::Skin
+                | MaterialShaderFamily::Hair
+                | MaterialShaderFamily::Iris
+                | MaterialShaderFamily::CharacterTattoo
+        );
+        if !consumes {
+            continue;
+        }
+        material.character_colors = Some(ModelMaterialCharacterColors {
+            colors: *appearance,
+            decal_texture,
+        });
+    }
+}
+
+/// 从本地游戏目录加载角色拼装，对齐 [`load_weapon_model_from_game_dir`]。
+#[cfg(feature = "game-data")]
+pub fn load_character_assembly_from_game_dir(
+    game_dir: &std::path::Path,
+    request: &CharacterAssemblyLoadRequest,
+) -> anyhow::Result<CharacterAssemblyData> {
+    use anyhow::{Context, anyhow};
+
+    let game_dir = normalize_game_dir(game_dir)?;
+    let game_dir = game_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?;
+    let mut resource = physis::resource::SqPackResource::from_existing(game_dir);
+    load_character_assembly_from_resource(&mut resource, request)
+        .with_context(|| format!("failed to load character assembly for {}", request.name))
 }
 
 #[cfg(feature = "game-data")]
@@ -4523,6 +5170,7 @@ async fn load_model_material_from_async_resource<R: AsyncGameResource>(
             color_dye_table,
             color_table_rows: base_color_table_rows,
             staining_application,
+            character_colors: None,
             texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: fallback,
             diffuse_color,
@@ -6367,6 +7015,7 @@ fn fallback_weapon_material(
         color_dye_table: None,
         color_table_rows: None,
         staining_application: None,
+        character_colors: None,
         texture_arrays: ModelMaterialTextureArrays::default(),
         fallback_color: fallback,
         diffuse_color: fallback,

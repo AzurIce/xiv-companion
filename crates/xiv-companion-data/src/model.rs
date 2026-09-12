@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::character_make::CharacterAppearanceColors;
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WeaponCatalogPackage {
@@ -422,6 +424,20 @@ pub enum ModelMaterialReferenceFallbackKind {
     SameIndexLoadedColorTable,
 }
 
+/// 角色级颜色在单个材质上的落地：数据侧只存储（按 shader family 决定的
+/// 全量角色色 + 面妆 decal 贴图索引），哪些通道被消费由渲染侧按
+/// family/GetMaterialValue 判定（skin 全收；hair 收 main/mesh；iris 收
+/// 眼色；charactertattoo 收 option）。
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelMaterialCharacterColors {
+    pub colors: CharacterAppearanceColors,
+    /// 面妆 decal 贴图（`chara/common/texture/decal_face/_decal_*.tex`）在
+    /// 模型纹理列表中的索引；仅脸部件的 skin family 材质可能携带。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal_texture: Option<usize>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelMaterial {
@@ -594,6 +610,10 @@ pub struct ModelMaterial {
     pub color_table_rows: Option<Vec<ColorTableRowColors>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staining_application: Option<ModelStainingApplication>,
+    /// 角色级颜色（仅角色拼装加载提供 appearance 时写入；武器/装备渲染恒为
+    /// None，uniform 尾部角色色通道全零，对现有渲染零影响）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_colors: Option<ModelMaterialCharacterColors>,
     #[serde(default)]
     pub texture_arrays: ModelMaterialTextureArrays,
     pub fallback_color: [f32; 3],
@@ -794,6 +814,8 @@ pub enum MaterialLightShaftType {
 pub enum MaterialShaderFamily {
     Character,
     Skin,
+    Hair,
+    Iris,
     CharacterStockings,
     CharacterGlass,
     CharacterReflection,
@@ -828,6 +850,8 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
             MaterialShaderFamily::Character
         }
         "skin.shpk" => MaterialShaderFamily::Skin,
+        "hair.shpk" => MaterialShaderFamily::Hair,
+        "iris.shpk" => MaterialShaderFamily::Iris,
         "characterstockings.shpk" => MaterialShaderFamily::CharacterStockings,
         "characterglass.shpk" => MaterialShaderFamily::CharacterGlass,
         "characterreflection.shpk" => MaterialShaderFamily::CharacterReflection,
@@ -852,6 +876,11 @@ pub struct PreparedModel {
     pub runtime_geometry_requirements: PreparedModelRuntimeGeometryRequirements,
 }
 
+/// 模型运行时要正确呈现所需的运行时几何能力。`skeleton_pose`/
+/// `skinning_matrices` 表示**模型含蒙皮负载**（bone_table + 顶点 blend 数据），
+/// 不是“渲染器尚未支持”的缺项清单：当调用方把 `ModelSkeleton` 传入渲染 API
+/// 开启蒙皮（`ModelRenderContext::create_model_with_skeleton`）时，这两位
+/// 由调用方视为已满足；race_deformer（装备骨骼形变）无对应实现，仍是真实缺项。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedModelRuntimeGeometryRequirements {
@@ -863,13 +892,20 @@ pub struct PreparedModelRuntimeGeometryRequirements {
     pub race_deformer: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedModelOptions {
     /// 显式启用的 submesh attribute 位；`None` 按游戏默认（全部未启用，= 0）处理，
     /// 带 attribute 的 submesh 默认隐藏，无 attribute 的 submesh 不受影响。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_attribute_mask: Option<u32>,
+    /// 按 attribute **名**启用：submesh 的必需位逐一映射回其 MDL 本地 attribute
+    /// 名，全部落在启用集合内才可见。角色拼装专用——attribute 位是各 MDL 本地
+    /// attribute 表序，跨 MDL 数值不可比（如 c0101 脸 bit0=atr_mim、c1401 脸
+    /// bit0=atr_kao），合并装配后只能按名判定。`Some` 时优先于
+    /// `enabled_attribute_mask`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_attribute_names: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_shape_mask: Option<u32>,
     /// 隔离预览：为 true 且模型含 attribute submesh 时，无 attribute 的 submesh
@@ -878,11 +914,37 @@ pub struct PreparedModelOptions {
     /// false 时行为完全不变。
     #[serde(default)]
     pub attribute_parts_only: bool,
+    /// 多 component 模型的预览布局：true（默认）把各 component 沿 X 轴平铺拆开
+    /// （武器主/副模型、家具多 MDL）；false 返回全零偏移，部件原位重叠
+    /// （角色拼装的全部件即按游戏原位叠加）。
+    #[serde(default = "default_component_preview_layout")]
+    pub component_preview_layout: bool,
+}
+
+fn default_component_preview_layout() -> bool {
+    true
+}
+
+impl Default for PreparedModelOptions {
+    fn default() -> Self {
+        Self {
+            enabled_attribute_mask: None,
+            enabled_attribute_names: None,
+            enabled_shape_mask: None,
+            attribute_parts_only: false,
+            component_preview_layout: true,
+        }
+    }
 }
 
 impl PreparedModelOptions {
     pub fn with_enabled_attribute_mask(mut self, enabled_attribute_mask: u32) -> Self {
         self.enabled_attribute_mask = Some(enabled_attribute_mask);
+        self
+    }
+
+    pub fn with_enabled_attribute_names(mut self, enabled_attribute_names: Vec<String>) -> Self {
+        self.enabled_attribute_names = Some(enabled_attribute_names);
         self
     }
 
@@ -893,6 +955,11 @@ impl PreparedModelOptions {
 
     pub fn with_attribute_parts_only(mut self, attribute_parts_only: bool) -> Self {
         self.attribute_parts_only = attribute_parts_only;
+        self
+    }
+
+    pub fn with_component_preview_layout(mut self, component_preview_layout: bool) -> Self {
+        self.component_preview_layout = component_preview_layout;
         self
     }
 }
@@ -1641,7 +1708,7 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
     options: PreparedModelOptions,
 ) -> PreparedModel {
     let runtime_geometry_requirements =
-        prepared_model_runtime_geometry_requirements(model, options);
+        prepared_model_runtime_geometry_requirements(model, &options);
     let has_attribute_submeshes = model.meshes().iter().any(|mesh| {
         mesh.submesh
             .as_ref()
@@ -1660,6 +1727,7 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                 let visibility = if has_attribute_submeshes {
                     let mut visibility = prepared_mesh_visibility(
                         mesh.submesh.as_ref(),
+                        options.enabled_attribute_names.as_deref(),
                         Some(options.enabled_attribute_mask.unwrap_or(0)),
                     );
                     // 隔离预览：只渲染带 attribute 的部件，无属性本体隐藏。
@@ -1734,9 +1802,13 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
     }
 }
 
+/// 运行时几何需求位：纯数据判定（模型是否携带对应负载/选项是否缺省）。
+/// `skeleton_pose`/`skinning_matrices` 为“模型含蒙皮负载”标记——调用方把
+/// 骨架传入渲染 API 开启蒙皮后即视为满足（见
+/// [`PreparedModelRuntimeGeometryRequirements`]）。
 pub fn prepared_model_runtime_geometry_requirements<M: ModelRenderData + ?Sized>(
     model: &M,
-    options: PreparedModelOptions,
+    options: &PreparedModelOptions,
 ) -> PreparedModelRuntimeGeometryRequirements {
     let has_shapes = model
         .meshes()
@@ -1755,7 +1827,9 @@ pub fn prepared_model_runtime_geometry_requirements<M: ModelRenderData + ?Sized>
     PreparedModelRuntimeGeometryRequirements {
         shape_name_id_mapping: has_shapes,
         enabled_shape_mask: has_shapes && options.enabled_shape_mask.is_none(),
-        enabled_attribute_mask: has_attributes && options.enabled_attribute_mask.is_none(),
+        enabled_attribute_mask: has_attributes
+            && options.enabled_attribute_mask.is_none()
+            && options.enabled_attribute_names.is_none(),
         skeleton_pose: has_skinning,
         skinning_matrices: has_skinning,
         race_deformer: has_equipment_skinning,
@@ -1794,8 +1868,39 @@ fn prepared_mesh_shape_influences(
 
 fn prepared_mesh_visibility(
     submesh: Option<&ModelSubmeshInfo>,
+    enabled_attribute_names: Option<&[String]>,
     enabled_attribute_mask: Option<u32>,
 ) -> PreparedMeshVisibility {
+    // 按名启用（角色拼装）：必需位映射回 attribute 名逐名核对。`attribute_names`
+    // 与掩码置位按位升序 zip 对应（见 `model_attribute_options`）；置位多于
+    // 名表（数据不完整）按未启用处理。
+    if let Some(enabled_attribute_names) = enabled_attribute_names {
+        let missing_attribute_mask = submesh
+            .map(|submesh| {
+                let mut names = submesh.attribute_names.iter();
+                let mut missing = 0_u32;
+                for bit in 0..u32::BITS {
+                    if submesh.attribute_index_mask & (1 << bit) == 0 {
+                        continue;
+                    }
+                    let enabled = names.next().is_some_and(|name| {
+                        enabled_attribute_names
+                            .iter()
+                            .any(|enabled_name| enabled_name == name)
+                    });
+                    if !enabled {
+                        missing |= 1 << bit;
+                    }
+                }
+                missing
+            })
+            .unwrap_or(0);
+        return PreparedMeshVisibility {
+            submesh_attributes_visible: missing_attribute_mask == 0,
+            enabled_attribute_mask: None,
+            missing_attribute_mask,
+        };
+    }
     let Some(enabled_attribute_mask) = enabled_attribute_mask else {
         return PreparedMeshVisibility::default();
     };
@@ -1986,7 +2091,14 @@ pub fn prepared_material_alpha_policy(
         PreparedAlphaSource::MaterialTransparency
     } else if matches!(shader_family, MaterialShaderFamily::CharacterStockings) {
         PreparedAlphaSource::Opaque
-    } else if matches!(shader_family, MaterialShaderFamily::CharacterTattoo) {
+    } else if matches!(
+        shader_family,
+        MaterialShaderFamily::CharacterTattoo | MaterialShaderFamily::Hair
+    ) {
+        // charactertattoo.shpk 按 MeddleTools 节点从法线贴图 Alpha 取透明度；
+        // hair.shpk 同理（真实纹理解码：normal A 为 0..255 的发丝透明度图，
+        // mask A 是明暗渐变副本）——头发无 base 纹理，BaseColorAlpha 恒 1
+        // 会渲染成实心头盔。
         PreparedAlphaSource::NormalAlpha
     } else if matches!(
         shader_family,
@@ -2659,6 +2771,12 @@ fn prepared_render_pass(
 
     match material.alpha_mode {
         MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
+        // hair.shpk 的 Blend 在游戏内表现为 alpha clip（发丝覆盖头皮，真实
+        // 纹理解码：normal A 为发丝透明度图）；走 true blend 的 Transparent
+        // pass 会透出头皮鳞片/皮肤纹理（敖龙前额鳞片透出实证），按 Cutout。
+        MaterialAlphaMode::Blend if matches!(shader_family, MaterialShaderFamily::Hair) => {
+            PreparedRenderPass::Cutout
+        }
         MaterialAlphaMode::Blend => PreparedRenderPass::Transparent,
         MaterialAlphaMode::Mask => PreparedRenderPass::Cutout,
         MaterialAlphaMode::Opaque => match material.render_mode {
@@ -5473,6 +5591,66 @@ mod color_table_bake_tests {
     }
 
     #[test]
+    fn prepared_model_applies_enabled_attribute_names_per_mdl_local_order() {
+        // 按名启用（角色拼装）：同一数值掩码在不同 MDL 本地 attribute 表序下
+        // 含义不同——名随掩码置位升序 zip 对应。两个 mesh 同为 mask 0x3，但
+        // 名表 ["atr_kao","atr_fv_c"] 与 ["atr_sta","atr_bak"] 各自独立判定。
+        let mut face_mesh = test_model_mesh(None, 0);
+        face_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0x0000_0003,
+            attribute_index_mask_hex: "0x00000003".to_string(),
+            attribute_names: vec!["atr_kao".to_string(), "atr_fv_c".to_string()],
+            ..test_model_submesh_info()
+        });
+        let mut hair_mesh = test_model_mesh(None, 0);
+        hair_mesh.submesh = Some(ModelSubmeshInfo {
+            attribute_index_mask: 0x0000_0003,
+            attribute_index_mask_hex: "0x00000003".to_string(),
+            attribute_names: vec!["atr_sta".to_string(), "atr_bak".to_string()],
+            ..test_model_submesh_info()
+        });
+        let model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![face_mesh, hair_mesh],
+        };
+
+        let prepared = prepare_model_for_render_with_options(
+            &model,
+            PreparedModelOptions::default().with_enabled_attribute_names(vec![
+                "atr_kao".to_string(),
+                "atr_sta".to_string(),
+                "atr_bak".to_string(),
+            ]),
+        );
+        assert!(
+            !prepared
+                .runtime_geometry_requirements
+                .enabled_attribute_mask
+        );
+        // 脸：atr_fv_c 未启用 → 缺 bit1；发：两个名都启用 → 可见。
+        assert!(!prepared.meshes[0].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[0].visibility,
+            PreparedMeshVisibility {
+                submesh_attributes_visible: false,
+                enabled_attribute_mask: None,
+                missing_attribute_mask: 0x0000_0002,
+            }
+        );
+        assert!(prepared.meshes[1].renders_in_main_pass);
+        assert_eq!(
+            prepared.meshes[1].visibility,
+            PreparedMeshVisibility {
+                submesh_attributes_visible: true,
+                enabled_attribute_mask: None,
+                missing_attribute_mask: 0,
+            }
+        );
+    }
+
+    #[test]
     fn prepared_model_hides_attribute_submeshes_by_default() {
         // 游戏内属性部件默认全部未启用：未显式给出 enabled_attribute_mask 时
         // 带 attribute 的 submesh 隐藏（如自走人偶的 atr_bv_a 变体部件），
@@ -5791,6 +5969,24 @@ mod color_table_bake_tests {
                 ..PreparedModelRuntimeGeometryRequirements::default()
             }
         );
+
+        // 语义是“负载存在”而非“能力缺项”：无蒙皮负载的模型两位都是 false，
+        // 渲染侧开启蒙皮（传入骨架）由调用方视为满足，不改变本判定。
+        let plain_mesh = {
+            let mut mesh = test_model_mesh(None, 0);
+            mesh.vertices = vec![test_model_vertex()];
+            mesh
+        };
+        let plain_model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![test_material()],
+            textures: Vec::new(),
+            meshes: vec![plain_mesh],
+        };
+        let requirements = prepare_model_for_render(&plain_model).runtime_geometry_requirements;
+        assert!(!requirements.skeleton_pose);
+        assert!(!requirements.skinning_matrices);
+        assert!(!requirements.race_deformer);
     }
 
     #[test]
@@ -6049,6 +6245,14 @@ mod color_table_bake_tests {
             MaterialShaderFamily::CharacterTattoo
         );
         assert_eq!(
+            material_shader_family(Some("hair.shpk")),
+            MaterialShaderFamily::Hair
+        );
+        assert_eq!(
+            material_shader_family(Some("chara/human/test/iris.shpk")),
+            MaterialShaderFamily::Iris
+        );
+        assert_eq!(
             material_shader_family(Some("characterocclusion.shpk")),
             MaterialShaderFamily::CharacterOcclusion
         );
@@ -6057,6 +6261,44 @@ mod color_table_bake_tests {
             material_shader_family(Some("unknown.shpk")),
             MaterialShaderFamily::Unknown
         );
+    }
+
+    #[test]
+    fn component_preview_layout_defaults_to_spread_with_builder_override() {
+        let options = PreparedModelOptions::default();
+        assert!(options.component_preview_layout);
+        assert!(
+            !options
+                .clone()
+                .with_component_preview_layout(false)
+                .component_preview_layout
+        );
+        assert!(
+            options
+                .with_component_preview_layout(false)
+                .with_component_preview_layout(true)
+                .component_preview_layout
+        );
+    }
+
+    #[test]
+    fn material_character_colors_store_full_appearance_and_decal_index() {
+        let mut material = test_material();
+        assert!(material.character_colors.is_none());
+        let colors = crate::character_make::CharacterAppearanceColors {
+            skin: [0.5, 0.4, 0.3, 1.0],
+            main: [0.1, 0.2, 0.3, 1.0],
+            ..Default::default()
+        };
+        material.character_colors = Some(ModelMaterialCharacterColors {
+            colors,
+            decal_texture: Some(7),
+        });
+        let prepared = prepare_material_for_draw_role(Some(&material), ModelMeshDrawRole::Normal);
+        assert_eq!(prepared.shader_family, MaterialShaderFamily::Unknown);
+        let stored = material.character_colors.expect("character colors stored");
+        assert_eq!(stored.decal_texture, Some(7));
+        assert_eq!(stored.colors.skin, [0.5, 0.4, 0.3, 1.0]);
     }
 
     fn test_prepared_render_pass(
@@ -6157,6 +6399,7 @@ mod color_table_bake_tests {
             color_dye_table: None,
             color_table_rows: None,
             staining_application: None,
+            character_colors: None,
             texture_arrays: ModelMaterialTextureArrays::default(),
             fallback_color: [1.0, 1.0, 1.0],
             diffuse_color: [1.0, 1.0, 1.0],

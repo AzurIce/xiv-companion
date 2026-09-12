@@ -16,8 +16,80 @@ pub fn decode_texture_rgba(texture: &physis::tex::Texture) -> Option<Vec<u8>> {
             texture.height as usize,
             texture.depth as usize,
         ),
+        // 面妆 decal 等单通道贴图：BC4 = BC3 的 alpha 段，解码后灰度复制到
+        // RGBA 四通道（形状同时进 rgb 与 alpha，供 DecalColor 乘色与混合）。
+        physis::tex::TextureFormat::BC4_UNORM => decode_bc4_rgba(
+            &texture.data,
+            texture.width as usize,
+            texture.height as usize,
+            texture.depth as usize,
+        ),
         _ => texture.to_rgba(),
     }
+}
+
+fn decode_bc4_rgba(data: &[u8], width: usize, height: usize, depth: usize) -> Option<Vec<u8>> {
+    let height = height.checked_mul(depth.max(1))?;
+    let pixel_count = width.checked_mul(height)?;
+    let mut rgba = vec![0_u8; pixel_count.checked_mul(4)?];
+    if width == 0 || height == 0 {
+        return Some(rgba);
+    }
+
+    let blocks_x = width.div_ceil(4);
+    let blocks_y = height.div_ceil(4);
+    let required = blocks_x.checked_mul(blocks_y)?.checked_mul(8)?;
+    if data.len() < required {
+        return None;
+    }
+
+    let mut block_offset = 0;
+    for block_y in 0..blocks_y {
+        for block_x in 0..blocks_x {
+            let block = &data[block_offset..block_offset + 8];
+            let pixels = decode_bc4_block(block);
+            copy_decoded_block(&pixels, block_x, block_y, width, height, &mut rgba);
+            block_offset += 8;
+        }
+    }
+
+    Some(rgba)
+}
+
+/// BC4（DXT5 alpha 段）：两个端点 + 16×3 bit 索引；端点 a0 > a1 时 6 档插值，
+/// 否则 4 档插值 + 透明/不透明哨兵（与 BC3 alpha 语义一致）。
+fn decode_bc4_block(block: &[u8]) -> [[u8; 4]; 16] {
+    let alpha_0 = block[0];
+    let alpha_1 = block[1];
+    let mut palette = [0_u8; 8];
+    palette[0] = alpha_0;
+    palette[1] = alpha_1;
+    if alpha_0 > alpha_1 {
+        for index in 0..6 {
+            palette[2 + index] = ((u16::from(alpha_0) * (7 - index as u16)
+                + u16::from(alpha_1) * (index as u16 + 1))
+                / 7) as u8;
+        }
+    } else {
+        for index in 0..4 {
+            palette[2 + index] = ((u16::from(alpha_0) * (5 - index as u16)
+                + u16::from(alpha_1) * (index as u16 + 1))
+                / 5) as u8;
+        }
+        palette[6] = 0;
+        palette[7] = 255;
+    }
+    let mut indices = 0_u64;
+    for (shift, byte) in block[2..8].iter().enumerate() {
+        indices |= u64::from(*byte) << (shift * 8);
+    }
+    let mut pixels = [[0_u8; 4]; 16];
+    for pixel in pixels.iter_mut() {
+        let value = palette[(indices & 0x07) as usize];
+        *pixel = [value, value, value, value];
+        indices >>= 3;
+    }
+    pixels
 }
 
 pub fn decode_texture_rgba_with_layout(
@@ -181,6 +253,40 @@ mod tests {
 
         bytes[0..4].copy_from_slice(&0x0080_0000_u32.to_le_bytes());
         assert_eq!(texture_array_size(&bytes), 1);
+    }
+
+    #[test]
+    fn bc4_decodes_grayscale_alpha_into_all_channels() {
+        // 端点 200 > 100：6 档插值 + 16 个索引全覆盖。
+        let mut block = [0_u8; 8];
+        block[0] = 200;
+        block[1] = 100;
+        let mut indices = 0_u64;
+        for index in 0..16 {
+            indices |= ((index as u64) & 0x07) << (index * 3);
+        }
+        let index_bytes = indices.to_le_bytes();
+        block[2..8].copy_from_slice(&index_bytes[..6]);
+
+        let pixels = decode_bc4_block(&block);
+        assert_eq!(pixels[0], [200, 200, 200, 200], "index 0 = alpha_0");
+        assert_eq!(pixels[1], [100, 100, 100, 100], "index 1 = alpha_1");
+        assert_eq!(pixels[2], [214, 214, 214, 214], "index 2 = (7*a0+1*a1)/7");
+        assert_eq!(pixels[7], [142, 142, 142, 142], "index 7 = (2*a0+6*a1)/7");
+        assert_eq!(pixels[8][0], 200, "index wraps to palette slot 0");
+        assert_eq!(pixels[14], [157, 157, 157, 157], "index 6 = (3*a0+5*a1)/7");
+        assert_eq!(pixels[15], [142, 142, 142, 142], "index 7 remaps to slot 7");
+
+        // a0 <= a1 分支：4 档插值 + 0/255 哨兵。
+        let mut block = [0_u8; 8];
+        block[0] = 100;
+        block[1] = 200;
+        block[2..8].copy_from_slice(&index_bytes[..6]);
+        let pixels = decode_bc4_block(&block);
+        assert_eq!(pixels[0], [100, 100, 100, 100]);
+        assert_eq!(pixels[2], [140, 140, 140, 140], "index 2 = (5*a0+1*a1)/5");
+        assert_eq!(pixels[6], [0, 0, 0, 0], "index 6 = transparent sentinel");
+        assert_eq!(pixels[7], [255, 255, 255, 255], "index 7 = opaque sentinel");
     }
 
     #[test]

@@ -83,6 +83,18 @@ struct Material {
     draw_role_params: vec4<f32>, // x: lightshaft, y: transparent crest fallback, z: base material fallback
     debug_color: vec4<f32>, // xyz: mesh/draw-role debug color
     unsupported_color: vec4<f32>, // rgb: unsupported-input diagnostic color
+    // 角色颜色通道（uniform 尾部）：RGB 为 squared RGB 线性色，W 为激活/强度。
+    // 无 character_colors 的材质全零，全部分支不激活（武器/装备渲染不受影响）。
+    character_skin: vec4<f32>, // rgb: SkinColor, a: 激活
+    character_lip: vec4<f32>, // rgb: LipColor, a: 唇釉混合权重
+    character_main: vec4<f32>, // rgb: MainColor 发色, a: 激活
+    character_mesh: vec4<f32>, // rgb: MeshColor 挑染, a: 混合权重
+    character_left_iris: vec4<f32>, // rgb: 左眼色, a: 激活
+    character_right_iris: vec4<f32>, // rgb: 右眼色, a: 激活（分侧未实现，备用）
+    character_option: vec4<f32>, // rgb: OptionColor 特征色, a: 激活
+    character_decal: vec4<f32>, // rgb: DecalColor 面妆色, a: 不透明度
+    character_decal_uv: vec4<f32>, // x: UV multiplier, y: UV offset, z: reversed, w: 贴图存在
+    character_params: vec4<f32>, // x: hair family 用 mask R 通道作明暗细节, yzw: 保留
 };
 
 struct VertexInput {
@@ -99,7 +111,79 @@ struct VertexInput {
     @location(10) bitangent1: vec4<f32>,
     @location(11) flow0: vec4<f32>,
     @location(12) flow1: vec4<f32>,
+    @location(13) joints: vec2<u32>, // u8×8 打包（低字节在前）：槽位 0..3 在 x，4..7 在 y
+    @location(14) weights0: vec4<f32>,
+    @location(15) weights1: vec4<f32>,
 };
+
+// 实例蒙皮关节矩阵（storage 头 + 运行时数组）。count=0（无骨架实例）时
+// vs_main/vs_outline 跳过蒙皮分支，渲染与非蒙皮路径逐位一致。
+struct JointData {
+    count: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+    matrices: array<mat4x4<f32>>,
+};
+
+@group(2) @binding(0)
+var<storage, read> joint_data: JointData;
+
+/// GPU 蒙皮：skinned_pos = Σ w·J·pos。MDL 原始权重是 u8/255 量化值，和只在
+/// 量化误差范围内≈1，这里按 Σw 归一兜底。法线用 mat3(J)——骨骼无缩放时是
+/// 精确的；FFXIV 骨骼为刚体（rest 含 uniform scale 时已并入 world 计算），
+/// 非均匀缩放骨骼下只是近似（注释声明，不做逆转置）。
+struct SkinnedPosition {
+    position: vec4<f32>,
+    normal: vec3<f32>,
+};
+
+fn skin_vertex(
+    position: vec4<f32>,
+    normal: vec3<f32>,
+    joints: vec2<u32>,
+    weights0: vec4<f32>,
+    weights1: vec4<f32>,
+) -> SkinnedPosition {
+    var joint_indices = array<u32, 8>(
+        joints.x & 0xFFu,
+        (joints.x >> 8u) & 0xFFu,
+        (joints.x >> 16u) & 0xFFu,
+        joints.x >> 24u,
+        joints.y & 0xFFu,
+        (joints.y >> 8u) & 0xFFu,
+        (joints.y >> 16u) & 0xFFu,
+        joints.y >> 24u,
+    );
+    var weights = array<f32, 8>(
+        weights0.x,
+        weights0.y,
+        weights0.z,
+        weights0.w,
+        weights1.x,
+        weights1.y,
+        weights1.z,
+        weights1.w,
+    );
+    let weight_sum = weights0.x + weights0.y + weights0.z + weights0.w
+        + weights1.x + weights1.y + weights1.z + weights1.w;
+    let inv_weight_sum = 1.0 / max(weight_sum, 0.000001);
+    var skinned = vec4<f32>(0.0);
+    var skinned_normal = vec3<f32>(0.0);
+    for (var slot = 0u; slot < 8u; slot++) {
+        let index = joint_indices[slot];
+        if index < joint_data.count {
+            let joint = joint_data.matrices[index];
+            let w = weights[slot] * inv_weight_sum;
+            skinned += w * (joint * position);
+            skinned_normal += w * (mat3x3<f32>(joint[0].xyz, joint[1].xyz, joint[2].xyz) * normal);
+        }
+    }
+    var out: SkinnedPosition;
+    out.position = skinned;
+    out.normal = skinned_normal;
+    return out;
+}
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -214,15 +298,34 @@ var tile_array_sampler: sampler;
 @group(1) @binding(30)
 var detail_array_sampler: sampler;
 
+@group(1) @binding(31)
+var decal_texture: texture_2d<f32>;
+
+@group(1) @binding(32)
+var decal_sampler: sampler;
+
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
 };
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
+    var position = vec4<f32>(input.position, 1.0);
+    var normal = input.normal;
+    if joint_data.count > 0u {
+        let skinned = skin_vertex(
+            position,
+            normal,
+            input.joints,
+            input.weights0,
+            input.weights1,
+        );
+        position = skinned.position;
+        normal = skinned.normal;
+    }
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * vec4<f32>(input.position, 1.0);
-    out.normal = normalize(input.normal);
+    out.clip_position = camera.view_proj * position;
+    out.normal = normalize(normal);
     out.uv0 = input.uv0;
     out.bitangent = input.bitangent;
     out.color = input.color;
@@ -234,16 +337,29 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.normal1 = normalize(input.normal1);
     out.bitangent1 = input.bitangent1;
     out.color1 = input.color1;
-    out.world_position = input.position;
+    out.world_position = position.xyz;
     return out;
 }
 
 @vertex
 fn vs_outline(input: VertexInput) -> VertexOutput {
     let width = clamp(material.outline_params.a, 0.0, 0.1);
+    var position = vec4<f32>(input.position, 1.0);
+    var normal = input.normal;
+    if joint_data.count > 0u {
+        let skinned = skin_vertex(
+            position,
+            normal,
+            input.joints,
+            input.weights0,
+            input.weights1,
+        );
+        position = skinned.position;
+        normal = skinned.normal;
+    }
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * vec4<f32>(input.position + normalize(input.normal) * width, 1.0);
-    out.normal = normalize(input.normal);
+    out.clip_position = camera.view_proj * vec4<f32>(position.xyz + normalize(normal) * width, 1.0);
+    out.normal = normalize(normal);
     out.uv0 = input.uv0;
     out.bitangent = input.bitangent;
     out.color = input.color;
@@ -255,7 +371,7 @@ fn vs_outline(input: VertexInput) -> VertexOutput {
     out.normal1 = normalize(input.normal1);
     out.bitangent1 = input.bitangent1;
     out.color1 = input.color1;
-    out.world_position = input.position + normalize(input.normal) * width;
+    out.world_position = position.xyz + normalize(normal) * width;
     return out;
 }
 
@@ -348,7 +464,15 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
         discard;
     }
     if pass_flags.is_mask && surface.alpha < material.render.w {
-        discard;
+        if material.family_params.w > 0.5 {
+            // hair.shpk：alpha-to-coverage 近似——固定阈值会把发丝边缘渐变带
+            // 整片削碎（敖龙刘海实证），按 4x4 screen-door 抖动保留软边缘。
+            if surface.alpha <= ordered_dither_threshold(input.clip_position.xy) {
+                discard;
+            }
+        } else {
+            discard;
+        }
     }
     if pass_flags.uses_alpha && surface.alpha < 0.01 {
         discard;
@@ -597,6 +721,7 @@ fn resolve_surface_state(
         material.water_deep_color.rgb,
         material.feature_params.y > 0.5,
     );
+    out.base = resolve_character_family_base(input, out.base, samples);
 
     let opacity_vertex_alpha = select(
         input.color.a,
@@ -748,6 +873,75 @@ fn hemisphere_irradiance(normal: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
     let view_fill = sqrt(max(dot(normal, view), 0.0));
     return mix(PREVIEW_AMBIENT_GROUND, PREVIEW_AMBIENT_SKY, vertical)
         + PREVIEW_AMBIENT_VIEW_FILL * view_fill;
+}
+
+fn resolve_character_family_base(
+    input: VertexOutput,
+    base: vec3<f32>,
+    samples: SurfaceSamples,
+) -> vec3<f32> {
+    // MeddleTools 已连节点（node_configs.py skin/hair/iris/charactertattoo）的第一版
+    // 落地；无节点证据的输入（唇形/挑染遮罩通道语义、双眼分侧、g_WhiteEyeColor、
+    // FacePaintUVMultiplier/Offset 运行态值）按近似处理并保留 unsupported 摘要。
+    var color = base;
+    // skin family（Face/Body/BodyJJM 同路径）：diffuse × SkinColor。
+    if material.character_skin.a > 0.5 {
+        color = color * material.character_skin.rgb;
+        // LipColor：按 lipstick 开关与唇形遮罩混入。遮罩无节点证据，第一版用脸
+        // 漫反射 alpha（唇区 alpha 非 0），仅脸部件材质由渲染侧填该通道。
+        if material.character_lip.a > 0.5 {
+            let lip_weight = clamp(material.character_lip.a * samples.base.a, 0.0, 1.0);
+            color = mix(color, material.character_lip.rgb, lip_weight);
+        }
+        // 面妆 decal：UV multiplier/offset 运行态值离线不可得，按恒等 UV（uv0）
+        // 采样；缺失时数据层不挂贴图（w = 0），此处不激活。
+        if material.character_decal.a > 0.0 && material.character_decal_uv.w > 0.5 {
+            let decal_uv = vec2<f32>(
+                input.uv0.x * material.character_decal_uv.x + material.character_decal_uv.y,
+                input.uv0.y,
+            );
+            let decal_sample = textureSample(decal_texture, decal_sampler, decal_uv);
+            color = mix(
+                color,
+                decal_sample.rgb * material.character_decal.rgb,
+                clamp(decal_sample.a * material.character_decal.a, 0.0, 1.0),
+            );
+        }
+    }
+    // hair family：MainColor 乘 diffuse；头发/尾/兔耳无 base 纹理，mask **R 通道**
+    // 是发丝明暗渐变（AO，真实纹理解码验证：R=渐变、G=挑染区域、B≈常量、
+    // A=R 副本）作明暗细节，只取发色平色的场景（脸部 hair 材质如眉毛的 mask
+    // 是数据通道）由 character_params.x 关闭。MeshColor 挑染区域用 **G 通道**。
+    if material.character_main.a > 0.5 {
+        let use_mask_detail = material.character_params.x > 0.5 && material.params.w > 0.5;
+        let hair_detail = select(vec3<f32>(1.0), vec3<f32>(samples.mask.r), use_mask_detail);
+        var hair_color = hair_detail * material.character_main.rgb;
+        if material.character_mesh.a > 0.5 && material.params.w > 0.5 {
+            let mask_uv = resolve_uv(input, material.uv_sources0.z, material.uv_scroll_masks0.z);
+            let hair_mask = textureSampleBias(
+                mask_texture,
+                mask_sampler,
+                mask_uv,
+                resolve_texture_mip_bias(),
+            );
+            hair_color = mix(
+                hair_color,
+                hair_detail * material.character_mesh.rgb,
+                clamp(hair_mask.g * material.character_mesh.a, 0.0, 1.0),
+            );
+        }
+        color = hair_color;
+    }
+    // iris family：虹膜 × LeftIrisColor。眼白 g_WhiteEyeColor 无离线来源按恒等白，
+    // 单眼材质双眼共享（右眼色入 uniform 备用未分侧）。
+    if material.character_left_iris.a > 0.5 {
+        color = color * material.character_left_iris.rgb;
+    }
+    // charactertattoo family：OptionColor 平铺（形状由法线贴图 alpha 的透明策略给）。
+    if material.character_option.a > 0.5 {
+        color = material.character_option.rgb;
+    }
+    return color;
 }
 
 fn resolve_surface_output(
@@ -1029,7 +1223,10 @@ fn resolve_material_properties(uv: vec2<f32>, mask: vec3<f32>, color_table_weigh
         return vec4<f32>(metalness, roughness, gloss_strength, 1.0);
     }
 
-    let metalness = clamp(max(material.params.y, mask.b * material.params.w), 0.0, 1.0);
+    // 皮肤族（family_params.z）：皮肤/毛发是介电质，mask.b 是族别数据通道
+    // （皮肤次表面强度等），不当金属度——否则敖龙 mask.b≈0.61 渲染成铜金属。
+    let mask_metalness = mask.b * material.params.w * select(1.0, 0.0, material.family_params.z > 0.5);
+    let metalness = clamp(max(material.params.y, mask_metalness), 0.0, 1.0);
     let roughness = clamp(mix(material.specular_color.a, mask.g, material.params.w), 0.08, 1.0);
     let specular_strength = mix(1.0, mask.r, material.params.w);
     let gloss_strength = clamp((1.0 - roughness) * 0.75 + 0.25, 0.0, 1.0);

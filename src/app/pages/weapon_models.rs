@@ -27,19 +27,48 @@ use xiv_companion::renderer::{ModelDebugMode, ModelGlassBlendMode, WeaponRenderO
 use xiv_companion::{
     CharaCatalogItem, CharaCatalogPackage, CharaModelKind, CharaModelType,
     CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
-    FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAttributeOption,
-    PackedCharaModelId, PackedEquipmentModelId, PackedModelId, WeaponModelData,
-    WeaponModelTextureKind, WeaponStain, equipment_slot_info, is_weapon_equip_slot_category,
-    model_attribute_options, weapon_slot_label,
+    FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAnimationSet,
+    ModelAttributeOption, ModelSkeleton, PackedCharaModelId, PackedEquipmentModelId, PackedModelId,
+    WeaponModelData, WeaponModelTextureKind, WeaponStain, equipment_slot_info,
+    is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
 use crate::app::data::{
-    load_chara_catalog, load_chara_model, load_collection_catalog, load_equipment_model,
-    load_furniture_catalog, load_furniture_model, load_weapon_catalog, load_weapon_model,
-    load_weapon_staining_templates, stain_weapon_model,
+    load_chara_catalog, load_chara_model_with_animation_assets, load_collection_catalog,
+    load_equipment_model, load_furniture_catalog, load_furniture_model, load_weapon_catalog,
+    load_weapon_model, load_weapon_staining_templates, stain_weapon_model,
 };
 use crate::app::load_progress::{self, WeaponModelLoadProgress};
+
+/// 动画播放状态：模型 + 骨架 + 动画集齐备时由页面派生传入画布；画布 rAF
+/// 循环每帧读取（选中动画时 `sample(t) → update_joint_matrices`）。
+/// 身份比较按 Rc 指针——状态随模型资源/选中项变化整体替换。
+#[derive(Clone)]
+pub(crate) struct AnimationPlaybackState {
+    pub set: std::rc::Rc<ModelAnimationSet>,
+    pub skeleton: std::rc::Rc<ModelSkeleton>,
+    pub selected: Option<usize>,
+}
+
+impl PartialEq for AnimationPlaybackState {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.set, &other.set)
+            && std::rc::Rc::ptr_eq(&self.skeleton, &other.skeleton)
+            && self.selected == other.selected
+    }
+}
+
+/// `Rc<ModelAnimationSet>` 的组件 props 包装：相等按 Rc 身份比较（动画集随
+/// 加载整体替换，语义深比较无意义且昂贵）。
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationSetHandle(pub Rc<ModelAnimationSet>);
+
+impl PartialEq for AnimationSetHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 const RESULT_LIMIT: usize = 220;
 const WEAPON_MODELS_ROUTE_PATH: &str = "/weapon-models";
@@ -287,12 +316,18 @@ struct ModelResourceResult {
     item_id: u32,
     race_id: u16,
     result: Result<Rc<WeaponModelData>, String>,
+    /// 宠物/坐骑的 rest pose 骨架（sklb 缺失为 None）。
+    skeleton: Option<Rc<ModelSkeleton>>,
+    /// 宠物/坐骑的动画集（pap 候选全缺为 None）。
+    animations: Option<Rc<ModelAnimationSet>>,
 }
 
 #[derive(Clone)]
 struct ModelPreviewResult {
     key: ModelRequestKey,
     result: Result<Rc<WeaponModelData>, String>,
+    skeleton: Option<Rc<ModelSkeleton>>,
+    animations: Option<Rc<ModelAnimationSet>>,
 }
 
 impl PartialEq for ModelPreviewResult {
@@ -300,11 +335,22 @@ impl PartialEq for ModelPreviewResult {
         if self.key != other.key {
             return false;
         }
-        match (&self.result, &other.result) {
+        let result_eq = match (&self.result, &other.result) {
             (Ok(left), Ok(right)) => Rc::ptr_eq(left, right),
             (Err(left), Err(right)) => left == right,
             _ => false,
-        }
+        };
+        result_eq
+            && optional_rc_eq(&self.skeleton, &other.skeleton)
+            && optional_rc_eq(&self.animations, &other.animations)
+    }
+}
+
+fn optional_rc_eq<T>(left: &Option<Rc<T>>, right: &Option<Rc<T>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+        _ => false,
     }
 }
 
@@ -529,21 +575,30 @@ pub fn ModelPreviewPage() -> Element {
         let race_id = race_id();
         async move {
             let item = item?;
-            let result = match &item {
+            let (result, skeleton, animations) = match &item {
                 ModelCatalogItem::Equipment(equipment) => match model_preview_support(equipment) {
-                    ModelPreviewSupport::Weapon => load_weapon_model(equipment).await,
+                    ModelPreviewSupport::Weapon => (load_weapon_model(equipment).await, None, None),
                     ModelPreviewSupport::Equipment => {
-                        load_equipment_model(equipment, race_id).await
+                        (load_equipment_model(equipment, race_id).await, None, None)
                     }
                     _ => return None,
                 },
-                ModelCatalogItem::Furniture(furniture) => load_furniture_model(furniture).await,
-                ModelCatalogItem::Chara(chara) => load_chara_model(chara).await,
+                ModelCatalogItem::Furniture(furniture) => {
+                    (load_furniture_model(furniture).await, None, None)
+                }
+                ModelCatalogItem::Chara(chara) => {
+                    match load_chara_model_with_animation_assets(chara).await {
+                        Ok((data, skeleton, animations)) => (Ok(data), skeleton, animations),
+                        Err(error) => (Err(error), None, None),
+                    }
+                }
             };
             Some(ModelResourceResult {
                 item_id: item.id(),
                 race_id,
                 result,
+                skeleton,
+                animations,
             })
         }
     });
@@ -561,7 +616,7 @@ pub fn ModelPreviewPage() -> Element {
         if loaded.item_id != item.id() || loaded.race_id != race_id {
             return None;
         }
-        // 家具与宠物/坐骑没有染色通道，始终展示基线模型。
+        // 家具与宠物/坐骑没有染色通道，始终展示基线模型；骨架/动画集与染色无关。
         let stainable = matches!(item, ModelCatalogItem::Equipment(_));
         let result = match loaded.result {
             Err(error) => Err(error),
@@ -572,7 +627,12 @@ pub fn ModelPreviewPage() -> Element {
                 None => return None,
             },
         };
-        Some(ModelPreviewResult { key, result })
+        Some(ModelPreviewResult {
+            key,
+            result,
+            skeleton: loaded.skeleton,
+            animations: loaded.animations,
+        })
     });
 
     use_effect(move || {
@@ -958,6 +1018,8 @@ fn ModelPreviewPane(
     let mut attribute_selection = use_signal(|| (None::<u32>, 0_u32));
     // 隔离预览开关同样按物品 id 作用域存储，切换物品后回到关闭。
     let mut parts_only_selection = use_signal(|| (None::<u32>, false));
+    // 动画选择按物品 id 作用域存储：切换物品后回到 None（rest）。
+    let mut animation_selection = use_signal(|| (None::<u32>, None::<usize>));
     let support = selected.as_ref().map(ModelCatalogItem::support);
     let stainable = matches!(
         support,
@@ -974,13 +1036,20 @@ fn ModelPreviewPane(
         race_id,
         stain_ids,
     });
-    let current_model_result = requested_key.and_then(|key| {
+    let current_snapshot = requested_key.and_then(|key| {
         model
             .filter(|snapshot| {
                 snapshot.key.item_id == key.item_id && snapshot.key.race_id == key.race_id
             })
-            .map(|snapshot| snapshot.result)
+            .clone()
     });
+    let current_model_result = current_snapshot.as_ref().map(|snapshot| snapshot.result.clone());
+    let current_skeleton = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.skeleton.clone());
+    let current_animations = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.animations.clone());
     let current_progress =
         requested_key.and_then(|key| progress.filter(|progress| progress.item_id == key.item_id));
 
@@ -1041,6 +1110,13 @@ fn ModelPreviewPane(
                                     scoped_attribute_mask(attribute_selection(), item.id());
                                 let attribute_parts_only =
                                     scoped_attribute_parts_only(parts_only_selection(), item.id());
+                                let animation_selected =
+                                    scoped_animation_selection(animation_selection(), item.id());
+                                let playback = animation_playback(
+                                    &current_skeleton,
+                                    &current_animations,
+                                    animation_selected,
+                                );
                                 rsx! {
                                     WeaponModelCanvas {
                                         model: canvas_model,
@@ -1049,6 +1125,11 @@ fn ModelPreviewPane(
                                         race_id,
                                         attribute_mask,
                                         attribute_parts_only,
+                                        // 有动画集时强制原位布局：平铺偏移量烘
+                                        // 在蒙皮前顶点位置里，动画驱动 joint 后
+                                        // 偏移随关节旋转（rest 下无此问题）。
+                                        component_preview_layout: playback.is_none(),
+                                        animation: playback,
                                     }
                                     match current_model_result.as_ref() {
                                         Some(Ok(_)) => rsx! {},
@@ -1086,6 +1167,9 @@ fn ModelPreviewPane(
                                         parts_only_selection(),
                                         item_id,
                                     );
+                                    let animation_selected =
+                                        scoped_animation_selection(animation_selection(), item_id);
+                                    let animations = current_animations.clone();
                                     rsx! {
                                         div { class: "space-y-4",
                                             WeaponRenderControls {
@@ -1095,6 +1179,16 @@ fn ModelPreviewPane(
                                                 on_shape_change: move |mask| {
                                                     shape_selection.set((Some(item_id), mask));
                                                 },
+                                            }
+                                            if let Some(animations) = animations {
+                                                AnimationControls {
+                                                    animations: AnimationSetHandle(animations),
+                                                    selected: animation_selected,
+                                                    on_select: move |selected| {
+                                                        animation_selection
+                                                            .set((Some(item_id), selected));
+                                                    },
+                                                }
                                             }
                                             WeaponAttributeControls {
                                                 model: data.clone(),
@@ -1159,7 +1253,7 @@ fn ModelPreviewPane(
 }
 
 #[component]
-fn WeaponModelLoadingView(
+pub(crate) fn WeaponModelLoadingView(
     progress: Option<WeaponModelLoadProgress>,
     stage: Option<String>,
 ) -> Element {
@@ -1544,6 +1638,39 @@ fn RenderCheckbox(label: &'static str, checked: bool, on_change: EventHandler<bo
     }
 }
 
+/// 骨骼动画下拉：有动画集时出现。None=rest（绑定姿势），其余为动画名列表。
+#[component]
+pub(crate) fn AnimationControls(
+    animations: AnimationSetHandle,
+    selected: Option<usize>,
+    on_select: EventHandler<Option<usize>>,
+) -> Element {
+    let animations = animations.0;
+    let select_class = input_class("h-8 w-full cursor-pointer py-1 text-xs");
+    rsx! {
+        section { class: "space-y-2 text-xs",
+            div { class: "flex items-center justify-between gap-3",
+                span { class: "text-sm font-semibold", "动画" }
+                span { class: "text-[11px] text-muted-foreground",
+                    "{animations.animations.len()} 个"
+                }
+            }
+            select {
+                class: "{select_class}",
+                value: "{selected.map(|index| index.to_string()).unwrap_or_default()}",
+                onchange: move |event| {
+                    let value = event.value().parse::<usize>().ok();
+                    on_select.call(value);
+                },
+                option { value: "", "Rest（绑定姿势）" }
+                for (index, animation) in animations.animations.iter().enumerate() {
+                    option { value: "{index}", "{animation.name}" }
+                }
+            }
+        }
+    }
+}
+
 /// 部件变体（attribute submesh）勾选列表：模型无 attribute 选项时不渲染。
 /// 默认全部关闭，对应游戏默认状态。
 #[component]
@@ -1817,13 +1944,28 @@ fn parse_glass_blend_mode(value: &str) -> ModelGlassBlendMode {
 const WEAPON_MODEL_CANVAS_ID: &str = "weapon-model-canvas";
 
 #[component]
-fn WeaponModelCanvas(
+pub(crate) fn WeaponModelCanvas(
     model: Option<Rc<WeaponModelData>>,
     render_options: Signal<WeaponRenderOptions>,
     shape_mask: Option<u32>,
     race_id: u16,
     attribute_mask: u32,
     attribute_parts_only: bool,
+    /// 按 attribute 名启用（角色拼装）：Some 时优先于 `attribute_mask`，
+    /// 位号映射回各 MDL 本地 attribute 名逐名核对。
+    #[props(default)]
+    enabled_attribute_names: Option<Vec<String>>,
+    /// 多 component 预览布局：true（默认）沿 X 轴平铺拆开（武器/家具），false
+    /// 部件按游戏坐标原位重叠（角色拼装）。调用方按页面语义固定传入。
+    #[props(default = true)]
+    component_preview_layout: bool,
+    /// 模型 Reload 修订号：同一 instance key 下重新加载出新模型（如角色装配换
+    /// 发型/颜色）时递增，驱动画布重新 set_model；恒为 0（默认）时行为不变。
+    #[props(default = 0_u64)]
+    model_revision: u64,
+    /// 骨骼动画播放状态（有动画集时 Some）。None 时渲染行为与无动画一致。
+    #[props(default)]
+    animation: Option<AnimationPlaybackState>,
 ) -> Element {
     let init_error = use_signal(|| None::<String>);
     let ready = use_signal(|| false);
@@ -1833,6 +1975,10 @@ fn WeaponModelCanvas(
         let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
         let init_generation = use_signal(|| 0_u64);
         let init_in_flight = use_signal(|| false);
+        // 动画播放状态镜像：prop 在渲染期快照，rAF 循环经 Signal 读取最新值。
+        let animation_signal = use_signal(|| animation.clone());
+        // 实例重建计数：set_model 后递增，rAF 循环据此刷新 joint 名表缓存。
+        let joint_epoch = use_signal(|| 0_u64);
         let instance_key = model.as_ref().map(|model| {
             model_instance_key(
                 model,
@@ -1851,6 +1997,8 @@ fn WeaponModelCanvas(
         let mut effect_renderer = renderer;
         let mut effect_generation = init_generation;
         let mut effect_in_flight = init_in_flight;
+        let effect_animation = animation_signal;
+        let mut effect_joint_epoch = joint_epoch;
         use_effect(use_reactive((&instance_key,), move |_| {
             if effect_renderer.peek().is_some() || *effect_in_flight.peek() {
                 return;
@@ -1885,7 +2033,14 @@ fn WeaponModelCanvas(
                         effect_renderer.set(Some(renderer.clone()));
                         effect_error.set(None);
                         effect_ready.set(true);
-                        start_weapon_render_loop(renderer, options, effect_generation, generation)
+                        start_weapon_render_loop(
+                            renderer,
+                            options,
+                            effect_animation,
+                            effect_joint_epoch,
+                            effect_generation,
+                            generation,
+                        )
                     }
                     Err(error) if *effect_generation.peek() == generation => {
                         effect_error.set(Some(error))
@@ -1895,11 +2050,20 @@ fn WeaponModelCanvas(
             });
         }));
 
+        // 动画播放状态 prop → Signal 镜像（rAF 循环每帧读取最新状态）。
+        let mut effect_animation = animation_signal;
+        use_effect(use_reactive((&animation,), move |(next,)| {
+            if effect_animation() != next {
+                effect_animation.set(next);
+            }
+        }));
+
         // 物品/模型/shape/种族/部件变体变化时同步重建 GPU 实例：复用常驻
         // context，不再重新初始化设备与管线。物品/模型/种族变化重置轨道相机
         // 视角（对齐画布重建的旧行为）；shape 与部件变体变化保持视角。
-        let set_model_key = (instance_key, renderer_ready);
+        let set_model_key = (instance_key, model_revision, renderer_ready);
         let instance_model = model.clone();
+        let instance_attribute_names = enabled_attribute_names.clone();
         let mut last_orbit_key = use_signal(|| None::<(u32, u64, u64, u16)>);
         use_effect(use_reactive((&set_model_key,), move |_| {
             let (Some(model), Some(_)) = (instance_model.clone(), instance_key) else {
@@ -1908,20 +2072,30 @@ fn WeaponModelCanvas(
             let Some(renderer) = renderer.peek().clone() else {
                 return;
             };
-            let mut prepared_options = PreparedModelOptions::default();
+            let mut prepared_options = PreparedModelOptions::default()
+                .with_component_preview_layout(component_preview_layout);
             if let Some(mask) = shape_mask {
                 prepared_options = prepared_options.with_enabled_shape_mask(mask);
             }
             // 模型无 attribute submesh 时不设置 attribute 相关选项（保持
-            // None/false），由准备管线按游戏默认处理。
+            // None/false），由准备管线按游戏默认处理。角色拼装按名启用
+            // （位是 MDL 本地表序，跨模型数值不可比），优先于数值掩码。
             if model_has_attribute_submeshes(&model) {
-                prepared_options = prepared_options
-                    .with_enabled_attribute_mask(attribute_mask)
-                    .with_attribute_parts_only(attribute_parts_only);
+                if let Some(names) = &instance_attribute_names {
+                    prepared_options =
+                        prepared_options.with_enabled_attribute_names(names.clone());
+                } else {
+                    prepared_options = prepared_options
+                        .with_enabled_attribute_mask(attribute_mask)
+                        .with_attribute_parts_only(attribute_parts_only);
+                }
             }
             let orbit_key = model_orbit_reset_key(&model, race_id);
             let mut renderer = renderer.borrow_mut();
             renderer.set_model(&model, prepared_options);
+            // 实例重建后 joint 名表/缓冲均重置（rest）：rAF 循环据此刷新动画运行时。
+            let next_epoch = *effect_joint_epoch.peek() + 1;
+            effect_joint_epoch.set(next_epoch);
             if *last_orbit_key.peek() != Some(orbit_key) {
                 renderer.reset_orbit();
                 last_orbit_key.set(Some(orbit_key));
@@ -1966,10 +2140,23 @@ fn WeaponModelCanvas(
     }
 }
 
+/// rAF 动画播放运行时：joint 名表 + inverse bind 缓存随实例重建（joint_epoch）
+/// 刷新；`playing` 记录当前 joint buffer 对应的动画（None = 已是 rest）。
+#[cfg(target_arch = "wasm32")]
+struct AnimationLoopRuntime {
+    joint_names: Vec<String>,
+    inverse_bind: xiv_companion::SkeletonInverseBindCache,
+    playing: Option<usize>,
+    started_at_ms: f64,
+    epoch: u64,
+}
+
 #[cfg(target_arch = "wasm32")]
 fn start_weapon_render_loop(
     renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>,
     render_options: Signal<WeaponRenderOptions>,
+    animation: Signal<Option<AnimationPlaybackState>>,
+    joint_epoch: Signal<u64>,
     generation: Signal<u64>,
     expected_generation: u64,
 ) {
@@ -1977,11 +2164,19 @@ fn start_weapon_render_loop(
         WasmRc::new(RefCell::new(None));
     let callback_slot_for_loop = callback_slot.clone();
     let renderer_for_loop = renderer.clone();
+    let mut animation_runtime: Option<AnimationLoopRuntime> = None;
 
     *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
         let connected = {
             let mut renderer = renderer_for_loop.borrow_mut();
             if renderer.canvas_connected() && *generation.peek() == expected_generation {
+                drive_animation_playback(
+                    &mut renderer,
+                    &animation(),
+                    *joint_epoch.peek(),
+                    &mut animation_runtime,
+                    time_ms,
+                );
                 let mut options = render_options();
                 options.uv_scroll_time = (time_ms as f32) / 1000.0;
                 renderer.render_with_options(options);
@@ -2004,6 +2199,69 @@ fn start_weapon_render_loop(
 
     if let (Some(window), Some(callback)) = (web_sys::window(), callback_slot.borrow().as_ref()) {
         let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    }
+}
+
+/// 每帧动画驱动：实例重建后刷新 joint 名表缓存；选中动画时
+/// `time = (now - start) % duration` 采样并上传关节矩阵（切换动画/模型
+/// 时重置计时）；切回 Rest 时上传一次 rest 关节矩阵。
+#[cfg(target_arch = "wasm32")]
+fn drive_animation_playback(
+    renderer: &mut WebWeaponCanvasRenderer,
+    playback: &Option<AnimationPlaybackState>,
+    epoch: u64,
+    runtime: &mut Option<AnimationLoopRuntime>,
+    time_ms: f64,
+) {
+    if runtime.as_ref().map(|runtime| runtime.epoch) != Some(epoch) {
+        *runtime = Some(AnimationLoopRuntime {
+            joint_names: renderer.joint_names(),
+            inverse_bind: xiv_companion::SkeletonInverseBindCache::new(),
+            playing: None,
+            started_at_ms: time_ms,
+            epoch,
+        });
+    }
+    let Some(runtime) = runtime.as_mut() else {
+        return;
+    };
+    let Some(playback) = playback else {
+        // 动画状态消失（切到无动画模型）：joint 缓冲已被新实例重置为 rest。
+        runtime.playing = None;
+        return;
+    };
+    match playback.selected {
+        Some(index) => {
+            let Some(animation) = playback.set.animations.get(index) else {
+                return;
+            };
+            if runtime.playing != Some(index) {
+                runtime.playing = Some(index);
+                runtime.started_at_ms = time_ms;
+            }
+            let duration_ms = animation.duration_ms.max(1.0);
+            let time = ((time_ms - runtime.started_at_ms) as f32).rem_euclid(duration_ms);
+            let matrices = xiv_companion::animation_joint_matrices(
+                &playback.set,
+                index,
+                time,
+                &playback.skeleton,
+                &runtime.joint_names,
+                &mut runtime.inverse_bind,
+            );
+            renderer.update_joint_matrices(&matrices);
+        }
+        None => {
+            if runtime.playing.take().is_some() {
+                let rest = xiv_companion::SkeletonPose::rest_pose(&playback.skeleton);
+                let matrices = runtime.inverse_bind.joint_matrices(
+                    &playback.skeleton,
+                    &rest,
+                    &runtime.joint_names,
+                );
+                renderer.update_joint_matrices(&matrices);
+            }
+        }
     }
 }
 
@@ -2456,6 +2714,28 @@ fn scoped_attribute_mask(selection: (Option<u32>, u32), item_id: u32) -> u32 {
 /// 隔离预览开关同样按物品 id 作用域存储；切换物品后回到关闭。
 fn scoped_attribute_parts_only(selection: (Option<u32>, bool), item_id: u32) -> bool {
     selection.0 == Some(item_id) && selection.1
+}
+
+/// 动画选择按物品 id 作用域存储；切换物品后回到 None（rest）。
+fn scoped_animation_selection(selection: (Option<u32>, Option<usize>), item_id: u32) -> Option<usize> {
+    (selection.0 == Some(item_id)).then_some(selection.1).flatten()
+}
+
+/// 动画播放状态：骨架 + 非空动画集齐备时可用（UI 出现「动画」下拉）。
+pub(crate) fn animation_playback(
+    skeleton: &Option<Rc<ModelSkeleton>>,
+    animations: &Option<Rc<ModelAnimationSet>>,
+    selected: Option<usize>,
+) -> Option<AnimationPlaybackState> {
+    let (skeleton, animations) = skeleton.clone().zip(animations.clone())?;
+    if animations.is_empty() {
+        return None;
+    }
+    Some(AnimationPlaybackState {
+        set: animations,
+        skeleton,
+        selected,
+    })
 }
 
 fn toggle_attribute_mask(mask: u32, bit: u32, enabled: bool) -> u32 {

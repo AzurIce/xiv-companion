@@ -107,6 +107,14 @@ pub const APP_MODULES: &[AppModule] = &[
         capabilities: LOCAL_DATA_REQUIRED,
     },
     AppModule {
+        id: "character",
+        label: "角色",
+        href: "/character",
+        group: ModuleGroup::Preview,
+        status: ModuleStatus::Experimental,
+        capabilities: LOCAL_DATA_REQUIRED,
+    },
+    AppModule {
         id: "inventory",
         label: "物品",
         href: "/inventory",
