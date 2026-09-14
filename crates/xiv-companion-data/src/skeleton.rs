@@ -720,11 +720,11 @@ fn parse_havok_skeleton(havok: &[u8]) -> Result<ModelSkeleton, SkeletonError> {
     let bone_count = havok_skeleton.bone_names.len();
     let mut parent_indices = Vec::with_capacity(bone_count);
     for &parent in &havok_skeleton.parent_indices {
-        let parent = parent as u64;
-        // havok 无父骨骼标记为 -1（usize 回转），其余应为合法下标。
-        parent_indices.push(if parent == u64::MAX {
+        // havok 无父骨骼标记为 -1（vendored 解析回转成 usize::MAX；wasm32 下是
+        // 0xFFFFFFFF 而非 u64::MAX，不能与 u64::MAX 比较），其余应为合法下标。
+        parent_indices.push(if parent == usize::MAX {
             -1
-        } else if parent <= i32::MAX as u64 {
+        } else if parent <= i32::MAX as usize {
             parent as i32
         } else {
             return Err(SkeletonError::InvalidParent {

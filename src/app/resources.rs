@@ -1507,6 +1507,45 @@ pub async fn load_character_assembly_with_skeleton_from_local(
             .map_err(|error| format!("{error:#}"));
     let result = match result {
         Ok((data, skeleton)) => {
+            // 拼接闭合诊断日志（浏览器 console 可见）：骨架缺失时骨变形与拼接
+            // 闭合都不会执行；foot_top ≈ calf_bottom + 0.015 表示闭合已生效。
+            let junction =
+                xiv_companion::bare_limb_junction_diagnostics(&data.meshes, request.customize.race_code());
+            log::info(
+                "character",
+                format!(
+                    "assembly race={} meshes={} skeleton={} calf_bottom={:?} foot_top={:?} forearm_end={:?} hand_start={:?}",
+                    request.customize.race_code(),
+                    data.meshes.len(),
+                    skeleton.is_some(),
+                    junction.calf_bottom,
+                    junction.foot_top,
+                    junction.forearm_end,
+                    junction.hand_start,
+                ),
+            );
+            // 骨架缺失时显式重试读取/解析并输出具体原因（装配内部对骨架失败
+            // 静默降级，这里的日志用于定位 web 端骨架加载问题）。
+            if skeleton.is_none() {
+                let sklb_path =
+                    xiv_companion::character_skeleton_path(request.customize.race_code());
+                match resource.read(&sklb_path).await {
+                    Err(error) => log::warn(
+                        "character",
+                        format!("skeleton read failed: {sklb_path}: {error}"),
+                    ),
+                    Ok(bytes) => match xiv_companion::load_skeleton_from_sklb_bytes(&bytes) {
+                        Err(error) => log::warn(
+                            "character",
+                            format!("skeleton parse failed: {sklb_path}: {error}"),
+                        ),
+                        Ok(_) => log::warn(
+                            "character",
+                            "skeleton read+parse succeeded on explicit retry".to_string(),
+                        ),
+                    },
+                }
+            }
             let animations = match &skeleton {
                 Some(skeleton) => {
                     let set = xiv_companion::load_animation_set_from_async_resource(

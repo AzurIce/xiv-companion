@@ -94,7 +94,7 @@ struct Material {
     character_option: vec4<f32>, // rgb: OptionColor 特征色, a: 激活
     character_decal: vec4<f32>, // rgb: DecalColor 面妆色, a: 不透明度
     character_decal_uv: vec4<f32>, // x: UV multiplier, y: UV offset, z: reversed, w: 贴图存在
-    character_params: vec4<f32>, // x: hair family 用 mask R 通道作明暗细节, yzw: 保留
+    character_params: vec4<f32>, // x: hair family 用 mask R 通道作明暗细节, y: obj/face 脸部毛发（alpha 整形）, zw: 保留
 };
 
 struct VertexInput {
@@ -910,8 +910,9 @@ fn resolve_character_family_base(
     }
     // hair family：MainColor 乘 diffuse；头发/尾/兔耳无 base 纹理，mask **R 通道**
     // 是发丝明暗渐变（AO，真实纹理解码验证：R=渐变、G=挑染区域、B≈常量、
-    // A=R 副本）作明暗细节，只取发色平色的场景（脸部 hair 材质如眉毛的 mask
-    // 是数据通道）由 character_params.x 关闭。MeshColor 挑染区域用 **G 通道**。
+    // A=R 副本）作明暗细节；脸部 hair 材质（眉毛/睫毛）的 mask R 同为明暗
+    // 细节图（眉发丝纹理 + 睫毛区压暗），平色发色会亮成白粉点（敖龙女实证）。
+    // MeshColor 挑染区域用 **G 通道**。
     if material.character_main.a > 0.5 {
         let use_mask_detail = material.character_params.x > 0.5 && material.params.w > 0.5;
         let hair_detail = select(vec3<f32>(1.0), vec3<f32>(samples.mask.r), use_mask_detail);

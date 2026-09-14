@@ -19,6 +19,7 @@ pub struct WebModelCanvasRenderer {
     context: ModelRenderContext,
     instance: Option<ModelInstance>,
     orbit: Rc<RefCell<OrbitState>>,
+    msaa_samples: u32,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
     _on_mouse_move: Closure<dyn FnMut(web_sys::MouseEvent)>,
     _on_mouse_up: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -30,6 +31,16 @@ impl WebModelCanvasRenderer {
     /// 一次性异步初始化：WebGPU instance/surface/adapter/device 与模型无关的
     /// 渲染 context（管线、后处理）。模型实例随后经 `set_model` 同步挂载。
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, String> {
+        Self::from_canvas_with_msaa(canvas, 1).await
+    }
+
+    /// MSAA 变体：`msaa_samples` 为场景目标/管线/深度纹理的采样数
+    /// （1 = 关闭，4 = 4x）。切换需重建整个 canvas renderer。
+    pub async fn from_canvas_with_msaa(
+        canvas: HtmlCanvasElement,
+        msaa_samples: u32,
+    ) -> Result<Self, String> {
+        let msaa_samples = if msaa_samples >= 3 { 4 } else { 1 };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -93,8 +104,8 @@ impl WebModelCanvasRenderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        let depth_texture = create_depth_texture(&device, width, height);
-        let context = ModelRenderContext::new(device, queue, config.format);
+        let depth_texture = create_depth_texture(&device, width, height, msaa_samples);
+        let context = ModelRenderContext::new_with_msaa(device, queue, config.format, msaa_samples);
         let orbit = Rc::new(RefCell::new(OrbitState::default()));
         let (on_mouse_down, on_mouse_move, on_mouse_up, on_wheel, on_context_menu) =
             install_orbit_handlers(&canvas, orbit.clone())?;
@@ -107,6 +118,7 @@ impl WebModelCanvasRenderer {
             context,
             instance: None,
             orbit,
+            msaa_samples,
             _on_mouse_down: on_mouse_down,
             _on_mouse_move: on_mouse_move,
             _on_mouse_up: on_mouse_up,
@@ -201,7 +213,8 @@ impl WebModelCanvasRenderer {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(self.context.device(), &self.config);
-            self.depth_texture = create_depth_texture(self.context.device(), width, height);
+            self.depth_texture =
+                create_depth_texture(self.context.device(), width, height, self.msaa_samples);
         }
     }
 }
@@ -339,7 +352,12 @@ fn canvas_pixel_size(canvas: &HtmlCanvasElement) -> (u32, u32) {
     (width, height)
 }
 
-fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    sample_count: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("model depth texture"),
         size: wgpu::Extent3d {
@@ -348,7 +366,7 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu:
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24Plus,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

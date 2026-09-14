@@ -2130,7 +2130,19 @@ pub fn prepared_material_alpha_policy(
 
     PreparedMaterialAlphaPolicy {
         source,
-        draw_depth_mode: material.draw_depth_mode,
+        // 脸部毛发（obj/face 下的 hair 材质）走 Transparent 真混合（见
+        // prepared_render_pass）：dither 深度会把半透明发丝带打成稀疏点，
+        // 这里同步关闭 dither 深度预通道；头部毛发保持 Cutout+dither。
+        draw_depth_mode: if matches!(shader_family, MaterialShaderFamily::Hair)
+            && material
+                .path
+                .as_deref()
+                .is_some_and(|path| path.contains("/obj/face/"))
+        {
+            MaterialDrawDepthMode::None
+        } else {
+            material.draw_depth_mode
+        },
         lighting_enabled,
     }
 }
@@ -2772,11 +2784,18 @@ fn prepared_render_pass(
     match material.alpha_mode {
         MaterialAlphaMode::Glass => PreparedRenderPass::Glass,
         // hair.shpk 的 Blend 在游戏内表现为 alpha clip（发丝覆盖头皮，真实
-        // 纹理解码：normal A 为发丝透明度图）；走 true blend 的 Transparent
-        // pass 会透出头皮鳞片/皮肤纹理（敖龙前额鳞片透出实证），按 Cutout。
-        MaterialAlphaMode::Blend if matches!(shader_family, MaterialShaderFamily::Hair) => {
+        // 纹理解码：normal A 为发丝透明度图）；头部毛发走 true blend 会透出
+        // 头皮鳞片/皮肤纹理（敖龙前额鳞片透出实证），按 Cutout。
+        MaterialAlphaMode::Blend
+            if matches!(shader_family, MaterialShaderFamily::Hair)
+                && !material.path.as_deref().is_some_and(|path| path.contains("/obj/face/")) =>
+        {
             PreparedRenderPass::Cutout
         }
+        // 脸部毛发（眉毛/睫毛，obj/face 下的 hair 材质）：下方是平滑皮肤而非
+        // 头皮，细发丝在 mipmap 下溶成半透明渐变带，screen-door 抖动会把它打
+        // 成稀疏白点（敖龙女睫毛实证）；游戏内表现为柔和半透明，走
+        // Transparent（按三角形排序的真混合）。
         MaterialAlphaMode::Blend => PreparedRenderPass::Transparent,
         MaterialAlphaMode::Mask => PreparedRenderPass::Cutout,
         MaterialAlphaMode::Opaque => match material.render_mode {

@@ -167,6 +167,67 @@ fn render_mock_weapon_model_snapshot() {
 }
 
 #[test]
+#[ignore = "asserts MSAA 4x smooths triangle edges vs single sampling; native wgpu"]
+fn render_mock_msaa_edge_smoothing_snapshot() {
+    let mut model = mock_weapon_model();
+    // 单色三角形：边缘像素只在白与深色背景之间过渡，便于统计中间色。
+    for vertex in &mut model.meshes[0].vertices {
+        vertex.color = [0.9, 0.9, 0.9, 1.0];
+    }
+    let render = |name: &str, msaa_samples: u32| {
+        let mut render_options = xiv_companion_render::renderer::ModelRenderOptions::default();
+        render_options.msaa_samples = msaa_samples;
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(640, 480)
+                .with_render_options(render_options),
+            &model,
+        )
+        .expect("render msaa snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode msaa PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let off = render("native-msaa-off", 1);
+    let on = render("native-msaa-4x", 4);
+    // 自校准边界：左上角为背景，画面中心在三角形内部。
+    let luminance = |pixels: &[u8], index: usize| {
+        (u32::from(pixels[index * 4]) + u32::from(pixels[index * 4 + 1])
+            + u32::from(pixels[index * 4 + 2]))
+            / 3
+    };
+    let background = luminance(&off, 0);
+    let interior = luminance(&off, 240 * 640 + 320);
+    // 中间色像素（既不在深色背景也不在亮三角形内部）：4x MSAA 的边缘
+    // resolve 应明显多于单采样的硬边缘。
+    let intermediate = |pixels: &[u8]| {
+        (0..pixels.len() / 4)
+            .filter(|&index| {
+                let value = luminance(pixels, index);
+                value > background + 0x10 && value + 0x10 < interior
+            })
+            .count()
+    };
+    let off_count = intermediate(&off);
+    let on_count = intermediate(&on);
+    eprintln!(
+        "intermediate edge pixels (bg={background}, interior={interior}): msaa off={off_count} msaa 4x={on_count}"
+    );
+    assert!(
+        on_count > off_count.saturating_mul(2),
+        "MSAA 4x should resolve visibly more intermediate edge pixels (off={off_count}, on={on_count})"
+    );
+    // 三角形内部亮度不因 MSAA 改变（resolve 只影响边缘）。
+    let off_mean = luminance(&off, 240 * 640 + 320);
+    let on_mean = luminance(&on, 240 * 640 + 320);
+    assert!(
+        off_mean.abs_diff(on_mean) <= 4,
+        "interior luminance should be unchanged by MSAA (off={off_mean}, on={on_mean})"
+    );
+}
+
+#[test]
 #[ignore = "writes synthetic secondary vertex channel debug snapshots with native wgpu"]
 fn render_mock_secondary_vertex_channel_debug_snapshots() {
     let mut model = mock_weapon_model();

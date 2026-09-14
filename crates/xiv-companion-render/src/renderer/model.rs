@@ -143,6 +143,9 @@ pub struct ModelRenderOptions {
     pub dynamic_emissive_color: [f32; 3],
     pub debug_mode: ModelDebugMode,
     pub glass_blend_mode: ModelGlassBlendMode,
+    /// 场景 HDR 目标的 MSAA 采样数：1 = 关闭，4 = 4x 多重采样（resolve 后进
+    /// bloom/compose）。属于渲染上下文创建参数，切换需要重建管线与场景纹理。
+    pub msaa_samples: u32,
 }
 
 impl Default for ModelRenderOptions {
@@ -156,6 +159,7 @@ impl Default for ModelRenderOptions {
             dynamic_emissive_color: [1.0; 3],
             debug_mode: ModelDebugMode::Final,
             glass_blend_mode: ModelGlassBlendMode::Alpha,
+            msaa_samples: 1,
         }
     }
 }
@@ -177,7 +181,13 @@ impl ModelRenderOptions {
                 .map(|value| if value.is_finite() { value } else { 1.0 }),
             debug_mode: self.debug_mode,
             glass_blend_mode: self.glass_blend_mode,
+            msaa_samples: self.msaa_samples,
         }
+    }
+
+    /// MSAA 采样数归一：仅支持 1（关闭）与 4（4x），其余值就近归入。
+    pub fn msaa_samples(self) -> u32 {
+        if self.msaa_samples >= 3 { 4 } else { 1 }
     }
 
     fn bloom_strength(self) -> f32 {
@@ -224,6 +234,7 @@ pub struct ModelRenderContext {
     compose_bind_group_layout: wgpu::BindGroupLayout,
     post_process: Option<PostProcessState>,
     format: wgpu::TextureFormat,
+    msaa_samples: u32,
 }
 
 /// 单个模型的 GPU 实例：顶点/索引缓冲、透明索引缓冲、绘制批次、材质 bind
@@ -397,6 +408,18 @@ impl ModelRenderer {
 
 impl ModelRenderContext {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self::new_with_msaa(device, queue, format, 1)
+    }
+
+    /// MSAA 变体：`msaa_samples` 为场景 HDR 目标与全部场景管线的采样数
+    /// （1 = 关闭，4 = 4x 多重采样，bloom/compose 前 resolve 到单采样纹理）。
+    pub fn new_with_msaa(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        msaa_samples: u32,
+    ) -> Self {
+        let msaa_samples = if msaa_samples >= 3 { 4 } else { 1 };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("model.wgsl").into()),
@@ -839,6 +862,7 @@ impl ModelRenderContext {
             "weapon model pipeline",
             ModelPipelineBlend::Opaque,
             false,
+            msaa_samples,
         );
         let culled_pipeline = create_model_pipeline(
             &device,
@@ -847,6 +871,7 @@ impl ModelRenderContext {
             "weapon culled model pipeline",
             ModelPipelineBlend::Opaque,
             true,
+            msaa_samples,
         );
         let cutout_pipeline = create_model_pipeline(
             &device,
@@ -855,6 +880,7 @@ impl ModelRenderContext {
             "weapon cutout model pipeline",
             ModelPipelineBlend::Opaque,
             false,
+            msaa_samples,
         );
         let cutout_culled_pipeline = create_model_pipeline(
             &device,
@@ -863,6 +889,7 @@ impl ModelRenderContext {
             "weapon cutout culled model pipeline",
             ModelPipelineBlend::Opaque,
             true,
+            msaa_samples,
         );
         let dither_depth_pipeline = create_model_pipeline(
             &device,
@@ -871,6 +898,7 @@ impl ModelRenderContext {
             "weapon dither depth pipeline",
             ModelPipelineBlend::DitherDepth,
             false,
+            msaa_samples,
         );
         let dither_depth_culled_pipeline = create_model_pipeline(
             &device,
@@ -879,12 +907,14 @@ impl ModelRenderContext {
             "weapon dither depth culled pipeline",
             ModelPipelineBlend::DitherDepth,
             true,
+            msaa_samples,
         );
         let outline_pipeline = create_outline_pipeline(
             &device,
             &shader,
             &pipeline_layout,
             "weapon outline pipeline",
+            msaa_samples,
         );
         let transparent_pipeline = create_model_pipeline(
             &device,
@@ -893,6 +923,7 @@ impl ModelRenderContext {
             "weapon transparent model pipeline",
             ModelPipelineBlend::Alpha,
             false,
+            msaa_samples,
         );
         let transparent_culled_pipeline = create_model_pipeline(
             &device,
@@ -901,6 +932,7 @@ impl ModelRenderContext {
             "weapon transparent culled model pipeline",
             ModelPipelineBlend::Alpha,
             true,
+            msaa_samples,
         );
         let glass_pipeline = create_model_pipeline(
             &device,
@@ -909,6 +941,7 @@ impl ModelRenderContext {
             "weapon glass model pipeline",
             ModelPipelineBlend::Alpha,
             false,
+            msaa_samples,
         );
         let glass_culled_pipeline = create_model_pipeline(
             &device,
@@ -917,6 +950,7 @@ impl ModelRenderContext {
             "weapon glass culled model pipeline",
             ModelPipelineBlend::Alpha,
             true,
+            msaa_samples,
         );
         let additive_pipeline = create_model_pipeline(
             &device,
@@ -925,6 +959,7 @@ impl ModelRenderContext {
             "weapon additive model pipeline",
             ModelPipelineBlend::Additive,
             false,
+            msaa_samples,
         );
         let additive_culled_pipeline = create_model_pipeline(
             &device,
@@ -933,6 +968,7 @@ impl ModelRenderContext {
             "weapon additive culled model pipeline",
             ModelPipelineBlend::Additive,
             true,
+            msaa_samples,
         );
         let lightshaft_pipeline = create_model_pipeline_with_fragment_entry(
             &device,
@@ -942,6 +978,7 @@ impl ModelRenderContext {
             ModelPipelineBlend::Additive,
             "fs_lightshaft",
             false,
+            msaa_samples,
         );
         let lightshaft_culled_pipeline = create_model_pipeline_with_fragment_entry(
             &device,
@@ -951,6 +988,7 @@ impl ModelRenderContext {
             ModelPipelineBlend::Additive,
             "fs_lightshaft",
             true,
+            msaa_samples,
         );
 
         let blur_pipeline = create_post_pipeline(
@@ -1018,6 +1056,7 @@ impl ModelRenderContext {
             compose_bind_group_layout,
             post_process: None,
             format,
+            msaa_samples,
         }
     }
 
@@ -1207,11 +1246,12 @@ impl ModelRenderContext {
             });
 
         {
+            let (scene_target, scene_resolve_target) = post.scene_color_target();
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("weapon scene render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &post.scene_view,
-                    resolve_target: None,
+                    view: scene_target,
+                    resolve_target: scene_resolve_target,
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1429,6 +1469,7 @@ impl ModelRenderContext {
                 &self.compose_uniform_buffer,
                 width,
                 height,
+                self.msaa_samples,
             ));
         }
     }
@@ -1501,6 +1542,9 @@ struct PostProcessState {
     #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
     scene_texture: wgpu::Texture,
     scene_view: wgpu::TextureView,
+    /// MSAA > 1 时的多重采样场景目标：场景 pass 渲到它并 resolve 进
+    /// `scene_view`（bloom/compose 仍读单采样 `scene_view`）。
+    msaa_scene_view: Option<wgpu::TextureView>,
     blur_a_view: wgpu::TextureView,
     blur_b_view: wgpu::TextureView,
     blur_scene_bind_group: wgpu::BindGroup,
@@ -1517,6 +1561,7 @@ impl PostProcessState {
         compose_uniform_buffer: &wgpu::Buffer,
         width: u32,
         height: u32,
+        msaa_samples: u32,
     ) -> Self {
         let scene_texture = create_post_texture(
             device,
@@ -1526,6 +1571,24 @@ impl PostProcessState {
             wgpu::TextureUsages::COPY_SRC,
         );
         let scene_view = scene_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let msaa_scene_view = (msaa_samples > 1).then(|| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("weapon msaa scene texture"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: msaa_samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: POST_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
         let blur_a_view = create_post_texture_view(device, "weapon-bloom-pass a", width, height);
         let blur_b_view = create_post_texture_view(device, "weapon-bloom-pass b", width, height);
 
@@ -1578,11 +1641,21 @@ impl PostProcessState {
             #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
             scene_texture,
             scene_view,
+            msaa_scene_view,
             blur_a_view,
             blur_b_view,
             blur_scene_bind_group,
             blur_a_bind_group,
             compose_bind_group,
+        }
+    }
+
+    /// 场景 pass 的颜色附件：(渲染目标, resolve 目标)。MSAA 关闭时直接渲进
+    /// 单采样 `scene_view`。
+    fn scene_color_target(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.msaa_scene_view {
+            Some(msaa_view) => (msaa_view, Some(&self.scene_view)),
+            None => (&self.scene_view, None),
         }
     }
 }
@@ -1989,6 +2062,7 @@ fn create_model_pipeline(
     label: &str,
     blend_mode: ModelPipelineBlend,
     cull_backfaces: bool,
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     create_model_pipeline_with_fragment_entry(
         device,
@@ -1998,6 +2072,7 @@ fn create_model_pipeline(
         blend_mode,
         blend_mode.fragment_entry(),
         cull_backfaces,
+        sample_count,
     )
 }
 
@@ -2009,6 +2084,7 @@ fn create_model_pipeline_with_fragment_entry(
     blend_mode: ModelPipelineBlend,
     fragment_entry: &str,
     cull_backfaces: bool,
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     let blend = blend_mode.blend_state();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2046,7 +2122,10 @@ fn create_model_pipeline_with_fragment_entry(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            ..Default::default()
+        },
         multiview_mask: None,
         cache: None,
     })
@@ -2057,6 +2136,7 @@ fn create_outline_pipeline(
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     label: &str,
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -2093,7 +2173,10 @@ fn create_outline_pipeline(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            ..Default::default()
+        },
         multiview_mask: None,
         cache: None,
     })
@@ -4850,13 +4933,11 @@ fn material_character_color_channels(material: &ModelMaterial) -> CharacterColor
             if colors.highlights {
                 channels.mesh = with_flag(colors.mesh, 1.0);
             }
-            // 头发/尾/兔耳的 mask R 通道是发丝明暗渐变（AO）；眉毛/睫毛等脸部
-            // hair 材质（obj/face 下）的 mask 是数据通道（rgb 非颜色），只取发色平色。
-            let mask_is_color_detail = material
-                .path
-                .as_deref()
-                .is_some_and(|path| !path.contains("/obj/face/"));
-            channels.params = [if mask_is_color_detail { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
+            // 头发/尾/兔耳的 mask R 通道是发丝明暗渐变（AO）；脸部 hair 材质
+            // （眉毛/睫毛，obj/face 下）的 mask R 同样是明暗细节图（眉发丝纹理
+            // + 睫毛区中灰压暗，真实纹理解码），一并作明暗细节——脸部毛发只取
+            // 发色平色会亮成白粉点（敖龙女睫毛实证）。
+            channels.params = [1.0, 0.0, 0.0, 0.0];
         }
         MaterialShaderFamily::Iris => {
             channels.left_iris = colors.left_iris;
@@ -8499,12 +8580,13 @@ mod tests {
             [1.0, 0.0, 0.0, 0.0],
             "hair part uses mask R channel as AO detail"
         );
-        // 脸部 hair 材质（眉毛）：mask 是数据通道，只取发色平色。
+        // 脸部 hair 材质（眉毛/睫毛）：mask R 同样是明暗细节图（眉发丝纹理 +
+        // 睫毛区压暗），与头发一致走 mask 细节。
         material.path =
             Some("chara/human/c1801/obj/face/f0001/material/mt_c1801f0001_etc_a.mtrl".to_string());
         assert_eq!(
             material_character_color_channels(&material).params,
-            [0.0; 4]
+            [1.0, 0.0, 0.0, 0.0]
         );
         // highlights 关闭：挑染通道不激活。
         material.character_colors = Some(crate::ModelMaterialCharacterColors {

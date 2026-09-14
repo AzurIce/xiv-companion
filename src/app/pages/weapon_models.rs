@@ -1011,7 +1011,10 @@ fn ModelPreviewPane(
     on_race_change: EventHandler<u16>,
     on_stain_change: EventHandler<(usize, u8)>,
 ) -> Element {
-    let render_options = use_signal(WeaponRenderOptions::default);
+    let render_options = use_signal(|| WeaponRenderOptions {
+        msaa_samples: 4,
+        ..Default::default()
+    });
     let mut shape_selection = use_signal(|| (None::<u32>, None::<u32>));
     // 部件变体选择按物品 id 作用域存储（与 shape 选择同款模式）：切换物品
     // 后读回 0=全部关闭（对应游戏默认状态）。
@@ -1577,6 +1580,20 @@ fn WeaponRenderControls(
                         option { value: "additive", "Add" }
                     }
                 }
+                label { class: "flex items-center justify-between gap-3",
+                    span { class: "text-muted-foreground", "抗锯齿" }
+                    select {
+                        class: "{input_class(\"h-8 w-24 cursor-pointer py-1 text-xs\")}",
+                        value: "{current.msaa_samples()}",
+                        onchange: move |event| {
+                            let mut next = options();
+                            next.msaa_samples = event.value().parse::<u32>().unwrap_or(1);
+                            options.set(next);
+                        },
+                        option { value: "1", "关" }
+                        option { value: "4", "MSAA 4x" }
+                    }
+                }
                 RenderCheckbox {
                     label: "Normal",
                     checked: current.normal_mapping,
@@ -1975,6 +1992,8 @@ pub(crate) fn WeaponModelCanvas(
         let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
         let init_generation = use_signal(|| 0_u64);
         let init_in_flight = use_signal(|| false);
+        // 当前 renderer 创建时的 MSAA 采样数（设置变化时据此丢弃重建）。
+        let mut created_msaa = use_signal(|| 1_u32);
         // 动画播放状态镜像：prop 在渲染期快照，rAF 循环经 Signal 读取最新值。
         let animation_signal = use_signal(|| animation.clone());
         // 实例重建计数：set_model 后递增，rAF 循环据此刷新 joint 名表缓存。
@@ -1989,9 +2008,11 @@ pub(crate) fn WeaponModelCanvas(
             )
         });
         let renderer_ready = renderer.read().is_some();
+        let msaa_setting = render_options().msaa_samples();
 
         // WebGPU context 一次性初始化：不依赖模型数据，与模型加载并行进行。
-        // 失败时下一次实例 key 变化重试，对齐画布重建时的重试行为。
+        // 失败时下一次实例 key 变化重试，对齐画布重建时的重试行为。MSAA 采样
+        // 数是渲染上下文创建参数：设置变化时丢弃现有 renderer 触发重建。
         let mut effect_error = init_error;
         let mut effect_ready = ready;
         let mut effect_renderer = renderer;
@@ -1999,9 +2020,16 @@ pub(crate) fn WeaponModelCanvas(
         let mut effect_in_flight = init_in_flight;
         let effect_animation = animation_signal;
         let mut effect_joint_epoch = joint_epoch;
-        use_effect(use_reactive((&instance_key,), move |_| {
-            if effect_renderer.peek().is_some() || *effect_in_flight.peek() {
+        use_effect(use_reactive((&instance_key, &msaa_setting), move |_| {
+            if *effect_in_flight.peek() {
                 return;
+            }
+            if effect_renderer.peek().is_some() {
+                if *created_msaa.peek() == msaa_setting {
+                    return;
+                }
+                effect_renderer.set(None);
+                effect_ready.set(false);
             }
             let generation = *effect_generation.peek() + 1;
             effect_generation.set(generation);
@@ -2019,7 +2047,7 @@ pub(crate) fn WeaponModelCanvas(
                         .ok_or_else(|| "canvas 未挂载".to_string())?
                         .dyn_into::<HtmlCanvasElement>()
                         .map_err(|_| "canvas 元素类型错误".to_string())?;
-                    WebWeaponCanvasRenderer::from_canvas(canvas).await
+                    WebWeaponCanvasRenderer::from_canvas_with_msaa(canvas, msaa_setting).await
                 }
                 .await;
 
@@ -2031,6 +2059,7 @@ pub(crate) fn WeaponModelCanvas(
                         }
                         let renderer = WasmRc::new(RefCell::new(renderer));
                         effect_renderer.set(Some(renderer.clone()));
+                        created_msaa.set(msaa_setting);
                         effect_error.set(None);
                         effect_ready.set(true);
                         start_weapon_render_loop(

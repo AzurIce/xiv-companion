@@ -576,6 +576,14 @@ fn sync_and_async_assembly_loads_are_identical() {
         assert_eq!(a.path, b.path, "mesh[{index}] path");
         assert_eq!(a.vertices.len(), b.vertices.len(), "mesh[{index}] verts");
         assert_eq!(a.indices, b.indices, "mesh[{index}] indices");
+        // 逐顶点位置一致（骨变形/拼接闭合在两条路径必须产生完全相同的几何）。
+        for (vertex, (va, vb)) in a.vertices.iter().zip(&b.vertices).enumerate() {
+            assert_eq!(
+                va.position, vb.position,
+                "mesh[{index}] vertex[{vertex}] position"
+            );
+            assert_eq!(va.normal, vb.normal, "mesh[{index}] vertex[{vertex}] normal");
+        }
     }
     for (index, (a, b)) in sync_data.textures.iter().zip(&async_data.textures).enumerate() {
         assert_eq!(a.path, b.path, "texture[{index}] path");

@@ -547,7 +547,10 @@ pub fn CharacterPage() -> Element {
     let make_package = use_resource(load_character_make);
     let palette_package = use_resource(load_character_palette);
     let mut model_progress = use_signal(|| None::<WeaponModelLoadProgress>);
-    let render_options = use_signal(WeaponRenderOptions::default);
+    let mut render_options = use_signal(|| WeaponRenderOptions {
+        msaa_samples: 4,
+        ..Default::default()
+    });
     // 装配模型每次重新加载到达时递增，驱动画布在 instance key 不变（同种族
     // 换发型/颜色）时也重新 set_model。
     let mut model_revision = use_signal(|| 0_u64);
@@ -772,6 +775,23 @@ pub fn CharacterPage() -> Element {
                                                             on_select: move |selected| {
                                                                 animation_selection.set(selected);
                                                             },
+                                                        }
+                                                    }
+                                                    section { class: "space-y-2 text-xs",
+                                                        div { class: "text-sm font-semibold", "渲染" }
+                                                        label { class: "flex items-center justify-between gap-3",
+                                                            span { class: "text-muted-foreground", "抗锯齿" }
+                                                            select {
+                                                                class: "{input_class(\"h-8 w-24 cursor-pointer py-1 text-xs\")}",
+                                                                value: "{render_options().msaa_samples()}",
+                                                                onchange: move |event| {
+                                                                    let mut next = render_options();
+                                                                    next.msaa_samples = event.value().parse::<u32>().unwrap_or(1);
+                                                                    render_options.set(next);
+                                                                },
+                                                                option { value: "1", "关" }
+                                                                option { value: "4", "MSAA 4x" }
+                                                            }
                                                         }
                                                     }
                                                     CharacterModelStats {

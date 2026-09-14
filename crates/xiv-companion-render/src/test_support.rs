@@ -275,15 +275,20 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         .map_err(|error| WeaponModelSnapshotError::RequestDevice(error.to_string()))?;
 
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let msaa_samples = options.render_options.msaa_samples();
     let target = create_target_texture(&device, options.width, options.height, format);
     let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let depth = create_depth_texture(&device, options.width, options.height);
+    let depth = create_depth_texture(&device, options.width, options.height, msaa_samples);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = ModelRenderer::new_with_skeleton_and_prepared_options(
+    let context = crate::renderer::ModelRenderContext::new_with_msaa(
         device,
         queue,
         format,
+        msaa_samples,
+    );
+    let mut renderer = ModelRenderer::from_context_with_skeleton(
+        context,
         model,
         options.prepared_model_options,
         skeleton,
@@ -353,7 +358,12 @@ fn create_target_texture(
     })
 }
 
-fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    sample_count: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("native weapon snapshot depth"),
         size: wgpu::Extent3d {
@@ -362,7 +372,7 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu:
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24Plus,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ModelAttributeOption, WeaponModelData, model_attribute_options};
+use crate::model::{ModelAttributeOption, ModelMesh, WeaponModelData, model_attribute_options};
 
 /// 捏脸数据（ActorCustomize）字节长度。
 pub const CHARACTER_CUSTOMIZE_LEN: usize = 26;
@@ -839,6 +839,230 @@ pub fn character_assembly_attribute_options(
     model_attribute_options(assembly)
 }
 
+/// 裸肤肢体拼接的最小埋入重叠（模型单位）：回退足筒上沿埋入小腿下沿的量，
+/// 低于中原裸装原生配对的设计重叠（~0.021）以避免过度拉伸。
+const BARE_LIMB_JUNCTION_OVERLAP: f32 = 0.015;
+/// 拼接闭合位移的平滑衰减带宽（从筒口向肢体末端方向，smoothstep）。
+const BARE_LIMB_JUNCTION_FALLOFF: f32 = 0.06;
+
+/// 闭合跨族回退裸肤手/足与角色身体之间的拼接缝。
+///
+/// 逐骨刚性骨变形保持回退手/足网格的自身尺寸，而各族小臂/小腿相对腕/踝的
+/// 覆盖长度随体型不同（如敖龙小腿下沿相对踝骨的位置与中原差 ~0.004），
+/// 回退件筒口与身体边缘之间会留下环状缺口（渲染为透底的深色环，实测敖龙
+/// 女脚踝：小腿下沿 y=0.1379，回退足筒上沿 y=0.1337）。这里按左右侧把
+/// 回退足筒上沿向身体方向平滑拉伸（smoothstep 衰减到踝部以下不受影响），
+/// 使足筒套住小腿下沿；腕部同理沿臂轴检查（仅在确有缺口时内移手筒腕端，
+/// 敖龙女实测有 ~0.035 重叠、不触发）。仅作用于跨族回退的 e0000 glv/sho
+/// **皮肤**网格（内嵌材质 `mt_c####b0001_...`；本族文件为原生配对，游戏
+/// 同样不修正）；凉鞋等 e0000 装备网格保持不动。
+pub fn close_bare_limb_junctions(meshes: &mut [ModelMesh], race_code: u16) {
+    fn smoothstep(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+    fn is_skin(mesh: &ModelMesh) -> bool {
+        mesh.material_name.contains("b0001")
+    }
+    // 身体参照极值（按左右侧，即 x 符号分组）：小腿皮肤下沿 y、前臂皮肤腕端
+    // |x|。参照取自全部 e0001 top/dwn 皮肤网格——无论其自身是否跨族回退件
+    // （如维埃拉小衣来自猫魅），拼接都以当前装配里的身体网格为准。
+    let mut calf_bottom: [Option<f32>; 2] = [None, None];
+    let mut forearm_end: [Option<f32>; 2] = [None, None];
+    for mesh in meshes.iter() {
+        if !is_skin(mesh) {
+            continue;
+        }
+        if mesh.path.contains("e0001_dwn") {
+            for vertex in &mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                let slot = &mut calf_bottom[side];
+                *slot = Some(slot.map_or(vertex.position[1], |y| y.min(vertex.position[1])));
+            }
+        } else if mesh.path.contains("e0001_top") {
+            for vertex in &mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                let slot = &mut forearm_end[side];
+                *slot = Some(slot.map_or(vertex.position[0].abs(), |x| {
+                    x.max(vertex.position[0].abs())
+                }));
+            }
+        }
+    }
+    for mesh in meshes.iter_mut() {
+        if !is_skin(mesh) || race_code_from_character_model_path(&mesh.path) == Some(race_code) {
+            continue;
+        }
+        if mesh.path.contains("e0000_sho") {
+            // 足筒上沿 → 套住小腿下沿（+y 抬升，筒口处权重 1，向下平滑衰减）。
+            let mut foot_top = [f32::NEG_INFINITY; 2];
+            for vertex in &mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                foot_top[side] = foot_top[side].max(vertex.position[1]);
+            }
+            for vertex in &mut mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                let (Some(calf), Some(top)) = (calf_bottom[side], foot_top.get(side).copied())
+                else {
+                    continue;
+                };
+                let lift = calf + BARE_LIMB_JUNCTION_OVERLAP - top;
+                if lift <= 0.0 || !top.is_finite() {
+                    continue;
+                }
+                let weight = smoothstep(
+                    (vertex.position[1] - (top - BARE_LIMB_JUNCTION_FALLOFF))
+                        / BARE_LIMB_JUNCTION_FALLOFF,
+                );
+                vertex.position[1] += lift * weight;
+            }
+        } else if mesh.path.contains("e0000_glv") {
+            // 手筒腕端 → 伸入前臂腕端（沿臂轴 |x| 向身体方向内移，腕端权重 1）。
+            let mut hand_start = [f32::INFINITY; 2];
+            for vertex in &mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                hand_start[side] = hand_start[side].min(vertex.position[0].abs());
+            }
+            for vertex in &mut mesh.vertices {
+                let side = usize::from(vertex.position[0] > 0.0);
+                let (Some(forearm), Some(start)) =
+                    (forearm_end[side], hand_start.get(side).copied())
+                else {
+                    continue;
+                };
+                let gap = start - (forearm - BARE_LIMB_JUNCTION_OVERLAP);
+                if gap <= 0.0 || !start.is_finite() {
+                    continue;
+                }
+                let weight = smoothstep(
+                    1.0 - (vertex.position[0].abs() - start) / BARE_LIMB_JUNCTION_FALLOFF,
+                );
+                vertex.position[0] -= gap * weight * vertex.position[0].signum();
+            }
+        }
+    }
+}
+
+/// 腕部叠加带的顶点吸附阈值：回退手筒与前臂筒叠加带实测间距 ~0.0016，环排
+/// 轴向/周向间距均 ≥0.01；阈值取两者之间，只吸附同环近顶点。
+const BARE_HAND_CUFF_SNAP_THRESHOLD: f32 = 0.004;
+
+/// 裸肤肢体拼接诊断：装配网格中接缝两侧的参照极值（按左右侧，即 x 符号）。
+/// 全部为 `None` 时表示装配不含对应部件。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BareLimbJunctionDiagnostics {
+    /// 小腿（e0001_dwn 皮肤网格）下沿 y。
+    pub calf_bottom: [Option<f32>; 2],
+    /// 跨族回退裸肤足（e0000 sho 皮肤网格）筒上沿 y：拼接闭合生效时
+    /// ≈ 同侧 `calf_bottom` + 0.015。
+    pub foot_top: [Option<f32>; 2],
+    /// 前臂（e0001_top 皮肤网格）腕端 |x|。
+    pub forearm_end: [Option<f32>; 2],
+    /// 跨族回退裸肤手（e0000 glv 皮肤网格）腕端 |x|：小于同侧
+    /// `forearm_end` 表示腕部有叠加带（无缺口）。
+    pub hand_start: [Option<f32>; 2],
+}
+
+/// 读取装配网格的裸肤肢体接缝极值（只读，用于日志与测试核对
+/// [`close_bare_limb_junctions`]/[`snap_bare_hand_cuff_to_forearm`] 的结果）。
+pub fn bare_limb_junction_diagnostics(
+    meshes: &[ModelMesh],
+    race_code: u16,
+) -> BareLimbJunctionDiagnostics {
+    let mut diagnostics = BareLimbJunctionDiagnostics::default();
+    for mesh in meshes {
+        if !mesh.material_name.contains("b0001") {
+            continue;
+        }
+        let borrowed =
+            race_code_from_character_model_path(&mesh.path).is_some_and(|race| race != race_code);
+        // (目标槽, 取值函数, 聚合)：小腿取下沿 min y、足筒取上沿 max y、
+        // 前臂腕端取 max |x|、手腕端取 min |x|。
+        let (extrema, value, minimize): (&mut [Option<f32>; 2], fn([f32; 3]) -> f32, bool) =
+            if mesh.path.contains("e0001_dwn") {
+                (&mut diagnostics.calf_bottom, |p| p[1], true)
+            } else if mesh.path.contains("e0001_top") {
+                (&mut diagnostics.forearm_end, |p| p[0].abs(), false)
+            } else if borrowed && mesh.path.contains("e0000_sho") {
+                (&mut diagnostics.foot_top, |p| p[1], false)
+            } else if borrowed && mesh.path.contains("e0000_glv") {
+                (&mut diagnostics.hand_start, |p| p[0].abs(), true)
+            } else {
+                continue;
+            };
+        for vertex in &mesh.vertices {
+            let side = usize::from(vertex.position[0] > 0.0);
+            let value = value(vertex.position);
+            let slot = &mut extrema[side];
+            *slot = Some(match *slot {
+                None => value,
+                Some(current) if minimize => current.min(value),
+                Some(current) => current.max(value),
+            });
+        }
+    }
+    diagnostics
+}
+
+/// 把跨族回退裸肤手（e0000 glv）腕部叠加带逐顶点吸附到前臂皮肤表面。
+///
+/// 原生配对（中原）里手筒腕端与前臂筒在叠加带上**逐顶点重合**（同一身体
+/// 模型沿腕环切割成 top/glv 两件，实测原生叠加带最近顶点距离为 0），渲染
+/// 时深度稳定打平、皮肤 UV 跨件连续，接缝不可见。跨族骨变形后两手仅近共
+/// 面（实测 ~0.0014），叠加带两个表面的深度随视角游动、图案互相穿插。
+/// 这里把回退手筒腕端叠加带（腕端 |x| 到前臂腕端之间）的每个顶点吸附到
+/// 同侧最近的前臂皮肤顶点（距离 ≤ [`BARE_HAND_CUFF_SNAP_THRESHOLD`]，小于
+/// 环排间距以避免错环吸附），恢复逐顶点重合；够不到近邻的顶点（掌背等
+/// 非筒区）不动。蒙皮运行时腕带随手骨离开前臂，与原生行为一致。
+pub fn snap_bare_hand_cuff_to_forearm(meshes: &mut [ModelMesh], race_code: u16) {
+    fn is_skin(mesh: &ModelMesh) -> bool {
+        mesh.material_name.contains("b0001")
+    }
+    // 前臂皮肤顶点参照（按左右侧分组）与前臂腕端 |x|。
+    let mut forearm_verts: [Vec<[f32; 3]>; 2] = [Vec::new(), Vec::new()];
+    let mut forearm_end = [0.0f32; 2];
+    for mesh in meshes.iter() {
+        if !is_skin(mesh) || !mesh.path.contains("e0001_top") {
+            continue;
+        }
+        for vertex in &mesh.vertices {
+            let side = usize::from(vertex.position[0] > 0.0);
+            forearm_verts[side].push(vertex.position);
+            forearm_end[side] = forearm_end[side].max(vertex.position[0].abs());
+        }
+    }
+    for mesh in meshes.iter_mut() {
+        if !is_skin(mesh)
+            || !mesh.path.contains("e0000_glv")
+            || race_code_from_character_model_path(&mesh.path) == Some(race_code)
+        {
+            continue;
+        }
+        for vertex in &mut mesh.vertices {
+            let side = usize::from(vertex.position[0] > 0.0);
+            // 叠加带：腕端到前臂腕端之间（+一点余量），之外的手掌/手指不动。
+            if forearm_end[side] <= 0.0 || vertex.position[0].abs() > forearm_end[side] + 0.002 {
+                continue;
+            }
+            let mut nearest = [0.0f32; 3];
+            let mut nearest_dist = f32::INFINITY;
+            for candidate in &forearm_verts[side] {
+                let dist = ((vertex.position[0] - candidate[0]).powi(2)
+                    + (vertex.position[1] - candidate[1]).powi(2)
+                    + (vertex.position[2] - candidate[2]).powi(2))
+                .sqrt();
+                if dist < nearest_dist {
+                    nearest_dist = dist;
+                    nearest = *candidate;
+                }
+            }
+            if nearest_dist <= BARE_HAND_CUFF_SNAP_THRESHOLD {
+                vertex.position = nearest;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1388,5 +1612,322 @@ mod tests {
         assert!(zear.contains(
             &"chara/human/c1801/obj/zear/z0003/material/mt_c1801z0003_zer_a.mtrl".to_string()
         ));
+    }
+
+    #[test]
+    fn close_bare_limb_junctions_lifts_borrowed_foot_cuff_to_calf() {
+        use crate::model::{ModelMesh, ModelVertex};
+
+        fn vertex(x: f32, y: f32, z: f32) -> ModelVertex {
+            ModelVertex {
+                position: [x, y, z],
+                blend_weights: None,
+                blend_indices: None,
+                normal: [0.0, 1.0, 0.0],
+                uv0: [0.0; 2],
+                uv1: [0.0; 2],
+                uv2: [0.0; 2],
+                uv3: [0.0; 2],
+                bitangent: [0.0; 4],
+                normal1: None,
+                bitangent1: None,
+                color: [0.0; 4],
+                color1: None,
+                flow0: None,
+                flow1: None,
+            }
+        }
+        fn limb_mesh(path: &str, material: &str, vertices: Vec<ModelVertex>) -> ModelMesh {
+            ModelMesh {
+                path: path.to_string(),
+                part_index: 0,
+                mesh_category: None,
+                submesh: None,
+                shape_influences: Vec::new(),
+                shape_targets: Vec::new(),
+                material_index: 0,
+                material_slot: 0,
+                material_name: material.to_string(),
+                color: [0.0; 3],
+                bone_table: None,
+                vertices,
+                indices: Vec::new(),
+            }
+        }
+
+        // 小腿皮肤（敖龙原生）：两腿下沿 y=0.14。
+        let calf = limb_mesh(
+            "chara/equipment/e0001/model/c1401e0001_dwn.mdl#part-0-submesh-2",
+            "/mt_c1401b0001_a.mtrl",
+            vec![
+                vertex(-0.07, 0.14, 0.0),
+                vertex(0.07, 0.14, 0.0),
+                vertex(-0.07, 0.30, 0.0),
+                vertex(0.07, 0.30, 0.0),
+            ],
+        );
+        // 回退足皮肤（中原→敖龙）：筒口上沿 y=0.134，低于小腿下沿 → 抬升。
+        let foot_top = 0.134_f32;
+        let band_bottom = foot_top - BARE_LIMB_JUNCTION_FALLOFF;
+        let foot = limb_mesh(
+            "chara/equipment/e0000/model/c0201e0000_sho.mdl",
+            "/mt_c0201b0001_a.mtrl",
+            vec![
+                vertex(-0.06, foot_top, 0.0),
+                vertex(0.06, foot_top, 0.0),
+                vertex(-0.06, band_bottom, 0.0),
+                vertex(0.06, band_bottom, 0.0),
+                vertex(-0.06, 0.01, 0.0),
+                vertex(0.06, 0.01, 0.0),
+            ],
+        );
+        // 凉鞋（同路径非皮肤材质）：不动。
+        let sandal = limb_mesh(
+            "chara/equipment/e0000/model/c0201e0000_sho.mdl",
+            "/mt_c0201e0000_sho_a.mtrl",
+            vec![vertex(-0.06, 0.09, 0.0), vertex(0.06, 0.09, 0.0)],
+        );
+        let mut meshes = vec![calf, foot, sandal];
+        close_bare_limb_junctions(&mut meshes, 1401);
+        let expected_top = 0.14 + BARE_LIMB_JUNCTION_OVERLAP;
+        let foot = &meshes[1];
+        for (index, vertex) in foot.vertices.iter().enumerate() {
+            let y = vertex.position[1];
+            match index {
+                0 | 1 => assert!(
+                    (y - expected_top).abs() < 1e-6,
+                    "cuff rim should lift to calf bottom + overlap: {y} vs {expected_top}"
+                ),
+                2 | 3 => assert!(
+                    (y - band_bottom).abs() < 1e-6,
+                    "falloff band bottom should stay: {y}"
+                ),
+                _ => assert!((y - 0.01).abs() < 1e-6, "sole should stay: {y}"),
+            }
+        }
+        assert!(
+            meshes[2].vertices.iter().all(|v| (v.position[1] - 0.09).abs() < 1e-6),
+            "sandal mesh must not move"
+        );
+
+        // 足筒已覆盖小腿下沿（或本族原生文件）→ 不动。
+        let covered_foot = limb_mesh(
+            "chara/equipment/e0000/model/c0201e0000_sho.mdl",
+            "/mt_c0201b0001_a.mtrl",
+            vec![vertex(-0.06, 0.16, 0.0), vertex(0.06, 0.16, 0.0)],
+        );
+        let native_foot = limb_mesh(
+            "chara/equipment/e0000/model/c1101e0000_sho.mdl",
+            "/mt_c1101b0001_a.mtrl",
+            vec![vertex(-0.02, 0.05, 0.0), vertex(0.02, 0.05, 0.0)],
+        );
+        let calf = limb_mesh(
+            "chara/equipment/e0001/model/c1101e0001_dwn.mdl",
+            "/mt_c1101b0001_a.mtrl",
+            vec![vertex(-0.02, 0.08, 0.0), vertex(0.02, 0.08, 0.0)],
+        );
+        let mut meshes = vec![calf, covered_foot, native_foot];
+        close_bare_limb_junctions(&mut meshes, 1101);
+        assert!((meshes[1].vertices[0].position[1] - 0.16).abs() < 1e-6);
+        assert!(
+            (meshes[2].vertices[0].position[1] - 0.05).abs() < 1e-6,
+            "native bare foot pairing must not move"
+        );
+
+        // 腕部确有缺口（手筒腕端 |x|=0.44 超出前臂腕端 0.43 - overlap）→ 内移。
+        let forearm = limb_mesh(
+            "chara/equipment/e0001/model/c1401e0001_top.mdl#part-0-submesh-2",
+            "/mt_c1401b0001_a.mtrl",
+            vec![vertex(0.43, 1.0, 0.0), vertex(-0.43, 1.0, 0.0)],
+        );
+        let hand = limb_mesh(
+            "chara/equipment/e0000/model/c0201e0000_glv.mdl",
+            "/mt_c0201b0001_a.mtrl",
+            vec![
+                vertex(0.44, 1.0, 0.0),
+                vertex(0.44 + BARE_LIMB_JUNCTION_FALLOFF, 1.0, 0.0),
+                vertex(-0.41, 1.0, 0.0),
+            ],
+        );
+        let mut meshes = vec![forearm, hand];
+        close_bare_limb_junctions(&mut meshes, 1401);
+        let gap = 0.44 - (0.43 - BARE_LIMB_JUNCTION_OVERLAP);
+        assert!(
+            (meshes[1].vertices[0].position[0] - (0.44 - gap)).abs() < 1e-6,
+            "wrist rim should move inward by the gap: {}",
+            meshes[1].vertices[0].position[0]
+        );
+        assert!(
+            (meshes[1].vertices[1].position[0] - (0.44 + BARE_LIMB_JUNCTION_FALLOFF)).abs() < 1e-6,
+            "falloff band end should stay"
+        );
+        assert!(
+            (meshes[1].vertices[2].position[0] + 0.41).abs() < 1e-6,
+            "overlapping side should stay"
+        );
+    }
+
+    #[test]
+    fn snap_bare_hand_cuff_to_forearm_restores_vertex_coincidence() {
+        use crate::model::{ModelMesh, ModelVertex};
+
+        fn vertex(x: f32, y: f32, z: f32) -> ModelVertex {
+            ModelVertex {
+                position: [x, y, z],
+                blend_weights: None,
+                blend_indices: None,
+                normal: [0.0, 1.0, 0.0],
+                uv0: [0.0; 2],
+                uv1: [0.0; 2],
+                uv2: [0.0; 2],
+                uv3: [0.0; 2],
+                bitangent: [0.0; 4],
+                normal1: None,
+                bitangent1: None,
+                color: [0.0; 4],
+                color1: None,
+                flow0: None,
+                flow1: None,
+            }
+        }
+        fn limb_mesh(path: &str, material: &str, vertices: Vec<ModelVertex>) -> ModelMesh {
+            ModelMesh {
+                path: path.to_string(),
+                part_index: 0,
+                mesh_category: None,
+                submesh: None,
+                shape_influences: Vec::new(),
+                shape_targets: Vec::new(),
+                material_index: 0,
+                material_slot: 0,
+                material_name: material.to_string(),
+                color: [0.0; 3],
+                bone_table: None,
+                vertices,
+                indices: Vec::new(),
+            }
+        }
+
+        // 前臂皮肤（敖龙原生）：腕端环 |x|=0.44。
+        let forearm = limb_mesh(
+            "chara/equipment/e0001/model/c1401e0001_top.mdl#part-0-submesh-2",
+            "/mt_c1401b0001_a.mtrl",
+            vec![
+                vertex(0.44, 1.00, 0.02),
+                vertex(0.44, 0.98, -0.02),
+                vertex(-0.44, 1.00, 0.02),
+            ],
+        );
+        // 回退手皮肤（中原→敖龙）：腕带顶点与前臂环近共面（距 0.002 → 吸附）、
+        // 过远顶点（距 0.01 → 不动）、掌部顶点（超出叠加带 → 不动）。
+        let hand = limb_mesh(
+            "chara/equipment/e0000/model/c0201e0000_glv.mdl",
+            "/mt_c0201b0001_a.mtrl",
+            vec![
+                vertex(0.44, 1.002, 0.021),
+                vertex(0.44, 0.99, -0.01),
+                vertex(0.46, 1.00, 0.02),
+            ],
+        );
+        let mut meshes = vec![forearm, hand];
+        snap_bare_hand_cuff_to_forearm(&mut meshes, 1401);
+        assert_eq!(
+            meshes[1].vertices[0].position,
+            [0.44, 1.00, 0.02],
+            "close cuff vertex snaps to the forearm ring"
+        );
+        assert_eq!(
+            meshes[1].vertices[1].position,
+            [0.44, 0.99, -0.01],
+            "beyond-threshold vertex stays"
+        );
+        assert_eq!(
+            meshes[1].vertices[2].position,
+            [0.46, 1.00, 0.02],
+            "palm vertex beyond the overlap band stays"
+        );
+        assert_eq!(meshes[0].vertices[0].position, [0.44, 1.00, 0.02]);
+    }
+
+    #[test]
+    fn bare_limb_junction_diagnostics_reads_per_side_extrema() {
+        use crate::model::{ModelMesh, ModelVertex};
+
+        fn vertex(x: f32, y: f32, z: f32) -> ModelVertex {
+            ModelVertex {
+                position: [x, y, z],
+                blend_weights: None,
+                blend_indices: None,
+                normal: [0.0, 1.0, 0.0],
+                uv0: [0.0; 2],
+                uv1: [0.0; 2],
+                uv2: [0.0; 2],
+                uv3: [0.0; 2],
+                bitangent: [0.0; 4],
+                normal1: None,
+                bitangent1: None,
+                color: [0.0; 4],
+                color1: None,
+                flow0: None,
+                flow1: None,
+            }
+        }
+        fn limb_mesh(path: &str, material: &str, vertices: Vec<ModelVertex>) -> ModelMesh {
+            ModelMesh {
+                path: path.to_string(),
+                part_index: 0,
+                mesh_category: None,
+                submesh: None,
+                shape_influences: Vec::new(),
+                shape_targets: Vec::new(),
+                material_index: 0,
+                material_slot: 0,
+                material_name: material.to_string(),
+                color: [0.0; 3],
+                bone_table: None,
+                vertices,
+                indices: Vec::new(),
+            }
+        }
+
+        let meshes = vec![
+            // 小腿皮肤：左侧下沿 0.14、右侧下沿 0.15（min y）。
+            limb_mesh(
+                "chara/equipment/e0001/model/c1401e0001_dwn.mdl#part-0-submesh-2",
+                "/mt_c1401b0001_a.mtrl",
+                vec![vertex(-0.07, 0.14, 0.0), vertex(0.07, 0.15, 0.0)],
+            ),
+            // 回退足皮肤：筒上沿 0.134（max y）；凉鞋网格不计。
+            limb_mesh(
+                "chara/equipment/e0000/model/c0201e0000_sho.mdl",
+                "/mt_c0201b0001_a.mtrl",
+                vec![vertex(-0.06, 0.134, 0.0), vertex(0.06, 0.13, 0.0)],
+            ),
+            limb_mesh(
+                "chara/equipment/e0000/model/c0201e0000_sho.mdl",
+                "/mt_c0201e0000_sho_a.mtrl",
+                vec![vertex(-0.06, 0.50, 0.0)],
+            ),
+            // 前臂皮肤：腕端 max |x|；回退手皮肤：腕端 min |x|。
+            limb_mesh(
+                "chara/equipment/e0001/model/c1401e0001_top.mdl#part-0-submesh-2",
+                "/mt_c1401b0001_a.mtrl",
+                vec![vertex(0.44, 1.0, 0.0), vertex(-0.43, 1.0, 0.0)],
+            ),
+            limb_mesh(
+                "chara/equipment/e0000/model/c0201e0000_glv.mdl",
+                "/mt_c0201b0001_a.mtrl",
+                vec![vertex(0.41, 1.0, 0.0), vertex(-0.40, 1.0, 0.0)],
+            ),
+        ];
+        let diagnostics = bare_limb_junction_diagnostics(&meshes, 1401);
+        assert_eq!(diagnostics.calf_bottom, [Some(0.14), Some(0.15)]);
+        assert_eq!(diagnostics.foot_top, [Some(0.134), Some(0.13)]);
+        assert_eq!(diagnostics.forearm_end, [Some(0.43), Some(0.44)]);
+        assert_eq!(diagnostics.hand_start, [Some(0.40), Some(0.41)]);
+        // 本族文件不计入回退件极值。
+        let diagnostics = bare_limb_junction_diagnostics(&meshes, 201);
+        assert_eq!(diagnostics.foot_top, [None, None]);
+        assert_eq!(diagnostics.hand_start, [None, None]);
     }
 }

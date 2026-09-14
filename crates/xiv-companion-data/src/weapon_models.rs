@@ -45,8 +45,8 @@ use crate::skeleton::{
 #[cfg(feature = "game-data")]
 use crate::chara_assemble::{
     CharacterCustomize, CharacterPartKind, character_material_candidate_paths,
-    character_part_paths, face_paint_decal_texture_candidates,
-    race_code_from_character_model_path,
+    character_part_paths, close_bare_limb_junctions, face_paint_decal_texture_candidates,
+    race_code_from_character_model_path, snap_bare_hand_cuff_to_forearm,
 };
 
 #[cfg(feature = "game-data")]
@@ -4293,6 +4293,8 @@ fn bake_assembly_race_deforms_from_resource<R: physis::resource::Resource>(
             }
         }
     }
+    close_bare_limb_junctions(meshes, race_code);
+    snap_bare_hand_cuff_to_forearm(meshes, race_code);
 }
 
 /// [`load_character_assembly_from_resource`] 的异步 Resource 版本，对齐
@@ -4462,6 +4464,8 @@ async fn bake_assembly_race_deforms_from_async_resource<R: AsyncGameResource>(
             }
         }
     }
+    close_bare_limb_junctions(meshes, race_code);
+    snap_bare_hand_cuff_to_forearm(meshes, race_code);
 }
 
 /// 面妆 decal 贴图加载：按 [`face_paint_decal_texture_candidates`] 降序尝试，
