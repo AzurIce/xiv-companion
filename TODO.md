@@ -246,6 +246,21 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
   - Include `cargo test -p xiv-companion-render --features renderer` in CI or the repository's
     standard verification command.
 
+- [ ] Fix the deterministic SIGSEGV when running the ignored native GPU snapshot suites with
+  parallel test threads.
+  - `cargo test --features render-test-support --test native_weapon_snapshot -- --ignored
+    --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Reproduced on the baseline
+    commit, so it is independent of the colorset composition change. Suspected cause: concurrent
+    wgpu instances across tests.
+  - Until fixed, run these suites single-threaded or add a serialized harness.
+
+- [ ] Fix compilation of `tests/weapon_shader_family_audit.rs` under the documented
+  `--features web` verification command.
+  - Whole-workspace `cargo test --features web` fails to build: the test references
+    `disassemble_dxbc` and related helpers that are not available without additional features.
+    Reproduced on the baseline commit.
+  - Either gate the test behind the required features or document the full verification command.
+
 ## Resolved
 
 - [x] Re-authorize the saved local game directory handle instead of forcing a re-pick after
