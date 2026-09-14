@@ -7,7 +7,9 @@ use crate::app::collection_bridge::{
 };
 use crate::app::icons::{Icon, IconKind};
 use crate::app::ui::{Badge, BadgeVariant, GitHubRepoButton};
-use crate::app::user_local_directory::{AuthorizedDirectoryLayout, restore_user_local_directory};
+use crate::app::user_local_directory::{
+    AuthorizedDirectoryLayout, RestoreUserLocalDirectoryOutcome, restore_user_local_directory,
+};
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
@@ -42,16 +44,25 @@ pub fn HomePage() -> Element {
 
         spawn(async move {
             match restore_user_local_directory().await {
-                Ok(Some(directory))
+                RestoreUserLocalDirectoryOutcome::Ready(directory)
                     if directory.layout != AuthorizedDirectoryLayout::MissingSqpack =>
                 {
                     local_data_status.set(IntegrationStatus::Available(directory.name));
                 }
-                Ok(Some(_)) => local_data_status.set(IntegrationStatus::NeedsAttention(
-                    "已保存的目录中没有找到 sqpack".to_string(),
-                )),
-                Ok(None) => local_data_status.set(IntegrationStatus::NotConfigured),
-                Err(error) => {
+                RestoreUserLocalDirectoryOutcome::Ready(_) => local_data_status.set(
+                    IntegrationStatus::NeedsAttention(
+                        "已保存的目录中没有找到 sqpack".to_string(),
+                    ),
+                ),
+                RestoreUserLocalDirectoryOutcome::NeedsReauthorize { .. } => {
+                    local_data_status.set(IntegrationStatus::NeedsAttention(
+                        "已保存的游戏目录需要重新授权读取；请到设置页数据处理".to_string(),
+                    ));
+                }
+                RestoreUserLocalDirectoryOutcome::NotSaved => {
+                    local_data_status.set(IntegrationStatus::NotConfigured);
+                }
+                RestoreUserLocalDirectoryOutcome::Failed(error) => {
                     local_data_status.set(IntegrationStatus::NeedsAttention(error));
                 }
             }

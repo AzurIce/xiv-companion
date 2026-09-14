@@ -24,9 +24,10 @@
 
 ## 恢复流程
 
-1. 从 `state/user-local-game` 读取目录句柄。
+1. 从 `state/user-local-game` 读取目录句柄；没有记录时提示用户通过目录选择器选择。
 2. 查询句柄的读取权限，结果可能为 `granted`、`prompt`、`denied` 或未知。
-3. 检查目录是 `game` 目录、安装根目录，还是缺少 `sqpack` 布局。
-4. 将本次页面生命周期内可用的句柄保存到 `window.__xivCompanionUserLocalDirectory`。
+3. `granted`（或查询接口不可用时的未知状态）直接检查目录布局；`prompt` 进入重新授权流程；`denied` 提示重新选择目录。
+4. 检查目录是 `game` 目录、安装根目录，还是缺少 `sqpack` 布局。
+5. 权限与布局均可用时，将句柄保存到 `window.__xivCompanionUserLocalDirectory`，供本次页面生命周期直接使用。
 
-IndexedDB 中存在句柄不代表浏览器仍授予读取权限。权限被撤销或浏览器不允许静默恢复时，用户需要重新选择目录。
+File System Access 的读取权限是会话级的：浏览器完全重启后句柄仍在 IndexedDB 中，但权限重置为 `prompt`。此时设置页提供「重新授权读取」操作，从真实用户手势调用 `handle.requestPermission({ mode: "read" })`，授予后沿用原句柄；只有权限被拒绝或句柄缺失时才需要重新走目录选择器。

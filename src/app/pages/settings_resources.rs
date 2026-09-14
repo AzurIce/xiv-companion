@@ -19,7 +19,8 @@ use crate::app::resource_settings::{
 };
 use crate::app::ui::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, input_class};
 use crate::app::user_local_directory::{
-    AuthorizedDirectoryLayout, AuthorizedUserLocalDirectory, authorize_user_local_directory,
+    AuthorizedDirectoryLayout, AuthorizedUserLocalDirectory, RestoreUserLocalDirectoryOutcome,
+    authorize_user_local_directory, reauthorize_saved_user_local_directory,
     restore_user_local_directory, save_current_user_local_directory_handle,
 };
 use crate::app::utils::{cx, format_integer};
@@ -235,6 +236,7 @@ pub(super) fn ResourceSettingsSection() -> Element {
     let mut settings_revision = use_signal(|| 0_u64);
     let mut directory_pick_error = use_signal(|| None::<String>);
     let mut authorized_user_local_directory = use_signal(|| None::<AuthorizedUserLocalDirectory>);
+    let mut reauth_pending_directory = use_signal(|| None::<String>);
     let mut directory_dirty = use_signal(|| false);
     let mut restore_started = use_signal(|| false);
     let mut craft_data_progress = use_signal(|| None::<CraftDataLoadProgress>);
@@ -318,18 +320,27 @@ pub(super) fn ResourceSettingsSection() -> Element {
         restore_started.set(true);
         spawn(async move {
             match restore_user_local_directory().await {
-                Ok(Some(directory)) => {
+                RestoreUserLocalDirectoryOutcome::Ready(directory) => {
                     clear_item_icon_cache();
                     authorized_user_local_directory.set(Some(directory));
+                    reauth_pending_directory.set(None);
                     directory_dirty.set(false);
                     settings_revision.set(settings_revision() + 1);
                     craft_data.restart();
                     weapon_catalog.restart();
                     collection_catalog.restart();
                 }
-                Ok(None) => {}
-                Err(error) => {
+                RestoreUserLocalDirectoryOutcome::NeedsReauthorize { name } => {
+                    log::info(
+                        "local-dir",
+                        format!("saved directory {name} needs re-authorization"),
+                    );
+                    reauth_pending_directory.set(Some(name));
+                }
+                RestoreUserLocalDirectoryOutcome::NotSaved => {}
+                RestoreUserLocalDirectoryOutcome::Failed(error) => {
                     log::warn("local-dir", format!("restore failed: {error}"));
+                    reauth_pending_directory.set(None);
                     directory_pick_error.set(Some(error));
                 }
             }
@@ -352,6 +363,7 @@ pub(super) fn ResourceSettingsSection() -> Element {
                 collection_catalog,
                 directory_pick_error: directory_pick_error(),
                 authorized_user_local_directory: authorized_directory_snapshot,
+                reauth_pending: reauth_pending_directory(),
                 craft_progress: craft_data_progress(),
                 craft_data_status: craft_data_status(),
                 weapon_catalog_status: weapon_catalog_status(),
@@ -400,11 +412,18 @@ pub(super) fn ResourceSettingsSection() -> Element {
                     directory_pick_error.set(None);
                     spawn(async move {
                         match restore_user_local_directory().await {
-                            Ok(directory) => {
-                                clear_item_icon_cache();
-                                authorized_user_local_directory.set(directory)
+                            RestoreUserLocalDirectoryOutcome::Ready(directory) => {
+                                authorized_user_local_directory.set(Some(directory))
                             }
-                            Err(error) => directory_pick_error.set(Some(error)),
+                            RestoreUserLocalDirectoryOutcome::NeedsReauthorize { name } => {
+                                reauth_pending_directory.set(Some(name))
+                            }
+                            RestoreUserLocalDirectoryOutcome::NotSaved => {
+                                authorized_user_local_directory.set(None)
+                            }
+                            RestoreUserLocalDirectoryOutcome::Failed(error) => {
+                                directory_pick_error.set(Some(error))
+                            }
                         }
                         directory_dirty.set(false);
                         save_feedback.set(Some(SaveFeedback::Cancelled));
@@ -423,6 +442,7 @@ pub(super) fn ResourceSettingsSection() -> Element {
                             Ok(directory) => {
                                 clear_item_icon_cache();
                                 authorized_user_local_directory.set(Some(directory));
+                                reauth_pending_directory.set(None);
                                 save_feedback.set(None);
                                 directory_dirty.set(true);
                                 settings_revision.set(settings_revision() + 1);
@@ -432,6 +452,29 @@ pub(super) fn ResourceSettingsSection() -> Element {
                             }
                             Err(error) => {
                                 log::warn("local-dir", format!("directory pick failed: {error}"));
+                                directory_pick_error.set(Some(error));
+                            }
+                        }
+                    });
+                },
+                on_reauthorize_user_local_dir: move |_| {
+                    directory_pick_error.set(None);
+                    load_progress::clear_craft_data_progress();
+
+                    spawn(async move {
+                        match reauthorize_saved_user_local_directory().await {
+                            Ok(directory) => {
+                                clear_item_icon_cache();
+                                authorized_user_local_directory.set(Some(directory));
+                                reauth_pending_directory.set(None);
+                                save_feedback.set(None);
+                                settings_revision.set(settings_revision() + 1);
+                                craft_data.restart();
+                                weapon_catalog.restart();
+                                collection_catalog.restart();
+                            }
+                            Err(error) => {
+                                log::warn("local-dir", format!("re-authorize failed: {error}"));
                                 directory_pick_error.set(Some(error));
                             }
                         }
@@ -559,6 +602,7 @@ fn ResourcePanel(
     collection_catalog: Resource<Result<Rc<CollectionCatalogPackage>, String>>,
     directory_pick_error: Option<String>,
     authorized_user_local_directory: Option<AuthorizedUserLocalDirectory>,
+    reauth_pending: Option<String>,
     craft_progress: Option<CraftDataLoadProgress>,
     craft_data_status: Option<ResourceStatus>,
     weapon_catalog_status: Option<ResourceStatus>,
@@ -573,6 +617,7 @@ fn ResourcePanel(
     on_save: EventHandler<()>,
     on_cancel: EventHandler<()>,
     on_choose_user_local_dir: EventHandler<()>,
+    on_reauthorize_user_local_dir: EventHandler<()>,
     on_update_craft_data_from_local: EventHandler<()>,
     on_reset_craft_data_to_builtin: EventHandler<()>,
     on_update_weapon_catalog_from_local: EventHandler<()>,
@@ -640,6 +685,7 @@ fn ResourcePanel(
                         path: user_local_path,
                         directory_error: directory_pick_error,
                         authorized_directory: authorized_user_local_directory,
+                        reauth_pending: reauth_pending.clone(),
                         status: local_status,
                         on_path_change: move |path| {
                             let mut next = settings_for_path.clone();
@@ -647,6 +693,7 @@ fn ResourcePanel(
                             on_settings_change.call(next);
                         },
                         on_choose: move |_| on_choose_user_local_dir.call(()),
+                        on_reauthorize: move |_| on_reauthorize_user_local_dir.call(()),
                     }
                 }
 
@@ -755,9 +802,11 @@ fn UserLocalSourceCard(
     path: String,
     directory_error: Option<String>,
     authorized_directory: Option<AuthorizedUserLocalDirectory>,
+    reauth_pending: Option<String>,
     status: UserLocalStatus,
     on_path_change: EventHandler<String>,
     on_choose: EventHandler<()>,
+    on_reauthorize: EventHandler<()>,
 ) -> Element {
     let status_badge = match status {
         UserLocalStatus::Configured => rsx! {
@@ -795,6 +844,17 @@ fn UserLocalSourceCard(
             }
 
             div { class: "mt-3 flex flex-wrap gap-2",
+                if let Some(ref name) = reauth_pending {
+                    Button {
+                        variant: ButtonVariant::Primary,
+                        size: ButtonSize::Sm,
+                        class: "shrink-0".to_string(),
+                        title: format!("重新授权浏览器读取已保存的目录 {name}"),
+                        onclick: move |_| on_reauthorize.call(()),
+                        Icon { kind: IconKind::RotateCcw, class: "h-3.5 w-3.5" }
+                        "重新授权读取"
+                    }
+                }
                 Button {
                     variant: ButtonVariant::Outline,
                     size: ButtonSize::Sm,
@@ -803,6 +863,14 @@ fn UserLocalSourceCard(
                     onclick: move |_| on_choose.call(()),
                     Icon { kind: IconKind::FolderPlus, class: "h-3.5 w-3.5" }
                     "选择游戏目录"
+                }
+            }
+            if let Some(ref name) = reauth_pending {
+                div { class: "mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900",
+                    div { class: "font-medium", "已保存的目录 {name} 需要重新授权读取" }
+                    div { class: "mt-0.5",
+                        "浏览器重启后读取权限会重置；点击下方「重新授权读取」即可继续使用，无需重新选择目录。"
+                    }
                 }
             }
             if let Some(ref err) = directory_error {

@@ -246,10 +246,10 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
   - Include `cargo test -p xiv-companion-render --features renderer` in CI or the repository's
     standard verification command.
 
-## App / Browser Integration
+## Resolved
 
-- [ ] Re-authorize the saved local game directory handle instead of forcing a re-pick after
-  browser restart.
+- [x] Re-authorize the saved local game directory handle instead of forcing a re-pick after
+  browser restart. (resolved: 2026-09-14)
   - Symptom: after a full browser restart, restoring the saved directory reports permission
     `prompt` and the UI tells the user to re-select the game directory every session.
   - Root cause: File System Access API handle grants are session-scoped (Chromium security
@@ -265,8 +265,6 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
   - Relevant code: `src/app/user_local_directory.rs` (`restore_user_local_directory`,
     `query_directory_read_permission`), `src/app/pages/settings_resources.rs:314-337` (restore
     effect), `src/app/pages/home.rs:44`.
-
-## Resolved
 
 - [x] Stop downsampling the diffuse texture to ColorTable index resolution in Compatibility
   `base × colorset` composition. (resolved: 2026-09-14)

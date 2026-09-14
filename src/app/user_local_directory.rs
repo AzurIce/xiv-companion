@@ -25,11 +25,33 @@ pub(crate) enum AuthorizedDirectoryLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DirectoryPermission {
+pub(crate) enum DirectoryPermission {
     Granted,
     Prompt,
     Denied,
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryPermissionAction {
+    UseHandle,
+    Reauthorize,
+    Repick,
+}
+
+/// What to do with a saved directory handle given its current read permission.
+///
+/// `Unknown` keeps the historical behavior of using the handle: it only appears when the
+/// reflection call fails or returns an unexpected state, and the follow-up layout reads are
+/// the real usability check (handles without `queryPermission` may still be readable).
+fn directory_permission_action(permission: DirectoryPermission) -> DirectoryPermissionAction {
+    match permission {
+        DirectoryPermission::Granted | DirectoryPermission::Unknown => {
+            DirectoryPermissionAction::UseHandle
+        }
+        DirectoryPermission::Prompt => DirectoryPermissionAction::Reauthorize,
+        DirectoryPermission::Denied => DirectoryPermissionAction::Repick,
+    }
 }
 
 impl DirectoryPermission {
@@ -43,16 +65,31 @@ impl DirectoryPermission {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RestoreUserLocalDirectoryOutcome {
+    /// The handle was restored with a usable read permission and stored in the window slot.
+    Ready(AuthorizedUserLocalDirectory),
+    /// A handle exists in IndexedDB but its read permission is `prompt`; the user must
+    /// re-authorize it from a real user gesture.
+    NeedsReauthorize { name: String },
+    /// No directory handle has been saved yet.
+    NotSaved,
+    /// Restoration failed; the message is user-facing.
+    Failed(String),
+}
+
 pub(crate) async fn save_current_user_local_directory_handle() -> Result<(), String> {
     let handle = current_window_user_local_directory_handle()?;
     save_user_local_directory_handle(handle).await
 }
 
-pub(crate) async fn restore_user_local_directory()
--> Result<Option<AuthorizedUserLocalDirectory>, String> {
+pub(crate) async fn restore_user_local_directory() -> RestoreUserLocalDirectoryOutcome {
     log::info("local-dir", "restoring saved directory handle");
-    let Some(handle) = load_user_local_directory_handle().await? else {
-        return Ok(None);
+    let Some(handle) = (match load_user_local_directory_handle().await {
+        Ok(handle) => handle,
+        Err(error) => return RestoreUserLocalDirectoryOutcome::Failed(error),
+    }) else {
+        return RestoreUserLocalDirectoryOutcome::NotSaved;
     };
     let name = directory_handle_name(&handle);
     let permission = query_directory_read_permission(&handle).await;
@@ -60,31 +97,41 @@ pub(crate) async fn restore_user_local_directory()
         "local-dir",
         format!("restored handle {name}; permission={}", permission.label()),
     );
-    if !matches!(
-        permission,
-        DirectoryPermission::Granted | DirectoryPermission::Unknown
-    ) {
-        return Err(format!(
-            "已恢复保存的目录 {name}，但浏览器读取权限是 {}；请重新选择游戏目录。",
-            permission.label()
-        ));
+    match directory_permission_action(permission) {
+        DirectoryPermissionAction::UseHandle => {}
+        DirectoryPermissionAction::Reauthorize => {
+            return RestoreUserLocalDirectoryOutcome::NeedsReauthorize { name };
+        }
+        DirectoryPermissionAction::Repick => {
+            return RestoreUserLocalDirectoryOutcome::Failed(format!(
+                "已恢复保存的目录 {name}，但浏览器读取权限已拒绝；请重新选择游戏目录。"
+            ));
+        }
     }
 
-    let layout = detect_authorized_directory_layout(&handle).await?;
+    let layout = match detect_authorized_directory_layout(&handle).await {
+        Ok(layout) => layout,
+        Err(error) => return RestoreUserLocalDirectoryOutcome::Failed(error),
+    };
     if layout == AuthorizedDirectoryLayout::MissingSqpack {
         log::warn(
             "local-dir",
             format!("restored handle {name} has no sqpack layout"),
         );
-        return Ok(Some(AuthorizedUserLocalDirectory { name, layout }));
+        return RestoreUserLocalDirectoryOutcome::Ready(AuthorizedUserLocalDirectory {
+            name,
+            layout,
+        });
     }
 
-    set_window_user_local_directory_handle(&handle)?;
+    if let Err(error) = set_window_user_local_directory_handle(&handle) {
+        return RestoreUserLocalDirectoryOutcome::Failed(error);
+    }
     log::info(
         "local-dir",
         format!("restored UserLocal directory {name}: {layout:?}"),
     );
-    Ok(Some(AuthorizedUserLocalDirectory { name, layout }))
+    RestoreUserLocalDirectoryOutcome::Ready(AuthorizedUserLocalDirectory { name, layout })
 }
 
 pub(crate) async fn ensure_window_user_local_directory_handle() -> Result<JsValue, String> {
@@ -92,11 +139,21 @@ pub(crate) async fn ensure_window_user_local_directory_handle() -> Result<JsValu
         return Ok(handle);
     }
 
-    let Some(directory) = restore_user_local_directory().await? else {
-        return Err("尚未选择本地游戏目录".to_string());
-    };
-    if directory.layout == AuthorizedDirectoryLayout::MissingSqpack {
-        return Err("选择的目录下没有 sqpack 或 game\\sqpack".to_string());
+    match restore_user_local_directory().await {
+        RestoreUserLocalDirectoryOutcome::Ready(directory) => {
+            if directory.layout == AuthorizedDirectoryLayout::MissingSqpack {
+                return Err("选择的目录下没有 sqpack 或 game\\sqpack".to_string());
+            }
+        }
+        RestoreUserLocalDirectoryOutcome::NeedsReauthorize { name } => {
+            return Err(format!(
+                "已保存的游戏目录 {name} 需要重新授权读取；请在设置页点击「重新授权读取」。"
+            ));
+        }
+        RestoreUserLocalDirectoryOutcome::NotSaved => {
+            return Err("尚未选择本地游戏目录".to_string());
+        }
+        RestoreUserLocalDirectoryOutcome::Failed(error) => return Err(error),
     }
 
     current_window_user_local_directory_handle()
@@ -137,6 +194,59 @@ pub(crate) async fn authorize_user_local_directory() -> Result<AuthorizedUserLoc
         format!("selected UserLocal directory {name}: {layout:?}"),
     );
     Ok(AuthorizedUserLocalDirectory { name, layout })
+}
+
+/// Re-request read permission for the saved directory handle and reuse it on success.
+///
+/// Must be called from a real user gesture: `requestPermission` consumes transient
+/// activation, so the synchronous call part is issued before the first `.await`
+/// whenever the handle is already in the window slot.
+pub(crate) async fn reauthorize_saved_user_local_directory()
+-> Result<AuthorizedUserLocalDirectory, String> {
+    log::info("local-dir", "re-authorizing saved directory handle");
+    if let Ok(handle) = current_window_user_local_directory_handle() {
+        return reauthorize_directory_handle(handle).await;
+    }
+    let Some(handle) = load_user_local_directory_handle().await? else {
+        return Err("没有已保存的游戏目录；请重新选择游戏目录。".to_string());
+    };
+    reauthorize_directory_handle(handle).await
+}
+
+async fn reauthorize_directory_handle(handle: JsValue) -> Result<AuthorizedUserLocalDirectory, String>
+{
+    let name = directory_handle_name(&handle);
+    let permission = request_directory_read_permission(&handle).await;
+    log::info(
+        "local-dir",
+        format!("re-authorized handle {name}; permission={}", permission.label()),
+    );
+    if permission != DirectoryPermission::Granted {
+        return Err(reauthorize_rejection_message(&name, permission));
+    }
+
+    let layout = detect_authorized_directory_layout(&handle).await?;
+    set_window_user_local_directory_handle(&handle)?;
+    log::info(
+        "local-dir",
+        format!("re-authorized UserLocal directory {name}: {layout:?}"),
+    );
+    Ok(AuthorizedUserLocalDirectory { name, layout })
+}
+
+fn reauthorize_rejection_message(name: &str, permission: DirectoryPermission) -> String {
+    match permission {
+        DirectoryPermission::Prompt => format!(
+            "已取消对目录 {name} 的读取授权；请再次点击「重新授权读取」，或重新选择游戏目录。"
+        ),
+        DirectoryPermission::Denied => format!(
+            "浏览器已拒绝读取目录 {name}；请在浏览器站点设置中允许本站点访问文件，或重新选择游戏目录。"
+        ),
+        DirectoryPermission::Unknown => {
+            format!("无法确认目录 {name} 的读取权限；请重新选择游戏目录。")
+        }
+        DirectoryPermission::Granted => "目录读取权限已授予。".to_string(),
+    }
 }
 
 async fn app_state_db() -> Result<indexed_db::Database<String>, String> {
@@ -281,6 +391,37 @@ async fn query_directory_read_permission(handle: &JsValue) -> DirectoryPermissio
     }
 }
 
+async fn request_directory_read_permission(handle: &JsValue) -> DirectoryPermission {
+    let Ok(method) = js_sys::Reflect::get(handle, &JsValue::from_str("requestPermission")) else {
+        return DirectoryPermission::Unknown;
+    };
+    let Ok(method) = method.dyn_into::<js_sys::Function>() else {
+        return DirectoryPermission::Unknown;
+    };
+    let options = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("mode"),
+        &JsValue::from_str("read"),
+    );
+    let Ok(promise) = method.call1(handle, &options) else {
+        return DirectoryPermission::Unknown;
+    };
+    let Ok(promise) = promise.dyn_into::<js_sys::Promise>() else {
+        return DirectoryPermission::Unknown;
+    };
+    match JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|value| value.as_string())
+    {
+        Some(value) if value == "granted" => DirectoryPermission::Granted,
+        Some(value) if value == "prompt" => DirectoryPermission::Prompt,
+        Some(value) if value == "denied" => DirectoryPermission::Denied,
+        _ => DirectoryPermission::Unknown,
+    }
+}
+
 async fn detect_authorized_directory_layout(
     handle: &JsValue,
 ) -> Result<AuthorizedDirectoryLayout, String> {
@@ -342,4 +483,58 @@ fn format_js_error(error: JsValue) -> String {
         .and_then(|value| value.as_string())
         .or_else(|| error.as_string())
         .unwrap_or_else(|| "目录选择失败".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_maps_to_restore_action() {
+        let cases = [
+            (DirectoryPermission::Granted, DirectoryPermissionAction::UseHandle),
+            (DirectoryPermission::Prompt, DirectoryPermissionAction::Reauthorize),
+            (DirectoryPermission::Denied, DirectoryPermissionAction::Repick),
+            // Reflection failures keep the historical use-the-handle behavior so
+            // environments without `queryPermission` do not regress to the picker.
+            (DirectoryPermission::Unknown, DirectoryPermissionAction::UseHandle),
+        ];
+        for (permission, action) in cases {
+            assert_eq!(directory_permission_action(permission), action);
+        }
+    }
+
+    #[test]
+    fn restore_outcome_variants_are_distinct() {
+        let ready = RestoreUserLocalDirectoryOutcome::Ready(AuthorizedUserLocalDirectory {
+            name: "game".to_string(),
+            layout: AuthorizedDirectoryLayout::GameDir,
+        });
+        let reauthorize = RestoreUserLocalDirectoryOutcome::NeedsReauthorize {
+            name: "game".to_string(),
+        };
+        assert_ne!(ready, reauthorize);
+        assert_ne!(
+            reauthorize,
+            RestoreUserLocalDirectoryOutcome::NotSaved,
+        );
+        assert_ne!(
+            RestoreUserLocalDirectoryOutcome::NotSaved,
+            RestoreUserLocalDirectoryOutcome::Failed("denied".to_string()),
+        );
+    }
+
+    #[test]
+    fn reauthorize_rejection_messages_point_at_the_right_next_action() {
+        let prompt = reauthorize_rejection_message("game", DirectoryPermission::Prompt);
+        assert!(prompt.contains("重新授权读取"));
+        assert!(prompt.contains("重新选择"));
+
+        let denied = reauthorize_rejection_message("game", DirectoryPermission::Denied);
+        assert!(denied.contains("重新选择"));
+        assert!(!denied.contains("重新授权读取"));
+
+        let unknown = reauthorize_rejection_message("game", DirectoryPermission::Unknown);
+        assert!(unknown.contains("重新选择"));
+    }
 }
