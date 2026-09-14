@@ -52,6 +52,7 @@ struct Material {
     detail_params: vec4<f32>, // x: detail id, y: multi detail id, z: GetMultiValues detail blend
     array_params: vec4<f32>, // x: tile layers, y: detail layers, z: has tile pair, w: has detail pair
     tile_lod_params: vec4<f32>, // x: tile bias, y: packed generic ramps, z: modern blend shaping, w: packed tile ramps
+    colorset_params: vec4<f32>, // x: compose full-resolution base diffuse with the colorset ramp in the shader
     detail_color: vec4<f32>,
     multi_detail_color: vec4<f32>,
     shader_diffuse_color: vec4<f32>,
@@ -251,7 +252,7 @@ var tile_matrix_sampler: sampler;
 var color_table_index_texture: texture_2d<f32>;
 
 @group(1) @binding(15)
-var material_map_texture: texture_2d<f32>;
+var colorset_diffuse_texture: texture_2d<f32>;
 
 @group(1) @binding(16)
 var multi_map_texture: texture_2d<f32>;
@@ -285,9 +286,6 @@ var sphere_sampler: sampler;
 
 @group(1) @binding(26)
 var index_sampler: sampler;
-
-@group(1) @binding(27)
-var material_map_sampler: sampler;
 
 @group(1) @binding(28)
 var multi_map_sampler: sampler;
@@ -1140,38 +1138,35 @@ fn debug_fragment_output(
         let index_sample = textureSample(color_table_index_texture, index_sampler, index_uv);
         color = vec3<f32>(index_sample.r, index_sample.g, 0.5);
     } else if mode < 15.5 {
-        let material_map_uv = resolve_uv(input, material.uv_sources0.w, material.uv_scroll_masks0.w);
-        color = textureSample(material_map_texture, material_map_sampler, material_map_uv).rgb;
-    } else if mode < 16.5 {
         let multi_map_uv = resolve_uv(input, material.uv_sources1.x, material.uv_scroll_masks1.x);
         color = textureSample(multi_map_texture, multi_map_sampler, multi_map_uv).rgb;
-    } else if mode < 17.5 {
+    } else if mode < 16.5 {
         color = mix(extra.tile_a, extra.tile_b, extra.tile_blend).rgb;
-    } else if mode < 18.5 {
+    } else if mode < 17.5 {
         let sheen_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
         color = textureSample(sheen_properties_texture, sheen_sampler, sheen_uv).rgb;
-    } else if mode < 19.5 {
+    } else if mode < 18.5 {
         let sphere_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z);
         color = textureSample(sphere_properties_texture, sphere_sampler, sphere_uv).rgb;
-    } else if mode < 20.5 {
+    } else if mode < 19.5 {
         color = mix(extra.tile_matrix_a, extra.tile_matrix_b, extra.tile_blend).rgb;
-    } else if mode < 21.5 {
+    } else if mode < 20.5 {
         color = tile_array.normal * 0.5 + vec3<f32>(0.5);
-    } else if mode < 22.5 {
+    } else if mode < 21.5 {
         color = tile_array.orb;
-    } else if mode < 23.5 {
+    } else if mode < 22.5 {
         color = detail_array.diffuse;
-    } else if mode < 24.5 {
+    } else if mode < 23.5 {
         color = detail_array.normal * 0.5 + vec3<f32>(0.5);
-    } else if mode < 25.5 {
+    } else if mode < 24.5 {
         color = input.color1.rgb;
-    } else if mode < 26.5 {
+    } else if mode < 25.5 {
         color = normalize(input.normal1) * 0.5 + vec3<f32>(0.5);
-    } else if mode < 27.5 {
+    } else if mode < 26.5 {
         color = input.flow0.xyz * 0.5 + vec3<f32>(0.5);
-    } else if mode < 28.5 {
+    } else if mode < 27.5 {
         color = input.flow1.xyz * 0.5 + vec3<f32>(0.5);
-    } else if mode < 29.5 {
+    } else if mode < 28.5 {
         color = material.unsupported_color.rgb;
     } else {
         color = resolve_view_direction(input.world_position) * 0.5 + vec3<f32>(0.5);
@@ -1180,7 +1175,7 @@ fn debug_fragment_output(
     var out: FragmentOutput;
     let preserves_hdr_color = mode < 1.5
         || (mode >= 3.5 && mode < 6.5)
-        || (mode >= 17.5 && mode < 18.5);
+        || (mode >= 16.5 && mode < 17.5);
     let debug_color = select(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), max(color, vec3<f32>(0.0)), preserves_hdr_color);
     out.color = vec4<f32>(debug_color, 1.0);
     return out;
@@ -1569,6 +1564,20 @@ fn load_packed_emissive(uv: vec2<f32>, side: u32) -> vec4<f32> {
 }
 
 fn sample_color_table_base(uv: vec2<f32>, mip_bias: f32, weight: f32) -> vec4<f32> {
+    if material.colorset_params.x > 0.5 {
+        // Compatibility `base × colorset`: the game multiplies per pixel, so the
+        // diffuse keeps its own filtered full-resolution sample and only the
+        // ColorTable row color comes from the unfiltered A/B ramp texels.
+        let diffuse = textureSampleBias(base_color_texture, base_color_sampler, uv, mip_bias);
+        let dimensions = textureDimensions(colorset_diffuse_texture);
+        let row_color = mix(
+            textureLoad(colorset_diffuse_texture, packed_ramp_texel(uv, dimensions, 0u), 0),
+            textureLoad(colorset_diffuse_texture, packed_ramp_texel(uv, dimensions, 1u), 0),
+            weight,
+        );
+        // The baked ramp alpha is opaque, so the composed alpha is the diffuse alpha.
+        return diffuse * row_color;
+    }
     if material.tile_lod_params.y > 0.5 {
         return mix(load_packed_base(uv, 0u), load_packed_base(uv, 1u), weight);
     }

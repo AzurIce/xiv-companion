@@ -1188,6 +1188,228 @@ fn render_mock_modern_colortable_shaping_snapshot() {
 }
 
 #[test]
+#[ignore = "writes synthetic colorset diffuse composition snapshots with native wgpu"]
+fn render_mock_colorset_diffuse_composition_snapshot() {
+    let model = mock_colorset_diffuse_composition_model();
+    let render = |name: &str, debug_mode| {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(name)
+                .with_viewport(256, 256)
+                .with_camera(0.0, 0.0, 3.2, [0.0, 0.0])
+                .with_render_options(ModelRenderOptions {
+                    debug_mode,
+                    ..ModelRenderOptions::default()
+                }),
+            &model,
+        )
+        .expect("render synthetic colorset diffuse composition snapshot");
+        image::open(snapshot.png_path)
+            .expect("decode synthetic colorset diffuse composition PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let final_pixels = render("native-colorset-diffuse-composition", ModelDebugMode::Final);
+    let pixel = |u: f32, v: f32| {
+        let offset = (((v * 255.0) as usize) * 256 + ((u * 255.0) as usize)) * 4;
+        [
+            final_pixels[offset],
+            final_pixels[offset + 1],
+            final_pixels[offset + 2],
+        ]
+    };
+
+    // Same index cell: the composed pixel must keep following the full-resolution
+    // diffuse gradient instead of collapsing into a constant colorset block.
+    let cell0_left = pixel(0.05, 0.5);
+    let cell0_right = pixel(0.45, 0.5);
+    assert!(
+        cell0_left[1] + 12 <= cell0_right[1],
+        "diffuse gradient must survive inside one index cell: {cell0_left:?} -> {cell0_right:?}"
+    );
+
+    // Distinct row colors per cell: at mirror positions the diffuse sample is the
+    // same, so the green row 0 cell and the white row 1 cell must separate.
+    let cell0_center = pixel(0.25, 0.5);
+    let cell1_center = pixel(0.75, 0.5);
+    assert!(
+        cell0_center[1] > cell0_center[0].saturating_add(25)
+            && cell0_center[1] > cell0_center[2].saturating_add(25),
+        "row 0 cell must be green-dominant: {cell0_center:?}"
+    );
+    let white_spread = cell1_center[0].max(cell1_center[1]).max(cell1_center[2])
+        - cell1_center[0].min(cell1_center[1]).min(cell1_center[2]);
+    assert!(
+        white_spread < 15,
+        "row 1 cell must stay neutral under the white row color: {cell1_center:?}"
+    );
+    assert!(
+        cell1_center[0] > cell0_center[0].saturating_add(60),
+        "the colorset row color must differentiate equal diffuse positions: \
+         {cell0_center:?} vs {cell1_center:?}"
+    );
+}
+
+/// Compatibility `base × colorset` fixture: a 256×1 horizontal grayscale
+/// gradient diffuse, a 2-texel index map selecting row pair 0 (green) and row
+/// pair 1 (white), and the four generic ColorTable ramps in A/B layout.
+fn mock_colorset_diffuse_composition_model() -> WeaponModelData {
+    let material: WeaponModelMaterial = serde_json::from_value(serde_json::json!({
+        "slot": 0,
+        "materialIndex": 0,
+        "name": "synthetic colorset diffuse composition",
+        "path": null,
+        "shaderPackageName": "characterlegacy.shpk",
+        "alphaMode": "opaque",
+        "shaderDiffuseColor": [1.0, 1.0, 1.0, 1.0],
+        "fallbackColor": [1.0, 1.0, 1.0],
+        "diffuseColor": [1.0, 1.0, 1.0],
+        "specularColor": [0.0, 0.0, 0.0],
+        "emissiveColor": [0.0, 0.0, 0.0],
+        "roughness": 1.0,
+        "metalness": 0.0,
+        "renderBackfaces": false,
+        "textureIndices": [0, 1, 2, 3, 4, 5, 6],
+        "baseColorTexture": 0,
+        "colorsetDiffuseTexture": 1,
+        "indexTexture": 2,
+        "specularTexture": 3,
+        "materialPropertiesTexture": 4,
+        "sheenPropertiesTexture": 5,
+        "spherePropertiesTexture": 6,
+    }))
+    .expect("deserialize synthetic colorset diffuse composition material");
+
+    let width = 256u16;
+    let mut diffuse_rgba = Vec::with_capacity(usize::from(width) * 4);
+    for x in 0..width {
+        let value = (32 + (f32::from(x) / f32::from(width - 1) * 223.0).round() as u32) as u8;
+        diffuse_rgba.extend_from_slice(&[value, value, value, 255]);
+    }
+    let ramp_texture =
+        |path: &str, kind, rgba: Vec<u8>, rgba_f32: Option<Vec<[f32; 4]>>| WeaponModelTexture {
+            path: path.to_string(),
+            kind,
+            texel_layout: ModelTextureTexelLayout::ColorTableRampAb,
+            width: 4,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba,
+            rgba_f32,
+        };
+    let textures = vec![
+        WeaponModelTexture {
+            path: "synthetic/colorset-diffuse-composition_d.tex".to_string(),
+            kind: ModelTextureKind::BaseColor,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: diffuse_rgba,
+            rgba_f32: None,
+        },
+        ramp_texture(
+            "baked://synthetic.mtrl#colorset-diffuse",
+            ModelTextureKind::BaseColor,
+            vec![
+                0, 255, 0, 255, 0, 255, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            ],
+            Some(vec![
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+            ]),
+        ),
+        WeaponModelTexture {
+            path: "synthetic/colorset-diffuse-composition_id.tex".to_string(),
+            kind: ModelTextureKind::Index,
+            texel_layout: ModelTextureTexelLayout::Standard,
+            width: 2,
+            height: 1,
+            array_size: 1,
+            array_layer_height: 0,
+            rgba: vec![0, 0, 0, 255, 0, 0, 0, 255],
+            rgba_f32: None,
+        },
+        ramp_texture(
+            "baked://synthetic.mtrl#colorset-specular",
+            ModelTextureKind::Specular,
+            vec![0, 0, 0, 255].repeat(4),
+            Some(vec![[0.0, 0.0, 0.0, 1.0]; 4]),
+        ),
+        ramp_texture(
+            "baked://synthetic.mtrl#colorset-material-properties",
+            ModelTextureKind::MaterialProperties,
+            vec![0, 255, 0, 0].repeat(4),
+            Some(vec![[0.0, 1.0, 0.0, 0.0]; 4]),
+        ),
+        ramp_texture(
+            "baked://synthetic.mtrl#colorset-sheen-properties",
+            ModelTextureKind::SheenProperties,
+            vec![0, 0, 0, 255].repeat(4),
+            Some(vec![[0.0, 0.0, 0.0, 1.0]; 4]),
+        ),
+        ramp_texture(
+            "baked://synthetic.mtrl#colorset-sphere-properties",
+            ModelTextureKind::SphereProperties,
+            vec![0, 0, 0, 255].repeat(4),
+            Some(vec![[0.0, 0.0, 0.0, 1.0]; 4]),
+        ),
+    ];
+    let positions = [
+        [-0.8, -0.8, 0.0],
+        [0.8, -0.8, 0.0],
+        [0.8, 0.8, 0.0],
+        [-0.8, 0.8, 0.0],
+    ];
+    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let vertices = positions
+        .into_iter()
+        .zip(uvs)
+        .map(|(position, uv)| {
+            let mut vertex = vertex(position, [1.0; 4]);
+            vertex.uv0 = uv;
+            vertex
+        })
+        .collect();
+
+    WeaponModelData {
+        item_id: 12,
+        item_name: "Synthetic Colorset Diffuse Composition".to_string(),
+        model_main: PackedModelId::from_raw(12),
+        model_sub: None,
+        stain_ids: [0, 0],
+        load_diagnostics: Vec::new(),
+        loaded_paths: vec!["synthetic/colorset_diffuse_composition.mdl".to_string()],
+        bounds: WeaponModelBounds {
+            min: [-0.8, -0.8, 0.0],
+            max: [0.8, 0.8, 0.0],
+            center: [0.0, 0.0, 0.0],
+            radius: 1.2,
+        },
+        materials: vec![material],
+        textures,
+        meshes: vec![WeaponModelMesh {
+            path: "synthetic/colorset_diffuse_composition.mdl".to_string(),
+            part_index: 0,
+            mesh_category: Some("normal".to_string()),
+            submesh: None,
+            shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
+            material_index: 0,
+            material_slot: 0,
+            material_name: "synthetic colorset diffuse composition".to_string(),
+            color: [1.0; 3],
+            bone_table: None,
+            vertices,
+            indices: vec![0, 1, 2, 0, 2, 3],
+        }],
+    }
+}
+
+#[test]
 #[ignore = "writes synthetic character texture mip bias snapshots with native wgpu"]
 fn render_mock_character_texture_mip_bias_snapshot() {
     let unbiased = mock_texture_mip_bias_model(-8.0);
