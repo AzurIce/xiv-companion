@@ -3179,6 +3179,7 @@ fn load_model_material_from_resource<R: physis::resource::Resource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            colorset_diffuse_texture: texture_set.colorset_diffuse,
             secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
             secondary_normal_texture: texture_set.secondary_normal,
@@ -3254,15 +3255,16 @@ fn load_weapon_material_textures_from_resource<R: physis::resource::Resource>(
         set.emissive.is_none(),
         textures,
     ) {
-        if let Some(base_color) = resolve_color_table_base_texture(
-            material_path,
+        let resolved_base = resolve_color_table_base_texture(
             set.base_color,
             baked.base_color,
             color_table_diffuse_composition,
-            textures,
-        ) {
-            set.base_color = Some(base_color);
-            add_unique_index(&mut set.indices, base_color);
+        );
+        set.base_color = Some(resolved_base.base_color);
+        add_unique_index(&mut set.indices, resolved_base.base_color);
+        set.colorset_diffuse = resolved_base.colorset_diffuse;
+        if let Some(colorset_diffuse) = resolved_base.colorset_diffuse {
+            add_unique_index(&mut set.indices, colorset_diffuse);
         }
 
         if set.emissive.is_none() {
@@ -4647,7 +4649,7 @@ pub fn apply_weapon_model_stains(
             continue;
         };
 
-        refresh_stained_material_textures(material, &material_path, baked, textures);
+        refresh_stained_material_textures(material, baked, textures);
         let summary = summarize_material_colors(Some(rows), material.fallback_color);
         material.diffuse_color = if material.base_color_texture.is_some() {
             [1.0, 1.0, 1.0]
@@ -4666,30 +4668,19 @@ pub fn apply_weapon_model_stains(
 #[cfg(feature = "game-data")]
 fn refresh_stained_material_textures(
     material: &mut WeaponModelMaterial,
-    material_path: &str,
     baked: BakedWeaponTextureIndices,
-    textures: &mut Vec<WeaponModelTexture>,
+    textures: &mut [WeaponModelTexture],
 ) {
-    let previous_base = material.base_color_texture;
-    let previous_base_is_composited = previous_base
-        .and_then(|index| textures.get(index))
-        .is_some_and(|texture| texture.path.ends_with("#base-times-colorset"));
-    let base_color = if previous_base_is_composited {
-        find_unbaked_base_color_texture(material, textures)
-            .and_then(|base_index| {
-                combine_base_with_colorset_texture(
-                    material_path,
-                    base_index,
-                    baked.base_color,
-                    textures,
-                )
-            })
-            .unwrap_or(baked.base_color)
-    } else {
-        baked.base_color
-    };
-    material.base_color_texture = Some(base_color);
-    add_unique_index(&mut material.texture_indices, base_color);
+    // A previously composed material keeps its original full-resolution diffuse
+    // in `base_color_texture` and only swaps the ColorTable ramp; materials
+    // without shader composition keep the ramp itself as the base.
+    if material.colorset_diffuse_texture.is_none() {
+        material.base_color_texture = Some(baked.base_color);
+    }
+    material.colorset_diffuse_texture = None;
+    if let Some(base_color) = material.base_color_texture {
+        add_unique_index(&mut material.texture_indices, base_color);
+    }
 
     replace_color_table_derived_slot(&mut material.specular_texture, baked.specular, textures);
     replace_color_table_derived_slot(
@@ -4757,22 +4748,8 @@ fn replace_color_table_derived_slot(
 }
 
 #[cfg(feature = "game-data")]
-fn find_unbaked_base_color_texture(
-    material: &WeaponModelMaterial,
-    textures: &[WeaponModelTexture],
-) -> Option<usize> {
-    material.texture_indices.iter().copied().find(|index| {
-        textures.get(*index).is_some_and(|texture| {
-            texture.kind == WeaponModelTextureKind::BaseColor
-                && !is_color_table_derived_texture_path(&texture.path)
-        })
-    })
-}
-
-#[cfg(feature = "game-data")]
 fn is_color_table_derived_texture_path(path: &str) -> bool {
-    path.starts_with("baked://")
-        && (path.contains("#colorset-") || path.ends_with("#base-times-colorset"))
+    path.starts_with("baked://") && path.contains("#colorset-")
 }
 
 #[cfg(feature = "game-data")]
@@ -5180,6 +5157,7 @@ async fn load_model_material_from_async_resource<R: AsyncGameResource>(
             metalness: summary.metalness,
             texture_indices: texture_set.indices,
             base_color_texture: texture_set.base_color,
+            colorset_diffuse_texture: texture_set.colorset_diffuse,
             secondary_base_color_texture: texture_set.secondary_base_color,
             normal_texture: texture_set.normal,
             secondary_normal_texture: texture_set.secondary_normal,
@@ -5257,15 +5235,16 @@ async fn load_weapon_material_textures_from_async_resource<R: AsyncGameResource>
         set.emissive.is_none(),
         textures,
     ) {
-        if let Some(base_color) = resolve_color_table_base_texture(
-            material_path,
+        let resolved_base = resolve_color_table_base_texture(
             set.base_color,
             baked.base_color,
             color_table_diffuse_composition,
-            textures,
-        ) {
-            set.base_color = Some(base_color);
-            add_unique_index(&mut set.indices, base_color);
+        );
+        set.base_color = Some(resolved_base.base_color);
+        add_unique_index(&mut set.indices, resolved_base.base_color);
+        set.colorset_diffuse = resolved_base.colorset_diffuse;
+        if let Some(colorset_diffuse) = resolved_base.colorset_diffuse {
+            add_unique_index(&mut set.indices, colorset_diffuse);
         }
 
         if set.emissive.is_none() {
@@ -5353,6 +5332,7 @@ async fn load_weapon_texture_from_async_resource<R: AsyncGameResource>(
 struct WeaponTextureSet {
     indices: Vec<usize>,
     base_color: Option<usize>,
+    colorset_diffuse: Option<usize>,
     secondary_base_color: Option<usize>,
     normal: Option<usize>,
     secondary_normal: Option<usize>,
@@ -6569,104 +6549,31 @@ fn composed_material_finite_constant(
 }
 
 #[cfg(feature = "game-data")]
-fn combine_base_with_colorset_texture(
-    material_path: &str,
-    base_index: usize,
-    colorset_index: usize,
-    textures: &mut Vec<WeaponModelTexture>,
-) -> Option<usize> {
-    let base = textures.get(base_index)?.clone();
-    let colorset = textures.get(colorset_index)?.clone();
-    let width = colorset.width.max(1) as usize;
-    let height = colorset.height.max(1) as usize;
-    let base_width = base.width.max(1) as usize;
-    let base_height = base.height.max(1) as usize;
-
-    let mut rgba = Vec::with_capacity(colorset.rgba.len());
-    let mut rgba_f32 = colorset
-        .rgba_f32
-        .as_ref()
-        .filter(|pixels| pixels.len() == width * height)
-        .map(|_| Vec::with_capacity(width * height));
-    for y in 0..height {
-        let base_y = y * base_height / height;
-        for x in 0..width {
-            let base_x = x * base_width / width;
-            let base_offset = (base_y * base_width + base_x) * 4;
-            let colorset_offset = (y * width + x) * 4;
-            let base = base.rgba.get(base_offset..base_offset + 4)?;
-            let colorset_bytes = colorset.rgba.get(colorset_offset..colorset_offset + 4)?;
-            rgba.push(multiply_srgb_channels(base[0], colorset_bytes[0]));
-            rgba.push(multiply_srgb_channels(base[1], colorset_bytes[1]));
-            rgba.push(multiply_srgb_channels(base[2], colorset_bytes[2]));
-            rgba.push(base[3]);
-            if let (Some(colorset_pixels), Some(output)) =
-                (colorset.rgba_f32.as_ref(), rgba_f32.as_mut())
-            {
-                let colorset = colorset_pixels[colorset_offset / 4];
-                output.push([
-                    srgb_u8_to_linear(base[0]) * colorset[0],
-                    srgb_u8_to_linear(base[1]) * colorset[1],
-                    srgb_u8_to_linear(base[2]) * colorset[2],
-                    f32::from(base[3]) / 255.0,
-                ]);
-            }
-        }
-    }
-
-    let index = push_or_replace_baked_texture_with_float_channels(
-        textures,
-        format!("baked://{material_path}#base-times-colorset"),
-        WeaponModelTextureKind::BaseColor,
-        colorset.width,
-        colorset.height,
-        rgba,
-        rgba_f32,
-    );
-    textures[index].texel_layout = colorset.texel_layout;
-    Some(index)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedColorTableBase {
+    base_color: usize,
+    /// `Multiply` composition with a real diffuse: the renderer samples the
+    /// diffuse at its own resolution and multiplies it by this ColorTable ramp
+    /// in the shader instead of baking a colorset-resolution composite.
+    colorset_diffuse: Option<usize>,
 }
 
 #[cfg(feature = "game-data")]
 fn resolve_color_table_base_texture(
-    material_path: &str,
     base_index: Option<usize>,
     colorset_index: usize,
     composition: ColorTableDiffuseComposition,
-    textures: &mut Vec<WeaponModelTexture>,
-) -> Option<usize> {
+) -> ResolvedColorTableBase {
     match (base_index, composition) {
-        (Some(base_index), ColorTableDiffuseComposition::Multiply) => {
-            combine_base_with_colorset_texture(material_path, base_index, colorset_index, textures)
-        }
-        _ => Some(colorset_index),
+        (Some(base_index), ColorTableDiffuseComposition::Multiply) => ResolvedColorTableBase {
+            base_color: base_index,
+            colorset_diffuse: Some(colorset_index),
+        },
+        _ => ResolvedColorTableBase {
+            base_color: colorset_index,
+            colorset_diffuse: None,
+        },
     }
-}
-
-#[cfg(feature = "game-data")]
-fn multiply_srgb_channels(a: u8, b: u8) -> u8 {
-    linear_to_srgb_u8(srgb_u8_to_linear(a) * srgb_u8_to_linear(b))
-}
-
-#[cfg(feature = "game-data")]
-fn srgb_u8_to_linear(value: u8) -> f32 {
-    let srgb = f32::from(value) / 255.0;
-    if srgb <= 0.04045 {
-        srgb / 12.92
-    } else {
-        ((srgb + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-#[cfg(feature = "game-data")]
-fn linear_to_srgb_u8(value: f32) -> u8 {
-    let value = value.clamp(0.0, 1.0);
-    let srgb = if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[cfg(feature = "game-data")]
@@ -7025,6 +6932,7 @@ fn fallback_weapon_material(
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        colorset_diffuse_texture: None,
         secondary_base_color_texture: None,
         normal_texture: None,
         secondary_normal_texture: None,
@@ -8248,14 +8156,22 @@ mod weapon_material_tests {
         assert_eq!(material.vertex_movement_scale, 0.0);
         assert_eq!(material.vertex_movement_max_length, 0.0);
         assert!(prepared.unsupported_inputs.vertex_movement_parameters);
-        assert!(base.path.ends_with("#base-times-colorset"));
-        assert_eq!(base.texel_layout, ModelTextureTexelLayout::ColorTableRampAb);
+        assert!(base.path.ends_with("v01_w0114b0001_base.tex"));
+        assert_eq!(base.texel_layout, ModelTextureTexelLayout::Standard);
+        let colorset_diffuse =
+            &model.textures[material.colorset_diffuse_texture.expect("colorset diffuse ramp")];
+        assert!(colorset_diffuse.path.ends_with("#colorset-diffuse"));
         assert_eq!(
-            base.rgba_f32.as_ref().map(Vec::len),
-            Some(usize::from(base.width) * usize::from(base.height))
+            colorset_diffuse.texel_layout,
+            ModelTextureTexelLayout::ColorTableRampAb
+        );
+        assert_eq!(
+            colorset_diffuse.rgba_f32.as_ref().map(Vec::len),
+            Some(usize::from(colorset_diffuse.width) * usize::from(colorset_diffuse.height))
         );
         assert!(
-            base.rgba_f32
+            colorset_diffuse
+                .rgba_f32
                 .as_deref()
                 .expect("Compatibility float diffuse payload")
                 .iter()
@@ -11156,12 +11072,6 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn srgb_multiply_uses_linear_space() {
-        assert_eq!(multiply_srgb_channels(255, 128), 128);
-        assert_ne!(multiply_srgb_channels(128, 128), 64);
-    }
-
-    #[test]
     fn character_colorset_diffuse_multiply_is_compatibility_gated() {
         for family in [
             MaterialShaderFamily::Character,
@@ -11195,8 +11105,8 @@ mod weapon_material_tests {
     }
 
     #[test]
-    fn colorset_base_selection_and_compatibility_multiply_preserve_hdr_diffuse() {
-        let mut textures = vec![
+    fn colorset_base_selection_and_compatibility_multiply_compose_in_shader() {
+        let textures = vec![
             WeaponModelTexture {
                 path: "base.tex".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
@@ -11211,7 +11121,7 @@ mod weapon_material_tests {
             WeaponModelTexture {
                 path: "baked://material#colorset-diffuse".to_string(),
                 kind: WeaponModelTextureKind::BaseColor,
-                texel_layout: ModelTextureTexelLayout::Standard,
+                texel_layout: ModelTextureTexelLayout::ColorTableRampAb,
                 width: 1,
                 height: 1,
                 array_size: 1,
@@ -11221,71 +11131,33 @@ mod weapon_material_tests {
             },
         ];
 
-        let replaced = resolve_color_table_base_texture(
-            "material.mtrl",
-            Some(0),
-            1,
-            ColorTableDiffuseComposition::Replace,
-            &mut textures,
-        )
-        .expect("replace colorset diffuse");
-        assert_eq!(replaced, 1);
+        let replaced =
+            resolve_color_table_base_texture(Some(0), 1, ColorTableDiffuseComposition::Replace);
+        assert_eq!(replaced.base_color, 1);
+        assert_eq!(replaced.colorset_diffuse, None);
         assert_eq!(textures.len(), 2);
 
-        let multiplied = resolve_color_table_base_texture(
-            "material.mtrl",
-            Some(0),
-            1,
-            ColorTableDiffuseComposition::Multiply,
-            &mut textures,
-        )
-        .expect("multiply compatibility diffuse");
-        assert_eq!(textures[multiplied].rgba[3], 77);
-        let multiplied_float = textures[multiplied]
-            .rgba_f32
-            .as_deref()
-            .expect("Compatibility float diffuse")[0];
-        assert!((multiplied_float[0] - srgb_u8_to_linear(128) * 6.7929688).abs() < 1.0e-6);
-        assert!((multiplied_float[1] - srgb_u8_to_linear(64) * 2.0).abs() < 1.0e-6);
-        assert!((multiplied_float[2] - srgb_u8_to_linear(32) * 0.5).abs() < 1.0e-6);
-        assert_eq!(multiplied_float[3], 77.0 / 255.0);
-        assert!(textures[multiplied].path.ends_with("#base-times-colorset"));
-    }
+        // Multiply with a real diffuse keeps the diffuse at its own resolution and
+        // lets the shader compose it with the colorset ramp; no colorset-resolution
+        // `#base-times-colorset` composite is baked.
+        let multiplied =
+            resolve_color_table_base_texture(Some(0), 1, ColorTableDiffuseComposition::Multiply);
+        assert_eq!(multiplied.base_color, 0);
+        assert_eq!(multiplied.colorset_diffuse, Some(1));
+        assert_eq!(textures.len(), 2);
+        assert_eq!(textures[0].rgba, vec![128, 64, 32, 77]);
+        assert!(
+            !textures
+                .iter()
+                .any(|texture| texture.path.ends_with("#base-times-colorset"))
+        );
 
-    #[test]
-    fn base_colorset_multiply_preserves_base_alpha() {
-        let mut textures = vec![
-            WeaponModelTexture {
-                path: "base.tex".to_string(),
-                kind: WeaponModelTextureKind::BaseColor,
-                texel_layout: ModelTextureTexelLayout::Standard,
-                width: 1,
-                height: 1,
-                array_size: 1,
-                array_layer_height: 1,
-                rgba: vec![255, 128, 64, 255],
-                rgba_f32: None,
-            },
-            WeaponModelTexture {
-                path: "colorset.tex".to_string(),
-                kind: WeaponModelTextureKind::BaseColor,
-                texel_layout: ModelTextureTexelLayout::Standard,
-                width: 1,
-                height: 1,
-                array_size: 1,
-                array_layer_height: 1,
-                rgba: vec![255, 255, 255, 32],
-                rgba_f32: None,
-            },
-        ];
-
-        let index =
-            combine_base_with_colorset_texture("material.mtrl", 0, 1, &mut textures).expect("bake");
-
-        assert_eq!(textures[index].rgba[3], 255);
-        assert!(!texture_alpha_affects_material_transparency(
-            &textures[index]
-        ));
+        // Multiply without a real diffuse keeps the ramp itself as the base.
+        let ramp_base =
+            resolve_color_table_base_texture(None, 1, ColorTableDiffuseComposition::Multiply);
+        assert_eq!(ramp_base.base_color, 1);
+        assert_eq!(ramp_base.colorset_diffuse, None);
+        assert_eq!(textures.len(), 2);
     }
 
     #[test]

@@ -59,7 +59,6 @@ pub enum ModelDebugMode {
     VertexColor,
     MeshRole,
     ColorTableIndex,
-    MaterialMap,
     MultiMap,
     TileProperties,
     SheenProperties,
@@ -100,22 +99,21 @@ impl ModelDebugMode {
             ModelDebugMode::VertexColor => 12.0,
             ModelDebugMode::MeshRole => 13.0,
             ModelDebugMode::ColorTableIndex => 14.0,
-            ModelDebugMode::MaterialMap => 15.0,
-            ModelDebugMode::MultiMap => 16.0,
-            ModelDebugMode::TileProperties => 17.0,
-            ModelDebugMode::SheenProperties => 18.0,
-            ModelDebugMode::SphereProperties => 19.0,
-            ModelDebugMode::TileMatrix => 20.0,
-            ModelDebugMode::TileNormalArray => 21.0,
-            ModelDebugMode::TileOrbArray => 22.0,
-            ModelDebugMode::DetailDiffuseArray => 23.0,
-            ModelDebugMode::DetailNormalArray => 24.0,
-            ModelDebugMode::VertexColor1 => 25.0,
-            ModelDebugMode::SecondaryNormal => 26.0,
-            ModelDebugMode::Flow0 => 27.0,
-            ModelDebugMode::Flow1 => 28.0,
-            ModelDebugMode::UnsupportedInputs => 29.0,
-            ModelDebugMode::ViewDirection => 30.0,
+            ModelDebugMode::MultiMap => 15.0,
+            ModelDebugMode::TileProperties => 16.0,
+            ModelDebugMode::SheenProperties => 17.0,
+            ModelDebugMode::SphereProperties => 18.0,
+            ModelDebugMode::TileMatrix => 19.0,
+            ModelDebugMode::TileNormalArray => 20.0,
+            ModelDebugMode::TileOrbArray => 21.0,
+            ModelDebugMode::DetailDiffuseArray => 22.0,
+            ModelDebugMode::DetailNormalArray => 23.0,
+            ModelDebugMode::VertexColor1 => 24.0,
+            ModelDebugMode::SecondaryNormal => 25.0,
+            ModelDebugMode::Flow0 => 26.0,
+            ModelDebugMode::Flow1 => 27.0,
+            ModelDebugMode::UnsupportedInputs => 28.0,
+            ModelDebugMode::ViewDirection => 29.0,
         }
     }
 }
@@ -583,7 +581,7 @@ impl ModelRenderContext {
                         binding: 15,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -663,12 +661,6 @@ impl ModelRenderContext {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 26,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 27,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
@@ -2522,6 +2514,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         detail_params: material_detail_params(material, prepared_material),
         array_params: material_array_params(prepared_material),
         tile_lod_params: material_tile_lod_params(material, model, prepared_material),
+        colorset_params: material_colorset_params(material, model),
         detail_color: material_detail_color(material),
         multi_detail_color: material_multi_detail_color(material),
         shader_diffuse_color: material_shader_diffuse_color(material),
@@ -3037,34 +3030,33 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         &index_label,
     )
     .create_view(&wgpu::TextureViewDescriptor::default());
-    let (material_map_key, material_map_label) = material
-        .material_map_texture
+    let (colorset_diffuse_key, colorset_diffuse_label) = material
+        .colorset_diffuse_texture
         .and_then(|index| model.textures().get(index).map(|texture| (index, texture)))
         .map(|(index, texture)| {
             (
-                MaterialTextureKey::Rgba {
+                MaterialTextureKey::FloatRamp {
                     index,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    neutral: [1.0; 4].map(f32::to_bits),
                 },
-                format!("weapon material map texture {}", texture.path),
+                format!("weapon colorset diffuse ramp texture {}", texture.path),
             )
         })
         .unwrap_or_else(|| {
             (
-                MaterialTextureKey::RgbaFallback {
-                    rgba: [0, 0, 0, 255],
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                MaterialTextureKey::FloatRampFallback {
+                    neutral: [1.0; 4].map(f32::to_bits),
                 },
-                "weapon neutral material map texture".to_string(),
+                "weapon neutral colorset diffuse ramp texture".to_string(),
             )
         });
-    let material_map_texture_view = cached_material_texture(
+    let colorset_diffuse_texture_view = cached_material_texture(
         device,
         queue,
         model.textures(),
         texture_cache,
-        material_map_key,
-        &material_map_label,
+        colorset_diffuse_key,
+        &colorset_diffuse_label,
     )
     .create_view(&wgpu::TextureViewDescriptor::default());
     let (multi_map_key, multi_map_label) = material
@@ -3164,11 +3156,6 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         device,
         "weapon ColorTable index sampler",
         prepared_material.texture_sampling.index,
-    );
-    let material_map_sampler = create_sampler_for_sampling(
-        device,
-        "weapon material map sampler",
-        prepared_material.texture_sampling.material_map,
     );
     let multi_map_sampler = create_sampler_for_sampling(
         device,
@@ -3295,7 +3282,7 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             },
             wgpu::BindGroupEntry {
                 binding: 15,
-                resource: wgpu::BindingResource::TextureView(&material_map_texture_view),
+                resource: wgpu::BindingResource::TextureView(&colorset_diffuse_texture_view),
             },
             wgpu::BindGroupEntry {
                 binding: 16,
@@ -3340,10 +3327,6 @@ fn create_material_bind_group<M: ModelRenderData + ?Sized>(
             wgpu::BindGroupEntry {
                 binding: 26,
                 resource: wgpu::BindingResource::Sampler(&index_sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 27,
-                resource: wgpu::BindingResource::Sampler(&material_map_sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 28,
@@ -3471,27 +3454,45 @@ fn material_baked_color_table_ramps_are_ab<M: ModelRenderData + ?Sized>(
             })
     };
     let generic = crate::ModelTextureTexelLayout::ColorTableRampAb;
-    has_layout(
-        material.base_color_texture,
-        crate::ModelTextureKind::BaseColor,
-        generic,
-    ) && has_layout(
-        material.specular_texture,
-        crate::ModelTextureKind::Specular,
-        generic,
-    ) && has_layout(
-        material.material_properties_texture,
-        crate::ModelTextureKind::MaterialProperties,
-        generic,
-    ) && has_layout(
-        material.sheen_properties_texture,
-        crate::ModelTextureKind::SheenProperties,
-        generic,
-    ) && has_layout(
-        material.sphere_properties_texture,
-        crate::ModelTextureKind::SphereProperties,
-        generic,
-    )
+    // The base ramp lives in `colorset_diffuse_texture` when the shader composes
+    // the full-resolution diffuse; otherwise the base texture itself is the ramp.
+    let base_ramp = material
+        .colorset_diffuse_texture
+        .or(material.base_color_texture);
+    has_layout(base_ramp, crate::ModelTextureKind::BaseColor, generic)
+        && has_layout(
+            material.specular_texture,
+            crate::ModelTextureKind::Specular,
+            generic,
+        )
+        && has_layout(
+            material.material_properties_texture,
+            crate::ModelTextureKind::MaterialProperties,
+            generic,
+        )
+        && has_layout(
+            material.sheen_properties_texture,
+            crate::ModelTextureKind::SheenProperties,
+            generic,
+        )
+        && has_layout(
+            material.sphere_properties_texture,
+            crate::ModelTextureKind::SphereProperties,
+            generic,
+        )
+}
+
+fn material_colorset_params<M: ModelRenderData + ?Sized>(
+    material: &ModelMaterial,
+    model: &M,
+) -> [f32; 4] {
+    let composes_in_shader = material.colorset_diffuse_texture.is_some_and(|index| {
+        model.textures().get(index).is_some_and(|texture| {
+            texture.kind == crate::ModelTextureKind::BaseColor
+                && texture.texel_layout == crate::ModelTextureTexelLayout::ColorTableRampAb
+        })
+    });
+    [if composes_in_shader { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]
 }
 
 fn material_baked_color_table_tile_ramps_are_ab<M: ModelRenderData + ?Sized>(
@@ -4300,6 +4301,7 @@ fn fallback_material() -> ModelMaterial {
         metalness: 0.0,
         texture_indices: Vec::new(),
         base_color_texture: None,
+        colorset_diffuse_texture: None,
         secondary_base_color_texture: None,
         normal_texture: None,
         secondary_normal_texture: None,
@@ -5181,6 +5183,9 @@ struct MaterialUniform {
     detail_params: [f32; 4],
     array_params: [f32; 4],
     tile_lod_params: [f32; 4],
+    // x: the shader composes the full-resolution base diffuse with the
+    // colorset_diffuse_texture ramp row color (Compatibility base × colorset).
+    colorset_params: [f32; 4],
     detail_color: [f32; 4],
     multi_detail_color: [f32; 4],
     shader_diffuse_color: [f32; 4],
@@ -5661,6 +5666,70 @@ mod tests {
         assert!(!dither.contains("sampled_secondary_base = textureSampleBias"));
         assert!(!lightshaft.contains("textureSampleBias"));
         assert!(!properties.contains("textureSampleBias"));
+    }
+
+    #[test]
+    fn model_shader_composes_colorset_diffuse_at_source_resolution() {
+        let shader = include_str!("model.wgsl");
+        let compose = shader
+            .split_once("fn sample_color_table_base")
+            .and_then(|(_, rest)| rest.split_once("fn sample_color_table_specular"))
+            .map(|(section, _)| section)
+            .expect("color table base sample section");
+
+        for required in [
+            "material.colorset_params.x > 0.5",
+            "textureSampleBias(base_color_texture, base_color_sampler, uv, mip_bias)",
+            "textureDimensions(colorset_diffuse_texture)",
+            "textureLoad(colorset_diffuse_texture, packed_ramp_texel(uv, dimensions, 0u), 0)",
+            "textureLoad(colorset_diffuse_texture, packed_ramp_texel(uv, dimensions, 1u), 0)",
+            "return diffuse * row_color;",
+        ] {
+            assert!(
+                compose.contains(required),
+                "Compatibility base × colorset must compose in the shader: {required}"
+            );
+        }
+        // The A/B ramp texel addressing stays the deliberate floor + mip 0 form.
+        assert!(shader.contains("fn packed_ramp_texel"));
+        assert!(
+            !compose.contains("textureLoad(base_color_texture"),
+            "the full-resolution diffuse must use the filtered sampler path"
+        );
+    }
+
+    #[test]
+    fn model_shader_stays_within_downlevel_webgl2_texture_budget() {
+        let shader = include_str!("model.wgsl");
+        let sampled_textures = shader.matches("@group(1) @binding").count();
+        let texture_bindings = shader
+            .lines()
+            .filter(|line| line.contains("var ") && line.contains("texture_2d"))
+            .count();
+        let sampler_bindings = shader
+            .lines()
+            .filter(|line| line.contains("var ") && line.contains(": sampler"))
+            .count();
+        assert_eq!(
+            sampled_textures,
+            texture_bindings + sampler_bindings + 1,
+            "every group(1) binding must be accounted for (plus the material uniform buffer)"
+        );
+        assert!(
+            texture_bindings <= 16,
+            "downlevel_webgl2 allows at most 16 sampled textures per stage, found {texture_bindings}"
+        );
+        assert!(
+            sampler_bindings <= 16,
+            "downlevel_webgl2 allows at most 16 samplers per stage, found {sampler_bindings}"
+        );
+        // The freed material-map slot now carries the colorset diffuse ramp.
+        assert!(
+            shader.contains("var colorset_diffuse_texture: texture_2d<f32>;")
+                && !shader.contains("material_map_texture")
+                && !shader.contains("material_map_sampler"),
+            "binding 15 must be the colorset diffuse ramp and the material map binding must be gone"
+        );
     }
 
     #[test]
@@ -6695,22 +6764,21 @@ mod tests {
         assert_eq!(ModelDebugMode::VertexColor.shader_value(), 12.0);
         assert_eq!(ModelDebugMode::MeshRole.shader_value(), 13.0);
         assert_eq!(ModelDebugMode::ColorTableIndex.shader_value(), 14.0);
-        assert_eq!(ModelDebugMode::MaterialMap.shader_value(), 15.0);
-        assert_eq!(ModelDebugMode::MultiMap.shader_value(), 16.0);
-        assert_eq!(ModelDebugMode::TileProperties.shader_value(), 17.0);
-        assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 18.0);
-        assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 19.0);
-        assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 20.0);
-        assert_eq!(ModelDebugMode::TileNormalArray.shader_value(), 21.0);
-        assert_eq!(ModelDebugMode::TileOrbArray.shader_value(), 22.0);
-        assert_eq!(ModelDebugMode::DetailDiffuseArray.shader_value(), 23.0);
-        assert_eq!(ModelDebugMode::DetailNormalArray.shader_value(), 24.0);
-        assert_eq!(ModelDebugMode::VertexColor1.shader_value(), 25.0);
-        assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 26.0);
-        assert_eq!(ModelDebugMode::Flow0.shader_value(), 27.0);
-        assert_eq!(ModelDebugMode::Flow1.shader_value(), 28.0);
-        assert_eq!(ModelDebugMode::UnsupportedInputs.shader_value(), 29.0);
-        assert_eq!(ModelDebugMode::ViewDirection.shader_value(), 30.0);
+        assert_eq!(ModelDebugMode::MultiMap.shader_value(), 15.0);
+        assert_eq!(ModelDebugMode::TileProperties.shader_value(), 16.0);
+        assert_eq!(ModelDebugMode::SheenProperties.shader_value(), 17.0);
+        assert_eq!(ModelDebugMode::SphereProperties.shader_value(), 18.0);
+        assert_eq!(ModelDebugMode::TileMatrix.shader_value(), 19.0);
+        assert_eq!(ModelDebugMode::TileNormalArray.shader_value(), 20.0);
+        assert_eq!(ModelDebugMode::TileOrbArray.shader_value(), 21.0);
+        assert_eq!(ModelDebugMode::DetailDiffuseArray.shader_value(), 22.0);
+        assert_eq!(ModelDebugMode::DetailNormalArray.shader_value(), 23.0);
+        assert_eq!(ModelDebugMode::VertexColor1.shader_value(), 24.0);
+        assert_eq!(ModelDebugMode::SecondaryNormal.shader_value(), 25.0);
+        assert_eq!(ModelDebugMode::Flow0.shader_value(), 26.0);
+        assert_eq!(ModelDebugMode::Flow1.shader_value(), 27.0);
+        assert_eq!(ModelDebugMode::UnsupportedInputs.shader_value(), 28.0);
+        assert_eq!(ModelDebugMode::ViewDirection.shader_value(), 29.0);
     }
 
     #[test]
@@ -7336,6 +7404,29 @@ mod tests {
             material_tile_lod_params(&material, &model, prepared),
             [0.0, 1.0, 1.0, 1.0]
         );
+
+        // A full-resolution base diffuse is not an A/B ramp: without the side-car
+        // colorset ramp the packed base lookup stays off and the shader
+        // composition flag stays clear.
+        model.textures[2].texel_layout = crate::ModelTextureTexelLayout::Standard;
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(material_colorset_params(&material, &model), [0.0; 4]);
+        // The colorset-diffuse ramp moves the A/B base lookup off the diffuse and
+        // selects the shader composition branch.
+        material.colorset_diffuse_texture = Some(2);
+        model.textures[2].texel_layout = crate::ModelTextureTexelLayout::ColorTableRampAb;
+        assert_eq!(
+            material_tile_lod_params(&material, &model, prepared),
+            [0.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            material_colorset_params(&material, &model),
+            [1.0, 0.0, 0.0, 0.0]
+        );
+        material.colorset_diffuse_texture = None;
 
         material.shader_package_name = Some("characterlegacy.shpk".to_string());
         assert_eq!(

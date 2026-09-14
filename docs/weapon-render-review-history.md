@@ -1,5 +1,12 @@
 # 武器渲染审查历史档案
 
+## 2026-09-14 Compatibility `base × colorset` 组合移入 shader
+
+- ColorTable 索引贴图远小于 diffuse 的材质（确认案例：怪物 m0694b0001，索引 `id_16.tex` 32×32、diffuse 256×512）此前把 diffuse 最近邻降采样到 colorset 分辨率（64×32）烘成 `#base-times-colorset`，再经 `textureLoad` mip 0 + `floor` 无过滤采样放大成全屏硬边色块。现按游戏逐像素语义改为 shader 内组合：diffuse 保持原贴图走正常双线性/mip 过滤路径全分辨率采样，ColorTable 行色由 `colorset_diffuse_texture` ramp 经 `packed_ramp_texel`（floor + mip 0，A/B 防串色语义原样保留）`textureLoad` 查询，两者在线性空间相乘；ramp alpha 恒 1，结果 alpha = diffuse alpha。
+- 数据层 `ModelMaterial`/`WeaponTextureSet` 新增 `colorset_diffuse_texture`（serde default，指向 `baked://<mtrl>#colorset-diffuse`）；`resolve_color_table_base_texture` 在 Multiply 且有真实 diffuse 时不再预乘，无真实 diffuse 的材质行为不变（ramp 直接作 base）。`combine_base_with_colorset_texture`、`multiply_srgb_channels` 与染色路径的 `#base-times-colorset` 重组分支删除（无跨版本序列化数据存活）。
+- renderer fragment 保持 16 张 texture + 15 个 sampler（downlevel_webgl2 上限 16/16）：新增 colorset-diffuse ramp 复用腾出的 material map debug 槽位，MaterialMap debug 视图移除、其余 debug 视图顺移重编号；`material_tile_lod_params` packed gating 不再要求 base 本身是 A/B ramp（base ramp 改由 `colorset_diffuse_texture` 或 base 自身担当），`colorset_params.x` 标志启用组合分支，`fs_dither_depth` 经同一 helper 继承。
+- 验证：数据层 focused tests、renderer shader 字符串断言与 gating 单测、合成 WGPU fixture（256×1 gradient diffuse + 2 行 colorset + 2 texel 索引，锁定同一 index cell 内像素随 diffuse 渐变且行色分 cell 生效）、installed native_model_domain_snapshots 4/4、phantom P0（45047/45048/45050/45053/45068）重跑通过；m0694 probe 修复前后 PNG 对照确认硬块消失、壳面明暗连续。index G 的 A/B 双线性评估仍需 installed sampler flags 证据，保持 Nearest + LOD 0 不变。
+
 ## 2026-07-23 Legacy Gloss permutation/pass provenance 审计
 
 - vertex/PS pairing 现把 1440 个主颜色 Gloss PS 经 9216 条 SHPK node/pass 记录归约到 16 个唯一 VS；16/16 的 `TEXCOORD4.w` 都执行同一高度控制公式：`clamp((position.y * g_ModelParameter.x + g_InstanceParameter[4].y) * g_InstanceParameter[4].x, g_InstanceParameter[4].z, g_InstanceParameter[4].w)`。TEXCOORD4 根据 permutation 打包到 `o3/o4/o6`，但 16/16 同时与投影前 position XYZ 共用同一 semantic，且 `w` 写入全部为上述 `mad -> mul -> max -> min` 链。SHPK scalar parameter metadata 将 `cb2/cb3` 分别固定为 `g_InstanceParameter/g_ModelParameter`；参考仓没有这两个 runtime buffer 的分量级 provider，不能把它误命名为静态模型 bounds。

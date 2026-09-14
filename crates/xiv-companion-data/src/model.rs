@@ -626,6 +626,11 @@ pub struct ModelMaterial {
     pub texture_indices: Vec<usize>,
     #[serde(default)]
     pub base_color_texture: Option<usize>,
+    /// Compatibility `base × colorset` 组合在 shader 内逐像素执行时的
+    /// ColorTable diffuse ramp（`baked://…#colorset-diffuse`）；base 保持
+    /// 原始全分辨率 diffuse。无真实 diffuse 的材质不设置此字段，base 即 ramp。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colorset_diffuse_texture: Option<usize>,
     #[serde(default)]
     pub secondary_base_color_texture: Option<usize>,
     #[serde(default)]
@@ -1393,6 +1398,8 @@ pub enum PreparedRuntimeFallback {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedTextureBindings {
     pub base_color: Option<usize>,
+    #[serde(default)]
+    pub colorset_diffuse: Option<usize>,
     pub secondary_base_color: Option<usize>,
     pub normal: Option<usize>,
     pub secondary_normal: Option<usize>,
@@ -2142,6 +2149,7 @@ pub fn prepared_texture_bindings(material: Option<&ModelMaterial>) -> PreparedTe
 
     PreparedTextureBindings {
         base_color: material.base_color_texture,
+        colorset_diffuse: material.colorset_diffuse_texture,
         secondary_base_color: material.secondary_base_color_texture,
         normal: material.normal_texture,
         secondary_normal: material.secondary_normal_texture,
@@ -4261,6 +4269,7 @@ mod color_table_bake_tests {
                 .texture_bindings,
             PreparedTextureBindings {
                 base_color: Some(1),
+                colorset_diffuse: None,
                 secondary_base_color: None,
                 normal: Some(2),
                 secondary_normal: None,
@@ -6409,6 +6418,7 @@ mod color_table_bake_tests {
             metalness: 0.0,
             texture_indices: Vec::new(),
             base_color_texture: None,
+            colorset_diffuse_texture: None,
             secondary_base_color_texture: None,
             normal_texture: None,
             secondary_normal_texture: None,

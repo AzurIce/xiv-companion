@@ -1550,7 +1550,6 @@ fn WeaponRenderControls(
                     option { value: "flow1", "Flow 1" }
                     option { value: "mesh", "Mesh" }
                     option { value: "ct-index", "CT Index" }
-                    option { value: "material-map", "Mat Map" }
                     option { value: "multi-map", "Multi" }
                     option { value: "tile-props", "Tile" }
                     option { value: "sheen-props", "Sheen" }
@@ -1869,7 +1868,6 @@ fn debug_mode_value(mode: ModelDebugMode) -> &'static str {
         ModelDebugMode::VertexColor => "vertex",
         ModelDebugMode::MeshRole => "mesh",
         ModelDebugMode::ColorTableIndex => "ct-index",
-        ModelDebugMode::MaterialMap => "material-map",
         ModelDebugMode::MultiMap => "multi-map",
         ModelDebugMode::TileProperties => "tile-props",
         ModelDebugMode::SheenProperties => "sheen-props",
@@ -1904,7 +1902,6 @@ fn parse_debug_mode(value: &str) -> ModelDebugMode {
         "vertex" => ModelDebugMode::VertexColor,
         "mesh" => ModelDebugMode::MeshRole,
         "ct-index" => ModelDebugMode::ColorTableIndex,
-        "material-map" => ModelDebugMode::MaterialMap,
         "multi-map" => ModelDebugMode::MultiMap,
         "tile-props" => ModelDebugMode::TileProperties,
         "sheen-props" => ModelDebugMode::SheenProperties,

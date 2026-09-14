@@ -2,6 +2,7 @@
 
 ## 开发中
 
+- 修复 ColorTable 材质（如坐骑大壳蟹 m0694b0001）渲染成大面积硬边色块的问题：Compatibility「base × colorset」组合从离线预乘改为 shader 内逐像素相乘，diffuse 不再被降采样到 colorset 索引分辨率，模型表面恢复平滑明暗与贴图细节。
 - PAP 骨骼动画采样与前端播放：数据层新增 `animation.rs`（pap 容器头解析 + 内嵌 havok tagfile，animations/bindings 平行数组按名表 `havok_index` 关联，track→bone 经 `binding.transform_track_to_bone_indices` 映射到本骨架，越界 track 丢弃计数；加载时按量化直方图预检剔除采样器不支持的动画，vendored 解析 panic 全部 catch_unwind 转错误），`sample_animation_pose`/`animation_joint_matrices` 采样到 SkeletonPose/关节矩阵（时间毫秒、越界钳制），角色 action.pap + 常用 emote、monster/demihuman mount/idle pap 多候选探测（命中合并、全缺返回空集不报错）；模型预览页（宠物/坐骑）与角色页右侧栏新增「动画」下拉（None=rest + 各动画名），选中后 rAF 循环 `t=(now-start)%duration` 采样并增量上传关节矩阵，切换动画/模型重置计时，无动画集时 UI 不出现、渲染行为不变。修复 vendored havok 样条求值的 knot 窗口重建 bug（上游仅在 span==p 的首段正确，中段四元数爆成非单位值导致姿态翻转）与顶点 blend 索引语义（bone_table 绝对下标，此前按 submesh 窗口偏移重映射在非 rest 姿势下撕碎多窗口网格）；web 画布 device limits 补 storage buffer 蒙皮下限（WebGPU 后端均满足），动画播放时预览强制原位布局（平铺偏移量在蒙皮前顶点位置里，动画下会随关节旋转）。
 - 骨骼 rest pose 与 GPU 蒙皮管线：数据层新增 `skeleton.rs`（sklb 解析容错 `blks`/`sklb` magic 与多版本头，vendored Havok 解析 panic 全部 `catch_unwind` 转错误；骨架不走 serde/IndexedDB，随加载内存存活），`load_chara_model_with_skeleton_from_resource`/`load_character_assembly_with_skeleton_from_resource` 平行入口随模型返回 rest pose 骨架（sklb 缺失静默降级）；渲染层 `create_model_with_skeleton` 构建实例 joint 表（mesh bone_table 名并集按名匹配）+ 实例级 joint storage buffer（256 上限）+ `update_joint_matrices` 姿势覆盖，WGSL 蒙皮 `Σ w·J·pos`（权重按和归一、法线 mat3(J) 近似）；rest pose 蒙皮输出与非蒙皮路径浮点噪声级一致（joint 数 0 旧分支零扰动），陆行鸟/中原男装配实测通过，颈部旋转冒烟肉眼可见。
 

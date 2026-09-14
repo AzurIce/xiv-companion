@@ -188,6 +188,46 @@ mod installed {
     }
 
     #[test]
+    #[ignore = "renders the m0694b0001 colorset diffuse regression to target/weapon-render-snapshots"]
+    fn render_installed_m0694_colorset_diffuse_regression() {
+        let mut resource = SqPackResource::from_existing(&game_dir());
+        let request = CharaModelLoadRequest {
+            item_id: 32_841,
+            item_name: "大壳蟹角笛".to_string(),
+            kind: CharaModelKind::Mount,
+            model: PackedCharaModelId {
+                model_id: 694,
+                base_id: 1,
+                variant_id: 1,
+                chara_type: CharaModelType::Monster,
+            },
+        };
+        let model =
+            load_chara_model_from_resource(&mut resource, &request).expect("load m0694b0001 mount");
+        let material = model
+            .materials
+            .iter()
+            .find(|material| material.colorset_diffuse_texture.is_some())
+            .expect("m0694b0001 composes the colorset diffuse in the shader");
+        let base = &model.textures[material.base_color_texture.expect("active base texture")];
+        assert!(
+            base.path.contains("m0694b0001_d"),
+            "base stays the full-resolution diffuse: {}",
+            base.path
+        );
+        assert_eq!((base.width, base.height), (256, 512));
+        let ramp = &model.textures[material
+            .colorset_diffuse_texture
+            .expect("colorset diffuse ramp")];
+        assert!(ramp.path.ends_with("#colorset-diffuse"));
+        assert_eq!((ramp.width, ramp.height), (64, 32));
+        let index = &model.textures[material.index_texture.expect("ColorTable index texture")];
+        assert_eq!((index.width, index.height), (32, 32));
+        eprintln!("m0694b0001: {}", mesh_summary(&model));
+        render("probe-m0694b0001", &model);
+    }
+
+    #[test]
     #[ignore = "renders a current-patch weapon as regression for the extended domains"]
     fn render_installed_weapon_regression_snapshot() {
         let mut resource = SqPackResource::from_existing(&game_dir());
