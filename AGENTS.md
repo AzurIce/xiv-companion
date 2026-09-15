@@ -3,18 +3,17 @@
 This project has local reference repositories that are useful when changing FFXIV model, material,
 or render data handling:
 
-- `E:\repos\Meddle`
+- `third_party/Meddle` (shallow clone of [PassiveModding/Meddle](https://github.com/PassiveModding/Meddle), gitignored)
   - Dalamud/runtime-oriented exporter.
-  - Key references: `Meddle\Meddle.Utils\Export\Model.cs`,
-    `Meddle\Meddle.Utils\Export\Mesh.cs`,
-    `Meddle\Meddle.Utils\Export\Vertex.cs`,
-    `Meddle\Meddle.Utils\Files\Structs\Model\Model.cs`,
-    `Meddle\Meddle.Utils\Files\Structs\Material\ColorTableRow.cs`.
-- `E:\repos\MeddleTools`
-  - Blender import/material node/bake tooling for Meddle glTF output.
-  - Key references: `MeddleTools\node_setup\node_configs.py`,
-    `MeddleTools\node_setup\node_mappings.py`,
-    `MeddleTools\bake\bake_utils.py`.
+  - Key references: `Meddle/Meddle.Utils/Export/Model.cs`,
+    `Meddle/Meddle.Utils/Export/Mesh.cs`,
+    `Meddle/Meddle.Utils/Export/Vertex.cs`,
+    `Meddle/Meddle.Formats/Files/MtrlFile/ColorTableRow.cs`.
+- `~/Files/repos/MeddleTools` (clone of [PassiveModding/MeddleTools](https://github.com/PassiveModding/MeddleTools))
+  - Blender import/material-node tooling for Meddle glTF output.
+  - Key references: `MeddleTools/node_setup/node_configs.py`,
+    `MeddleTools/node_setup/node_mappings.py`,
+    `MeddleTools/shaders.blend`.
 
 When modifying `xiv-companion-data` parsing or texture/material baking, compare field semantics
 against these references before changing assumptions. Keep fixes small and add focused tests for
@@ -22,8 +21,9 @@ each semantic correction.
 
 Additional references:
 
-- `third_party/Meddle` is a shallow clone of `PassiveModding/Meddle` (gitignored) for machines
-  where the Windows paths above are unavailable. Note that Meddle resolves model paths at runtime
+- `third_party/Meddle` is gitignored, so it must be cloned on first use:
+  `git clone --depth 1 https://github.com/PassiveModding/Meddle.git third_party/Meddle`.
+  Note that Meddle resolves model paths at runtime
   and does not construct them; for SqPack path construction semantics (equipment/accessory
   `chara/equipment|accessory`, monster/demihuman `chara/monster|demihuman`, housing
   `bgcommon/hou` SGB) the authority is

@@ -1,20 +1,11 @@
-# Rendering Pipeline TODO
-
-This document tracks rendering-fidelity gaps found by comparing the current pipeline with the
-field and texture semantics used by Meddle and MeddleTools.
-
-MeddleTools is a behavioral reference, not an authoritative copy of the in-game shaders. Its
-`shaders.blend` materials are hand-crafted approximations and the project is licensed under
-AGPL-3.0-or-later. Keep WGSL implementations independent and use MeddleTools primarily to verify
-texture roles, UV routing, material keys, ColorTable fields, and expected feature composition.
+# TODO
 
 ## Verification Infrastructure
 
 - [ ] Fix the deterministic SIGSEGV when running the ignored native GPU snapshot suites with
   parallel test threads.
   - `cargo test --features render-test-support --test native_weapon_snapshot -- --ignored
-    --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Reproduced on the baseline
-    commit, so it is independent of the colorset composition change. Suspected cause: concurrent
+    --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Suspected cause: concurrent
     wgpu instances across tests.
   - Until fixed, run these suites single-threaded or add a serialized harness.
 
@@ -22,7 +13,6 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
   `--features web` verification command.
   - Whole-workspace `cargo test --features web` fails to build: the test references
     `disassemble_dxbc` and related helpers that are not available without additional features.
-    Reproduced on the baseline commit.
   - Either gate the test behind the required features or document the full verification command.
 
 ## App UI
@@ -45,11 +35,13 @@ texture roles, UV routing, material keys, ColorTable fields, and expected featur
 
 ## Reference Files
 
-- `E:\repos\Meddle\Meddle\Meddle.Utils\Export\Model.cs`
-- `E:\repos\Meddle\Meddle\Meddle.Utils\Export\Mesh.cs`
-- `E:\repos\Meddle\Meddle\Meddle.Utils\Export\Vertex.cs`
-- `E:\repos\Meddle\Meddle.Utils\Files\Structs\Material\ColorTableRow.cs`
-- `E:\repos\MeddleTools\MeddleTools\node_setup\node_configs.py`
-- `E:\repos\MeddleTools\MeddleTools\node_setup\node_mappings.py`
-- `E:\repos\MeddleTools\MeddleTools\bake\bake_utils.py`
-- `E:\repos\MeddleTools\MeddleTools\shaders.blend`
+Local clones for checking FFXIV model/material/texture semantics:
+
+- `~/Files/repos/MeddleTools` — clone of [PassiveModding/MeddleTools](https://github.com/PassiveModding/MeddleTools),
+  Blender import/material-node tooling for Meddle glTF output
+  (`MeddleTools/node_setup/node_configs.py`, `MeddleTools/node_setup/node_mappings.py`,
+  `MeddleTools/shaders.blend`).
+- `third_party/Meddle` — shallow clone of [PassiveModding/Meddle](https://github.com/PassiveModding/Meddle),
+  Dalamud/runtime-oriented exporter
+  (`Meddle/Meddle.Utils/Export/Model.cs`, `Meddle/Meddle.Utils/Export/Mesh.cs`,
+  `Meddle/Meddle.Utils/Export/Vertex.cs`, `Meddle/Meddle.Formats/Files/MtrlFile/ColorTableRow.cs`).
