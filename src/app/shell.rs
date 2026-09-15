@@ -105,27 +105,58 @@ fn module_icon(id: &str) -> IconKind {
     }
 }
 
+/// 悬浮中的侧边栏导航 tooltip：记录触发项的视口几何，tooltip 本体由
+/// `DesktopSidebar` 渲染在滚动容器外（`position: fixed`），避免被
+/// `overflow-y-auto` 的导航滚动条在横向裁剪。
+#[derive(Clone, Copy, PartialEq)]
+struct SidebarTooltipAnchor {
+    id: &'static str,
+    label: &'static str,
+    right: f64,
+    center_y: f64,
+}
+
 #[component]
 fn IconTooltip(
     label: &'static str,
+    anchor_id: &'static str,
+    #[props(default)] tooltip: Option<Signal<Option<SidebarTooltipAnchor>>>,
     #[props(default = true)] enabled: bool,
-    #[props(default = "relative".to_string())] class: String,
     children: Element,
 ) -> Element {
-    let wrapper_class = if class == "absolute -right-3 top-1/2 z-20 -translate-y-1/2" {
-        "group absolute -right-3 top-1/2 z-20 -translate-y-1/2"
-    } else {
-        "group relative"
-    };
-
+    let dom_id = format!("sidebar-tooltip-anchor-{anchor_id}");
     rsx! {
-        div { class: wrapper_class,
-            {children}
-            if enabled {
-                div { class: "pointer-events-none absolute left-full top-1/2 z-50 ml-2 hidden -translate-y-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md group-hover:block",
-                    "{label}"
+        div {
+            class: "relative",
+            id: "{dom_id}",
+            onmouseenter: move |_| {
+                if !enabled {
+                    return;
                 }
-            }
+                let Some(mut tooltip) = tooltip else { return };
+                let anchor = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.get_element_by_id(&dom_id))
+                    .map(|element| {
+                        let rect = element.get_bounding_client_rect();
+                        SidebarTooltipAnchor {
+                            id: anchor_id,
+                            label,
+                            right: rect.right(),
+                            center_y: rect.top() + rect.height() / 2.0,
+                        }
+                    });
+                if let Some(anchor) = anchor {
+                    tooltip.set(Some(anchor));
+                }
+            },
+            onmouseleave: move |_| {
+                let Some(mut tooltip) = tooltip else { return };
+                if tooltip().is_some_and(|anchor| anchor.id == anchor_id) {
+                    tooltip.set(None);
+                }
+            },
+            {children}
         }
     }
 }
@@ -139,6 +170,8 @@ fn NavButton(
     #[props(default = false)] compact: bool,
     #[props(default = false)] collapsed: bool,
     #[props(default = false)] experimental: bool,
+    #[props(default = "")] tooltip_id: &'static str,
+    #[props(default)] tooltip: Option<Signal<Option<SidebarTooltipAnchor>>>,
 ) -> Element {
     let button_class = match (compact, collapsed, active) {
         (true, _, true) => {
@@ -187,7 +220,13 @@ fn NavButton(
         link
     } else {
         rsx! {
-            IconTooltip { label, enabled: collapsed, {link} }
+            IconTooltip {
+                label,
+                anchor_id: tooltip_id,
+                tooltip,
+                enabled: collapsed,
+                {link}
+            }
         }
     }
 }
@@ -238,6 +277,14 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
         "min-w-0 overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-300 ease-out max-w-40 translate-x-0 opacity-100"
     };
 
+    // 折叠态悬浮 tooltip 的共享状态：本体渲染在 aside 根部（滚动容器外），
+    // `position: fixed` 锚定触发项的视口几何，避免被导航滚动条横向裁剪。
+    let mut tooltip = use_signal(|| None::<SidebarTooltipAnchor>);
+    use_effect(move || {
+        collapsed();
+        tooltip.set(None);
+    });
+
     rsx! {
         aside { class: "relative z-50 hidden h-dvh min-h-0 min-w-0 overflow-visible border-r bg-card transition-all duration-300 ease-out lg:flex lg:flex-col",
             div { class: brand_class,
@@ -261,13 +308,17 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                 }
             }
 
-            div { class: "flex-1 overflow-y-auto px-3 py-4",
+            div {
+                class: "flex-1 overflow-y-auto px-3 py-4",
+                onscroll: move |_| tooltip.set(None),
                 NavButton {
                     label: "首页",
                     route: Route::Home,
                     active: current == Route::Home,
                     icon: IconKind::Home,
                     collapsed: collapsed(),
+                    tooltip_id: "home",
+                    tooltip: Some(tooltip),
                 }
 
                 for group in [ModuleGroup::Tools, ModuleGroup::Preview, ModuleGroup::Data] {
@@ -286,6 +337,8 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                                     icon: module_icon(module.id),
                                     collapsed: collapsed(),
                                     experimental: module.status == ModuleStatus::Experimental,
+                                    tooltip_id: module.id,
+                                    tooltip: Some(tooltip),
                                 }
                             }
                         }
@@ -299,6 +352,16 @@ fn DesktopSidebar(current: Route, collapsed: Signal<bool>) -> Element {
                     active: current == Route::Settings,
                     icon: IconKind::Settings,
                     collapsed: collapsed(),
+                    tooltip_id: "settings",
+                    tooltip: Some(tooltip),
+                }
+            }
+            if let Some(anchor) = tooltip() {
+                div {
+                    class: "pointer-events-none fixed z-50 -translate-y-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md",
+                    role: "tooltip",
+                    style: "left: {anchor.right + 8.0}px; top: {anchor.center_y}px;",
+                    "{anchor.label}"
                 }
             }
         }

@@ -4,7 +4,10 @@
 
 ## App UI
 
-- [ ] Fix collapsed-sidebar nav tooltips being clipped by the nav scroll container.
+## Resolved
+
+- [x] Fix collapsed-sidebar nav tooltips being clipped by the nav scroll container.
+  (resolved: 2026-09-15)
   - Symptom: with the sidebar collapsed (72px), hovering a nav icon shows the label tooltip cut
     off at the sidebar's right edge, appearing covered by the main content.
   - Root cause: `IconTooltip` renders the tooltip as `absolute left-full ... z-50` inside the nav
@@ -19,8 +22,6 @@
     shell root), or use the top layer (`popover` attribute); check for new stacking conflicts
     with page modals (`fixed inset-0 z-50` in `src/app/pages/{crafting,collection,notes}.rs`).
   - Relevant code: `src/app/shell.rs` (`IconTooltip`, `DesktopSidebar` nav scroller).
-
-## Resolved
 
 - [x] Fix the deterministic SIGSEGV when running the ignored native GPU snapshot suites with
   parallel test threads. (resolved: 2026-09-15)
