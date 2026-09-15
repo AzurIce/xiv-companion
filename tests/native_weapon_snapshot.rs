@@ -167,6 +167,38 @@ fn render_mock_weapon_model_snapshot() {
 }
 
 #[test]
+#[ignore = "stresses concurrent native wgpu snapshot renders across threads"]
+fn render_mock_concurrent_snapshot_stress_smoke() {
+    // 复现 native GPU 快照套件多线程 SIGSEGV 的用例：多线程并发跑完整快照渲染。
+    // 修复前各线程的 wgpu 实例生命周期（含 vkDestroyInstance）并发触发
+    // libvulkan ICD 竞态（NVIDIA 环境确定性 SIGSEGV）；test_support 串行化
+    // 整个渲染后，本用例与 --test-threads=N 跑全部 ignored 套件均应通过。
+    let threads = 4;
+    let renders_per_thread = 2;
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for thread_index in 0..threads {
+            handles.push(scope.spawn(move || {
+                for render_index in 0..renders_per_thread {
+                    let snapshot = render_weapon_model_snapshot_with_options(
+                        WeaponModelSnapshotOptions::new(format!(
+                            "native-concurrent-stress-t{thread_index}-r{render_index}"
+                        ))
+                        .with_viewport(320, 240),
+                        &mock_weapon_model(),
+                    )
+                    .expect("render concurrent stress snapshot");
+                    eprintln!("png: {}", snapshot.png_path.display());
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("concurrent stress thread");
+        }
+    });
+}
+
+#[test]
 #[ignore = "asserts MSAA 4x smooths triangle edges vs single sampling; native wgpu"]
 fn render_mock_msaa_edge_smoothing_snapshot() {
     let mut model = mock_weapon_model();

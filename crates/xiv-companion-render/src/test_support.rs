@@ -204,6 +204,16 @@ pub fn render_model_snapshot_with_skeleton_and_pose<M: ModelRenderData + ?Sized>
     skeleton: Option<&xiv_companion_data::ModelSkeleton>,
     pose: Option<&xiv_companion_data::SkeletonPose>,
 ) -> Result<ModelSnapshot, ModelSnapshotError> {
+    // libvulkan 的 ICD 扫描/加载在多个线程并发 vkCreateInstance 时存在已知竞态
+    // （loader_icd_scan 空函数指针，NVIDIA 等 dlopen 重 ICD 环境下随机 SIGSEGV）。
+    // 只串行化 Instance::new/request_adapter 不够：wgpu 的 Instance/Adapter 句柄
+    // 都存活到渲染结束，vkDestroyInstance 仍与其他线程的实例创建/销毁并发。
+    // 这里串行化整个快照渲染，任意时刻只有一个 Vulkan 实例生命周期在跑，
+    // ignored 快照套件可以多线程跑（--test-threads=N）而不再触发 ICD 竞态。
+    static SNAPSHOT_RENDER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _render_guard = SNAPSHOT_RENDER_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     pollster::block_on(render_model_snapshot_async(options, model, skeleton, pose))
 }
 
@@ -243,13 +253,6 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         .output_dir
         .join(format!("{}.png", sanitize_file_stem(&options.name)));
 
-    // libvulkan 的 ICD 扫描在多个线程并发 vkCreateInstance 时存在已知竞态
-    // （loader_icd_scan 空函数指针，NVIDIA 等 dlopen 重 ICD 环境下随机 SIGSEGV），
-    // 串行化实例创建；adapter/device 请求与渲染不受影响，可继续并行。
-    static INSTANCE_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _instance_init_guard = INSTANCE_INIT_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -262,7 +265,6 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         })
         .await
         .map_err(|error| WeaponModelSnapshotError::RequestAdapter(format!("{error:?}")))?;
-    drop(_instance_init_guard);
     let adapter_info = adapter.get_info();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {

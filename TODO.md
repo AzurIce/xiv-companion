@@ -2,13 +2,6 @@
 
 ## Verification Infrastructure
 
-- [ ] Fix the deterministic SIGSEGV when running the ignored native GPU snapshot suites with
-  parallel test threads.
-  - `cargo test --features render-test-support --test native_weapon_snapshot -- --ignored
-    --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Suspected cause: concurrent
-    wgpu instances across tests.
-  - Until fixed, run these suites single-threaded or add a serialized harness.
-
 - [ ] Fix compilation of `tests/weapon_shader_family_audit.rs` under the documented
   `--features web` verification command.
   - Whole-workspace `cargo test --features web` fails to build: the test references
@@ -32,6 +25,15 @@
     shell root), or use the top layer (`popover` attribute); check for new stacking conflicts
     with page modals (`fixed inset-0 z-50` in `src/app/pages/{crafting,collection,notes}.rs`).
   - Relevant code: `src/app/shell.rs` (`IconTooltip`, `DesktopSidebar` nav scroller).
+
+## Resolved
+
+- [x] Fix the deterministic SIGSEGV when running the ignored native GPU snapshot suites with
+  parallel test threads. (resolved: 2026-09-15)
+  - `cargo test --features render-test-support --test native_weapon_snapshot -- --ignored
+    --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Suspected cause: concurrent
+    wgpu instances across tests.
+  - Until fixed, run these suites single-threaded or add a serialized harness.
 
 ## Reference Files
 
