@@ -2,9 +2,13 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    ffi::{c_char, c_void},
     fs,
     path::PathBuf,
+};
+
+#[cfg(windows)]
+use std::{
+    ffi::{c_char, c_void},
     ptr,
     sync::{
         OnceLock,
@@ -10370,12 +10374,6 @@ fn assert_installed_character_glass_shader_boundary(resource: &mut SqPackResourc
     let package = physis::shpk::ShaderPackage::from_existing(resource.platform(), &bytes)
         .expect("parse installed characterglass.shpk");
     assert_eq!(package.pixel_shaders.len(), 38);
-    let mut sampled_texture_shader_counts = BTreeMap::<String, usize>::new();
-    let mut discard_shader_count = 0;
-    let mut alpha_output_shader_count = 0;
-    let mut constant_one_alpha_shader_count = 0;
-    let mut dynamic_alpha_shader_count = 0;
-    let mut normal_sample_with_alpha_component_count = 0;
     for (index, shader) in package.pixel_shaders.iter().enumerate() {
         assert!(
             shader.scalar_parameters.iter().all(|parameter| {
@@ -10386,85 +10384,100 @@ fn assert_installed_character_glass_shader_boundary(resource: &mut SqPackResourc
             }),
             "characterglass pixel shader {index} started binding a glass parameter; re-audit its surface formula"
         );
-        let assembly = disassemble_dxbc(&shader.bytecode)
-            .unwrap_or_else(|error| panic!("characterglass pixel shader {index}: {error}"));
-        let lines = assembly.lines().map(str::trim).collect::<Vec<_>>();
-        let bindings = dxbc_texture_bindings(&lines);
-        let samples = lines
-            .iter()
-            .filter_map(|line| dxbc_sample_texture_name(line, &bindings))
-            .collect::<BTreeSet<_>>();
-        normal_sample_with_alpha_component_count += lines
-            .iter()
-            .filter(|line| {
-                dxbc_sample_texture_name(line, &bindings).as_deref() == Some("g_SamplerNormal.T")
-                    && line
-                        .split_once(' ')
-                        .and_then(|(_, operands)| operands.split(',').next())
-                        .is_some_and(|destination| destination.contains('w'))
-            })
-            .count();
-        for sample in samples {
-            *sampled_texture_shader_counts.entry(sample).or_default() += 1;
-        }
-        if lines.iter().any(|line| line.starts_with("discard")) {
-            discard_shader_count += 1;
-        }
-        if lines.iter().any(|line| line.contains("o0.w")) {
-            alpha_output_shader_count += 1;
-        }
-        if lines.iter().any(|line| line == &"mov o0.w, l(1.000000)") {
-            constant_one_alpha_shader_count += 1;
-        }
-        if lines.iter().any(|line| line.starts_with("mad o0.w,")) {
-            dynamic_alpha_shader_count += 1;
-        }
     }
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerIndex.T"),
-        Some(&34)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerNormal.T"),
-        Some(&34)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerTable.T"),
-        Some(&34)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerTileNormal"),
-        Some(&34)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerTileOrb.T"),
-        Some(&34)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerMask.T"),
-        Some(&24)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerReflectionArray.T"),
-        Some(&24)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerSphereMap.T"),
-        Some(&24)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerDissolveTexture"),
-        Some(&19)
-    );
-    assert_eq!(
-        sampled_texture_shader_counts.get("g_SamplerDissolveTexture1"),
-        Some(&19)
-    );
-    assert_eq!(discard_shader_count, 31);
-    assert_eq!(alpha_output_shader_count, 32);
-    assert_eq!(constant_one_alpha_shader_count, 16);
-    assert_eq!(dynamic_alpha_shader_count, 16);
-    assert_eq!(normal_sample_with_alpha_component_count, 0);
+
+    // DXBC 反汇编依赖 D3DCompiler，仅 Windows 可用；其余平台跳过逐 shader 的
+    // 反汇编统计，上面的平台无关断言在所有平台运行。
+    #[cfg(windows)]
+    {
+        let mut sampled_texture_shader_counts = BTreeMap::<String, usize>::new();
+        let mut discard_shader_count = 0;
+        let mut alpha_output_shader_count = 0;
+        let mut constant_one_alpha_shader_count = 0;
+        let mut dynamic_alpha_shader_count = 0;
+        let mut normal_sample_with_alpha_component_count = 0;
+        for (index, shader) in package.pixel_shaders.iter().enumerate() {
+            let assembly = disassemble_dxbc(&shader.bytecode)
+                .unwrap_or_else(|error| panic!("characterglass pixel shader {index}: {error}"));
+            let lines = assembly.lines().map(str::trim).collect::<Vec<_>>();
+            let bindings = dxbc_texture_bindings(&lines);
+            let samples = lines
+                .iter()
+                .filter_map(|line| dxbc_sample_texture_name(line, &bindings))
+                .collect::<BTreeSet<_>>();
+            normal_sample_with_alpha_component_count += lines
+                .iter()
+                .filter(|line| {
+                    dxbc_sample_texture_name(line, &bindings).as_deref()
+                        == Some("g_SamplerNormal.T")
+                        && line
+                            .split_once(' ')
+                            .and_then(|(_, operands)| operands.split(',').next())
+                            .is_some_and(|destination| destination.contains('w'))
+                })
+                .count();
+            for sample in samples {
+                *sampled_texture_shader_counts.entry(sample).or_default() += 1;
+            }
+            if lines.iter().any(|line| line.starts_with("discard")) {
+                discard_shader_count += 1;
+            }
+            if lines.iter().any(|line| line.contains("o0.w")) {
+                alpha_output_shader_count += 1;
+            }
+            if lines.iter().any(|line| line == &"mov o0.w, l(1.000000)") {
+                constant_one_alpha_shader_count += 1;
+            }
+            if lines.iter().any(|line| line.starts_with("mad o0.w,")) {
+                dynamic_alpha_shader_count += 1;
+            }
+        }
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerIndex.T"),
+            Some(&34)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerNormal.T"),
+            Some(&34)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerTable.T"),
+            Some(&34)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerTileNormal"),
+            Some(&34)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerTileOrb.T"),
+            Some(&34)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerMask.T"),
+            Some(&24)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerReflectionArray.T"),
+            Some(&24)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerSphereMap.T"),
+            Some(&24)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerDissolveTexture"),
+            Some(&19)
+        );
+        assert_eq!(
+            sampled_texture_shader_counts.get("g_SamplerDissolveTexture1"),
+            Some(&19)
+        );
+        assert_eq!(discard_shader_count, 31);
+        assert_eq!(alpha_output_shader_count, 32);
+        assert_eq!(constant_one_alpha_shader_count, 16);
+        assert_eq!(dynamic_alpha_shader_count, 16);
+        assert_eq!(normal_sample_with_alpha_component_count, 0);
+    }
 }
 
 fn assert_installed_cutout_boundary(report: &WeaponShaderFamilyAudit) {

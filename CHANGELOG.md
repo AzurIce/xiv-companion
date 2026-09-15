@@ -3,6 +3,7 @@
 ## 开发中
 
 - 修复 native GPU 快照套件多线程运行（`--test-threads=N`）时的确定性 SIGSEGV：快照渲染此前只串行化 wgpu 实例创建，wgpu 的 Instance/Adapter 句柄存活到渲染结束，实例销毁（vkDestroyInstance）仍与其他线程的 Vulkan 实例创建并发触发 libvulkan ICD 竞态（NVIDIA 等 dlopen 重 ICD 环境）；现 test_support 串行化整个快照渲染，任意时刻只跑一个 Vulkan 实例生命周期，Justfile 的多线程 ignored 快照命令可直接使用，并新增多线程并发渲染冒烟用例守护。
+- 修复文档化的 `cargo test --features web` 全量验证命令构建失败：`tests/weapon_shader_family_audit.rs` 的 characterglass 边界断言未按平台隔离地引用仅 Windows 可用的 DXBC 反汇编辅助（`disassemble_dxbc` 等），导致非 Windows 平台整个测试目标编译失败；DXBC 统计已收入 `#[cfg(windows)]` 块，shader 数量与标量参数等平台无关断言保留在所有平台运行，仅 Windows 用到的导入一并按平台门控。
 - 模型预览新增抗锯齿设置：场景 HDR 目标与全部场景管线支持 4x MSAA（bloom/compose 前 resolve 到单采样纹理，resolve 只平滑边缘、不改变内部亮度），模型预览页与角色页「渲染」区块新增「抗锯齿」选项（关 / MSAA 4x，默认开）；切换时重建 WebGPU 画布。native WGPU 断言 4x 边缘中间色像素显著多于单采样且内部亮度不变。
 - 睫毛/眉毛渲染重做：脸部 hair 材质（obj/face 下，如敖龙 `mt_c####f####_etc_a`）的发色恢复乘 mask R 明暗细节（真实纹理解码：眉发丝纹理 + 睫毛区压暗，此前按"数据通道"只取发色平色，睫毛亮成白粉点）；混合方式由 Cutout + screen-door 抖动改为 Transparent 真混合并关闭其 dither 深度（细发丝在 mipmap 下溶成半透明渐变带，抖动把它打成稀疏白点；下方是平滑皮肤，无头部毛发透出头皮的问题），睫毛/眉毛恢复为柔和连续的深色发丝。
 - 修复 web（wasm32）端角色/宠物骨架全部加载失败的问题：vendored havok 骨架解析把无父骨骼标记 -1 回转为 `usize::MAX`，而校验处与 `u64::MAX` 比较——在 64 位宿主上恰好相等、wasm32 下恒不成立，导致骨架解析必败，种族骨变形、裸肤拼接闭合与骨骼动画在 web 端全部静默失效（native 不受影响）。真实 sklb 在 wasmtime（wasm32）下验证了修复前后的失败/通过。

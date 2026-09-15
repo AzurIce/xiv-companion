@@ -2,12 +2,6 @@
 
 ## Verification Infrastructure
 
-- [ ] Fix compilation of `tests/weapon_shader_family_audit.rs` under the documented
-  `--features web` verification command.
-  - Whole-workspace `cargo test --features web` fails to build: the test references
-    `disassemble_dxbc` and related helpers that are not available without additional features.
-  - Either gate the test behind the required features or document the full verification command.
-
 ## App UI
 
 - [ ] Fix collapsed-sidebar nav tooltips being clipped by the nav scroll container.
@@ -34,6 +28,12 @@
     --test-threads=4` crashes with SIGSEGV; `--test-threads=1` passes. Suspected cause: concurrent
     wgpu instances across tests.
   - Until fixed, run these suites single-threaded or add a serialized harness.
+
+- [x] Fix compilation of `tests/weapon_shader_family_audit.rs` under the documented
+  `--features web` verification command. (resolved: 2026-09-15)
+  - Whole-workspace `cargo test --features web` fails to build: the test references
+    `disassemble_dxbc` and related helpers that are not available without additional features.
+  - Either gate the test behind the required features or document the full verification command.
 
 ## Reference Files
 
