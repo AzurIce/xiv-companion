@@ -2,6 +2,14 @@
 
 ## Verification Infrastructure
 
+- [ ] Fix `cargo test --features render-test-support` failing to build example
+  `dump_gear.rs` without `game-data`.
+  - `examples/dump_gear.rs` calls `physis::savedata::gearsets` but `physis` is an optional
+    dependency gated behind `game-data`, so any cargo invocation that builds examples without
+    `game-data` fails. Found during the 2026-09-15 todo fix pass (out of scope there).
+  - Either gate the example's body behind `#![cfg(feature = "game-data")]` with a `main` stub,
+    or declare the example with `required-features = ["game-data"]` in Cargo.toml.
+
 ## App UI
 
 ## Resolved
