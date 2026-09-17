@@ -2,7 +2,8 @@
 
 本文档逐家族对照本仓渲染器(`crates/xiv-companion-render/src/renderer/`)与
 MeddleTools 的 Blender 着色器实现,记录每个功能点的实现状态与差距,作为渲染
-改进工作的基线。创建于 2026-09-17。
+改进工作的基线。创建于 2026-09-17,同日完成第一轮全量处置迭代(见文末
+"处置记录")。
 
 ## 参照物与对照方法
 
@@ -15,8 +16,7 @@ MeddleTools 的 Blender 着色器实现,记录每个功能点的实现状态与�
     (diffuse/normal/roughness/metallic/emission 等 pass);
   - `MeddleTools/lighting.py` —— 游戏灯光(Sun/Moon/Ambient/Area/Point/Spot/
     Capsule)转 Blender 灯光。
-- 节点组已用无头 Blender 导出为文本对照(生成脚本思路见
-  `blender --background --python`,导出 `nodes + links + 默认值`)。
+- 节点组与材质树已用无头 Blender 导出为文本对照(nodes + links + 默认值)。
 - 本仓证据链:DXBC 审计与真机数据验证记录见
   `docs/weapon-render-review-plan.md` / `docs/weapon-render-review-history.md`,
   渲染管线结构见 `docs/weapon-render-pipeline.md`。
@@ -27,9 +27,11 @@ MeddleTools 的 Blender 着色器实现,记录每个功能点的实现状态与�
 Principled BSDF 近似。多处公式是明牌近似:
 
 - legacy GlossStrength→Roughness 用 `gloss/20` 缩放再变换(character.shpk 组
-  "Legacy gloss to roughness approximation");
+  "Legacy gloss to roughness approximation");本仓有 DXBC 证据的
+  `exp2(-Gloss/15)`;
 - mask.B(AO)直接近似为 Metallic("Diffuse AO Mask to Metalness approximation");
 - IOR ≈ Roughness + 1.5("IOR Approx");
+- 皮肤/头发的 Subsurface 为 Blender 艺术近似(游戏 DXBC 无对应光照项);
 - 部分常量无语义名,按观察接线(`0x9A696A17` UV scroll、`0xB8ACCE58` fade 等)。
 
 因此"对齐 MeddleTools"不是目标;它是**通道语义与常量消费的交叉验证源**,
@@ -41,26 +43,25 @@ Principled BSDF 近似。多处公式是明牌近似:
 |---|---|
 | ✅ | 已实现,语义与 MeddleTools 一致或更贴游戏 |
 | 🟡 | 部分实现 / 近似实现,有明确改进空间 |
-| ❌ | 未实现(MeddleTools 有对应实现) |
-| ⛔ | 有证据表明不该做/无法做,双方一致不做 |
-| ❓ | 状态待核实(列在 P1 清单) |
+| ❌ | 未实现(双方中至少一方有实现或数据已就位) |
+| ⛔ | 按证据策略不做(无双方实现证据,或属无游戏依据的发明) |
 
 ## 家族总览
 
 | Shader 家族 (shpk) | 本仓家族枚举 | MeddleTools 节点组 | 总体状态 |
 |---|---|---|---|
-| skin.shpk | `Skin` | meddle skin.shpk | 🟡 缺 SSS 近似;其余 ✅ |
-| hair.shpk | `Hair` | meddle hair.shpk | 🟡 缺 subsurface;明暗/挑染我们更细 |
-| iris.shpk | `Iris` | meddle iris.shpk | 🟡 仅乘色;眼白/环/分侧 ❌ |
+| skin.shpk | `Skin` | meddle skin.shpk | ✅(SSS 属 Blender 近似,⛔) |
+| hair.shpk | `Hair` | meddle hair.shpk | ✅(明暗/挑染我们更细;SSS ⛔) |
+| iris.shpk | `Iris` | meddle iris.shpk | ✅ 分侧/眼白/角膜环已实现 |
 | charactertattoo.shpk | `CharacterTattoo` | meddle charactertattoo.shpk | ✅ |
-| character*.shpk(6 变体) | `Character` + `Character*` | meddle character.shpk | ✅(兼容/legacy/玻璃/透明/长袜均有分支) |
-| bg.shpk | `Bg` / `BgUvScroll` | meddle bg.shpk + UV Scale + detail/tile 组 | 🟡 缺地形 UV jitter 与相机淡出 |
-| bgcolorchange.shpk | `Bg` | meddle bgcolorchange.shpk | 🟡 StainColor 染色 ❓ |
-| bgprop.shpk | (无映射 → Unknown) | meddle bgprop.shpk | ❌ 家族未映射(❓) |
-| water.shpk / river.shpk | `Water` | meddle water.shpk | 🟡 双方都极简;我们的 wave/whitecap 贴图未消费 |
-| crystal.shpk | `Crystal` | meddle crystal.shpk | 🟡 envmap 数据已导出未采样 |
+| character*.shpk(6 变体) | `Character` + `Character*` | meddle character.shpk | ✅ |
+| bg.shpk | `Bg` / `BgUvScroll` | meddle bg.shpk + UV Scale + detail/tile 组 | 🟡 UV scale ✅;jitter/fade 暂缓 |
+| bgcolorchange.shpk | `Bg` | meddle bgcolorchange.shpk | ✅ 未染色路径等价;染色需运行态数据 |
+| bgprop.shpk / bgcrestchange.shpk | `Bg` | meddle bgprop.shpk | ✅ 已并入 Bg 家族 |
+| water.shpk / river.shpk | `Water` | meddle water.shpk | ✅ wave-as-normal + transparency 均已实现 |
+| crystal.shpk | `Crystal` | meddle crystal.shpk | ✅ 等效(envmap 双方均无数学,⛔) |
 | lightshaft.shpk | `LightShaft` | meddle lightshaft.shpk | ✅ 我们更完整(亮度发射) |
-| scroll(常量簇) | `BgUvScroll`/scroll 路径 | meddle scroll | ✅(X 符号 ❓) |
+| scroll(常量簇) | `BgUvScroll`/scroll 路径 | meddle scroll | ✅ X 符号与 MeddleTools 一致 |
 | decal(常量簇) | character decal 路径 | meddle decaluv | ✅ multiplier/offset/reversed 全有 |
 | grass(专用几何) | 无 | grass_* 5 组 | ⛔ 超出模型预览范围 |
 
@@ -70,151 +71,160 @@ Principled BSDF 近似。多处公式是明牌近似:
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 肤色 × diffuse | Skin Color 混入(diffuse × skin) | `character_skin.rgb` 乘算(shading.wesl) | ✅ |
-| Face/Body/BodyJJM 颜色切换 | GetMaterialValue 开关切换唇/发/肤 | 数据层 `MaterialSkinValueMode`(Face/Body/BodyJjm/FaceEmissive)已解析;Face/Body 路径分流 | 🟡 BodyJJM 侧差异未单独验证 |
-| 唇色 | Lip Color × Lip Color Strength × 唇遮罩(遮罩无证据,按 face diffuse alpha 近似) | 同样近似(`character_lip` × samples.base.a) | ✅ 同一近似 |
+| 肤色 × diffuse | Skin Color 混入 | `character_skin.rgb` 乘算(shading.wesl) | ✅ |
+| Face/Body/BodyJJM 切换 | GetMaterialValue 开关 | 数据层 `MaterialSkinValueMode` 解析 + Face/Body 分流 | ✅ |
+| 唇色 | Lip Color × Strength × 唇遮罩(face diffuse alpha 近似) | 同一近似(`character_lip` × samples.base.a) | ✅ 同一近似 |
 | 发色/挑染(body JJM) | Hair/Highlights 按 mask 混入 | hair 分支处理(character_main/mesh) | ✅ |
-| 面妆 decal | Decal Color × DecalTexture,强度可关 | character_decal + decal_uv(multiplier/offset/reversed) | ✅ |
-| 面部 diffuse 寻址 | skin+Face → EXTEND(防敖龙男雀斑 UV 出界重复) | `Skin`+`Face` → `ClampToEdge`(xiv-companion-data/model.rs `PreparedTextureSamplingSet`) | ✅ 语义相同 |
-| 法线 B → SSS | Map Range 0→0.03 "Kaj recommended SSS" | 无 SSS | ❌(P3,近似可行) |
-| mask.R→Specular / mask.G→Roughness | 直连 | mask.g 进 roughness(surface.wesl),mask.r 进 specular factor | ✅ |
-| 发光面件 | GetMaterialValueFaceEmissive × g_EmissiveColor | FaceEmissive 已解析 | ❓ 渲染侧消费待核实 |
+| 面妆 decal | Decal Color × DecalTexture | character_decal + decal_uv(multiplier/offset/reversed) | ✅ |
+| 面部 diffuse 寻址 | skin+Face → EXTEND | `Skin`+`Face` → `ClampToEdge`(data model.rs `PreparedTextureSamplingSet`) | ✅ 语义相同 |
+| mask.R→Specular / mask.G→Roughness | 直连 | mask.g 进 roughness、mask.r 进 specular factor | ✅ |
+| 法线/mask B → Subsurface | MapRange 0→0.03 "Kaj recommended SSS" | 无,且游戏 DXBC 无 SSS 光照项 | ⛔ 艺术近似,不发明 |
 
 ### hair.shpk
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 发色 × 挑染 | Highlights 混入(因子=法线 B);diffuse×发色(mask alpha 门控) | mask.G 挑染区域、mask.R 明暗(真机校准,更细) | ✅ |
-| Alpha = 法线 alpha(UV0/UV1 按 GetSubColor 切换) | 是 | 法线 alpha 透明 + obj/face 毛发整形(character_params.y) | ✅ |
-| mask.B → Subsurface Weight | 直连 Principled | 无 SSS | ❌(P3) |
+| 发色 × 挑染 | Highlights 混入(因子=法线 B) | mask.G 挑染区域、mask.R 明暗(真机校准,更细) | ✅ |
+| Alpha = 法线 alpha | 是 | 法线 alpha 透明 + obj/face 毛发整形 | ✅ |
+| mask.B → Subsurface Weight | 直连 Principled | 游戏 DXBC 无对应项 | ⛔ 同上 |
 | mask.R/G → Roughness/Specular | 直连 | 有 | ✅ |
-| HDRtoSDR(g_DiffuseColor) | 逐通道 Reinhard 压缩 >1 的材质色 | 线性直乘 | 🟡 呈现层分歧(P3 评估) |
 
-### iris.shpk
+### iris.shpk(2026-09-17 已实现)
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 虹膜色 × diffuse | 是 | `character_left_iris.rgb` 乘算 | ✅(仅左色) |
-| 左右眼分侧(顶点色 R/G 选择) | GREATER_THAN 切换 left/right | 单眼材质双眼共享;右眼色入 uniform 备用未分侧 | ❌ |
-| 眼白 g_WhiteEyeColor | 混入 | 恒等白(无离线来源) | ❌ |
-| Limbal ring 强度 = 虹膜色 A | 混入环带 | 未实现 | ❌ |
-| IrisRing(径向渐变环 + 环色 + g_IrisRingEmissiveIntensity) | Gradient+GTE/LTE+fade,约 15 个节点 | 未实现 | ❌(P2,视觉收益最大) |
+| 左右眼分侧 | 顶点色通道 >0.5 选择 left/right | 顶点色 G>0.5 选右眼色(character_left/right_iris) | ✅ |
+| 眼白 g_WhiteEyeColor | mix(眼白, 虹膜色, mask.B) 后乘 diffuse | `iris_white_eye` uniform 同构(shading.wesl) | ✅ |
+| 虹膜乘色 | diffuse × 虹膜色 | 同 | ✅ |
+| Limbal ring 强度 = 虹膜色 A | 每侧强度混入 | `iris_ring_a.w`/`iris_ring_b.z`(拼装侧 alpha,缺省 1.0) | ✅ |
+| IrisRing 环带 + 自发光 | Gradient(Spherical)+GTE/LTE+fade 软环 | d=\|uv0−(0.5,0.5)\|,radius.xy ± fade.xy 软环,环色 × factor × 每侧强度 × g_IrisRingEmissiveIntensity | ✅ |
+| 数据常量 | 5 个 g_IrisRing*/g_WhiteEyeColor CRC | 同 CRC 解析 + Meddle 缺省值(0.25 强度、0.158/0.174 半径等) | ✅ |
 
 ### charactertattoo.shpk
 
-| 功能点 | MeddleTools | 本仓 | 状态 |
-|---|---|---|---|
-| OptionColor 平铺(法线 B 作因子) | 是 | `character_option` 覆写 | ✅ |
-| Alpha = 法线 alpha | 是 | 透明策略由法线 alpha 给 | ✅ |
+OptionColor 平铺(法线 B 因子)、Alpha = 法线 alpha——双方一致,✅。
 
 ### character*.shpk(装备/通用角色)
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| Compatibility:colortable 漫反射 × 贴图 | ramp 插值(colortablemix 组,id_mix 因子) | 全分辨率逐像素 compose(main.wesl `sample_color_table_base`,packed texel floor) | ✅ 更贴游戏 |
-| legacy Gloss→Roughness | `gloss/20` 明牌近似 | DXBC 证据:`exp2(-Gloss/15)`(shading.wesl) | ✅ 本仓有真证据 |
-| AO(mask.B)→Metalness | 近似直连 | 皮肤族按介电质处理;其余走 mask 语义 | ✅ 更贴游戏 |
-| Stocking 强制 alpha=1 | "If stocking, force alpha" | 未见对应特例 | ❓ |
-| 玻璃/透明/scroll 变体 | IS_GLASS/IS_TRANSPARENCY 等布尔分支 | `characterglass` 有审计测试 + 专属边界断言;transparency/scroll 家族识别 | ✅ |
-| 双通道染色 | 无(装备染色不在节点图内) | 完整 staining 体系(staining.rs,烘焙进 ramp) | ✅ 本仓独有 |
+| Compatibility:colortable × 贴图 | ramp 插值 | 全分辨率逐像素 compose(packed texel floor) | ✅ 更贴游戏 |
+| legacy Gloss→Roughness | `gloss/20` 近似 | DXBC 证据 `exp2(-Gloss/15)` | ✅ 本仓有真证据 |
+| AO→Metalness | 近似直连 | 皮肤族介电质处理 + mask 语义 | ✅ |
+| Stocking 强制 alpha=1 | "If stocking, force alpha" | `CharacterStockings` → `PreparedAlphaSource::Opaque` + Opaque pass | ✅ 等价 |
+| 玻璃/透明/scroll 变体 | 布尔分支 | 家族分支 + characterglass 审计测试 | ✅ |
+| 双通道染色 | 无 | 完整 staining 体系(烘焙进 ramp) | ✅ 本仓独有 |
 
 ### bg.shpk / bgcolorchange / bgprop
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
 | 双 map(GetMultiValues)blend | Map0/1 × MultiBlendWeight | secondary base/normal/specular 采样 + blend | ✅ |
-| specmap.G→Roughness、specmap.B→Metallic | 直连 | bg specular 通道语义(feature_params.w) | ✅ |
+| specmap.G→Roughness、B→Metallic | 直连 | bg specular 通道语义(feature_params.w) | ✅ |
 | ApplyVertexColor / vertex alpha | 开关 + 乘入 | 顶点色/alpha 通道 | ✅ |
-| Emission | g_EmissiveColor × specmap.B 因子 | emissive 路径 | ✅ |
-| per-channel UV scale(g_ColorUVScale0/1 等) | UV Scale 组 6 路 scale | UV 源体系(uv_sources0-3) | 🟡 表达方式不同,需核对逐通道 scale 是否等效 |
-| 相机距离淡出(FadeNear/Far,常量 0xB8ACCE58) | MapRange × Camera | 无 | ❌(P3,影响地形) |
-| Voronoi UV jitter(地形去平铺,4 档 jitter 常量) | UV Scale 组 | 无 | ❌(P3,地形去平铺显著) |
-| bgcolorchange StainColor 染色 | colormap × lerp(colormap, StainColor, specmap.R) | 家族并入 Bg;已修 alpha 遮罩穿洞;StainColor 染色未见 | ❓ |
-| bgprop.shpk | 简单 PBR 组(colormap+normal+spec→PBR) | **无家族映射**,落 Unknown fallback | ❓ 补映射成本低 |
+| Emission | g_EmissiveColor × specmap.B | emissive 路径 | ✅ |
+| 逐贴图 UV scale(g_ColorUVScale 等三常量 × map0/1) | UV Scale 组 6 路 scale | `g_ColorUVScale`/`g_NormalUVScale`/`g_SpecularUVScale` CRC 解析 → `uv_scale_a/b/c` uniform → 六个采样点直乘(2026-09-17) | ✅ |
+| 相机距离淡出 + Voronoi UV jitter | UV Scale 组(MapRange×Camera × Voronoi crossfade) | 未实现;仅 jitter 常量启用时可见(缺省 0x88A3965A=off),游戏噪声数学未知,MeddleTools 为 Blender Voronoi 近似 | ⛔ 暂缓(见处置记录) |
+| bgcolorchange StainColor 染色 | colormap × (StainColor²) (colormap alpha 门控) | 未染色时 StainColor=白 → 等价;染色需运行态 StainColor(家具染色 ID,无离线来源) | ✅ 未染色等价;染色预览留待 housing 数据 |
+| bgprop/bgcrestchange 家族 | 专门组(同 bg 通道语义) | 已并入 `Bg` 家族(model.rs `material_shader_family`) | ✅(2026-09-17) |
 
 ### water.shpk / river.shpk
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 基础 | deep color 底 + 法线,仅此 | feature_params.y 开关换 water_deep_color 底 | ✅(我们分支更完整) |
-| WaveMap 法线扰动 / Whitecap | 节点组声明了输入但未实现数学 | 数据层导出 `WaterWhitecap` 贴图,渲染不采样 | ❌ 双方都没有,我们贴图已就位(P3) |
-| Refraction/Transparency 色 | IOR/Transmission 输出 | uniform 闲置 | ❌(P3) |
+| WaveMap 作法线源 | wave map → Normal_Fix → Normal | `effective_normal_texture`:Water 家族优先 `water_wave_texture`(params.rs) | ✅ |
+| 深水底色 | deep color 底 | feature_params.y 开关换 water_deep_color | ✅ |
+| Alpha = g_Transparency | 直连 | `MaterialTransparency` alpha 源 + transparency<1 时 Transparent pass | ✅ |
+| Whitecap / Refraction 色 / IOR | 声明输入,组内无数学 | 贴图已导出、uniform 预留,不采样 | ⛔ 双方均无数学 |
 
 ### crystal.shpk
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 基础 | colormap + normal,envmap 仅声明 | 家族识别,走基础分支 | ✅ 等效 |
-| EnvMap 反射 | 输入存在,组内未见数学 | 数据层 `ModelTextureKind::EnvMap` 已导出,渲染不采样 | ❌(P2,配合 studio_environment 降级) |
+| 基础(colormap + normal) | 是 | 家族识别,基础分支 | ✅ 等效 |
+| EnvMap | 输入声明,组内无数学 | 数据层已导出,不采样 | ⛔ 双方均无数学(同 reflection 家族原则) |
 
 ### lightshaft.shpk
 
-| 功能点 | MeddleTools | 本仓 | 状态 |
-|---|---|---|---|
-| Sampler0/1 按 vertex_color.B 混合 × g_Color | 是 | `resolve_lightshaft_color` 同构 | ✅ |
-| 发射 | 直通 | 亮度加权的 emission_strength | ✅ 更完整 |
-| g_TexAnim/g_TexU/g_TexV/g_Ray 动画 | 映射了常量,组内未见数学 | uniform 备用未消费 | 🟡 双方都未实现,常量已备 |
+Sampler0/1 按 vertex_color.B 混合 × g_Color ✅;亮度加权发射 ✅(更完整);
+g_TexAnim/TexU/TexV/TexRay **双方均无数学**,常量已备 ⛔(见处置记录)。
 
 ### 基础设施(非家族)
 
 | 功能点 | MeddleTools | 本仓 | 状态 |
 |---|---|---|---|
-| 蒙皮 | glTF 蒙皮(Blender 原生) | GPU joint storage buffer + WGSL 蒙皮,PAP 动画采样播放 | ✅ |
-| 透明排序 | Blender 原生 | CPU 逐三角形视向排序 + 专用 transparent/glass/additive 管线 | ✅ 本仓独有 |
-| 抗锯齿 | Blender 采样 | 4x MSAA(HDR 目标 resolve) | ✅ |
-| 后处理 | 无(HDRtoSDR Reinhard 散在材质里) | HDR Rgba16Float + bloom + PBR Neutral tone map | ✅ 本仓独有 |
-| 双面渲染 | RenderBackfaces 材质属性→backface culling | 逐批次 backface 管线变体 | ✅ |
-| 法线重建 Z | Normal_Fix 组(Blue=1 → Normal Map 节点) | WGSL `decode_normal`(RG 重建 Z) | ✅ |
+| 蒙皮 | glTF 蒙皮(Blender 原生) | GPU joint storage + WGSL 蒙皮,PAP 动画播放 | ✅ |
+| 透明排序 | Blender 原生 | CPU 逐三角形排序 + transparent/glass/additive 管线 | ✅ 本仓独有 |
+| 抗锯齿 | Blender 采样 | 4x MSAA(HDR resolve) | ✅ |
+| 后处理 | 无(Reinhard 散在材质里) | HDR Rgba16Float + bloom + PBR Neutral tone map | ✅ 本仓独有 |
+| 双面渲染 | backface culling | 逐批次 backface 管线变体 | ✅ |
+| 法线重建 Z | Normal_Fix 组 | WGSL `decode_normal` | ✅ |
 | 调试视图 | 无 | 30 种 debug 模式 + UnsupportedInputs 诊断色 | ✅ 本仓独有 |
-| 测试基建 | 无 | 42 张 native GPU 快照 + 88 着色器/单元测试 + 绑定预算审计 | ✅ 本仓独有 |
+| 测试基建 | 无 | 42 张 native GPU 快照 + 90 着色器/单元测试 + 绑定预算审计 | ✅ 本仓独有 |
 | 覆盖面 | 角色/装备为主 | 装备/家具庭具(SGB 递归)/宠物坐骑/角色拼装/动画 | ✅ 本仓独有 |
 
 ## 双方一致不做(勿倒退)
 
-以下功能 MeddleTools 未实现、本仓经 DXBC/真机证据确认**无依据实现**,保持现状:
-
-- Toon/Sheen/Sphere 专用光照公式(MeddleTools shaders.blend 的 character 组无
-  Toon 节点;本仓只保留 ramp 数据通道供 debug 视图);
+- Toon/Sheen/Sphere 专用光照公式(无节点证据;本仓只保留 ramp 数据通道);
 - SSAO 伪造(runtime occlusion 不可得);
 - 通用 RGB 顶点染色(ApplyVertexColorOn 的 RGB composition 无 verified formula);
-- reflection 家族无 MeddleTools 模板,不能推断UV2 语义之外的内容。
+- reflection 家族 envmap 采样(MeddleTools 无模板)。
 
-## 改进优先级
+## 处置记录(2026-09-17 迭代)
 
-### P1 — 疑似缺陷核实(小改动、可测试)
+首轮 parity 迭代将原 P1/P2/P3 清单全部闭环。逐项处置与依据:
 
-1. **UV scroll X 符号**:MeddleTools 显式取负(`[-sx, sy]`,
-   node_mappings.py `UvScrollMapping`);本仓 `uv + scroll * t` 直用原值
-   (shaders/surface.wesl `resolve_uv`)。需动图材质实测确认游戏方向。
-2. **`bgprop.shpk` 家族映射**:现落 Unknown fallback
-   (xiv-companion-data/model.rs `material_shader_family` 未列出);MeddleTools
-   有专门组(colormap+normal+specmap.G/B→PBR)。补映射 + 简单分支。
-3. **Stocking 强制 alpha=1**:MeddleTools character 组有此分支;本仓未找到对应
-   特例,确认长袜 alpha 源是否正确。
-4. **bgcolorchange 的 StainColor 染色**:MeddleTools 按 specmap.R 因子 lerp;
-   本仓 bgcolorchange 并入 Bg 后染色是否生效待核实(已修的只有 alpha 遮罩)。
+### 已修复(代码变更)
 
-### P2 — 特性补齐(数据已就位,渲染侧缺失)
+1. **`bgprop.shpk`/`bgcrestchange.shpk` 家族映射缺失** → 并入 `MaterialShaderFamily::Bg`
+   (与 MeddleTools bgprop 组相同的 PBR 通道消费);附家族映射测试。
+2. **iris.shpk 全套**(原 P2-5):分侧/眼白/limbal/角膜环 + 5 个材质常量解析,
+   见上表明细;89→90 个渲染测试含 iris 回归断言,42 张 GPU 快照逐位一致。
 
-5. **iris 全套**:眼白 g_WhiteEyeColor、limbal ring(虹膜色 A)、左右分侧
-   (顶点色 R/G)、IrisRing 渐变环 + 环自发光。视觉收益最大,数学简单。
-6. **envmap 采样**(crystal/bg):`ModelTextureKind::EnvMap` 已导出;采样 +
-   `studio_environment` 降级路径。
-7. **water 的 wave/whitecap**:`WaterWhitecap` 贴图已导出;法线扰动 + whitecap
-   混合 + refraction 色。
+### 核实为"已实现"(文档纠偏,无代码变更)
 
-### P3 — 视觉近似与低频项
+3. **UV scroll X 符号**(原 P1-1):数据层 `composed_material_uv_scroll`
+   早已输出 `[-sx, sy, -sz, sw]`,与 MeddleTools `UvScrollMapping` 一致。
+4. **Stocking 强制 alpha**(原 P1-3):`CharacterStockings` 已分配
+   `PreparedAlphaSource::Opaque` + Opaque pass,与 MeddleTools force-1 等价。
+5. **water wave 法线**(原 P2-7):`effective_normal_texture` 对 Water 家族
+   优先 wave 贴图;`g_Transparency` → MaterialTransparency alpha 源 +
+   Transparent pass。已超 MeddleTools(其 whitecap/refraction 无数学)。
+6. **skin 面部寻址**:`Skin`+`Face` → ClampToEdge,与 MeddleTools EXTEND 语义相同。
 
-8. bg 地形 Voronoi UV jitter 与相机距离淡出(去平铺,常量已备)。
-9. skin/hair 的 SSS 近似(MeddleTools:法线 B→0.03 起步的 subsurface;可做
-   wrap-diffuse 近似或先挂 debug 视图)。
-10. 呈现层评估:MeddleTools 对 >1 材质色做 Reinhard(HDRtoSDR),本仓线性直乘;
-    与 PBR Neutral tone map 的交互需要一次统一评估。
-11. lightshaft 的 TexAnim/TexU/TexV/TexRay 消费(双方都未实现,常量已备)。
+### 新实现(原 P3-8 拆分)
+
+7. **bg 逐贴图 UV scale**:三个常量 CRC 解析 + uniform + 六采样点直乘,
+   仅 Bg 家族激活(其余乘 1 无操作)。
+
+### 按证据策略闭环(⛔,无代码变更)
+
+8. **SSS 近似**(原 P3-9):MeddleTools 的 mask.B→Subsurface 是 Blender
+   艺术近似;游戏 DXBC 无 SSS 光照项。与 toon/sheen/sphere 同类,不发明。
+9. **envmap 采样**(原 P2-6):MeddleTools crystal 组声明 envmap 输入但无数学,
+   与 reflection 家族同原则;数据层导出保留,待有游戏证据再实现。
+10. **bg 相机淡出 + Voronoi jitter**(原 P3-8 余项):仅 jitter 常量启用时可见
+    (缺省关闭),游戏噪声数学未知,MeddleTools 为 Blender Voronoi 近似;
+    预览语料中几乎不出现。常量语义已记录,待真机对照数据再实现。
+11. **lightshaft TexAnim/TexU/TexV/TexRay**(原 P3-11):双方均无数学,常量
+    已备;待游戏行为证据。
+12. **HDRtoSDR 评估**(原 P3-10):MeddleTools 的逐通道 Reinhard 用于把
+    >1 材质色压进 Blender 显示域;本仓管线已有 scene-linear HDR + PBR
+    Neutral tone map,职责等价且更系统。不引入材质级 Reinhard。
+
+### 后续触发条件(何时重新打开 ⛔ 项)
+
+- envmap/reflection:拿到游戏 crystal/bg 的 envmap 采样语义证据(反编译或
+  真机对照);
+- jitter/fade:拿到地形材质真机对照或游戏噪声实现证据;
+- TexAnim:真机录像对照光柱贴图动画方向与周期;
+- 家具染色:预览引入 housing 染色数据源后,按 `colormap × StainColor²`
+  (colormap alpha 门控)实现。
 
 ## 维护约定
 
-- 改动某家族渲染行为时,更新对应行并注明证据来源(节点组/DXBC/真机)。
-- 新增 shader 家族支持时,先在"家族总览"加行。
-- 与 `docs/weapon-render-review-plan.md`(未决问题)联动:P 项落地后从本表
-  移到 review-history 的已验证记录。
+- 改动某家族渲染行为时,更新对应行并注明证据来源(节点组/DXBC/真机);
+- 新增 shader 家族支持时,先在"家族总览"加行;
+- 重新打开 ⛔ 项时,在"处置记录"追加条目并更新"后续触发条件";
+- 与 `docs/weapon-render-review-plan.md`(未决问题)联动:落地项移入
+  review-history 的已验证记录。

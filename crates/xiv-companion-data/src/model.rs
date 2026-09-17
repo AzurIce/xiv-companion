@@ -577,6 +577,13 @@ pub struct ModelMaterial {
     pub detail_normal_uv_scale: [f32; 4],
     #[serde(default)]
     pub uv_scroll: [f32; 4],
+    /// bg 域逐贴图 UV 缩放:每常量 4 浮点 = map0.xy + map1.xy(缺省 1)。
+    #[serde(default = "default_material_uv_scale")]
+    pub color_uv_scale: [f32; 4],
+    #[serde(default = "default_material_uv_scale")]
+    pub normal_uv_scale: [f32; 4],
+    #[serde(default = "default_material_uv_scale")]
+    pub specular_uv_scale: [f32; 4],
     /// iris.shpk 眼白 g_WhiteEyeColor(iris 家族消费;缺省恒等白)。
     #[serde(default = "default_material_white_eye_color")]
     pub white_eye_color: [f32; 4],
@@ -2816,7 +2823,10 @@ fn prepared_render_pass(
         // 头皮鳞片/皮肤纹理（敖龙前额鳞片透出实证），按 Cutout。
         MaterialAlphaMode::Blend
             if matches!(shader_family, MaterialShaderFamily::Hair)
-                && !material.path.as_deref().is_some_and(|path| path.contains("/obj/face/")) =>
+                && !material
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.contains("/obj/face/")) =>
         {
             PreparedRenderPass::Cutout
         }
@@ -2928,6 +2938,10 @@ fn default_material_specular_color_mask() -> [f32; 4] {
 
 fn default_material_ssao_mask() -> f32 {
     1.0
+}
+
+fn default_material_uv_scale() -> [f32; 4] {
+    [1.0; 4]
 }
 
 fn default_material_white_eye_color() -> [f32; 4] {
@@ -6461,6 +6475,9 @@ mod color_table_bake_tests {
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],
+            color_uv_scale: [1.0; 4],
+            normal_uv_scale: [1.0; 4],
+            specular_uv_scale: [1.0; 4],
             white_eye_color: [1.0, 1.0, 1.0, 0.0],
             iris_ring_color: [1.0, 1.0, 1.0, 1.0],
             iris_ring_emissive_intensity: 0.25,

@@ -496,6 +496,25 @@ fn model_shader_uses_proven_legacy_camera_reflection_lobe() {
 }
 
 #[test]
+fn model_shader_applies_bg_uv_scales_only_to_bg_textures() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    // 六个可缩放采样点直乘 uv_scale(mask/emissive/material map 不缩放)。
+    for required in [
+        "resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x) * material.uv_scale_a.xy",
+        "resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y) * material.uv_scale_b.xy",
+        "resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x) * material.uv_scale_a.zw",
+        "resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y) * material.uv_scale_b.zw",
+        "resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z) * material.uv_scale_c.zw",
+        "resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y) * material.uv_scale_c.xy",
+    ] {
+        assert!(
+            shader.contains(required),
+            "bg uv scale must apply: {required}"
+        );
+    }
+}
+
+#[test]
 fn model_shader_irise_ring_follows_meddletools_node_semantics() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let family = shader_fn_body(shader, "resolve_character_family_base");
@@ -505,7 +524,10 @@ fn model_shader_irise_ring_follows_meddletools_node_semantics() {
         "select(material.character_left_iris.rgb, material.character_right_iris.rgb, is_right)",
         "mix(material.iris_white_eye.rgb, iris_color, clamp(samples.mask.b, 0.0, 1.0))",
     ] {
-        assert!(family.contains(required), "iris eye tint must match MeddleTools nodes: {required}");
+        assert!(
+            family.contains(required),
+            "iris eye tint must match MeddleTools nodes: {required}"
+        );
     }
     // 角膜环：中心距 + radius ± fade 软环带 + 每侧 limbal 强度 × 发射强度。
     for required in [
@@ -516,7 +538,10 @@ fn model_shader_irise_ring_follows_meddletools_node_semantics() {
         "select(material.iris_ring_a.w, material.iris_ring_b.z, is_right)",
         "*ring_emission += material.iris_ring_color.rgb * (factor * limbal * max(material.iris_ring_a.x, 0.0))",
     ] {
-        assert!(family.contains(required), "iris ring must implement the soft band: {required}");
+        assert!(
+            family.contains(required),
+            "iris ring must implement the soft band: {required}"
+        );
     }
     // 环发射只进最终颜色（非光照路径），非 Iris 家族 uniform 全零不激活。
     assert!(

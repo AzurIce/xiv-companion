@@ -227,6 +227,9 @@ pub(crate) fn fallback_material() -> ModelMaterial {
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
+        color_uv_scale: [1.0; 4],
+        normal_uv_scale: [1.0; 4],
+        specular_uv_scale: [1.0; 4],
         white_eye_color: [1.0, 1.0, 1.0, 0.0],
         iris_ring_color: [1.0, 1.0, 1.0, 1.0],
         iris_ring_emissive_intensity: 0.25,
@@ -609,6 +612,22 @@ pub(crate) fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
 /// 按 MeddleTools iris.shpk 节点组还原：环带 = uv0 距中心 (0.5,0.5) 的距离
 /// 落在 radius.xy ± fade.xy 内的软环；每侧 limbal 强度来自拼装侧虹膜色
 /// alpha（离线无运行态来源，默认 1.0 满强度）。
+/// bg 域逐贴图 UV 缩放（g_ColorUVScale/g_NormalUVScale/g_SpecularUVScale，
+/// 每常量 = map0.xy + map1.xy）。仅 Bg 家族激活，其余全 1（直乘无操作）。
+pub(crate) fn material_uv_scales(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> ([f32; 4], [f32; 4], [f32; 4]) {
+    if prepared_material.shader_family != MaterialShaderFamily::Bg {
+        return ([1.0; 4], [1.0; 4], [1.0; 4]);
+    }
+    (
+        finite_vec4_or(material.color_uv_scale, [1.0; 4]),
+        finite_vec4_or(material.normal_uv_scale, [1.0; 4]),
+        finite_vec4_or(material.specular_uv_scale, [1.0; 4]),
+    )
+}
+
 pub(crate) fn material_iris_params(
     material: &ModelMaterial,
     prepared_material: PreparedMaterial,

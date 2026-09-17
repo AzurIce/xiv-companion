@@ -185,6 +185,7 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     let sheen_sphere_params = material_sheen_sphere_params(material, prepared_material);
     let character_channels = material_character_color_channels(material);
     let iris_params = material_iris_params(material, prepared_material);
+    let uv_scales = material_uv_scales(material, prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -305,6 +306,9 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         character_decal: character_channels.decal,
         character_decal_uv: character_channels.decal_uv,
         character_params: character_channels.params,
+        uv_scale_a: uv_scales.0,
+        uv_scale_b: uv_scales.1,
+        uv_scale_c: uv_scales.2,
         iris_white_eye: iris_params.0,
         iris_ring_color: iris_params.1,
         iris_ring_a: iris_params.2,
@@ -1221,6 +1225,10 @@ pub(crate) struct MaterialUniform {
     pub(crate) character_decal: [f32; 4],
     pub(crate) character_decal_uv: [f32; 4],
     pub(crate) character_params: [f32; 4],
+    // bg 域逐贴图 UV 缩放（仅 Bg 家族非 1）：color/normal/specular 各 map0.xy+map1.xy。
+    pub(crate) uv_scale_a: [f32; 4],
+    pub(crate) uv_scale_b: [f32; 4],
+    pub(crate) uv_scale_c: [f32; 4],
     // iris.shpk 专用（仅 Iris 家族非零）：眼白/环色/环带参数与每侧 limbal 强度。
     pub(crate) iris_white_eye: [f32; 4],
     pub(crate) iris_ring_color: [f32; 4],

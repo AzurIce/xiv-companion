@@ -449,10 +449,9 @@ pub fn sample_animation_pose(
     skeleton: &ModelSkeleton,
 ) -> SkeletonPose {
     let mut pose = SkeletonPose::rest_pose(skeleton);
-    let (Some(animation), Some(&binding_index)) = (
-        set.animations.get(index),
-        set.animation_bindings.get(index),
-    ) else {
+    let (Some(animation), Some(&binding_index)) =
+        (set.animations.get(index), set.animation_bindings.get(index))
+    else {
         return pose;
     };
     let (Some(Some(binding)), Some(map)) = (
@@ -675,7 +674,8 @@ mod tests {
         });
         let joint_names = vec!["root".to_string(), "spine".to_string()];
         let mut cache = SkeletonInverseBindCache::new();
-        let matrices = animation_joint_matrices(&set, 0, 500.0, &skeleton, &joint_names, &mut cache);
+        let matrices =
+            animation_joint_matrices(&set, 0, 500.0, &skeleton, &joint_names, &mut cache);
         assert_eq!(matrices.len(), 2);
         // rest pose ⇒ 恒等关节矩阵。
         for matrix in &matrices {
@@ -696,12 +696,16 @@ mod tests {
             character[0],
             "chara/human/c0101/animation/a0001/bt_common/resident/action.pap"
         );
-        assert!(character
-            .iter()
-            .any(|path| path.ends_with("/emote/joy.pap")));
-        assert!(character
-            .iter()
-            .any(|path| path.ends_with("/emote/wave.pap")));
+        assert!(
+            character
+                .iter()
+                .any(|path| path.ends_with("/emote/joy.pap"))
+        );
+        assert!(
+            character
+                .iter()
+                .any(|path| path.ends_with("/emote/wave.pap"))
+        );
 
         let monster = pap_path_candidates(AnimationSourceKind::Chara {
             model: PackedCharaModelId {
@@ -732,15 +736,17 @@ mod tests {
             "chara/demihuman/d0001/animation/a0001/bt_common/resident/mount.pap"
         );
 
-        assert!(pap_path_candidates(AnimationSourceKind::Chara {
-            model: PackedCharaModelId {
-                model_id: 0,
-                base_id: 1,
-                variant_id: 1,
-                chara_type: CharaModelType::Monster,
-            },
-        })
-        .is_empty());
+        assert!(
+            pap_path_candidates(AnimationSourceKind::Chara {
+                model: PackedCharaModelId {
+                    model_id: 0,
+                    base_id: 1,
+                    variant_id: 1,
+                    chara_type: CharaModelType::Monster,
+                },
+            })
+            .is_empty()
+        );
     }
 
     #[cfg(feature = "game-data")]
@@ -763,7 +769,11 @@ mod tests {
 
             fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
                 self.reads.push(path.to_string());
-                let result = self.files.get(path).cloned().ok_or_else(|| "missing".to_string());
+                let result = self
+                    .files
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| "missing".to_string());
                 Box::pin(async move { result })
             }
 

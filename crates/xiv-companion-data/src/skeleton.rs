@@ -473,7 +473,10 @@ impl RaceDeform {
 
     /// 源骨架 bone index 的 deform 矩阵（越界回退单位阵）。
     pub fn matrix(&self, source_bone: usize) -> [f32; 16] {
-        self.matrices.get(source_bone).copied().unwrap_or(IDENTITY_MAT4)
+        self.matrices
+            .get(source_bone)
+            .copied()
+            .unwrap_or(IDENTITY_MAT4)
     }
 
     /// 源骨架 bone **名**的 deform 矩阵（未知名回退单位阵）。
@@ -1166,7 +1169,9 @@ mod tests {
 
     #[test]
     fn bake_race_deform_moves_vertices_to_target_proportions() {
-        use crate::model::{ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelMesh, ModelVertex};
+        use crate::model::{
+            ModelBlendIndices, ModelBlendWeights, ModelBoneTable, ModelMesh, ModelVertex,
+        };
         // 源族 limb 短（平移 1、缩放 1），目标族 limb 长（平移 1、缩放 2）：
         // limb 世界矩阵缩放差 2 倍 → limb 上的点距根加倍。
         let source = deform_test_skeleton([1.0, 0.0, 0.0], [1.0; 3]);
@@ -1223,12 +1228,27 @@ mod tests {
         assert_eq!(skipped, 1, "zero-weight vertex is skipped");
         // 纯 limb 顶点（源 limb 局部偏移 [0,1,0]）：目标 limb 缩放 2 → 偏移
         // [0,2,0] + limb 世界平移 [1,0,0] = [1,2,0]。
-        assert_mat4_approx(&mesh.vertices[0].position, &[1.0, 2.0, 0.0], 1e-5, "limb vertex");
+        assert_mat4_approx(
+            &mesh.vertices[0].position,
+            &[1.0, 2.0, 0.0],
+            1e-5,
+            "limb vertex",
+        );
         // 半权顶点：deform(limb) 下 [0.5,0,0] → 2([0.5,0,0]-[1,0,0])+[1,0,0]
         // = [0,0,0]，与 root（恒等）0.5 混合 = [0.25,0,0]。
-        assert_mat4_approx(&mesh.vertices[1].position, &[0.25, 0.0, 0.0], 1e-5, "blended vertex");
+        assert_mat4_approx(
+            &mesh.vertices[1].position,
+            &[0.25, 0.0, 0.0],
+            1e-5,
+            "blended vertex",
+        );
         // 零权顶点不动。
-        assert_mat4_approx(&mesh.vertices[2].position, &[9.0, 9.0, 9.0], 0.0, "skipped vertex");
+        assert_mat4_approx(
+            &mesh.vertices[2].position,
+            &[9.0, 9.0, 9.0],
+            0.0,
+            "skipped vertex",
+        );
         // 法线保持单位长度。
         let normal = mesh.vertices[0].normal;
         let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();

@@ -109,13 +109,20 @@ fn resolve_blend_primary_world_normal(
 }
 
 fn resolve_surface_samples(input: VertexOutput, color_table_weight: f32) -> SurfaceSamples {
-    let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x);
-    let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y);
-    let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x);
-    let secondary_normal_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y);
-    let secondary_specular_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z);
+    // bg 域逐贴图 UV 缩放（uv_scale_* 仅 Bg 家族非 1；其余家族直乘 1 无操作）。
+    let base_uv = resolve_uv(input, material.uv_sources0.x, material.uv_scroll_masks0.x)
+        * material.uv_scale_a.xy;
+    let normal_uv = resolve_uv(input, material.uv_sources0.y, material.uv_scroll_masks0.y)
+        * material.uv_scale_b.xy;
+    let secondary_base_uv = resolve_uv(input, material.uv_sources2.x, material.uv_scroll_masks2.x)
+        * material.uv_scale_a.zw;
+    let secondary_normal_uv = resolve_uv(input, material.uv_sources2.y, material.uv_scroll_masks2.y)
+        * material.uv_scale_b.zw;
+    let secondary_specular_uv = resolve_uv(input, material.uv_sources2.z, material.uv_scroll_masks2.z)
+        * material.uv_scale_c.zw;
     let mask_uv = resolve_uv(input, material.uv_sources0.z, material.uv_scroll_masks0.z);
-    let specular_uv = resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y);
+    let specular_uv = resolve_uv(input, material.uv_sources1.y, material.uv_scroll_masks1.y)
+        * material.uv_scale_c.xy;
     let emissive_uv = resolve_uv(input, material.uv_sources1.z, material.uv_scroll_masks1.z);
     let material_properties_uv = resolve_uv(input, material.uv_sources1.w, material.uv_scroll_masks1.w);
     let mip_bias = resolve_texture_mip_bias();

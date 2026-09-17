@@ -399,9 +399,7 @@ pub fn character_part_paths(customize: &CharacterCustomize) -> Vec<CharacterPart
     // 皮肤身体（小衣 e0001）：候选按种族回退表合并去重。
     let smallclothes_races = smallclothes_model_race_candidates(race_code);
     let equipment_path = |equipment: u16, race_code: u16, slot: &str| {
-        format!(
-            "chara/equipment/e{equipment:04}/model/c{race_code:04}e{equipment:04}_{slot}.mdl"
-        )
+        format!("chara/equipment/e{equipment:04}/model/c{race_code:04}e{equipment:04}_{slot}.mdl")
     };
     for (kind, slot, required) in [
         (CharacterPartKind::BodyTop, "top", true),
@@ -664,8 +662,7 @@ pub fn character_material_candidate_paths(
             let skin_race = skin_race_for(customize.race_code());
             if human_material_root_from_file(&material_file).is_some() {
                 let skin_file = rewrite_material_race(&material_file, skin_race);
-                let skin_root =
-                    format!("chara/human/c{skin_race:04}/obj/body/b0001/material");
+                let skin_root = format!("chara/human/c{skin_race:04}/obj/body/b0001/material");
                 push_unique(&mut candidates, format!("{skin_root}/v0001/{skin_file}"));
                 push_unique(&mut candidates, format!("{skin_root}/{skin_file}"));
             }
@@ -1114,8 +1111,8 @@ mod tests {
 
     #[test]
     fn enabled_attribute_names_follow_facial_features_with_lod_on() {
-        use crate::model::{ModelMesh, ModelSubmeshInfo, WeaponModelData};
         use crate::PackedModelId;
+        use crate::model::{ModelMesh, ModelSubmeshInfo, WeaponModelData};
 
         fn mesh(mask: u32, names: &[&str]) -> ModelMesh {
             ModelMesh {
@@ -1168,12 +1165,12 @@ mod tests {
             ..Default::default()
         };
         let names = character_enabled_attribute_names(&customize, &assembly);
-        assert_eq!(names, ["atr_kao", "atr_fv_c", "atr_fv_d", "atr_lod", "atr_hrn"]);
-        // 特征位清空：fv 件全关，其余（含 atr_lod）不变。
-        let names = character_enabled_attribute_names(
-            &CharacterCustomize::default(),
-            &assembly,
+        assert_eq!(
+            names,
+            ["atr_kao", "atr_fv_c", "atr_fv_d", "atr_lod", "atr_hrn"]
         );
+        // 特征位清空：fv 件全关，其余（含 atr_lod）不变。
+        let names = character_enabled_attribute_names(&CharacterCustomize::default(), &assembly);
         assert_eq!(names, ["atr_kao", "atr_lod", "atr_hrn"]);
     }
 
@@ -1706,7 +1703,10 @@ mod tests {
             }
         }
         assert!(
-            meshes[2].vertices.iter().all(|v| (v.position[1] - 0.09).abs() < 1e-6),
+            meshes[2]
+                .vertices
+                .iter()
+                .all(|v| (v.position[1] - 0.09).abs() < 1e-6),
             "sandal mesh must not move"
         );
 
