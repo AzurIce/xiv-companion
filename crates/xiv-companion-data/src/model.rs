@@ -577,6 +577,21 @@ pub struct ModelMaterial {
     pub detail_normal_uv_scale: [f32; 4],
     #[serde(default)]
     pub uv_scroll: [f32; 4],
+    /// iris.shpk 眼白 g_WhiteEyeColor(iris 家族消费;缺省恒等白)。
+    #[serde(default = "default_material_white_eye_color")]
+    pub white_eye_color: [f32; 4],
+    /// iris.shpk 角膜环:g_IrisRingColor(rgb;a 为渲染侧启用标记)。
+    #[serde(default = "default_material_iris_ring_color")]
+    pub iris_ring_color: [f32; 4],
+    /// g_IrisRingEmissiveIntensity(缺省 0.25,同 MeddleTools)。
+    #[serde(default = "default_material_iris_ring_emissive_intensity")]
+    pub iris_ring_emissive_intensity: f32,
+    /// g_IrisRingUvRadius.xy(环带内/外半径,uv 空间)。
+    #[serde(default = "default_material_iris_ring_uv_radius")]
+    pub iris_ring_uv_radius: [f32; 2],
+    /// g_IrisRingUvFadeWidth.xy(内/外缘渐变宽)。
+    #[serde(default = "default_material_iris_ring_uv_fade_width")]
+    pub iris_ring_uv_fade_width: [f32; 2],
     #[serde(default = "default_material_lightshaft_color")]
     pub lightshaft_color: [f32; 4],
     #[serde(default)]
@@ -2913,6 +2928,26 @@ fn default_material_specular_color_mask() -> [f32; 4] {
 
 fn default_material_ssao_mask() -> f32 {
     1.0
+}
+
+fn default_material_white_eye_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 0.0]
+}
+
+fn default_material_iris_ring_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_material_iris_ring_emissive_intensity() -> f32 {
+    0.25
+}
+
+fn default_material_iris_ring_uv_radius() -> [f32; 2] {
+    [0.158, 0.174]
+}
+
+fn default_material_iris_ring_uv_fade_width() -> [f32; 2] {
+    [0.04, 0.02]
 }
 
 fn default_material_lightshaft_color() -> [f32; 4] {
@@ -6426,6 +6461,11 @@ mod color_table_bake_tests {
             detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
             detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
             uv_scroll: [0.0, 0.0, 0.0, 0.0],
+            white_eye_color: [1.0, 1.0, 1.0, 0.0],
+            iris_ring_color: [1.0, 1.0, 1.0, 1.0],
+            iris_ring_emissive_intensity: 0.25,
+            iris_ring_uv_radius: [0.158, 0.174],
+            iris_ring_uv_fade_width: [0.04, 0.02],
             lightshaft_color: [1.0, 1.0, 1.0, 1.0],
             lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
             lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],

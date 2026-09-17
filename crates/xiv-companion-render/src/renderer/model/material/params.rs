@@ -227,6 +227,11 @@ pub(crate) fn fallback_material() -> ModelMaterial {
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
+        white_eye_color: [1.0, 1.0, 1.0, 0.0],
+        iris_ring_color: [1.0, 1.0, 1.0, 1.0],
+        iris_ring_emissive_intensity: 0.25,
+        iris_ring_uv_radius: [0.158, 0.174],
+        iris_ring_uv_fade_width: [0.04, 0.02],
         lightshaft_color: [1.0, 1.0, 1.0, 1.0],
         lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
         lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
@@ -597,6 +602,48 @@ pub(crate) fn material_detail_normal_uv_scale(material: &ModelMaterial) -> [f32;
 
 pub(crate) fn material_uv_scroll(material: &ModelMaterial) -> [f32; 4] {
     finite_vec4_or(material.uv_scroll, [0.0; 4])
+}
+
+/// iris.shpk 专用 uniform：眼白、环色与环带参数。仅 Iris 家族材质激活
+/// （其余家族全零，WGSL 分支不激活，对武器/装备渲染零影响）。角膜环数学
+/// 按 MeddleTools iris.shpk 节点组还原：环带 = uv0 距中心 (0.5,0.5) 的距离
+/// 落在 radius.xy ± fade.xy 内的软环；每侧 limbal 强度来自拼装侧虹膜色
+/// alpha（离线无运行态来源，默认 1.0 满强度）。
+pub(crate) fn material_iris_params(
+    material: &ModelMaterial,
+    prepared_material: PreparedMaterial,
+) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    if prepared_material.shader_family != MaterialShaderFamily::Iris {
+        return ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
+    }
+    let white_eye = finite_vec4_or(material.white_eye_color, [1.0, 1.0, 1.0, 0.0]);
+    let ring_color = finite_vec4_or(material.iris_ring_color, [1.0, 1.0, 1.0, 1.0]);
+    let radius = material.iris_ring_uv_radius;
+    let fade = material.iris_ring_uv_fade_width;
+    (
+        [white_eye[0], white_eye[1], white_eye[2], 1.0],
+        [ring_color[0], ring_color[1], ring_color[2], 1.0],
+        [
+            finite_or(material.iris_ring_emissive_intensity, 0.25),
+            finite_or(radius[0], 0.158),
+            finite_or(radius[1], 0.174),
+            material
+                .character_colors
+                .as_ref()
+                .map(|colors| colors.colors.left_iris[3])
+                .unwrap_or(1.0),
+        ],
+        [
+            finite_or(fade[0], 0.04),
+            finite_or(fade[1], 0.02),
+            material
+                .character_colors
+                .as_ref()
+                .map(|colors| colors.colors.right_iris[3])
+                .unwrap_or(1.0),
+            0.0,
+        ],
+    )
 }
 
 pub(crate) fn material_lightshaft_color(material: &ModelMaterial) -> [f32; 4] {

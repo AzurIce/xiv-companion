@@ -8,6 +8,7 @@ fn resolve_character_family_base(
     input: VertexOutput,
     base: vec3<f32>,
     samples: SurfaceSamples,
+    ring_emission: ptr<function, vec3<f32>>,
 ) -> vec3<f32> {
     // MeddleTools 已连节点（node_configs.py skin/hair/iris/charactertattoo）的第一版
     // 落地；无节点证据的输入（唇形/挑染遮罩通道语义、双眼分侧、g_WhiteEyeColor、
@@ -62,10 +63,40 @@ fn resolve_character_family_base(
         }
         color = hair_color;
     }
-    // iris family：虹膜 × LeftIrisColor。眼白 g_WhiteEyeColor 无离线来源按恒等白，
-    // 单眼材质双眼共享（右眼色入 uniform 备用未分侧）。
+    // iris family（MeddleTools iris.shpk 节点组）：单眼材质双眼共享，顶点色
+    // G>0.5 选右眼色；diffuse × mix(眼白 g_WhiteEyeColor, 虹膜色, mask.B)。
+    // 角膜环：d = |uv0 - (0.5,0.5)|，环带在 radius.xy ± fade.xy 内软过渡
+    // （内缘 ramp 上、外缘 ramp 下），发射 = 环色 × factor × 每侧 limbal
+    // 强度（虹膜色 alpha）× g_IrisRingEmissiveIntensity。
+    var is_right = false;
     if material.character_left_iris.a > 0.5 {
-        color = color * material.character_left_iris.rgb;
+        is_right = input.color.g > 0.5;
+        let iris_color = select(
+            material.character_left_iris.rgb,
+            material.character_right_iris.rgb,
+            is_right,
+        );
+        let eye_tint = mix(
+            material.iris_white_eye.rgb,
+            iris_color,
+            clamp(samples.mask.b, 0.0, 1.0),
+        );
+        color = color * eye_tint;
+    }
+    if material.iris_ring_color.a > 0.5 {
+        let d = length(input.uv0 - vec2<f32>(0.5, 0.5));
+        let radius = material.iris_ring_a.yz;
+        let fade = material.iris_ring_b.xy;
+        let inner = max(radius.x - fade.x, 0.0);
+        let outer = radius.y + fade.y;
+        let ramp_in = clamp((d - inner) / max(radius.x - inner, 1e-5), 0.0, 1.0);
+        let ramp_out = clamp((outer - d) / max(outer - radius.y, 1e-5), 0.0, 1.0);
+        let gate_in = select(0.0, 1.0, d < radius.y);
+        let gate_out = select(0.0, 1.0, d > radius.x);
+        let factor = clamp(ramp_in * gate_in + ramp_out * gate_out, 0.0, 1.0);
+        let limbal = select(material.iris_ring_a.w, material.iris_ring_b.z, is_right);
+        *ring_emission += material.iris_ring_color.rgb
+            * (factor * limbal * max(material.iris_ring_a.x, 0.0));
     }
     // charactertattoo family：OptionColor 平铺（形状由法线贴图 alpha 的透明策略给）。
     if material.character_option.a > 0.5 {
@@ -199,7 +230,8 @@ fn resolve_surface_output(
     let unscaled_emissive = surface.emissive - surface.color_table_emissive;
     let color = lit
         + unscaled_emissive
-        + surface.color_table_emissive * color_table_emissive_scale;
+        + surface.color_table_emissive * color_table_emissive_scale
+        + surface.ring_emission;
 
     var out: FragmentOutput;
     out.color = vec4<f32>(color, surface.alpha);

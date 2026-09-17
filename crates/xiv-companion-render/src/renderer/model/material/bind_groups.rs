@@ -184,6 +184,7 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     let uv_scroll_masks = material_uv_scroll_mask_params(prepared_material);
     let sheen_sphere_params = material_sheen_sphere_params(material, prepared_material);
     let character_channels = material_character_color_channels(material);
+    let iris_params = material_iris_params(material, prepared_material);
     let uniform = MaterialUniform {
         diffuse_color: [
             material.diffuse_color[0],
@@ -304,6 +305,10 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         character_decal: character_channels.decal,
         character_decal_uv: character_channels.decal_uv,
         character_params: character_channels.params,
+        iris_white_eye: iris_params.0,
+        iris_ring_color: iris_params.1,
+        iris_ring_a: iris_params.2,
+        iris_ring_b: iris_params.3,
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("weapon material uniform"),
@@ -1216,4 +1221,9 @@ pub(crate) struct MaterialUniform {
     pub(crate) character_decal: [f32; 4],
     pub(crate) character_decal_uv: [f32; 4],
     pub(crate) character_params: [f32; 4],
+    // iris.shpk 专用（仅 Iris 家族非零）：眼白/环色/环带参数与每侧 limbal 强度。
+    pub(crate) iris_white_eye: [f32; 4],
+    pub(crate) iris_ring_color: [f32; 4],
+    pub(crate) iris_ring_a: [f32; 4],
+    pub(crate) iris_ring_b: [f32; 4],
 }

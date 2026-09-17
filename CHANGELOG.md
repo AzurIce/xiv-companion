@@ -2,6 +2,7 @@
 
 ## 开发中
 
+- 虹膜渲染按 MeddleTools iris.shpk 节点组补全：左右眼分侧（顶点色 G 通道选择右眼色）、眼白 g_WhiteEyeColor 与虹膜色按 mask.B 混合、角膜环带（g_IrisRingUvRadius ± FadeWidth 软环）以环色 × 每侧 limbal 强度 × g_IrisRingEmissiveIntensity 自发光；数据层解析 5 个 iris 材质常量（CRC 与缺省值同 MeddleTools），非 iris 家族 uniform 全零对现有渲染零影响。另将 bgprop/bgcrestchange 材质并入 Bg 家族（此前落 Unknown 走兜底路径）。
 - 模型着色器迁移为 WESL 包并整理渲染器目录：`xiv-companion-render` 在构建期用 wesl-rs 把 `src/renderer/shaders/` 的 WESL 包编译为 WGSL 产物（模型着色器与 bloom/compose 后处理各一个产物），渲染器与着色器测试统一消费链接产物；Rust 渲染器归入 `renderer/model/`（材质数据管道收进 `material/` 子模块），着色器全部位于 `renderer/shaders/`。着色器拆为 bindings/skinning/lighting/color_table/arrays/alpha/surface/shading/debug 九个模块加入口点根模块，跨模块依赖以显式 import 声明，链接保持无重命名、无裁剪。着色器回归测试中依赖声明顺序的区间断言改为按函数体提取，六个数值/格式锚点同步到 WESL 规范化输出；88 个单元测试与 42 张 native GPU 快照逐位一致。
 - 模型渲染器整理：`xiv-companion-render` 渲染核心从单个约 8900 行文件拆分为按职责划分的模块（渲染上下文与每帧绘制、管线构建、材质纹理绑定与上传、材质 uniform 参数、顶点装配与透明排序、后处理、相机/材质 uniform 布局，着色器与渲染测试随迁），行为不变、快照逐位一致；同时移除 wgpu 的 `webgl` feature——模型预览本就固定走 WebGPU 后端，构建不再包含 WebGL2 后端代码，着色器 16 纹理/16 采样器预算改为自设保守上限、不再以 WebGL2 兼容为由约束。
 - 修复 native GPU 快照套件多线程运行（`--test-threads=N`）时的确定性 SIGSEGV：快照渲染此前只串行化 wgpu 实例创建，wgpu 的 Instance/Adapter 句柄存活到渲染结束，实例销毁（vkDestroyInstance）仍与其他线程的 Vulkan 实例创建并发触发 libvulkan ICD 竞态（NVIDIA 等 dlopen 重 ICD 环境）；现 test_support 串行化整个快照渲染，任意时刻只跑一个 Vulkan 实例生命周期，Justfile 的多线程 ignored 快照命令可直接使用，并新增多线程并发渲染冒烟用例守护。

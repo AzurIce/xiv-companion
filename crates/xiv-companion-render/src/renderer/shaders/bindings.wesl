@@ -76,6 +76,11 @@ struct Material {
     character_decal: vec4<f32>, // rgb: DecalColor 面妆色, a: 不透明度
     character_decal_uv: vec4<f32>, // x: UV multiplier, y: UV offset, z: reversed, w: 贴图存在
     character_params: vec4<f32>, // x: hair family 用 mask R 通道作明暗细节, y: obj/face 脸部毛发（alpha 整形）, zw: 保留
+    // iris.shpk 专用（仅 Iris 家族材质非零）：按 MeddleTools iris.shpk 节点组。
+    iris_white_eye: vec4<f32>,  // rgb: g_WhiteEyeColor（眼白乘色）
+    iris_ring_color: vec4<f32>, // rgb: g_IrisRingColor, a: 启用
+    iris_ring_a: vec4<f32>,     // x: g_IrisRingEmissiveIntensity, yz: g_IrisRingUvRadius.xy, w: 左眼 limbal 强度
+    iris_ring_b: vec4<f32>,     // xy: g_IrisRingUvFadeWidth.xy, z: 右眼 limbal 强度
 };
 
 struct VertexInput {

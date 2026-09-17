@@ -254,6 +254,12 @@ const G_LIGHTSHAFT_TEX_V: u32 = 0xC02F_F1F9;
 const G_LIGHTSHAFT_RAY: u32 = 0x827B_DD09;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_COLOR: u32 = 0xD27C_58B9;
+// iris.shpk 眼白与角膜环参数(Meddle Names.cs CRC;缺省值同 MeddleTools 节点组)。
+const G_WHITE_EYE_COLOR: u32 = 0x11C9_0091;
+const G_IRIS_RING_COLOR: u32 = 0x50E3_6D56;
+const G_IRIS_RING_EMISSIVE_INTENSITY: u32 = 0x7DAB_A471;
+const G_IRIS_RING_UV_RADIUS: u32 = 0xE183_98AE;
+const G_IRIS_RING_UV_FADE_WIDTH: u32 = 0x5B60_8CFE;
 #[cfg(feature = "game-data")]
 const G_LIGHTSHAFT_ANGLE_CLIP: u32 = 0x71DB_DA81;
 #[cfg(feature = "game-data")]
@@ -3046,6 +3052,11 @@ fn load_model_material_from_resource<R: physis::resource::Resource>(
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
+        let white_eye_color = composed_material_white_eye_color(&semantics);
+        let iris_ring_color = composed_material_iris_ring_color(&semantics);
+        let iris_ring_emissive_intensity = composed_material_iris_ring_emissive_intensity(&semantics);
+        let iris_ring_uv_radius = composed_material_iris_ring_uv_radius(&semantics);
+        let iris_ring_uv_fade_width = composed_material_iris_ring_uv_fade_width(&semantics);
         let lightshaft_color = composed_material_lightshaft_color(&semantics);
         let lightshaft_tex_anim = composed_material_lightshaft_tex_anim(&semantics);
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
@@ -3155,6 +3166,11 @@ fn load_model_material_from_resource<R: physis::resource::Resource>(
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
+            white_eye_color,
+            iris_ring_color,
+            iris_ring_emissive_intensity,
+            iris_ring_uv_radius,
+            iris_ring_uv_fade_width,
             lightshaft_color,
             lightshaft_tex_anim,
             lightshaft_tex_u,
@@ -5027,6 +5043,11 @@ async fn load_model_material_from_async_resource<R: AsyncGameResource>(
         let detail_color_uv_scale = composed_material_detail_color_uv_scale(&semantics);
         let detail_normal_uv_scale = composed_material_detail_normal_uv_scale(&semantics);
         let uv_scroll = composed_material_uv_scroll(&semantics);
+        let white_eye_color = composed_material_white_eye_color(&semantics);
+        let iris_ring_color = composed_material_iris_ring_color(&semantics);
+        let iris_ring_emissive_intensity = composed_material_iris_ring_emissive_intensity(&semantics);
+        let iris_ring_uv_radius = composed_material_iris_ring_uv_radius(&semantics);
+        let iris_ring_uv_fade_width = composed_material_iris_ring_uv_fade_width(&semantics);
         let lightshaft_color = composed_material_lightshaft_color(&semantics);
         let lightshaft_tex_anim = composed_material_lightshaft_tex_anim(&semantics);
         let lightshaft_tex_u = composed_material_lightshaft_tex_u(&semantics);
@@ -5137,6 +5158,11 @@ async fn load_model_material_from_async_resource<R: AsyncGameResource>(
             detail_color_uv_scale,
             detail_normal_uv_scale,
             uv_scroll,
+            white_eye_color,
+            iris_ring_color,
+            iris_ring_emissive_intensity,
+            iris_ring_uv_radius,
+            iris_ring_uv_fade_width,
             lightshaft_color,
             lightshaft_tex_anim,
             lightshaft_tex_u,
@@ -6489,6 +6515,39 @@ fn composed_material_uv_scroll(semantics: &ComposedMaterialSemantics) -> [f32; 4
 }
 
 #[cfg(feature = "game-data")]
+fn composed_material_white_eye_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_WHITE_EYE_COLOR, [1.0, 1.0, 1.0, 0.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_iris_ring_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
+    composed_material_finite_vec4_constant(semantics, G_IRIS_RING_COLOR, [1.0, 1.0, 1.0, 1.0])
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_iris_ring_emissive_intensity(semantics: &ComposedMaterialSemantics) -> f32 {
+    composed_material_finite_vec4_constant(
+        semantics,
+        G_IRIS_RING_EMISSIVE_INTENSITY,
+        [0.25, 0.0, 0.0, 0.0],
+    )[0]
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_iris_ring_uv_radius(semantics: &ComposedMaterialSemantics) -> [f32; 2] {
+    let values =
+        composed_material_finite_vec4_constant(semantics, G_IRIS_RING_UV_RADIUS, [0.158, 0.174, 0.0, 0.0]);
+    [values[0], values[1]]
+}
+
+#[cfg(feature = "game-data")]
+fn composed_material_iris_ring_uv_fade_width(semantics: &ComposedMaterialSemantics) -> [f32; 2] {
+    let values =
+        composed_material_finite_vec4_constant(semantics, G_IRIS_RING_UV_FADE_WIDTH, [0.04, 0.02, 0.0, 0.0]);
+    [values[0], values[1]]
+}
+
+#[cfg(feature = "game-data")]
 fn composed_material_lightshaft_color(semantics: &ComposedMaterialSemantics) -> [f32; 4] {
     composed_material_finite_vec4_constant(semantics, G_LIGHTSHAFT_COLOR, [1.0; 4])
 }
@@ -6912,6 +6971,11 @@ fn fallback_weapon_material(
         detail_color_uv_scale: [4.0, 4.0, 4.0, 4.0],
         detail_normal_uv_scale: [4.0, 4.0, 4.0, 4.0],
         uv_scroll: [0.0, 0.0, 0.0, 0.0],
+        white_eye_color: [1.0, 1.0, 1.0, 0.0],
+        iris_ring_color: [1.0, 1.0, 1.0, 1.0],
+        iris_ring_emissive_intensity: 0.25,
+        iris_ring_uv_radius: [0.158, 0.174],
+        iris_ring_uv_fade_width: [0.04, 0.02],
         lightshaft_color: [1.0, 1.0, 1.0, 1.0],
         lightshaft_tex_anim: [0.0, 0.0, 0.0, 0.0],
         lightshaft_tex_u: [1.0, 0.0, 0.0, 0.0],
@@ -7819,6 +7883,54 @@ fn push_unique_path(paths: &mut Vec<String>, path: String) {
 
 #[cfg(all(test, feature = "game-data"))]
 mod weapon_material_tests {
+    #[test]
+    #[cfg(feature = "game-data")]
+    fn composed_iris_ring_constants_use_meddle_defaults_and_overrides() {
+        let mut semantics = ComposedMaterialSemantics::default();
+        assert_eq!(
+            composed_material_white_eye_color(&semantics),
+            [1.0, 1.0, 1.0, 0.0]
+        );
+        assert_eq!(
+            composed_material_iris_ring_color(&semantics),
+            [1.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(composed_material_iris_ring_emissive_intensity(&semantics), 0.25);
+        assert_eq!(composed_material_iris_ring_uv_radius(&semantics), [0.158, 0.174]);
+        assert_eq!(
+            composed_material_iris_ring_uv_fade_width(&semantics),
+            [0.04, 0.02]
+        );
+
+        semantics.material_constants.insert(
+            G_IRIS_RING_COLOR,
+            ResolvedMaterialValue {
+                value: vec![0.2, 0.4, 0.6],
+                source: "test",
+            },
+        );
+        semantics.material_constants.insert(
+            G_IRIS_RING_EMISSIVE_INTENSITY,
+            ResolvedMaterialValue {
+                value: vec![2.0],
+                source: "test",
+            },
+        );
+        semantics.material_constants.insert(
+            G_IRIS_RING_UV_RADIUS,
+            ResolvedMaterialValue {
+                value: vec![0.2, 0.3],
+                source: "test",
+            },
+        );
+        assert_eq!(
+            composed_material_iris_ring_color(&semantics),
+            [0.2, 0.4, 0.6, 1.0]
+        );
+        assert_eq!(composed_material_iris_ring_emissive_intensity(&semantics), 2.0);
+        assert_eq!(composed_material_iris_ring_uv_radius(&semantics), [0.2, 0.3]);
+    }
+
     use super::*;
 
     #[test]

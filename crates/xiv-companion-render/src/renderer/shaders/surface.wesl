@@ -167,6 +167,7 @@ struct SurfaceState {
     color_table_emissive: vec3<f32>,
     lightshaft: vec4<f32>,
     alpha: f32,
+    ring_emission: vec3<f32>,
 };
 
 fn resolve_surface_state(
@@ -242,7 +243,9 @@ fn resolve_surface_state(
         material.water_deep_color.rgb,
         material.feature_params.y > 0.5,
     );
-    out.base = resolve_character_family_base(input, out.base, samples);
+    var ring_emission = vec3<f32>(0.0);
+    out.base = resolve_character_family_base(input, out.base, samples, &ring_emission);
+    out.ring_emission = ring_emission;
 
     let opacity_vertex_alpha = select(
         input.color.a,
