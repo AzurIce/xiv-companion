@@ -230,7 +230,9 @@ impl ModelRenderContext {
         let msaa_samples = if msaa_samples >= 3 { 4 } else { 1 };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/model.wgsl")).into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!(concat!(env!("OUT_DIR"), "/model.wgsl")).into(),
+            ),
         });
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model postprocess shader"),

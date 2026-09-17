@@ -10,6 +10,17 @@ use crate::{
     PreparedUvSource, prepare_material_for_draw_role,
 };
 
+/// Extract a single function's text (from its `fn` marker to the next
+/// top-level `fn`) from the linked WGSL. Robust against declaration
+/// reordering introduced by WESL linking.
+fn shader_fn_body<'a>(shader: &'a str, name: &str) -> &'a str {
+    shader
+        .split_once(&format!("fn {name}"))
+        .and_then(|(_, rest)| rest.split_once("\nfn "))
+        .map(|(body, _)| body)
+        .unwrap_or_else(|| panic!("shader is missing fn {name}"))
+}
+
 struct ComponentTestModel {
     data: crate::ModelData,
     components: Vec<u16>,
@@ -40,11 +51,7 @@ impl ModelRenderData for ComponentTestModel {
 #[test]
 fn model_shader_keeps_surface_pipeline_stages_separate() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let fs_main = shader
-        .split_once("fn fs_main")
-        .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
-        .map(|(entry, _)| entry)
-        .expect("fs_main surface entry section");
+    let fs_main = shader_fn_body(shader, "fs_main");
 
     for stage in [
         "resolve_surface_samples(input, color_table_blend)",
@@ -143,11 +150,7 @@ fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_main"))
         .map(|(section, _)| section)
         .expect("dither depth section");
-    let lightshaft = shader
-        .split_once("fn fs_lightshaft")
-        .and_then(|(_, rest)| rest.split_once("fn debug_fragment_output"))
-        .map(|(section, _)| section)
-        .expect("lightshaft section");
+    let lightshaft = shader_fn_body(shader, "fs_lightshaft");
     let properties = shader
         .split_once("fn resolve_material_properties")
         .and_then(|(_, rest)| rest.split_once("fn resolve_specular_mask_factor"))
@@ -289,11 +292,7 @@ fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
 #[test]
 fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
 
     for required in [
         "let view = resolve_view_direction(input.world_position);",
@@ -316,11 +315,7 @@ fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
 #[test]
 fn model_shader_applies_normal_light_once_per_direct_term() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
     let direct_diffuse = surface_output
         .split_once("let direct_diffuse")
         .and_then(|(_, rest)| rest.split_once("let ggx_direct_specular"))
@@ -363,11 +358,7 @@ fn model_shader_consumes_only_baked_specular_alpha_as_anisotropy() {
 #[test]
 fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
     assert!(
         !surface_output.contains("material.surface_params.x")
             && !surface_output.contains("ambient_visibility"),
@@ -378,11 +369,7 @@ fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
 #[test]
 fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
     assert!(
         !shader.contains("fn resolve_extra_lighting")
             && !surface_output.contains("extra.sheen")
@@ -399,11 +386,7 @@ fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
 #[test]
 fn model_shader_does_not_invent_toon_lighting() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
     assert!(
         !shader.contains("fn resolve_toon_lighting")
             && !surface_output.contains("toon_sheen_params")
@@ -421,11 +404,7 @@ fn model_shader_does_not_invent_toon_lighting() {
 #[test]
 fn model_shader_composes_colortable_lighting_fields_independently() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface_output = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface_output = shader_fn_body(shader, "resolve_surface_output");
 
     // MeddleTools character topology keeps modern Roughness independent
     // of GlossStrength. Installed Legacy DXBC separately proves its MRT
@@ -476,11 +455,7 @@ fn model_shader_composes_colortable_lighting_fields_independently() {
             .contains("let specular_strength = mix(1.0, mask.r, material.params.w);"),
         "mask fallback must keep the verified specular strength composition"
     );
-    let specular_mask_factor = shader
-        .split_once("fn resolve_specular_mask_factor")
-        .and_then(|(_, rest)| rest.split_once("struct TileArraySample"))
-        .map(|(section, _)| section)
-        .expect("specular mask factor section");
+    let specular_mask_factor = shader_fn_body(shader, "resolve_specular_mask_factor");
     assert!(
         specular_mask_factor.contains("return mask_red * mask_red;")
             && specular_mask_factor.contains("return 1.0;")
@@ -559,11 +534,7 @@ fn model_shader_uses_emissive_texture_or_fallback_without_empirical_gates() {
 #[test]
 fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let surface = shader
-        .split_once("fn resolve_surface_output")
-        .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
-        .map(|(section, _)| section)
-        .expect("surface output section");
+    let surface = shader_fn_body(shader, "resolve_surface_output");
     for required in [
         "samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb",
         "let uses_character_colortable_emissive_scale = material.properties.x > 0.5 && material.family_params.y > 0.5;",
@@ -714,11 +685,7 @@ fn model_shader_orients_two_sided_normals_toward_the_viewer() {
             "two-sided orientation helper must contain {required}"
         );
     }
-    let fs_main = shader
-        .split_once("fn fs_main")
-        .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
-        .map(|(entry, _)| entry)
-        .expect("fs_main surface entry section");
+    let fs_main = shader_fn_body(shader, "fs_main");
     assert!(
         !fs_main.contains("front_facing"),
         "fs_main must not plumb triangle winding into surface state"
