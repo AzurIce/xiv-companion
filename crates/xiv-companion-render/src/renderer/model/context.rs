@@ -236,7 +236,9 @@ impl ModelRenderContext {
         });
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model postprocess shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!(concat!(env!("OUT_DIR"), "/postprocess.wgsl")).into(),
+            ),
         });
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {

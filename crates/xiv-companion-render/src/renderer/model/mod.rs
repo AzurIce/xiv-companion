@@ -1,3 +1,7 @@
+//! Model renderer: GPU context, per-frame passes, material data pipeline,
+//! and the shader regression tests. The WGSL/WESL shader sources live in
+//! `../shaders/` and are compiled to `OUT_DIR` artifacts by `build.rs`.
+
 use std::collections::HashMap;
 
 use half::f16;
@@ -16,13 +20,10 @@ use crate::{
 
 mod context;
 mod instance;
-mod material_params;
-mod materials;
+mod material;
 mod options;
 mod pipelines;
 mod postprocess;
-mod textures;
-mod uniforms;
 
 #[cfg(test)]
 mod tests;
@@ -34,10 +35,7 @@ pub use options::{
 
 use context::*;
 use instance::*;
-use material_params::*;
-use materials::*;
+use material::*;
 use options::*;
 use pipelines::*;
 use postprocess::*;
-use textures::*;
-use uniforms::*;

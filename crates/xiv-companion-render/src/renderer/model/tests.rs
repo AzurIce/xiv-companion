@@ -700,7 +700,7 @@ fn post_pipeline_uses_hdr_intermediates_and_tone_mapped_compose() {
         "scene/bright intermediates must keep HDR values above 1.0 until composition"
     );
 
-    let shader = include_str!("postprocess.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/postprocess.wgsl"));
     let compose = shader
         .split_once("fn compose_fs")
         .and_then(|(_, rest)| rest.split_once("fn tonemap_pbr_neutral"))
@@ -733,7 +733,7 @@ fn bloom_uses_scene_linear_threshold_in_the_post_pass() {
         BLOOM_THRESHOLD, 1.0,
         "bloom threshold is defined in scene-linear units (display white)"
     );
-    let shader = include_str!("postprocess.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/postprocess.wgsl"));
     for required in [
         "fn bloom_contribution(color: vec3<f32>, threshold: f32) -> vec3<f32>",
         "smoothstep(threshold, threshold + BLOOM_KNEE, luma)",

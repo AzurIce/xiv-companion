@@ -2,7 +2,7 @@
 
 ## 开发中
 
-- 模型着色器迁移为 WESL 包：`xiv-companion-render` 在构建期用 wesl-rs 把 `src/renderer/model/` 的 WESL 包编译为 WGSL 产物，渲染器与着色器测试统一消费链接产物；着色器拆为 bindings/skinning/lighting/color_table/arrays/alpha/surface/shading/debug 九个模块加入口点根模块，跨模块依赖以显式 import 声明，链接保持无重命名、无裁剪。着色器回归测试中依赖声明顺序的区间断言改为按函数体提取，六个数值/格式锚点同步到 WESL 规范化输出；88 个单元测试与 42 张 native GPU 快照逐位一致。
+- 模型着色器迁移为 WESL 包并整理渲染器目录：`xiv-companion-render` 在构建期用 wesl-rs 把 `src/renderer/shaders/` 的 WESL 包编译为 WGSL 产物（模型着色器与 bloom/compose 后处理各一个产物），渲染器与着色器测试统一消费链接产物；Rust 渲染器归入 `renderer/model/`（材质数据管道收进 `material/` 子模块），着色器全部位于 `renderer/shaders/`。着色器拆为 bindings/skinning/lighting/color_table/arrays/alpha/surface/shading/debug 九个模块加入口点根模块，跨模块依赖以显式 import 声明，链接保持无重命名、无裁剪。着色器回归测试中依赖声明顺序的区间断言改为按函数体提取，六个数值/格式锚点同步到 WESL 规范化输出；88 个单元测试与 42 张 native GPU 快照逐位一致。
 - 模型渲染器整理：`xiv-companion-render` 渲染核心从单个约 8900 行文件拆分为按职责划分的模块（渲染上下文与每帧绘制、管线构建、材质纹理绑定与上传、材质 uniform 参数、顶点装配与透明排序、后处理、相机/材质 uniform 布局，着色器与渲染测试随迁），行为不变、快照逐位一致；同时移除 wgpu 的 `webgl` feature——模型预览本就固定走 WebGPU 后端，构建不再包含 WebGL2 后端代码，着色器 16 纹理/16 采样器预算改为自设保守上限、不再以 WebGL2 兼容为由约束。
 - 修复 native GPU 快照套件多线程运行（`--test-threads=N`）时的确定性 SIGSEGV：快照渲染此前只串行化 wgpu 实例创建，wgpu 的 Instance/Adapter 句柄存活到渲染结束，实例销毁（vkDestroyInstance）仍与其他线程的 Vulkan 实例创建并发触发 libvulkan ICD 竞态（NVIDIA 等 dlopen 重 ICD 环境）；现 test_support 串行化整个快照渲染，任意时刻只跑一个 Vulkan 实例生命周期，Justfile 的多线程 ignored 快照命令可直接使用，并新增多线程并发渲染冒烟用例守护。
 - 修复文档化的 `cargo test --features web` 全量验证命令构建失败：`tests/weapon_shader_family_audit.rs` 的 characterglass 边界断言未按平台隔离地引用仅 Windows 可用的 DXBC 反汇编辅助（`disassemble_dxbc` 等），导致非 Windows 平台整个测试目标编译失败；DXBC 统计已收入 `#[cfg(windows)]` 块，shader 数量与标量参数等平台无关断言保留在所有平台运行，仅 Windows 用到的导入一并按平台门控。

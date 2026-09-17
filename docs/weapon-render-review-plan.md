@@ -29,7 +29,7 @@
 最近核验：2026-07-15；最近实现基线：`4e1b9c6`；最近路线基线：`1f64277`；最近视觉回归诊断基线：`4e1b9c6`。
 
 - 本仓数据层：`crates/xiv-companion-data/src/model.rs`、`mdl_geometry.rs`、`mdl_metadata.rs`、`weapon_models.rs`。
-- 本仓渲染层：`crates/xiv-companion-render/src/renderer/model/`（`context.rs` 渲染上下文与绘制；着色器为同目录 WESL 包 `main.wesl` + 各模块，build.rs 编译到 WGSL 产物）。
+- 本仓渲染层：`crates/xiv-companion-render/src/renderer/model/`（Rust 渲染器，材质管道在 `material/` 子模块）与 `src/renderer/shaders/`（WESL 着色器包，`main.wesl` 为入口点根，build.rs 编译到 WGSL 产物）。
 - Meddle：模型/顶点导出、ColorTable 结构、material constant buffer、on-render material output、CRC 名称表。
 - MeddleTools：shader node groups、node mappings、texture config、ColorTable ramp 和 bake 路径。
 - Penumbra.GameData：Legacy/GUD STM、dye pack 和 ColorTable dye override 规则。
