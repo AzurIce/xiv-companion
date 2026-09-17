@@ -864,7 +864,12 @@ pub fn material_shader_family(shader_package_name: Option<&str>) -> MaterialShad
         "characterscroll.shpk" => MaterialShaderFamily::CharacterScroll,
         "charactertattoo.shpk" => MaterialShaderFamily::CharacterTattoo,
         "characterocclusion.shpk" => MaterialShaderFamily::CharacterOcclusion,
-        "bg.shpk" | "bgcolorchange.shpk" => MaterialShaderFamily::Bg,
+        // bgprop(家具/物件简单 PBR)与 bgcrestchange(纹章)按 MeddleTools
+        // 消费与 bg.shpk 相同的 PBR 通道(specmap.G→roughness、B→metallic),
+        // 并入 Bg 家族走同一渲染路径。
+        "bg.shpk" | "bgcolorchange.shpk" | "bgprop.shpk" | "bgcrestchange.shpk" => {
+            MaterialShaderFamily::Bg
+        }
         "bguvscroll.shpk" => MaterialShaderFamily::BgUvScroll,
         "crystal.shpk" => MaterialShaderFamily::Crystal,
         "lightshaft.shpk" => MaterialShaderFamily::LightShaft,
@@ -6250,6 +6255,14 @@ mod color_table_bake_tests {
         );
         assert_eq!(
             material_shader_family(Some("bg.shpk")),
+            MaterialShaderFamily::Bg
+        );
+        assert_eq!(
+            material_shader_family(Some("bgprop.shpk")),
+            MaterialShaderFamily::Bg
+        );
+        assert_eq!(
+            material_shader_family(Some("bgcrestchange.shpk")),
             MaterialShaderFamily::Bg
         );
         assert_eq!(
