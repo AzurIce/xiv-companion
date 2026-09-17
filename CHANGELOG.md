@@ -2,6 +2,7 @@
 
 ## 开发中
 
+- 模型渲染器整理：`xiv-companion-render` 渲染核心从单个约 8900 行文件拆分为按职责划分的模块（渲染上下文与每帧绘制、管线构建、材质纹理绑定与上传、材质 uniform 参数、顶点装配与透明排序、后处理、相机/材质 uniform 布局，着色器与渲染测试随迁），行为不变、快照逐位一致；同时移除 wgpu 的 `webgl` feature——模型预览本就固定走 WebGPU 后端，构建不再包含 WebGL2 后端代码，着色器 16 纹理/16 采样器预算改为自设保守上限、不再以 WebGL2 兼容为由约束。
 - 修复 native GPU 快照套件多线程运行（`--test-threads=N`）时的确定性 SIGSEGV：快照渲染此前只串行化 wgpu 实例创建，wgpu 的 Instance/Adapter 句柄存活到渲染结束，实例销毁（vkDestroyInstance）仍与其他线程的 Vulkan 实例创建并发触发 libvulkan ICD 竞态（NVIDIA 等 dlopen 重 ICD 环境）；现 test_support 串行化整个快照渲染，任意时刻只跑一个 Vulkan 实例生命周期，Justfile 的多线程 ignored 快照命令可直接使用，并新增多线程并发渲染冒烟用例守护。
 - 修复文档化的 `cargo test --features web` 全量验证命令构建失败：`tests/weapon_shader_family_audit.rs` 的 characterglass 边界断言未按平台隔离地引用仅 Windows 可用的 DXBC 反汇编辅助（`disassemble_dxbc` 等），导致非 Windows 平台整个测试目标编译失败；DXBC 统计已收入 `#[cfg(windows)]` 块，shader 数量与标量参数等平台无关断言保留在所有平台运行，仅 Windows 用到的导入一并按平台门控。
 - 修复折叠侧边栏（72px）悬浮导航图标时标签 tooltip 被导航滚动容器右缘裁掉的问题：tooltip 此前以 `absolute` 渲染在 `overflow-y-auto` 的滚动条内，横向溢出被裁剪且 `z-50` 无法逃逸祖先的 overflow 裁剪；现改为悬浮时读取触发项的 `getBoundingClientRect`，由 `DesktopSidebar` 在滚动容器外以 `position: fixed` 渲染同层级的 tooltip，层叠与页面 `fixed inset-0 z-50` 弹窗无冲突（弹窗后绘制于上层且遮罩拦截指针，悬浮不再触发）；滚动导航列表或折叠状态变化时 tooltip 即消失。

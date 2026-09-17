@@ -29,7 +29,7 @@
 最近核验：2026-07-15；最近实现基线：`4e1b9c6`；最近路线基线：`1f64277`；最近视觉回归诊断基线：`4e1b9c6`。
 
 - 本仓数据层：`crates/xiv-companion-data/src/model.rs`、`mdl_geometry.rs`、`mdl_metadata.rs`、`weapon_models.rs`。
-- 本仓渲染层：`crates/xiv-companion-render/src/renderer/model.rs`、`model.wgsl`。
+- 本仓渲染层：`crates/xiv-companion-render/src/renderer/model/`（`context.rs` 渲染上下文与绘制、`model.wgsl` 着色器等按职责分模块）。
 - Meddle：模型/顶点导出、ColorTable 结构、material constant buffer、on-render material output、CRC 名称表。
 - MeddleTools：shader node groups、node mappings、texture config、ColorTable ramp 和 bake 路径。
 - Penumbra.GameData：Legacy/GUD STM、dye pack 和 ColorTable dye override 规则。

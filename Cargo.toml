@@ -96,7 +96,7 @@ web-sys = { version = "0.3.83", features = [
     "Worker",
     "WebSocket",
 ], optional = true }
-wgpu = { version = "29", features = ["webgl"], optional = true }
+wgpu = { version = "29", optional = true }
 xiv-companion-data = { path = "crates/xiv-companion-data", default-features = false }
 xiv-companion-render = { path = "crates/xiv-companion-render", default-features = false }
 

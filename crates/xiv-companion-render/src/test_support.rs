@@ -283,12 +283,8 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     let depth = create_depth_texture(&device, options.width, options.height, msaa_samples);
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let context = crate::renderer::ModelRenderContext::new_with_msaa(
-        device,
-        queue,
-        format,
-        msaa_samples,
-    );
+    let context =
+        crate::renderer::ModelRenderContext::new_with_msaa(device, queue, format, msaa_samples);
     let mut renderer = ModelRenderer::from_context_with_skeleton(
         context,
         model,
