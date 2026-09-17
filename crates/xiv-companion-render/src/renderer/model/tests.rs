@@ -39,7 +39,7 @@ impl ModelRenderData for ComponentTestModel {
 
 #[test]
 fn model_shader_keeps_surface_pipeline_stages_separate() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let fs_main = shader
         .split_once("fn fs_main")
         .and_then(|(_, rest)| rest.split_once("struct SurfacePassFlags"))
@@ -73,7 +73,7 @@ fn model_shader_keeps_surface_pipeline_stages_separate() {
 
 #[test]
 fn model_shader_keeps_modern_colortable_shaping_explicit() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     assert!(
         shader.contains("let base_weight = 1.0 - clamp(source_blend, 0.0, 1.0);"),
         "ColorTable blend must retain the installed inverted index weight"
@@ -100,7 +100,7 @@ fn model_shader_keeps_modern_colortable_shaping_explicit() {
 
 #[test]
 fn model_shader_keeps_unverified_vertex_rgb_out_of_surface_composition() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_state = shader
         .split_once("fn resolve_surface_state")
         .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
@@ -119,7 +119,7 @@ fn model_shader_keeps_unverified_vertex_rgb_out_of_surface_composition() {
 
 #[test]
 fn model_shader_keeps_unverified_specular_color_mask_out_of_final() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     assert!(
         shader.contains("specular_color_mask: vec4<f32>"),
         "the parsed constant must remain available in the material uniform"
@@ -132,7 +132,7 @@ fn model_shader_keeps_unverified_specular_color_mask_out_of_final() {
 
 #[test]
 fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let samples = shader
         .split_once("fn resolve_surface_samples")
         .and_then(|(_, rest)| rest.split_once("struct SurfaceState"))
@@ -158,7 +158,7 @@ fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
         "out.normal = textureSampleBias(normal_texture",
         "return textureSampleBias(base_color_texture",
         "return textureSampleBias(mask_texture",
-        "return select(\n        0.0,\n        clamp(material.surface_params.y, -16.0, 15.99)",
+        "return select(0.0, clamp(material.surface_params.y, -16.0, 15.99), material.surface_params.w > 0.5)",
     ] {
         assert!(
             shader.contains(required),
@@ -184,7 +184,7 @@ fn model_shader_limits_texture_mip_bias_to_verified_character_samplers() {
 
 #[test]
 fn model_shader_composes_colorset_diffuse_at_source_resolution() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let compose = shader
         .split_once("fn sample_color_table_base")
         .and_then(|(_, rest)| rest.split_once("fn sample_color_table_specular"))
@@ -214,7 +214,7 @@ fn model_shader_composes_colorset_diffuse_at_source_resolution() {
 
 #[test]
 fn model_shader_stays_within_material_binding_budget() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let sampled_textures = shader.matches("@group(1) @binding").count();
     let texture_bindings = shader
         .lines()
@@ -251,7 +251,7 @@ fn model_shader_stays_within_material_binding_budget() {
 
 #[test]
 fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let tile = shader
         .split_once("fn resolve_tile_array")
         .and_then(|(_, rest)| rest.split_once("fn tile_array_layer"))
@@ -265,7 +265,7 @@ fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
 
     for required in [
         "min(length(tile_matrix.xz), length(tile_matrix.yw)) * 0.0078125",
-        "max(log2(max(matrix_scale, 1.0e-8)), 0.0)",
+        "max(log2(max(matrix_scale, 1e-8)), 0.0)",
         "matrix_bias + material.tile_lod_params.x",
         "normal_coordinates_a.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_a))",
         "normal_coordinates_b.ddx * exp2(resolve_tile_lod_bias(extra.tile_matrix_b))",
@@ -288,7 +288,7 @@ fn model_shader_applies_verified_tile_mip_bias_only_to_tile_arrays() {
 
 #[test]
 fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -315,7 +315,7 @@ fn model_shader_uses_camera_aware_energy_conserving_metal_lighting() {
 
 #[test]
 fn model_shader_applies_normal_light_once_per_direct_term() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -345,7 +345,7 @@ fn model_shader_applies_normal_light_once_per_direct_term() {
 
 #[test]
 fn model_shader_consumes_only_baked_specular_alpha_as_anisotropy() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     for required in [
         "specular: vec4<f32>",
         "clamp(samples.specular.a, 0.0, 1.0)",
@@ -362,7 +362,7 @@ fn model_shader_consumes_only_baked_specular_alpha_as_anisotropy() {
 
 #[test]
 fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -377,7 +377,7 @@ fn model_shader_does_not_invent_ssao_without_runtime_occlusion() {
 
 #[test]
 fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -398,7 +398,7 @@ fn model_shader_does_not_invent_sheen_or_sphere_lighting() {
 
 #[test]
 fn model_shader_does_not_invent_toon_lighting() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -420,7 +420,7 @@ fn model_shader_does_not_invent_toon_lighting() {
 
 #[test]
 fn model_shader_composes_colortable_lighting_fields_independently() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface_output = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -443,17 +443,13 @@ fn model_shader_composes_colortable_lighting_fields_independently() {
     );
     for required in [
         "let legacy_gloss_roughness = exp2(-max(surface.properties.z, 0.0) / 15.0);",
-        "let roughness_source = select(",
-        "surface.properties.y,\n        legacy_gloss_roughness,",
-        "material.properties.x > 0.5 && material.family_params.x > 0.5,",
+        "let roughness_source = select(surface.properties.y, legacy_gloss_roughness, material.properties.x > 0.5 && material.family_params.x > 0.5)",
+        "let uses_legacy_colortable = material.properties.x > 0.5 && material.family_params.x > 0.5;",
         "let roughness = clamp(roughness_source, 0.06, 1.0);",
         "let specular_strength = max(surface.properties.w, 0.0);",
-        "let specular_weight = specular_strength",
-        "let preview_f0_specular_weight = select(",
-        "specular_weight,\n        1.0,\n        uses_legacy_colortable,",
-        "let uses_colortable_specular_mask = material.properties.x > 0.5",
-        "&& legacy_specular_mode < 0.5;",
-        "clamp(surface.mask.r, 0.0, 1.0),\n        uses_colortable_specular_mask,",
+        "let specular_weight = specular_strength * select(1.0, clamp(surface.mask.r, 0.0, 1.0), uses_colortable_specular_mask)",
+        "let preview_f0_specular_weight = select(specular_weight, 1.0, uses_legacy_colortable)",
+        "let uses_colortable_specular_mask = material.properties.x > 0.5 && legacy_specular_mode < 0.5;",
         "surface.material_specular * (0.08 * preview_f0_specular_weight)",
         "let specular_mask = clamp(resolve_specular_mask_factor(surface.mask.r), 0.0, 1.35);",
     ] {
@@ -502,7 +498,7 @@ fn model_shader_composes_colortable_lighting_fields_independently() {
 
 #[test]
 fn model_shader_uses_proven_legacy_camera_reflection_lobe() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let lobe = shader
         .split_once("fn legacy_camera_reflection_lobe")
         .and_then(|(_, rest)| rest.split_once("fn ggx_anisotropic_distribution"))
@@ -521,12 +517,12 @@ fn model_shader_uses_proven_legacy_camera_reflection_lobe() {
             "Legacy lobe must retain installed DXBC formula: {required}"
         );
     }
-    assert!(shader.contains("material.properties.x > 0.5 && material.family_params.x > 0.5,"));
+    assert!(shader.contains("material.properties.x > 0.5 && material.family_params.x > 0.5;"));
 }
 
 #[test]
 fn model_shader_uses_emissive_texture_or_fallback_without_empirical_gates() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let emissive = shader
         .split_once("fn resolve_emissive")
         .and_then(|(_, rest)| rest.split_once("fn resolve_shader_diffuse_tint"))
@@ -562,7 +558,7 @@ fn model_shader_uses_emissive_texture_or_fallback_without_empirical_gates() {
 
 #[test]
 fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface = shader
         .split_once("fn resolve_surface_output")
         .and_then(|(_, rest)| rest.split_once("@fragment\nfn fs_lightshaft"))
@@ -570,10 +566,9 @@ fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
         .expect("surface output section");
     for required in [
         "samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb",
-        "let uses_character_colortable_emissive_scale = material.properties.x > 0.5",
-        "&& material.family_params.y > 0.5;",
-        "let lit_luminance = dot(lit, vec3<f32>(0.298910, 0.586610, 0.114480));",
-        "max(lit_luminance, 1.0),",
+        "let uses_character_colortable_emissive_scale = material.properties.x > 0.5 && material.family_params.y > 0.5;",
+        "let lit_luminance = dot(lit, vec3<f32>(0.29891, 0.58661, 0.11448));",
+        "select(1.0, max(lit_luminance, 1.0), uses_character_colortable_emissive_scale)",
         "let unscaled_emissive = surface.emissive - surface.color_table_emissive;",
         "+ surface.color_table_emissive * color_table_emissive_scale;",
     ] {
@@ -590,7 +585,7 @@ fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
 
 #[test]
 fn model_shader_does_not_invent_generic_multi_diffuse_mask_blending() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let generic_tint = shader
         .split_once("fn resolve_shader_diffuse_tint")
         .and_then(|(_, rest)| rest.split_once("fn resolve_lightshaft_color"))
@@ -613,7 +608,7 @@ fn model_shader_does_not_invent_generic_multi_diffuse_mask_blending() {
 
 #[test]
 fn model_shader_preserves_verified_water_deep_color_as_linear_hdr() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface = shader
         .split_once("fn resolve_surface_state")
         .and_then(|(_, rest)| rest.split_once("fn fresnel_schlick"))
@@ -628,7 +623,7 @@ fn model_shader_preserves_verified_water_deep_color_as_linear_hdr() {
 
 #[test]
 fn model_shader_keeps_unverified_detail_composition_out_of_final() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface = shader
         .split_once("fn resolve_surface_state")
         .and_then(|(_, rest)| rest.split_once("fn resolve_surface_output"))
@@ -667,7 +662,7 @@ fn model_shader_keeps_unverified_detail_composition_out_of_final() {
 
 #[test]
 fn model_shader_keeps_unverified_alpha_shaping_out_of_final() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let alpha = shader
         .split_once("fn resolve_surface_alpha")
         .and_then(|(_, rest)| rest.split_once("fn ordered_dither_threshold"))
@@ -684,7 +679,7 @@ fn model_shader_keeps_unverified_alpha_shaping_out_of_final() {
 
 #[test]
 fn model_shader_orients_two_sided_normals_toward_the_viewer() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let resolve_normal = shader
         .split_once("fn resolve_normal")
         .and_then(|(_, rest)| rest.split_once("\nfn resolve_uv"))
@@ -711,7 +706,7 @@ fn model_shader_orients_two_sided_normals_toward_the_viewer() {
     for required in [
         "fn resolve_view_direction(world_position: vec3<f32>) -> vec3<f32>",
         "camera.camera_position.xyz - world_position",
-        "vertex_normal: vec3<f32>,\n    view: vec3<f32>",
+        "vertex_normal: vec3<f32>, view: vec3<f32>",
         "select(-1.0, 1.0, dot(normal, view) >= 0.0)",
     ] {
         assert!(
@@ -782,7 +777,7 @@ fn bloom_uses_scene_linear_threshold_in_the_post_pass() {
             "bloom pass must contain {required}"
         );
     }
-    let model_shader = include_str!("model.wgsl");
+    let model_shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     assert!(
         !model_shader.contains("bright"),
         "material shader must not own bright-pass extraction anymore"
@@ -1244,7 +1239,7 @@ fn preview_lighting_contract_is_explicit_and_stable() {
     ]);
     assert!(actual.abs_diff_eq(expected, 1.0e-6));
 
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     for constant in [
         "PREVIEW_KEY_COLOR",
         "PREVIEW_DIRECT_DIFFUSE_SCALE",
@@ -1454,7 +1449,7 @@ fn unsupported_inputs_diagnostic_color_prioritizes_visible_families() {
 
 #[test]
 fn model_shader_exposes_unsupported_inputs_debug_view() {
-    let shader = include_str!("model.wgsl");
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     assert!(
         shader.contains("unsupported_color: vec4<f32>"),
         "material uniform must carry the unsupported-input diagnostic color"

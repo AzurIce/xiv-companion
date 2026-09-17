@@ -6,8 +6,11 @@ publish.workspace = true
 
 [features]
 default = []
-renderer = ["dep:bytemuck", "dep:glam", "dep:half", "dep:wgpu"]
+renderer = ["dep:bytemuck", "dep:glam", "dep:half", "dep:wgpu", "dep:wesl"]
 test-support = ["renderer", "dep:image", "dep:pollster"]
+
+[build-dependencies]
+wesl = { version = "0.4", default-features = false, optional = true }
 
 [dependencies]
 bytemuck = { version = "1.22", features = ["derive"], optional = true }
