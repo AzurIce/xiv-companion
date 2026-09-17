@@ -556,6 +556,10 @@ pub fn CharacterPage() -> Element {
     let mut model_revision = use_signal(|| 0_u64);
     // 动画选择：None=rest；action.pap 动画表在 race code 间一致，换发型保留选择。
     let mut animation_selection = use_signal(|| None::<usize>);
+    // 角膜环（limbal ring）强度覆盖：渲染侧消费虹膜色 alpha 作每侧环强度；
+    // 26 字节捏脸与调色板均无此数据（调色板 alpha 恒 255），默认满强度 1.0，
+    // 会话内可调（不进 ?c= 链接）。
+    let mut limbal_ring_intensity = use_signal(|| 1.0_f32);
 
     // 捏脸菜单资产就绪后，以当前（种族, 部族, 性别）组默认捏脸为基底
     // （URL 带合法 ?c= 时跳过，保留链接里的捏脸）。
@@ -577,6 +581,7 @@ pub fn CharacterPage() -> Element {
     let model = use_resource(move || {
         let customize = customize();
         let adopted = default_adopted();
+        let limbal = limbal_ring_intensity.cloned();
         let palette = palette_package
             .read()
             .as_ref()
@@ -590,7 +595,9 @@ pub fn CharacterPage() -> Element {
             if customize.validate().is_err() {
                 return None;
             }
-            let appearance = appearance_colors_from_palette(&customize, &palette.palette);
+            let mut appearance = appearance_colors_from_palette(&customize, &palette.palette);
+            appearance.left_iris[3] = limbal;
+            appearance.right_iris[3] = limbal;
             let request =
                 CharacterAssemblyLoadRequest::new(customize, character_display_name(&customize))
                     .with_appearance(appearance);
@@ -791,6 +798,21 @@ pub fn CharacterPage() -> Element {
                                                                 },
                                                                 option { value: "1", "关" }
                                                                 option { value: "4", "MSAA 4x" }
+                                                            }
+                                                        }
+                                                        label { class: "flex items-center justify-between gap-3",
+                                                            span { class: "text-muted-foreground", "角膜环强度" }
+                                                            input {
+                                                                class: "h-1.5 w-24 cursor-pointer accent-foreground",
+                                                                r#type: "range",
+                                                                min: "0",
+                                                                max: "2",
+                                                                step: "0.05",
+                                                                value: "{limbal_ring_intensity()}",
+                                                                onchange: move |event| {
+                                                                    let value = event.value().parse::<f32>().unwrap_or(1.0).clamp(0.0, 2.0);
+                                                                    limbal_ring_intensity.set(value);
+                                                                },
                                                             }
                                                         }
                                                     }

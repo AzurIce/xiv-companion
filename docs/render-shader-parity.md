@@ -96,7 +96,7 @@ Principled BSDF 近似。多处公式是明牌近似:
 | 左右眼分侧 | 顶点色通道 >0.5 选择 left/right | 顶点色 G>0.5 选右眼色(character_left/right_iris) | ✅ |
 | 眼白 g_WhiteEyeColor | mix(眼白, 虹膜色, mask.B) 后乘 diffuse | `iris_white_eye` uniform 同构(shading.wesl) | ✅ |
 | 虹膜乘色 | diffuse × 虹膜色 | 同 | ✅ |
-| Limbal ring 强度 = 虹膜色 A | 每侧强度混入 | `iris_ring_a.w`/`iris_ring_b.z`(拼装侧 alpha,缺省 1.0) | ✅ |
+| Limbal ring 强度 = 虹膜色 A | 每侧强度混入 | `iris_ring_a.w`/`iris_ring_b.z`(拼装侧 alpha,缺省 1.0);角色页「渲染」区块提供强度滑杆覆盖 | ✅ |
 | IrisRing 环带 + 自发光 | Gradient(Spherical)+GTE/LTE+fade 软环 | d=\|uv0−(0.5,0.5)\|,radius.xy ± fade.xy 软环,环色 × factor × 每侧强度 × g_IrisRingEmissiveIntensity | ✅ |
 | 数据常量 | 5 个 g_IrisRing*/g_WhiteEyeColor CRC | 同 CRC 解析 + Meddle 缺省值(0.25 强度、0.158/0.174 半径等) | ✅ |
 
