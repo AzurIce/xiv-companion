@@ -73,10 +73,13 @@ pub struct VfxTextureInput {
 }
 
 /// 常驻 VFX 粒子批次：由 `ModelRenderContext::create_vfx_particles` 构建，
-/// 每帧 `update` 后随 `render(..., vfx: Some(&batch))` 绘制。
+/// 每帧 `update` 后随 `render(..., vfx: Some(&batch))` 绘制。粒子按目标
+/// 贴图分组（每组一个 bind group，一次绘制），换贴图即换组。
 pub struct VfxParticles {
     pub(crate) instance_buffer: wgpu::Buffer,
-    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) texture_bind_groups: Vec<wgpu::BindGroup>,
+    /// 稳定排序后的绘制段：(bind group 下标, 实例起点, 实例数)。
+    pub(crate) draw_ranges: Vec<(usize, u32, u32)>,
     pub(crate) capacity: usize,
     pub(crate) count: usize,
 }
@@ -90,49 +93,54 @@ impl VfxParticles {
         self.capacity
     }
 
-    pub(crate) fn bind_group(&self) -> &wgpu::BindGroup {
-        &self.bind_group
-    }
-
     pub(crate) fn instance_slice(&self) -> wgpu::BufferSlice<'_> {
         self.instance_buffer.slice(..)
     }
 
-    /// 增量上传实例数据（每帧调用；超过容量截断）。
+    /// 增量上传实例数据（每帧调用；超过容量截断）。按 `texture_index`
+    /// 稳定排序分组成绘制段；未命中任何贴图的粒子落入回退组（0 号）。
     pub fn update(&mut self, context: &ModelRenderContext, quads: &[xiv_companion_data::VfxQuad]) {
         self.count = quads.len().min(self.capacity);
+        self.draw_ranges.clear();
         if self.count == 0 {
             return;
         }
-        let gpu: Vec<GpuVfxQuad> = quads[..self.count].iter().map(GpuVfxQuad::from).collect();
+        let mut ordered: Vec<GpuVfxQuad> =
+            quads[..self.count].iter().map(GpuVfxQuad::from).collect();
+        ordered.sort_by_key(|quad| quad.texture_index as i32);
         context
             .queue()
-            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&gpu));
-    }
-}
+            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&ordered));
 
-/// 内置回退贴图：64×64 白色径向光点（无 atex 时的兜底形状）。
-pub(crate) fn fallback_vfx_texture_rgba() -> VfxTextureInput {
-    let size = 64_u32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    let center = (size - 1) as f32 * 0.5;
-    for y in 0..size {
-        for x in 0..size {
-            let distance = (((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt()
-                / center)
-                .clamp(0.0, 1.0);
-            // 软边光点：中心全亮，边缘平滑衰减到 0。
-            let alpha = ((1.0 - distance) * (1.0 - distance) * 255.0).round() as u8;
-            rgba.extend_from_slice(&[255, 255, 255, alpha]);
+        let mut ranges: Vec<(i32, u32, u32)> = Vec::new();
+        for quad in &ordered {
+            match ranges.last_mut() {
+                Some((index, _, count)) if *index == quad.texture_index as i32 => *count += 1,
+                _ => ranges.push((quad.texture_index as i32, 0, 1)),
+            }
         }
+        let mut start = 0_u32;
+        self.draw_ranges = ranges
+            .into_iter()
+            .map(|(texture_index, _, count)| {
+                let group = self.group_index_for(texture_index);
+                let range = (group, start, count);
+                start += count;
+                range
+            })
+            .collect();
     }
-    VfxTextureInput {
-        rgba,
-        width: size,
-        height: size,
+
+    /// 贴图序号 → bind group 下标（0 号固定为回退贴图）。
+    fn group_index_for(&self, texture_index: i32) -> usize {
+        if texture_index < 0 {
+            return 0;
+        }
+        (texture_index as usize + 1).min(self.texture_bind_groups.len() - 1)
     }
 }
 
+/// 单张贴图上传为 2D 纹理并返回视图。
 pub(crate) fn create_vfx_texture_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -169,4 +177,26 @@ pub(crate) fn create_vfx_texture_view(
         size,
     );
     gpu_texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// 内置回退贴图：64×64 白色径向光点（无 atex 时的兜底形状）。
+pub(crate) fn fallback_vfx_texture_rgba() -> VfxTextureInput {
+    let size = 64_u32;
+    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+    let center = (size - 1) as f32 * 0.5;
+    for y in 0..size {
+        for x in 0..size {
+            let distance = (((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt()
+                / center)
+                .clamp(0.0, 1.0);
+            // 软边光点：中心全亮，边缘平滑衰减到 0。
+            let alpha = ((1.0 - distance) * (1.0 - distance) * 255.0).round() as u8;
+            rgba.extend_from_slice(&[255, 255, 255, alpha]);
+        }
+    }
+    VfxTextureInput {
+        rgba,
+        width: size,
+        height: size,
+    }
 }

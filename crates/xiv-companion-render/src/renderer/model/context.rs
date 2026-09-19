@@ -1299,9 +1299,11 @@ impl ModelRenderContext {
                 if vfx.count() > 0 {
                     render_pass.set_pipeline(&self.vfx_pipeline);
                     render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    render_pass.set_bind_group(1, vfx.bind_group(), &[]);
                     render_pass.set_vertex_buffer(0, vfx.instance_slice());
-                    render_pass.draw(0..6, 0..vfx.count() as u32);
+                    for (group, start, count) in &vfx.draw_ranges {
+                        render_pass.set_bind_group(1, &vfx.texture_bind_groups[*group], &[]);
+                        render_pass.draw(0..6, *start..*start + *count);
+                    }
                 }
             }
         }
@@ -1465,37 +1467,42 @@ impl ModelRenderContext {
     /// 粒子批次容量上限（超过由采样器截断）。
     pub const VFX_PARTICLE_CAPACITY: usize = 4096;
 
-    /// 创建 VFX 粒子批次：固定容量实例缓冲 + 颜色贴图 bind group。
-    /// `texture` 为 `None` 时使用内置径向光点回退贴图。
-    pub fn create_vfx_particles(&self, texture: Option<VfxTextureInput>) -> VfxParticles {
+    /// 创建 VFX 粒子批次：固定容量实例缓冲 + 每贴图一个颜色 bind group
+    /// （0 号固定为回退径向光点；其后按调用方顺序对应粒子 TC1 的贴图序号）。
+    pub fn create_vfx_particles(&self, textures: &[Option<VfxTextureInput>]) -> VfxParticles {
         let instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weapon vfx particle instances"),
             size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxQuad>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let view = create_vfx_texture_view(
-            &self.device,
-            &self.queue,
-            &texture.unwrap_or_else(fallback_vfx_texture_rgba),
-        );
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("weapon vfx particle bind group"),
-            layout: &self.vfx_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.vfx_sampler),
-                },
-            ],
-        });
+        let mut texture_bind_groups = Vec::with_capacity(textures.len() + 1);
+        let fallback = fallback_vfx_texture_rgba();
+        for texture in std::iter::once(&None).chain(textures.iter()) {
+            let view = create_vfx_texture_view(
+                &self.device,
+                &self.queue,
+                texture.as_ref().unwrap_or(&fallback),
+            );
+            texture_bind_groups.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("weapon vfx particle bind group"),
+                layout: &self.vfx_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.vfx_sampler),
+                    },
+                ],
+            }));
+        }
         VfxParticles {
             instance_buffer,
-            bind_group,
+            texture_bind_groups,
+            draw_ranges: Vec::new(),
             capacity: Self::VFX_PARTICLE_CAPACITY,
             count: 0,
         }

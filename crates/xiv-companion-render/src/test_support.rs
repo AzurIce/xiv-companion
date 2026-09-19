@@ -310,7 +310,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         renderer.update_joint_matrices(&matrices);
     }
     let vfx_particles = (!options.vfx_quads.is_empty()).then(|| {
-        let mut batch = renderer.context().create_vfx_particles(None);
+        let mut batch = renderer.context().create_vfx_particles(&[]);
         batch.update(renderer.context(), &options.vfx_quads);
         batch
     });

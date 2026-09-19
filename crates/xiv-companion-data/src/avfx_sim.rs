@@ -116,7 +116,7 @@ impl VfxRuntime {
             .map(|geometry| geometry.positions.as_slice())
             .unwrap_or(&[]);
         // child_limit：单 emitter 存活粒子数上限（缺省 0 → 48）。
-        let emitter_cap = out.len() + emitter.child_limit.clamp(1, 48) as usize;
+        let emitter_cap = out.len() + emitter.child_limit.clamp(1, 12) as usize;
 
         for particle_item in &emitter.particle_items {
             if !particle_item.enabled || particle_item.target_index < 0 {
@@ -248,10 +248,14 @@ impl VfxRuntime {
                 | Some(crate::avfx::ParticleType::Disc)
                 | Some(crate::avfx::ParticleType::Polygon)
         );
-        // 缺省（无 Scl 曲线）= 小亮片尺寸；有曲线时 Quad 类取 scale 的 x/y
-        // 为宽高，贴图层近似类取 DEFAULT_QUAD_SIZE × scale 系数。
+        // 尺寸：游戏缺省粒子 scale = 1（1 米级软贴片，灵光/烟雾类特效的
+        // 主要观感）；贴图层近似（模型顶点落位）取中尺寸避免顶点间大 overlap。
         let scale = if particle.scale.keys.is_empty() {
-            [DEFAULT_QUAD_SIZE, DEFAULT_QUAD_SIZE, 1.0]
+            if uses_raw_scale {
+                [0.6, 0.6, 1.0]
+            } else {
+                [0.35, 0.35, 1.0]
+            }
         } else {
             particle.scale.evaluate(age)
         };
@@ -259,8 +263,8 @@ impl VfxRuntime {
             [scale[0].abs().max(1.0e-4), scale[1].abs().max(1.0e-4)]
         } else {
             [
-                DEFAULT_QUAD_SIZE * scale[0].abs().max(1.0e-4),
-                DEFAULT_QUAD_SIZE * scale[1].abs().max(1.0e-4),
+                (DEFAULT_QUAD_SIZE * 6.0) * scale[0].abs().max(1.0e-4),
+                (DEFAULT_QUAD_SIZE * 6.0) * scale[1].abs().max(1.0e-4),
             ]
         };
 
@@ -345,13 +349,13 @@ fn timeline_span(timeline: &AvfxTimeline) -> (f32, f32) {
 
 /// 无有效 Life 时的粒子寿命上限（帧）：跟随 timeline 的粒子 clamp 到
 /// 3 秒，防止无界累积（配合加色 + bloom 的密度上限）。
-const MAX_PARTICLE_LIFE: f32 = 60.0;
+const MAX_PARTICLE_LIFE: f32 = 45.0;
 /// 缺省粒子四边形尺寸（世界单位；Quad 类无 scale 曲线时的亮片大小）。
 const DEFAULT_QUAD_SIZE: f32 = 0.05;
 /// Point 发射器近似散布半径（世界单位）：贴图层近似粒子的体积感。
 const POINT_SCATTER_RADIUS: f32 = 0.26;
 /// 加色 + bloom 下的全局透明度折减（近似 HDR 曝光，避免叠成过曝白团）。
-const APPROX_ALPHA_SCALE: f32 = 0.12;
+const APPROX_ALPHA_SCALE: f32 = 0.22;
 
 /// ItPr.Override > particle Life > emitter Life；<=0（-1 = 跟随 timeline）
 /// 视为无界并 clamp。
@@ -608,7 +612,8 @@ mod tests {
         assert_eq!(quads_a, quads_b);
         // 间隔 15 帧、生命 30 帧：30 帧处恰有 3 个事件（k=0,1,2，边界
         // 粒子视为存活）；每事件 CrC=2 × ItPr.CrCn=3 = 6 粒子。
-        assert_eq!(quads_a.len(), 18);
+        // child_limit 钳制上限（fixture emitter 128 → 采样上限 12）。
+        assert_eq!(quads_a.len(), 12);
 
         // 颜色/贴图/UV/尺寸语义落位。
         let quad = &quads_a[0];
