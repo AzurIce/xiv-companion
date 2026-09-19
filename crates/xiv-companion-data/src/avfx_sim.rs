@@ -212,16 +212,19 @@ impl VfxRuntime {
                         particle_item.target_index as u64,
                         particle_index as u64,
                     );
-                    let alpha = (1.0 - age / life_frames) * APPROX_ALPHA_SCALE * 2.0;
+                    let alpha = (1.0 - age / life_frames) * APPROX_ALPHA_SCALE * 5.0;
                     let rgb = if particle.color.keys.is_empty() {
                         [1.0, 1.0, 1.0]
                     } else {
                         particle.color.evaluate(age)
                     };
+                    // 网格保持授权坐标（Y 翻转后自发射点向 +Y 延伸，恰好
+                    // 覆盖刃部并伸出锋外，与游戏内观感一致）。
+                    let spawn = particle.position.evaluate(age);
                     let position = [
-                        emitter_offset[0] + particle.position.evaluate(age)[0],
-                        emitter_offset[1] + particle.position.evaluate(age)[1],
-                        emitter_offset[2] + particle.position.evaluate(age)[2],
+                        emitter_offset[0] + spawn[0],
+                        emitter_offset[1] + spawn[1],
+                        emitter_offset[2] + spawn[2],
                     ];
                     let texture_index = particle
                         .texture_color1

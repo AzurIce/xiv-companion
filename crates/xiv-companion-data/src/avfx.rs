@@ -404,6 +404,8 @@ pub struct VfxDrawVertex {
 pub struct VfxDrawModel {
     pub vertices: Vec<VfxDrawVertex>,
     pub indices: Vec<u32>,
+    /// 顶点包围盒中心（采样时把网格对中到发射点）。
+    pub center: [f32; 3],
 }
 
 /// 解析后的 avfx 文件子集；未消费的根级块按名计数进 `unknown_blocks`。
@@ -1011,7 +1013,9 @@ fn parse_model_pair(node: &AvfxNodeView, models: &mut Vec<VfxModelGeometry>) {
         for chunk in payload.chunks_exact(28) {
             positions.push([
                 f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
-                f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+                // avfx 模型 Y 轴与武器模型相反（发射点/贴片在刃侧对应
+                // 武器 +Y），读取时翻转（见 VDrw 分支注释）。
+                -f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
                 f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
             ]);
         }
@@ -1030,7 +1034,10 @@ fn parse_model_pair(node: &AvfxNodeView, models: &mut Vec<VfxModelGeometry>) {
             vertices.push(VfxDrawVertex {
                 position: [
                     f16_to_f32([chunk[0], chunk[1]]),
-                    f16_to_f32([chunk[2], chunk[3]]),
+                    // avfx 模型 Y 轴与武器模型相反：灵光戟火舌网格顶点
+                    // y∈[-1.11,0]，翻转后恰好覆盖刃部并伸出锋外（与游戏
+                    // 内观感一致）。
+                    -f16_to_f32([chunk[2], chunk[3]]),
                     f16_to_f32([chunk[4], chunk[5]]),
                 ],
                 // 首组 UV（half2），其余三组 v1 不消费。
@@ -1050,7 +1057,27 @@ fn parse_model_pair(node: &AvfxNodeView, models: &mut Vec<VfxModelGeometry>) {
                 }
             }
         }
-        last.draw = Some(VfxDrawModel { vertices, indices });
+        let center = if vertices.is_empty() {
+            [0.0; 3]
+        } else {
+            let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for vertex in &vertices {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(vertex.position[axis]);
+                    max[axis] = max[axis].max(vertex.position[axis]);
+                }
+            }
+            [
+                (min[0] + max[0]) / 2.0,
+                (min[1] + max[1]) / 2.0,
+                (min[2] + max[2]) / 2.0,
+            ]
+        };
+        last.draw = Some(VfxDrawModel {
+            vertices,
+            indices,
+            center,
+        });
     }
 }
 
