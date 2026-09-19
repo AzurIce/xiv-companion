@@ -80,6 +80,10 @@ fn vs_main(
     let world = instance.position + right * rotated.x + up * rotated.y;
     var output: VfxVertexOutput;
     output.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
+    // 深度偏移：贴附武器表面的粒子（发射模型顶点）深度与表面几乎相等，
+    // 严格的 LessEqual 测试下会被表面剔除；把 NDC 深度向近处拉一个小量
+    // （标准贴花手法，远小于场景深度差，不影响遮挡关系）。
+    output.clip_position.z -= 0.002 * output.clip_position.w;
     let uv_corner = UV_CORNERS[vertex_index];
     output.uv = instance.uv_params.xy + uv_corner * instance.uv_params.zw;
     output.color = instance.color;

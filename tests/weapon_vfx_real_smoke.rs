@@ -33,17 +33,41 @@ fn render_installed_weapon_vfx_smoke() {
     )
     .expect("export weapon catalog");
 
-    // 15264 圣母盾（w0105b0001 variant1，审计确认该 variant vfx=1 → vw0001.avfx）。
+    // 15264 圣母盾 + 16053 屠龙戟·灵光（w0501b0060 variant1 → vw0001）。
     // 注意：VfxId 挂在 IMC 子集上，必须选 item 变体与 vfx 子集对齐的条目
     // （如 1671 火神刀 variant1 无特效，特效在其 variant2）。
+    for (item_id, label) in [(15264_u32, "holyshield"), (16053, "reikan-lance")] {
+        render_weapon_vfx_item(
+            &mut resource,
+            &catalog,
+            item_id,
+            label,
+            sample_seconds_label(item_id),
+        );
+    }
+}
+
+fn sample_seconds_label(item_id: u32) -> &'static str {
+    let _ = item_id;
+    "default"
+}
+
+fn render_weapon_vfx_item(
+    resource: &mut SqPackResource,
+    catalog: &xiv_companion::WeaponCatalogPackage,
+    item_id: u32,
+    label: &str,
+    _tag: &str,
+) {
+    let sample_seconds = 0.8_f32;
     let item = catalog
         .items
         .iter()
-        .find(|item| item.id == 15264)
-        .expect("item 15264 圣母盾 in catalog");
+        .find(|item| item.id == item_id)
+        .unwrap_or_else(|| panic!("item {item_id} in catalog"));
     let request = WeaponModelLoadRequest::from(item);
-    let model = load_weapon_model_from_resource_request(&mut resource, &request)
-        .expect("load weapon model");
+    let model = load_weapon_model_from_resource_request(resource, &request)
+        .unwrap_or_else(|error| panic!("load weapon model {item_id}: {error:#}"));
 
     let packed = request.primary_model();
     eprintln!(
@@ -69,8 +93,13 @@ fn render_installed_weapon_vfx_smoke() {
             }
         }
     }
-    let vfx = load_weapon_vfx_from_resource(&mut resource, &request)
-        .expect("mounted vfx must resolve for 15264");
+    let vfx = load_weapon_vfx_from_resource(resource, &request)
+        .unwrap_or_else(|| panic!("mounted vfx must resolve for {item_id}"));
+    eprintln!(
+        "[{label}] models(parsed)={} textures={}",
+        vfx.file.models.len(),
+        vfx.file.texture_paths.len()
+    );
     eprintln!(
         "vfx: {} (id {}) schedulers={} timelines={} emitters={} particles={} binders={} textures={:?}",
         vfx.avfx_path,
@@ -85,6 +114,53 @@ fn render_installed_weapon_vfx_smoke() {
     eprintln!("vfx diagnostics: {:?}", vfx.diagnostics);
     eprintln!("vfx warnings: {:?}", vfx.file.warnings);
 
+    for (mi, model) in vfx.file.models.iter().enumerate() {
+        if let (Some(min), Some(max)) = (
+            model.positions.iter().fold(None::<[f32; 3]>, |acc, p| {
+                Some(match acc {
+                    None => *p,
+                    Some(a) => [a[0].min(p[0]), a[1].min(p[1]), a[2].min(p[2])],
+                })
+            }),
+            model.positions.iter().fold(None::<[f32; 3]>, |acc, p| {
+                Some(match acc {
+                    None => *p,
+                    Some(a) => [a[0].max(p[0]), a[1].max(p[1]), a[2].max(p[2])],
+                })
+            }),
+        ) {
+            eprintln!(
+                "[{label}] model {mi}: {} verts bbox min={min:?} max={max:?}",
+                model.positions.len()
+            );
+        }
+    }
+    for (ti, timeline) in vfx.file.timelines.iter().enumerate() {
+        eprintln!(
+            "[{label}] timeline {ti}: loop {}..{} items {:?}",
+            timeline.loop_start,
+            timeline.loop_end,
+            timeline
+                .items
+                .iter()
+                .map(|i| (i.enabled, i.start_time, i.end_time, i.emitter_index))
+                .collect::<Vec<_>>()
+        );
+    }
+    for (ei, emitter) in vfx.file.emitters.iter().enumerate() {
+        eprintln!(
+            "[{label}] emitter {ei}: type={:?} model_index={:?} items={} targets={:?} life={:?}",
+            emitter.emitter_type,
+            emitter.model_index,
+            emitter.particle_items.len(),
+            emitter
+                .particle_items
+                .iter()
+                .map(|i| (i.enabled, i.target_index, i.create_time, i.create_count))
+                .collect::<Vec<_>>(),
+            emitter.life.value
+        );
+    }
     // 文件级 Tex 引用应已解码（atex）；全部失败说明路径/头假设有误。
     assert!(
         vfx.file.texture_paths.is_empty() || vfx.textures.iter().any(|texture| texture.is_some()),
@@ -96,6 +172,27 @@ fn render_installed_weapon_vfx_smoke() {
     let mut quads = Vec::new();
     let sample_seconds = 0.8;
     runtime.sample(sample_seconds, &mut quads);
+    let qmin = quads.iter().fold([f32::MAX; 3], |a, q| {
+        [
+            a[0].min(q.position[0]),
+            a[1].min(q.position[1]),
+            a[2].min(q.position[2]),
+        ]
+    });
+    let qmax = quads.iter().fold([f32::MIN; 3], |a, q| {
+        [
+            a[0].max(q.position[0]),
+            a[1].max(q.position[1]),
+            a[2].max(q.position[2]),
+        ]
+    });
+    eprintln!("[{label}] quads bbox min={qmin:?} max={qmax:?}");
+    for quad in quads.iter().take(4) {
+        eprintln!(
+            "[{label}] quad uv_o={:?} uv_s={:?} size={:?} color={:?} tex={}",
+            quad.uv_origin, quad.uv_scale, quad.size, quad.color, quad.texture_index
+        );
+    }
     eprintln!(
         "sampled {} quads at t={sample_seconds}s (frame {})",
         quads.len(),
@@ -110,7 +207,7 @@ fn render_installed_weapon_vfx_smoke() {
 
     // 基线（无 VFX）对照，用于确认画面中哪些元素来自特效。
     let baseline = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new("installed-vfx-15264-baseline")
+        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-baseline"))
             .with_output_dir("target/weapon-render-snapshots")
             .with_viewport(1024, 1024)
             .with_camera(0.65, 0.35, 3.2, [0.0, 0.0]),
@@ -119,43 +216,45 @@ fn render_installed_weapon_vfx_smoke() {
     .expect("render baseline");
     eprintln!("baseline: {}", baseline.png_path.display());
 
-    // 放大诊断：确认粒子几何位置与武器遮挡关系（正式尺寸见上方采样）。
+    // 增亮诊断：同位置粒子放大提亮，验证粒子几何/遮挡（正式强度走上面采样值）。
     let magnified = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new("installed-vfx-15264-magnified")
+        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-ring"))
             .with_output_dir("target/weapon-render-snapshots")
             .with_viewport(1024, 1024)
             .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
-            .with_vfx_quads((0..24).map(|index| {
-                // 合成大环：把粒子挪出盾面爆白区域，验证渲染路径。
-                let angle = index as f32 / 24.0 * std::f32::consts::TAU;
-                xiv_companion::VfxQuad {
-                    position: [angle.cos() * 0.7, 0.15, angle.sin() * 0.7],
-                    size: [0.14, 0.14],
-                    rotation: 0.0,
-                    color: [3.0, 1.8, 0.6, 1.0],
-                    uv_origin: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    texture_index: -1,
+            .with_vfx_quads(quads.iter().enumerate().map(|(index, quad)| {
+                let mut boosted = *quad;
+                // 二分诊断：偶数序号 → 环位置（已知可见）；奇数序号 → 原位置。
+                // 尺寸/颜色统一放大增亮。
+                if index % 2 == 0 {
+                    let angle = index as f32 / 24.0 * std::f32::consts::TAU;
+                    boosted.position = [angle.cos() * 0.7, 0.15, angle.sin() * 0.7];
                 }
+                boosted.size = [0.2, 0.2];
+                boosted.color = [3.0, 2.0, 1.0, 1.0];
+                boosted
             })),
         &model,
     )
-    .expect("render magnified vfx");
+    .unwrap_or_else(|error| panic!("render boosted vfx {item_id}: {error:#}"));
     eprintln!("magnified: {}", magnified.png_path.display());
-    // 渲染路径有效性：真实模型 + 合成环的快照必须与基线不同。
+    // 渲染路径有效性：增亮粒子必须产生像素变化。
     let baseline_bytes = std::fs::read(&baseline.png_path).expect("read baseline png");
-    let ring_bytes = std::fs::read(&magnified.png_path).expect("read ring png");
+    let boosted_bytes = std::fs::read(&magnified.png_path).expect("read boosted png");
     assert_ne!(
-        baseline_bytes, ring_bytes,
-        "vfx particles produced no pixel change on the real model"
+        baseline_bytes, boosted_bytes,
+        "boosted vfx particles produced no pixel change"
     );
 
-    let options = WeaponModelSnapshotOptions::new("installed-vfx-15264-holyshield")
-        .with_output_dir("target/weapon-render-snapshots")
-        .with_viewport(1024, 1024)
-        .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
-        .with_vfx_quads(quads);
-    let snapshot =
-        render_weapon_model_snapshot_with_options(options, &model).expect("render weapon with vfx");
+    // 正式渲染：真实采样值（尺寸/亮度为 v1 近似参数）。
+    let snapshot = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-vfx"))
+            .with_output_dir("target/weapon-render-snapshots")
+            .with_viewport(1024, 1024)
+            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+            .with_vfx_quads(quads),
+        &model,
+    )
+    .unwrap_or_else(|error| panic!("render weapon with vfx {item_id}: {error:#}"));
     eprintln!("snapshot: {}", snapshot.png_path.display());
 }

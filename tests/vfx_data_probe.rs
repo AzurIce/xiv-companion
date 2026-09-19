@@ -44,7 +44,29 @@ fn scan_shared_vw_files() {
     let raw_dir = std::path::PathBuf::from(std::env::var("XIV_GAME_DIR").expect("XIV_GAME_DIR"));
     let game_dir = xiv_companion::game_data::normalize_game_dir(&raw_dir).expect("normalize");
     let mut resource = SqPackResource::from_existing(game_dir.to_str().expect("utf8"));
-    // 诊断：手动走 vw0001 的 Ptcl 子块名，确认真实块命名。
+    // 诊断：vw0001 粒子 Scale/Color 曲线的键值分量分布。
+    {
+        let path = "chara/weapon/w0501/obj/body/b0060/vfx/eff/vw0001.avfx";
+        let bytes = resource.read(path).expect("vw0001");
+        let file = xiv_companion::AvfxFile::parse(&bytes).expect("parse");
+        for (pi, particle) in file.particles.iter().enumerate() {
+            println!(
+                "particle {pi} ({:?}) scl_keys={} col_keys={} uvsets={} first_scale_keys={:?}",
+                particle.particle_type,
+                particle.scale.keys.len(),
+                particle.color.keys.len(),
+                particle.uv_sets.len(),
+                particle
+                    .scale
+                    .keys
+                    .iter()
+                    .take(2)
+                    .map(|k| (k.time, k.interpolation, k.x, k.y, k.z))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     {
         let path = "chara/weapon/w0105/obj/body/b0001/vfx/eff/vw0001.avfx";
         let bytes = resource.read(path).expect("vw0001");

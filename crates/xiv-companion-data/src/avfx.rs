@@ -320,6 +320,8 @@ pub struct AvfxEmitter {
     pub scale: AvfxCurve,
     pub particle_items: Vec<AvfxEmitterItem>,
     pub emitter_items: Vec<AvfxEmitterItem>,
+    /// 模型发射数据（类型 5）的 `MdNo` 模型引用。
+    pub model_index: Option<i32>,
     /// 圆锥发射数据（类型 1）。
     pub cone: Option<ConeEmitterData>,
     /// 球形模型发射数据（类型 3）。
@@ -375,6 +377,14 @@ pub struct AvfxBinder {
     pub binder_type: u32,
 }
 
+/// 内嵌发射模型（根级 `Modl` 块的 EmitModel 半对）的顶点位置：
+/// Model/LightModel 粒子的可见几何就是这些点构成的贴片。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxModelGeometry {
+    pub positions: Vec<[f32; 3]>,
+}
+
 /// 解析后的 avfx 文件子集；未消费的根级块按名计数进 `unknown_blocks`。
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -387,6 +397,8 @@ pub struct AvfxFile {
     pub binders: Vec<AvfxBinder>,
     /// 文件级 `Tex` 块的贴图路径（通常指向 .atex）。
     pub texture_paths: Vec<String>,
+    /// 根级 `Modl` 的 EmitModel 顶点几何（按文件顺序；DrawModel 半对跳过）。
+    pub models: Vec<VfxModelGeometry>,
     pub warnings: Vec<String>,
     pub unknown_blocks: BTreeMap<String, usize>,
 }
@@ -409,6 +421,11 @@ impl AvfxFile {
                 "Emit" => file.emitters.push(parse_emitter(&node, &mut warnings)),
                 "Ptcl" => file.particles.push(parse_particle(&node, &mut warnings)),
                 "Bind" => file.binders.push(parse_binder(&node)),
+                "Modl" => {
+                    if let Some(geometry) = parse_emit_model(&node) {
+                        file.models.push(geometry);
+                    }
+                }
                 "Tex" => file
                     .texture_paths
                     .push(read_null_terminated(node.payload())),
@@ -838,6 +855,14 @@ fn parse_emitter(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxEmitter
                         .unwrap_or_default(),
                 });
             }
+            Some(
+                EmitterType::Model
+                | EmitterType::ConeModel
+                | EmitterType::CylinderModel
+                | EmitterType::SphereModel,
+            ) => {
+                emitter.model_index = Some(data.scalar_i32("MdNo").unwrap_or(-1));
+            }
             Some(EmitterType::SphereModel) => {
                 emitter.sphere_model = Some(SphereModelEmitterData {
                     generate_method: data.scalar_i32("GeMT").unwrap_or(0),
@@ -957,6 +982,22 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
         )),
     }
     particle
+}
+
+/// EmitModel 半对：VNum（顶点编号）+ VEmt（顶点：位置/法线/颜色）。
+/// VEmt 负载为 28 字节/顶点（3×f32 位置 + 3×f32 法线 + 4×u8 颜色）。
+fn parse_emit_model(node: &AvfxNodeView) -> Option<VfxModelGeometry> {
+    let emit_vertexes = node.child("VEmt")?;
+    let payload = emit_vertexes.payload();
+    let mut positions = Vec::with_capacity(payload.len() / 28);
+    for chunk in payload.chunks_exact(28) {
+        positions.push([
+            f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+            f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+            f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
+        ]);
+    }
+    (positions.len() > 0).then_some(VfxModelGeometry { positions })
 }
 
 fn parse_binder(node: &AvfxNodeView) -> AvfxBinder {

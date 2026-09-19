@@ -42,6 +42,8 @@ pub struct VfxRuntime {
     timelines: Vec<AvfxTimeline>,
     emitters: Vec<AvfxEmitter>,
     particles: Vec<AvfxParticle>,
+    /// 内嵌发射模型顶点（Model/LightModel 粒子的可见几何）。
+    models: Vec<crate::avfx::VfxModelGeometry>,
     /// 采样硬上限，超出丢弃（child_limit 语义的保守版）。
     max_quads: usize,
 }
@@ -52,6 +54,7 @@ impl VfxRuntime {
             timelines: file.timelines.clone(),
             emitters: file.emitters.clone(),
             particles: file.particles.clone(),
+            models: file.models.clone(),
             max_quads: 4096,
         }
     }
@@ -107,6 +110,13 @@ impl VfxRuntime {
             return;
         }
         let emitter_offset = emitter.position.evaluate(emitter_frame);
+        let model_vertices = emitter
+            .model_index
+            .and_then(|index| self.models.get(index as usize))
+            .map(|geometry| geometry.positions.as_slice())
+            .unwrap_or(&[]);
+        // child_limit：单 emitter 存活粒子数上限（缺省 0 → 48）。
+        let emitter_cap = out.len() + emitter.child_limit.clamp(1, 48) as usize;
 
         for particle_item in &emitter.particle_items {
             if !particle_item.enabled || particle_item.target_index < 0 {
@@ -142,14 +152,34 @@ impl VfxRuntime {
                 }
                 let age = emitter_frame - spawn_frame;
                 for particle_index in 0..per_event {
+                    if out.len() >= emitter_cap {
+                        break;
+                    }
                     let mut rng = SplitMix64::seeded(
                         item_index as u64,
                         event,
                         particle_item.target_index as u64,
                         particle_index as u64,
                     );
-                    let (shape_offset, injection_dir, injection_speed) =
-                        sample_shape(emitter, &mut rng);
+                    // EmitterType.Model/…Model 系：发射点在内嵌模型顶点上
+                    // （与粒子类型无关），覆盖整个贴片几何；其余走形状采样。
+                    let (shape_offset, injection_dir, injection_speed) = if !model_vertices
+                        .is_empty()
+                        && matches!(
+                            emitter.emitter_type,
+                            Some(
+                                crate::avfx::EmitterType::Model
+                                    | crate::avfx::EmitterType::ConeModel
+                                    | crate::avfx::EmitterType::CylinderModel
+                                    | crate::avfx::EmitterType::SphereModel
+                            )
+                        ) {
+                        let vertex = model_vertices
+                            [(particle_index as usize + event as usize) % model_vertices.len()];
+                        (vertex, [0.0, 1.0, 0.0], 0.0)
+                    } else {
+                        sample_shape(emitter, &mut rng)
+                    };
                     self.sample_particle(
                         particle,
                         age,
@@ -218,8 +248,10 @@ impl VfxRuntime {
                 | Some(crate::avfx::ParticleType::Disc)
                 | Some(crate::avfx::ParticleType::Polygon)
         );
+        // 缺省（无 Scl 曲线）= 小亮片尺寸；有曲线时 Quad 类取 scale 的 x/y
+        // 为宽高，贴图层近似类取 DEFAULT_QUAD_SIZE × scale 系数。
         let scale = if particle.scale.keys.is_empty() {
-            [1.0, 1.0, 1.0]
+            [DEFAULT_QUAD_SIZE, DEFAULT_QUAD_SIZE, 1.0]
         } else {
             particle.scale.evaluate(age)
         };
@@ -238,14 +270,26 @@ impl VfxRuntime {
         } else {
             particle.color.evaluate(age)
         };
-        let color = [rgb[0], rgb[1], rgb[2], alpha];
+        let color = [rgb[0], rgb[1], rgb[2], alpha * APPROX_ALPHA_SCALE];
 
-        // UV：首个 UVSet 的 scroll（x/y，环绕）与 scale。
+        // UV：首个 UVSet 的 scroll（x/y，sampler Repeat 寻址环绕）与 scale。
+        // 真实文件里 Scale 常量为 0（= 不缩放 = 单帧全贴图），按 1 处理，
+        // 否则 UV 坍缩到单点、加色输出恒 0（粒子隐形）。
         let (uv_origin, uv_scale) = match particle.uv_sets.first() {
             Some(uv_set) => {
                 let scroll = uv_set.scroll.evaluate(age);
                 let scale = uv_set.scale.evaluate(age);
-                ([scroll[0], scroll[1]], [scale[0], scale[1]])
+                let scale_x = if scale[0].abs() > 1.0e-4 {
+                    scale[0]
+                } else {
+                    1.0
+                };
+                let scale_y = if scale[1].abs() > 1.0e-4 {
+                    scale[1]
+                } else {
+                    1.0
+                };
+                ([scroll[0], scroll[1]], [scale_x, scale_y])
             }
             None => ([0.0, 0.0], [1.0, 1.0]),
         };
@@ -300,12 +344,14 @@ fn timeline_span(timeline: &AvfxTimeline) -> (f32, f32) {
 }
 
 /// 无有效 Life 时的粒子寿命上限（帧）：跟随 timeline 的粒子 clamp 到
-/// 20 秒，防止无界累积。
-const MAX_PARTICLE_LIFE: f32 = 600.0;
+/// 3 秒，防止无界累积（配合加色 + bloom 的密度上限）。
+const MAX_PARTICLE_LIFE: f32 = 60.0;
 /// 缺省粒子四边形尺寸（世界单位；Quad 类无 scale 曲线时的亮片大小）。
 const DEFAULT_QUAD_SIZE: f32 = 0.05;
 /// Point 发射器近似散布半径（世界单位）：贴图层近似粒子的体积感。
-const POINT_SCATTER_RADIUS: f32 = 0.18;
+const POINT_SCATTER_RADIUS: f32 = 0.26;
+/// 加色 + bloom 下的全局透明度折减（近似 HDR 曝光，避免叠成过曝白团）。
+const APPROX_ALPHA_SCALE: f32 = 0.12;
 
 /// ItPr.Override > particle Life > emitter Life；<=0（-1 = 跟随 timeline）
 /// 视为无界并 clamp。
@@ -475,6 +521,7 @@ mod tests {
             emitters: vec![AvfxEmitter {
                 emitter_type: Some(EmitterType::Cone),
                 raw_emitter_type: 1,
+                model_index: None,
                 loop_start: 0,
                 loop_end: 120,
                 child_limit: 128,
@@ -542,6 +589,7 @@ mod tests {
                 }],
             }],
             binders: vec![AvfxBinder { binder_type: 0 }],
+            models: Vec::new(),
             texture_paths: vec!["vfx/eff/test.atex".to_string()],
             warnings: Vec::new(),
             unknown_blocks: Default::default(),
@@ -579,15 +627,18 @@ mod tests {
         let mut looped = Vec::new();
         runtime.sample(0.0, &mut at_zero);
         runtime.sample(0.5, &mut mid);
-        // t=0 只有一个事件批，全部新生（alpha=1）。
+        // t=0 只有一个事件批，全部新生（alpha = 1 × 全局折减）。
         assert_eq!(at_zero.len(), 6);
         assert!(
             at_zero
                 .iter()
-                .all(|quad| (quad.color[3] - 1.0).abs() < 1.0e-6)
+                .all(|quad| (quad.color[3] - APPROX_ALPHA_SCALE).abs() < 1.0e-6)
         );
         // t=0.5s（15 帧）出现老一批（alpha≈0.5）。
-        assert!(mid.iter().any(|quad| (quad.color[3] - 0.5).abs() < 0.01));
+        assert!(
+            mid.iter()
+                .any(|quad| (quad.color[3] - 0.5 * APPROX_ALPHA_SCALE).abs() < 0.01)
+        );
 
         // 时间轴 120 帧 = 4 秒循环：t=0 与 t=4s 的粒子集合一致。
         runtime.sample(4.0, &mut looped);
