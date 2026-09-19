@@ -31,8 +31,9 @@
 
 - [ ] 幻化 3D 预览支持主手/副手武器（挂手骨）
   - 武器是未蒙皮独立模型，游戏运行时挂到手部骨骼；渲染侧尚无"未蒙皮子模型绑定到关节矩阵"的
-    变换路径。需要在 renderer 增加 bone-attach 机制（关节矩阵 × 绑定偏移），dressed loader
-    的槽位数据已就绪（武器槽位当前在 UI 层被过滤，见 glamour.rs 的武器提示文案）。
+    变换路径。需要在 renderer 增加 bone-attach 机制（关节矩阵 × 绑定偏移）。多实例场景渲染
+    （`ModelRenderContext::render_scene` + 场景画布）已就绪，武器可作为刚性实例挂到手骨变换上；
+    dressed loader 的槽位数据已就绪（武器槽位当前在 UI 层被过滤，见 glamour.rs 的武器提示文案）。
 - [ ] 头部装备的耳饰/耳朵显隐（EQP bits 47-53）与跨槽规则 BodyShowHead(10)、ShowTail(13) 未实现
   - 当前 met 槽只处理头发遮蔽（bits 41-44）；耳饰件始终显示。触发时
     `apply_dressed_visibility` 会输出诊断 eprintln（crates/xiv-companion-data/src/weapon_models.rs）。

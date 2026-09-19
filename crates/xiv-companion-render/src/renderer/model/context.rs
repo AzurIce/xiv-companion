@@ -999,6 +999,7 @@ impl ModelRenderContext {
         (joint_buffer, joint_bind_group, joint_count)
     }
 
+    /// 单实例渲染：[`ModelRenderContext::render_scene`] 的单元素委托。
     pub fn render(
         &mut self,
         model: &ModelInstance,
@@ -1011,9 +1012,41 @@ impl ModelRenderContext {
         pan: [f32; 2],
         options: ModelRenderOptions,
     ) {
+        self.render_scene(
+            &[model],
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        );
+    }
+
+    /// 多实例场景渲染：一个 render pass 内画全部实例（共享相机/深度/光照/
+    /// 后处理），相机取场景包围球（各实例包围球并）。蒙皮实例各自的 joint
+    /// 表经 `update_joint_matrices` 逐实例上传；透明三角形跨实例全局
+    /// back-to-front 排序（各实例索引流写自己的 transparent index buffer，
+    /// 按全局绘制序列切换实例缓冲绘制）。不透明/切割/描边/加色各趟按
+    /// "趟外层 × 实例外层"顺序绘制，趟内语义与单实例一致。
+    pub fn render_scene(
+        &mut self,
+        instances: &[&ModelInstance],
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+    ) {
+        let (bounds_center, bounds_radius) = scene_bounds(instances);
         let uniform = camera_uniform(
-            model.bounds_center,
-            model.bounds_radius,
+            bounds_center,
+            bounds_radius,
             viewport,
             yaw,
             pitch,
@@ -1030,13 +1063,15 @@ impl ModelRenderContext {
                 params: compose_post_params(options.bloom_strength(), self.format),
             }),
         );
-        let sorted_transparent = sorted_transparent_triangles(&model.draw_batches, yaw, pitch);
-        if !sorted_transparent.indices.is_empty() {
-            self.queue.write_buffer(
-                &model.transparent_index_buffer,
-                0,
-                bytemuck::cast_slice(&sorted_transparent.indices),
-            );
+        let sorted_transparent = sorted_scene_transparent_triangles(instances, yaw, pitch);
+        for (instance, indices) in instances.iter().zip(&sorted_transparent.indices) {
+            if !indices.is_empty() {
+                self.queue.write_buffer(
+                    &instance.transparent_index_buffer,
+                    0,
+                    bytemuck::cast_slice(indices),
+                );
+            }
         }
         let viewport = [viewport[0].max(1), viewport[1].max(1)];
         self.ensure_post_process_targets(viewport);
@@ -1083,64 +1118,87 @@ impl ModelRenderContext {
             });
 
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(2, &model.joint_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for instance in instances {
+                render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(instance.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.pipeline
-                } else {
-                    &self.culled_pipeline
-                });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.pipeline
+                    } else {
+                        &self.culled_pipeline
+                    });
+                    draw_model_batch(&mut render_pass, &instance.material_bind_groups, batch);
+                }
+
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.cutout_pipeline
+                    } else {
+                        &self.cutout_culled_pipeline
+                    });
+                    draw_model_batch(&mut render_pass, &instance.material_bind_groups, batch);
+                }
+
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.uses_dither_depth_prepass())
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.dither_depth_pipeline
+                    } else {
+                        &self.dither_depth_culled_pipeline
+                    });
+                    draw_model_batch(&mut render_pass, &instance.material_bind_groups, batch);
+                }
+
+                render_pass.set_pipeline(&self.outline_pipeline);
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.uses_outline_pass())
+                {
+                    draw_model_batch(&mut render_pass, &instance.material_bind_groups, batch);
+                }
             }
 
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.cutout_pipeline
-                } else {
-                    &self.cutout_culled_pipeline
-                });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
-            }
-
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.uses_dither_depth_prepass())
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.dither_depth_pipeline
-                } else {
-                    &self.dither_depth_culled_pipeline
-                });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
-            }
-
-            render_pass.set_pipeline(&self.outline_pipeline);
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.uses_outline_pass())
-            {
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
-            }
-
-            render_pass.set_index_buffer(
-                model.transparent_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
+            // 跨实例透明段：按全局深度序绘制，实例切换时换绑顶点/索引/joint。
+            let mut bound_instance: Option<usize> = None;
+            let mut bound_transparent = false;
             for draw in &sorted_transparent.draws {
-                let batch = &model.draw_batches[draw.batch_index];
+                let Some(instance) = instances.get(draw.instance_index) else {
+                    continue;
+                };
+                let Some(batch) = instance.draw_batches.get(draw.batch_index) else {
+                    continue;
+                };
+                if bound_instance != Some(draw.instance_index) {
+                    render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        instance.transparent_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    bound_instance = Some(draw.instance_index);
+                    bound_transparent = true;
+                } else if !bound_transparent {
+                    render_pass.set_index_buffer(
+                        instance.transparent_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    bound_transparent = true;
+                }
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
                     if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
                         if batch.render_backfaces() {
@@ -1161,30 +1219,35 @@ impl ModelRenderContext {
                 render_pass.set_pipeline(pipeline);
                 draw_model_batch_range(
                     &mut render_pass,
-                    &model.material_bind_groups,
+                    &instance.material_bind_groups,
                     batch,
                     draw.index_start,
                     draw.index_count,
                 );
             }
 
-            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass().uses_additive_pipeline())
-            {
-                let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
-                render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
-                    &self.lightshaft_pipeline
-                } else if dedicated {
-                    &self.lightshaft_culled_pipeline
-                } else if batch.render_backfaces() {
-                    &self.additive_pipeline
-                } else {
-                    &self.additive_culled_pipeline
-                });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+            for instance in instances {
+                render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(instance.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass().uses_additive_pipeline())
+                {
+                    let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
+                    render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
+                        &self.lightshaft_pipeline
+                    } else if dedicated {
+                        &self.lightshaft_culled_pipeline
+                    } else if batch.render_backfaces() {
+                        &self.additive_pipeline
+                    } else {
+                        &self.additive_culled_pipeline
+                    });
+                    draw_model_batch(&mut render_pass, &instance.material_bind_groups, batch);
+                }
             }
         }
 
@@ -1340,4 +1403,28 @@ impl ModelInstance {
             bytemuck::cast_slice(&matrices[..count]),
         );
     }
+}
+
+/// 场景包围球：全部实例包围球的并（模型空间）。空场景返回单位球。
+pub(crate) fn scene_bounds(instances: &[&ModelInstance]) -> ([f32; 3], f32) {
+    scene_bounds_from_spheres(
+        &instances
+            .iter()
+            .map(|instance| (instance.bounds_center, instance.bounds_radius))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// [`sorted_scene_transparent_batches`] 的实例版：按各实例 draw_batches 分组
+/// 传入核心排序。
+pub(crate) fn sorted_scene_transparent_triangles(
+    instances: &[&ModelInstance],
+    yaw: f32,
+    pitch: f32,
+) -> SortedSceneTransparentDraws {
+    let batches = instances
+        .iter()
+        .map(|instance| &instance.draw_batches[..])
+        .collect::<Vec<_>>();
+    sorted_scene_transparent_batches(&batches, yaw, pitch)
 }

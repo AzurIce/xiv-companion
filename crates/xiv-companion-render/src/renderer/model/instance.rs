@@ -35,6 +35,9 @@ pub(crate) fn flatten_model_with_options_and_skeleton<M: ModelRenderData + ?Size
     let component_offsets =
         model_component_preview_offsets(model, &prepared_model, &prepared_options);
     for prepared_mesh in &prepared_model.meshes {
+        if prepared_mesh.mesh_hidden {
+            continue;
+        }
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
                 .prepared_material
@@ -178,6 +181,9 @@ pub(crate) fn model_component_preview_offsets<M: ModelRenderData + ?Sized>(
     let mut maximums = vec![[f32::NEG_INFINITY; 3]; max_component + 1];
     let mut present = vec![false; max_component + 1];
     for prepared_mesh in &prepared_model.meshes {
+        if prepared_mesh.mesh_hidden {
+            continue;
+        }
         if !prepared_mesh.renders_in_main_pass
             && !prepared_mesh
                 .prepared_material
@@ -355,6 +361,96 @@ pub(crate) fn sorted_transparent_triangles(
     sorted
 }
 
+/// 跨实例全局透明排序的批次表核心：收集场景内全部实例的透明三角形（模型
+/// 空间中心 · 视线方向），单张深度表 back-to-front 全局排序。各实例的有序
+/// 索引流分别落到自己的 transparent index buffer（索引是实例顶点缓冲局部
+/// 的），`draws` 记录全局绘制顺序，渲染时按需切换实例缓冲逐段绘制。实例间
+/// 坐标同源（角色拼装：全部件按游戏坐标原位重叠），模型空间深度可直接比
+/// 较，与单实例排序同为静态 bind pose 中心的近似。
+pub(crate) fn sorted_scene_transparent_batches(
+    instance_batches: &[&[DrawBatch]],
+    yaw: f32,
+    pitch: f32,
+) -> SortedSceneTransparentDraws {
+    let sort_dir = transparent_sort_direction(yaw, pitch);
+    let mut triangles = instance_batches
+        .iter()
+        .enumerate()
+        .flat_map(|(instance_index, batches)| {
+            batches
+                .iter()
+                .enumerate()
+                .filter(|(_, batch)| batch.pass().sorts_back_to_front())
+                .flat_map(move |(batch_index, batch)| {
+                    batch
+                        .transparent_triangles
+                        .iter()
+                        .map(move |triangle| (instance_index, batch_index, triangle))
+                })
+        })
+        .collect::<Vec<_>>();
+    triangles.sort_by(|(_, _, left), (_, _, right)| {
+        let left_depth = glam::Vec3::from(left.center).dot(sort_dir);
+        let right_depth = glam::Vec3::from(right.center).dot(sort_dir);
+        right_depth
+            .partial_cmp(&left_depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut sorted = SortedSceneTransparentDraws {
+        indices: vec![Vec::new(); instance_batches.len()],
+        draws: Vec::new(),
+    };
+    for (instance_index, batch_index, triangle) in triangles {
+        let instance_indices = &mut sorted.indices[instance_index];
+        let index_start = instance_indices.len() as u32;
+        instance_indices.extend_from_slice(&triangle.indices);
+        let merge_into_last = sorted
+            .draws
+            .last_mut()
+            .filter(|draw| draw.instance_index == instance_index && draw.batch_index == batch_index)
+            .map(|draw| draw.index_count += 3);
+        if merge_into_last.is_none() {
+            sorted.draws.push(SceneTransparentDraw {
+                instance_index,
+                batch_index,
+                index_start,
+                index_count: 3,
+            });
+        }
+    }
+    sorted
+}
+
+/// 包围球并（AABB 包住各球再取最小外接球的保守近似，覆盖全部输入球）。
+pub(crate) fn scene_bounds_from_spheres(spheres: &[([f32; 3], f32)]) -> ([f32; 3], f32) {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for (center, radius) in spheres {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(center[axis] - radius);
+            max[axis] = max[axis].max(center[axis] + radius);
+        }
+    }
+    if min.iter().any(|value| !value.is_finite()) {
+        return ([0.0; 3], 1.0);
+    }
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let radius = spheres
+        .iter()
+        .map(|(sphere_center, sphere_radius)| {
+            let delta = glam::Vec3::from(*sphere_center) - glam::Vec3::from(center);
+            delta.length() + sphere_radius
+        })
+        .fold(0.0_f32, f32::max)
+        .max(0.0001);
+    (center, radius)
+}
+
 pub(crate) fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
     let pitch = pitch.clamp(-1.35, 1.35);
     glam::Vec3::new(
@@ -420,6 +516,23 @@ pub(crate) struct SortedTransparentDraws {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SortedTransparentDraw {
+    pub(crate) batch_index: usize,
+    pub(crate) index_start: u32,
+    pub(crate) index_count: u32,
+}
+
+/// 跨实例全局排序的透明绘制计划：`indices[instance]` 是该实例按全局深度序
+/// 排好的索引流（写入实例自己的 transparent index buffer），`draws` 是跨
+/// 实例的全局绘制顺序（相邻同实例同批次段合并）。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SortedSceneTransparentDraws {
+    pub(crate) indices: Vec<Vec<u32>>,
+    pub(crate) draws: Vec<SceneTransparentDraw>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SceneTransparentDraw {
+    pub(crate) instance_index: usize,
     pub(crate) batch_index: usize,
     pub(crate) index_start: u32,
     pub(crate) index_count: u32,

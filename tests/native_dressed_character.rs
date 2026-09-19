@@ -17,8 +17,8 @@
 mod installed {
     use physis::resource::SqPackResource;
     use xiv_companion::{
-        CharacterPalettePackage, appearance_colors_from_palette,
-        character_enabled_attribute_names,
+        CharacterPalettePackage, appearance_colors_from_palette, character_enabled_attribute_names,
+        load_dressed_character_scene_from_resource, plan_dressed_concealment,
     };
     use xiv_companion_data::{
         CharacterCustomize, DressedCharacterData, DressedCharacterLoadRequest,
@@ -137,8 +137,9 @@ mod installed {
         let request = DressedCharacterLoadRequest::new(customize, name)
             .with_appearance(appearance)
             .with_equipment(equipment);
-        let (data, skeleton) = load_dressed_character_with_skeleton_from_resource(resource, &request)
-            .unwrap_or_else(|error| panic!("load dressed {name}: {error:#}"));
+        let (data, skeleton) =
+            load_dressed_character_with_skeleton_from_resource(resource, &request)
+                .unwrap_or_else(|error| panic!("load dressed {name}: {error:#}"));
         let skeleton = skeleton.unwrap_or_else(|| panic!("{name}: missing human skeleton"));
         eprintln!(
             "{name}: meshes={} materials={} textures={} bones={} ranges={:?}",
@@ -181,9 +182,10 @@ mod installed {
                 .with_prepared_model_options(
                     PreparedModelOptions::default()
                         .with_component_preview_layout(false)
-                        .with_enabled_attribute_names(
-                            character_enabled_attribute_names(customize, &data.model),
-                        ),
+                        .with_enabled_attribute_names(character_enabled_attribute_names(
+                            customize,
+                            &data.model,
+                        )),
                 ),
             &data.model,
             Some(skeleton),
@@ -251,8 +253,12 @@ mod installed {
         let mut resource = SqPackResource::from_existing(&game_dir());
         let (customize, data, skeleton) =
             load_dressed(&mut resource, "dressed-au-ra-e0908", e0908_set([0, 0]));
-        let snapshot =
-            render_dressed_front("dressed-au-ra-e0908-set-front", &customize, &data, &skeleton);
+        let snapshot = render_dressed_front(
+            "dressed-au-ra-e0908-set-front",
+            &customize,
+            &data,
+            &skeleton,
+        );
         assert_non_uniform_render(&snapshot, "e0908-set-front");
     }
 
@@ -391,6 +397,130 @@ mod installed {
             3.4,
         );
         assert_non_uniform_render(&snapshot, "roe-m-maid-front");
+    }
+
+    /// 模型的可见网格签名（路径 + 顶点数多重集，渲染谓词同 flatten：整网格
+    /// 隐藏跳过、attribute 隐藏经按名启用在 prepare 落地、加色网格保留）。
+    fn visible_mesh_signature(
+        model: &xiv_companion_data::CharacterAssemblyData,
+        options: &PreparedModelOptions,
+    ) -> Vec<(String, usize)> {
+        let prepared =
+            xiv_companion_data::prepare_model_for_render_with_options(model, options.clone());
+        let mut signature = Vec::new();
+        for mesh in &prepared.meshes {
+            if mesh.mesh_hidden {
+                continue;
+            }
+            if !mesh.renders_in_main_pass
+                && !mesh.prepared_material.render_pass.uses_additive_pipeline()
+            {
+                continue;
+            }
+            let source = &model.meshes[mesh.mesh_index];
+            signature.push((source.path.clone(), source.vertices.len()));
+        }
+        signature.sort();
+        signature
+    }
+
+    fn model_has_attribute_submeshes(model: &xiv_companion_data::CharacterAssemblyData) -> bool {
+        model.meshes.iter().any(|mesh| {
+            mesh.submesh
+                .as_ref()
+                .is_some_and(|submesh| submesh.attribute_index_mask != 0)
+        })
+    }
+
+    /// Case F：逐件场景（scene 加载 + 遮蔽计划隐藏标签）与合并版（加载期网格
+    /// 过滤）的可见网格完全一致（敖龙女 + e0908 五件，无染色）。这是逐件化
+    /// 重构的行为等价锚：件级缓存/增量换装路径渲染的网格集合与合并路径一致。
+    #[test]
+    #[ignore = "compares per-piece scene loading against the merged loader; requires XIV_GAME_DIR"]
+    fn dressed_scene_pieces_match_merged_visibility() {
+        let mut resource = SqPackResource::from_existing(&game_dir());
+        let customize = au_ra_female_customize();
+        let palette = load_palette_package();
+        let appearance = appearance_colors_from_palette(&customize, &palette.palette);
+
+        let merged_request = DressedCharacterLoadRequest::new(customize, "scene-parity-merged")
+            .with_appearance(appearance)
+            .with_equipment(e0908_set([0, 0]));
+        let (merged, merged_skeleton) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &merged_request)
+                .unwrap_or_else(|error| panic!("merged load: {error:#}"));
+
+        let scene_request = DressedCharacterLoadRequest::new(customize, "scene-parity-scene")
+            .with_equipment(e0908_set([0, 0]));
+        let scene = load_dressed_character_scene_from_resource(&mut resource, &scene_request)
+            .unwrap_or_else(|error| panic!("scene load: {error:#}"));
+
+        let skeleton = scene
+            .skeleton
+            .as_ref()
+            .unwrap_or_else(|| panic!("scene: missing skeleton"));
+        assert_eq!(
+            skeleton.bone_count(),
+            merged_skeleton
+                .as_ref()
+                .map(|skeleton| skeleton.bone_count())
+                .unwrap_or(0),
+            "scene skeleton must match the merged loader skeleton"
+        );
+        assert_eq!(scene.pieces.len(), 5, "scene: all five pieces load");
+
+        // 合并版可见签名：加载期已过滤网格 + 按名启用（捏脸特征件）。
+        let merged_signature = visible_mesh_signature(
+            &merged.model,
+            &PreparedModelOptions::default()
+                .with_component_preview_layout(false)
+                .with_enabled_attribute_names(character_enabled_attribute_names(
+                    &customize,
+                    &merged.model,
+                )),
+        );
+
+        // 场景版可见签名：身体（隐藏标签 + 默认启用名 − 遮蔽名）+ 各件（IMC
+        // 变体名 + 跨件规则），选项组装语义与幻化页一致。
+        let plan = plan_dressed_concealment(&scene.body, &scene.pieces);
+        let mut body_names = character_enabled_attribute_names(&customize, &scene.body);
+        for hidden in &plan.body_hidden_attributes {
+            body_names.retain(|name| name != hidden);
+        }
+        let mut scene_signature = visible_mesh_signature(
+            &scene.body,
+            &PreparedModelOptions::default()
+                .with_component_preview_layout(false)
+                .with_hidden_mesh_indices(plan.body_hidden_meshes.clone())
+                .with_enabled_attribute_names(body_names),
+        );
+        for piece in &scene.pieces {
+            let mut options = PreparedModelOptions::default().with_component_preview_layout(false);
+            if model_has_attribute_submeshes(&piece.model) {
+                if let Some((_, names)) =
+                    plan.piece_enabled_attributes
+                        .iter()
+                        .find(|((slot, item_id), _)| {
+                            *slot == piece.equip_slot_category && *item_id == piece.item_id
+                        })
+                {
+                    options = options.with_enabled_attribute_names(names.clone());
+                }
+            }
+            scene_signature.extend(visible_mesh_signature(&piece.model, &options));
+        }
+        scene_signature.sort();
+
+        eprintln!(
+            "merged visible meshes: {} / scene visible meshes: {} / concealment notes: {:?}",
+            merged_signature.len(),
+            scene_signature.len(),
+            plan.hidden_notes
+        );
+        assert_eq!(
+            merged_signature, scene_signature,
+            "per-piece scene with concealment tags must render exactly the merged loader's visible meshes"
+        );
     }
 }
 

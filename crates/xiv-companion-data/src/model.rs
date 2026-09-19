@@ -951,6 +951,11 @@ pub struct PreparedModelOptions {
     /// （角色拼装的全部件即按游戏原位叠加）。
     #[serde(default = "default_component_preview_layout")]
     pub component_preview_layout: bool,
+    /// 整网格隐藏标签（模型 mesh 下标）：着装遮蔽等场景下标记"该网格本轮
+    /// 不渲染"，数据本体不动（件级缓存可复用，遮蔽组合变化只改标签）。
+    /// `None`/空 = 全部可见；隐藏网格连同其透明/加色批次一并跳过。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_mesh_indices: Option<Vec<usize>>,
 }
 
 fn default_component_preview_layout() -> bool {
@@ -965,6 +970,7 @@ impl Default for PreparedModelOptions {
             enabled_shape_mask: None,
             attribute_parts_only: false,
             component_preview_layout: true,
+            hidden_mesh_indices: None,
         }
     }
 }
@@ -994,6 +1000,11 @@ impl PreparedModelOptions {
         self.component_preview_layout = component_preview_layout;
         self
     }
+
+    pub fn with_hidden_mesh_indices(mut self, hidden_mesh_indices: Vec<usize>) -> Self {
+        self.hidden_mesh_indices = Some(hidden_mesh_indices);
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1003,6 +1014,11 @@ pub struct PreparedMesh {
     pub material_slot: usize,
     pub draw_role: ModelMeshDrawRole,
     pub renders_in_main_pass: bool,
+    /// 整网格隐藏标签（来自 `PreparedModelOptions::hidden_mesh_indices`）：
+    /// true 时渲染层连网格带全部透明/加色批次一并跳过（遮蔽组合变化不
+    /// 动模型数据本体）。
+    #[serde(default)]
+    pub mesh_hidden: bool,
     #[serde(default)]
     pub visibility: PreparedMeshVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1824,6 +1840,10 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                     draw_role,
                     renders_in_main_pass: draw_role.renders_in_main_pass()
                         && visibility.submesh_attributes_visible,
+                    mesh_hidden: options
+                        .hidden_mesh_indices
+                        .as_ref()
+                        .is_some_and(|hidden| hidden.contains(&mesh_index)),
                     visibility,
                     submesh: mesh.submesh.clone(),
                     shape_influences: mesh.shape_influences.clone(),

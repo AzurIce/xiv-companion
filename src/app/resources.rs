@@ -4,18 +4,19 @@ use serde::Deserialize;
 use xiv_companion::{
     AsyncGameResource, BuiltinItemIconProvider, CharaModelLoadRequest, CharacterAssemblyData,
     CharacterAssemblyLoadRequest, DressedCharacterData, DressedCharacterLoadRequest,
-    EquipmentModelLoadRequest, FurnitureModelLoadRequest, ItemIconResourceInfo, LocalItemIconImage,
-    ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
-    ResourceMetadata, ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus,
-    WeaponModelLoadRequest, WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
+    DressedEquipmentPiece, DressedPieceModel, EquipmentModelLoadRequest, FurnitureModelLoadRequest,
+    ItemIconResourceInfo, LocalItemIconImage, ProviderRequest, ResourceBlob, ResourceError,
+    ResourceErrorKind, ResourceFuture, ResourceHub, ResourceMetadata, ResourceOrigin,
+    ResourceProvider, ResourceSource, ResourceStatus, WeaponModelLoadRequest,
+    WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
     load_chara_model_with_skeleton_from_async_resource,
     load_character_assembly_with_skeleton_from_async_resource,
     load_dressed_character_with_skeleton_from_async_resource,
-    load_equipment_model_from_async_resource, load_furniture_model_from_async_resource,
-    load_weapon_model_from_async_resource, register_chara_catalog_resource,
-    register_character_make_resource, register_character_palette_resource,
-    register_collection_catalog_resource, register_craft_data_resource,
-    register_furniture_catalog_resource, register_item_icon_resource,
+    load_dressed_piece_model_from_async_resource, load_equipment_model_from_async_resource,
+    load_furniture_model_from_async_resource, load_weapon_model_from_async_resource,
+    register_chara_catalog_resource, register_character_make_resource,
+    register_character_palette_resource, register_collection_catalog_resource,
+    register_craft_data_resource, register_furniture_catalog_resource, register_item_icon_resource,
     register_weapon_model_resources,
     resources::{
         chara_catalog::CharaCatalogKind, character_make::CharacterMakeKind,
@@ -1702,6 +1703,95 @@ pub async fn load_dressed_character_with_skeleton_from_local(
         done: true,
     }));
     result
+}
+
+/// 单件装备增量加载（幻化场景逐件换装）：染剂恒 `[0, 0]` 加载免染基准件
+/// （对 (model_main, model_sub, 槽位, race) 恒定，调用方可做件级缓存），骨架
+/// 传入时种族变形烘焙到该骨架。件缺失/无模型返回 Ok(None)，读取失败记入
+/// 返回件诊断；游戏目录不可达为 Err。
+pub async fn load_dressed_piece_from_local(
+    piece: DressedEquipmentPiece,
+    race_code: u16,
+    skeleton: Option<xiv_companion::ModelSkeleton>,
+) -> Result<Option<DressedPieceModel>, String> {
+    let started_at_ms = log::now_ms();
+    let item_id = piece.item_id;
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id,
+        stain_ids: [0, 0],
+        stage: "连接本地游戏目录".to_string(),
+        detail: piece.item_name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id,
+                stain_ids: [0, 0],
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id,
+        stain_ids: [0, 0],
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+
+    let loaded = load_dressed_piece_model_from_async_resource(
+        &mut resource,
+        &piece,
+        race_code,
+        skeleton.as_ref(),
+    )
+    .await;
+    let (stage, detail) = match &loaded {
+        Some(piece) => (
+            "装备件资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理",
+                piece.model.meshes.len(),
+                piece.model.materials.len(),
+                piece.model.textures.len()
+            ),
+        ),
+        None => ("装备件没有可渲染网格", piece_path_note(&piece)),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id,
+        stain_ids: [0, 0],
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    Ok(loaded)
+}
+
+fn piece_path_note(piece: &DressedEquipmentPiece) -> String {
+    format!(
+        "item {} · slot {} · model {:#x}",
+        piece.item_id, piece.equip_slot_category, piece.model_main
+    )
 }
 
 pub async fn load_weapon_staining_templates_from_local() -> Result<WeaponStainingTemplates, String>

@@ -1,13 +1,15 @@
-use std::collections::{BTreeMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 use xiv_companion::renderer::WeaponRenderOptions;
 use xiv_companion::{
-    CharacterCustomize, CharacterMakePackage, CollectionCatalogPackage, CollectionItem,
-    DressedCharacterData, DressedCharacterLoadRequest, DressedEquipmentPiece, ModelAnimationSet,
-    ModelSkeleton, WeaponModelData, WeaponStain, appearance_colors_from_palette,
-    apply_dressed_piece_stains, character_enabled_attribute_names, is_weapon_equip_slot_category,
+    CharacterAssemblyLoadRequest, CharacterCustomize, CharacterMakePackage,
+    CollectionCatalogPackage, CollectionItem, DressedConcealmentPlan, DressedEquipmentPiece,
+    DressedPieceModel, ModelAnimationSet, ModelSkeleton, PreparedModelOptions, WeaponModelData,
+    WeaponStain, appearance_colors_from_palette, apply_weapon_model_stains,
+    character_enabled_attribute_names, is_weapon_equip_slot_category, plan_dressed_concealment,
 };
 
 use crate::app::character_customize::{
@@ -24,7 +26,9 @@ use crate::app::glamour_state::{
 };
 use crate::app::icons::{Icon, IconKind};
 use crate::app::load_progress::{self, WeaponModelLoadProgress};
-use crate::app::resources::load_dressed_character_with_skeleton_from_local;
+use crate::app::resources::{
+    load_character_assembly_with_skeleton_from_local, load_dressed_piece_from_local,
+};
 use crate::app::ui::{
     Badge, Button, ButtonSize, ButtonVariant, Card, DialogKeyAction, EmptyState, dialog_key_action,
     input_class,
@@ -33,8 +37,8 @@ use crate::app::utils::cx;
 
 use super::crafting::ItemIcon;
 use super::weapon_models::{
-    AnimationControls, AnimationPlaybackState, AnimationSetHandle, WeaponModelCanvas,
-    WeaponModelLoadingView, animation_playback,
+    AnimationControls, AnimationPlaybackState, AnimationSetHandle, CharacterSceneCanvas,
+    SceneCanvasModel, WeaponModelLoadingView, animation_playback, model_has_attribute_submeshes,
 };
 
 const PICKER_ROW_LIMIT: usize = 100;
@@ -146,15 +150,62 @@ fn download_glamour_json(json: &str) -> Result<(), String> {
     }
 }
 
-/// 预览加载结果：合并模型（染色已按请求落地到各件材质切片）+ 骨架 + 动画集。
-/// `baked_stains` 记录加载请求落地时的染色（item_id → stains），是增量染色的
-/// 基准；`base` 保留未染色基准色表，供 `apply_dressed_piece_stains` 重染。
+/// 预览身体资产：裸装装配（外观色已落地）+ 骨架 + 动画集。装备件独立缓存
+/// （见 [`DRESSED_PIECE_CACHE`]），遮蔽标签按当前件组合经
+/// `plan_dressed_concealment` 现算。
 #[derive(Clone)]
-struct DressedModelAssets {
-    base: Rc<DressedCharacterData>,
-    baked_stains: Vec<(u32, [u8; 2])>,
+struct GlamourPreviewAssets {
+    /// 资产对应的捏脸 hex（换捏脸重载期间据此判过期）。
+    customize_hex: String,
+    body: Rc<WeaponModelData>,
     skeleton: Option<Rc<ModelSkeleton>>,
     animations: Option<Rc<ModelAnimationSet>>,
+}
+
+/// 免染基准件的缓存键：基准件对 (model_main, model_sub, 槽位, race) 恒定，
+/// 与染色无关。
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct PieceCacheKey {
+    model_main: u64,
+    model_sub: u64,
+    equip_slot_category: u32,
+    race_code: u16,
+}
+
+thread_local! {
+    /// 免染基准件缓存：换装/回切不重读游戏文件（命中为同步 Rc 克隆）。
+    /// 插入序 FIFO，超上限逐出最旧。
+    static DRESSED_PIECE_CACHE: RefCell<(HashMap<PieceCacheKey, Rc<DressedPieceModel>>, Vec<PieceCacheKey>)> =
+        RefCell::new((HashMap::new(), Vec::new()));
+}
+
+/// 件缓存容量上限（约 4-5 个全身套装的件数）。
+const DRESSED_PIECE_CACHE_CAP: usize = 48;
+
+fn cached_dressed_piece(key: PieceCacheKey) -> Option<Rc<DressedPieceModel>> {
+    DRESSED_PIECE_CACHE.with(|cache| cache.borrow().0.get(&key).cloned())
+}
+
+fn cache_dressed_piece(key: PieceCacheKey, piece: Rc<DressedPieceModel>) {
+    DRESSED_PIECE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.0.contains_key(&key) {
+            cache.1.push(key);
+        }
+        cache.0.insert(key, piece);
+        while cache.1.len() > DRESSED_PIECE_CACHE_CAP {
+            let oldest = cache.1.remove(0);
+            cache.0.remove(&oldest);
+        }
+    });
+}
+
+/// 稳定内容修订号：用哈希当修订（内容变 → 修订变，驱动画布按件重建）。
+fn content_revision<T: std::hash::Hash>(value: &T) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// 预览装备件的免染色身份：染色变化不改变它（不重载模型，走增量染色路径）。
@@ -595,10 +646,6 @@ fn GlamourSetEditor(
     let mut picker_slot = use_signal(|| None::<GlamourSlot>);
     let mut dye_slot = use_signal(|| None::<GlamourSlot>);
     let mut model_progress = use_signal(|| None::<WeaponModelLoadProgress>);
-    // 预览模型每次重新加载/增量染色到达时递增，驱动画布在 instance key 不变
-    // （同角色换装/染色）时也重新 set_model。
-    let mut model_revision = use_signal(|| 0_u64);
-    let mut canvas_model = use_signal(|| None::<Rc<WeaponModelData>>);
     // 动画选择：None=rest；action.pap 动画表在 race code 间一致，换装保留选择。
     let mut animation_selection = use_signal(|| None::<usize>);
     let render_options = use_signal(|| WeaponRenderOptions {
@@ -628,51 +675,14 @@ fn GlamourSetEditor(
             })
             .collect::<Vec<_>>()
     });
-    let set_id_for_stains = set_id.clone();
-    // 当前染色（item_id → stains，按槽位序）：染色变化只驱动增量染色。
-    let preview_stains = use_memo(move || {
-        let state = glamour_state.read();
-        let Some(set) = state.find_set(&set_id_for_stains) else {
-            return Vec::new();
-        };
-        set.pieces
-            .values()
-            .filter(|piece| is_previewable_piece(piece))
-            .map(|piece| (piece.item_id, piece.stains))
-            .collect::<Vec<_>>()
-    });
-
-    let set_id_for_load = set_id.clone();
-    let preview_load = use_resource(move || {
+    // 身体加载（捏脸/调色板变化时重载；换装/染色不触发）：裸装装配 + 骨架 +
+    // 动画集。装备件走下方独立资源，不再整身合并重读。
+    let body_load = use_resource(move || {
         let adopted = preview_default_adopted();
         let customize = preview_customize();
-        let identity = preview_identity();
         let palette = palette_package.read().as_ref().cloned();
-        // 染色不进重载键：请求构建时经 peek 非响应式快照当前染色；之后的染色
-        // 编辑不再重载，由 canvas_model effect 在基准上做增量染色。
-        let equipment = {
-            let state = glamour_state.peek();
-            let set = state.find_set(&set_id_for_load);
-            identity
-                .iter()
-                .map(|piece| {
-                    let stain_ids = set
-                        .and_then(|set| set.pieces.values().find(|p| p.item_id == piece.item_id))
-                        .map(|piece| piece.stains)
-                        .unwrap_or([0, 0]);
-                    DressedEquipmentPiece {
-                        item_id: piece.item_id,
-                        item_name: piece.item_name.clone(),
-                        model_main: piece.model_main,
-                        model_sub: piece.model_sub,
-                        equip_slot_category: u32::from(piece.equip_slot_category),
-                        stain_ids,
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
         async move {
-            if !adopted || identity.is_empty() {
+            if !adopted || customize.validate().is_err() {
                 return None;
             }
             let palette = match palette {
@@ -680,24 +690,17 @@ fn GlamourSetEditor(
                 Some(Err(error)) => return Some(Err(error)),
                 Some(Ok(package)) => package,
             };
-            if customize.validate().is_err() {
-                return None;
-            }
             let appearance = appearance_colors_from_palette(&customize, &palette.palette);
-            let baked_stains = equipment
-                .iter()
-                .map(|piece| (piece.item_id, piece.stain_ids))
-                .collect::<Vec<_>>();
             let request =
-                DressedCharacterLoadRequest::new(customize, character_display_name(&customize))
-                    .with_appearance(appearance)
-                    .with_equipment(equipment);
+                CharacterAssemblyLoadRequest::new(customize, character_display_name(&customize))
+                    .with_appearance(appearance);
+            let customize_hex = customize_to_hex(&request.customize);
             Some(
-                load_dressed_character_with_skeleton_from_local(request)
+                load_character_assembly_with_skeleton_from_local(request)
                     .await
-                    .map(|(data, skeleton, animations)| DressedModelAssets {
-                        base: Rc::new(data),
-                        baked_stains,
+                    .map(|(body, skeleton, animations)| GlamourPreviewAssets {
+                        customize_hex,
+                        body: Rc::new(body),
                         skeleton: skeleton.map(Rc::new),
                         animations: animations.map(Rc::new),
                     }),
@@ -705,55 +708,103 @@ fn GlamourSetEditor(
         }
     });
 
-    // 画布模型 = 加载结果 + 当前染色的增量落地：加载到达时取结果本体；仅染色
-    // 变化时在基准（保留未染色基准色表与材质区间的 DressedCharacterData）上
-    // 重染漂移件的材质切片，不触发模型重载。
-    use_effect(move || {
-        let assets = preview_load
+    // 装备件加载（身份列表/身体资产变化时重跑）：逐件先查免染基准缓存，未命中
+    // 才读该件的 MDL/IMC/EQP 链——换一件只加载那一件，其余件同步 Rc 直传。
+    let preview_pieces = use_resource(move || {
+        let identity = preview_identity();
+        let customize = preview_customize();
+        let body = body_load
             .read()
-            .cloned()
+            .clone()
             .flatten()
             .and_then(|result| result.ok());
-        let Some(assets) = assets else {
-            canvas_model.set(None);
-            return;
-        };
-        let current_stains = preview_stains();
-        let drifted = current_stains
-            .iter()
-            .filter(|(item_id, stains)| {
-                assets
-                    .baked_stains
-                    .iter()
-                    .any(|(base_id, base_stains)| base_id == item_id && base_stains != stains)
-            })
-            .map(|(item_id, stains)| (*item_id, *stains))
-            .collect::<Vec<_>>();
-        let model = if drifted.is_empty() {
-            assets.base.model.clone()
-        } else {
-            let templates = staining_templates
-                .read()
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .cloned();
-            match templates {
-                Some(templates) => {
-                    let mut working = (*assets.base).clone();
-                    for (item_id, stains) in drifted {
-                        working.model =
-                            apply_dressed_piece_stains(&working, item_id, stains, &templates);
+        let race_code = customize.race_code();
+        async move {
+            let Some(body) = body else {
+                return Vec::new();
+            };
+            let skeleton = body.skeleton.as_ref().map(|skeleton| (**skeleton).clone());
+            let mut loaded: Vec<(u32, Rc<DressedPieceModel>)> = Vec::new();
+            for piece in &identity {
+                let category = u32::from(piece.equip_slot_category);
+                let key = PieceCacheKey {
+                    model_main: piece.model_main,
+                    model_sub: piece.model_sub,
+                    equip_slot_category: category,
+                    race_code,
+                };
+                let model = match cached_dressed_piece(key) {
+                    Some(model) => model,
+                    None => {
+                        let request = DressedEquipmentPiece {
+                            item_id: piece.item_id,
+                            item_name: piece.item_name.clone(),
+                            model_main: piece.model_main,
+                            model_sub: piece.model_sub,
+                            equip_slot_category: category,
+                            stain_ids: [0, 0],
+                        };
+                        match load_dressed_piece_from_local(request, race_code, skeleton.clone())
+                            .await
+                        {
+                            Ok(Some(model)) => {
+                                let model = Rc::new(model);
+                                cache_dressed_piece(key, model.clone());
+                                model
+                            }
+                            // 无模型/读取失败：单件跳过，不阻断其余件。
+                            Ok(None) | Err(_) => continue,
+                        }
                     }
-                    working.model
-                }
-                // 染色模板未就绪：先显示加载时落地的染色，模板到达后本 effect
-                // 重跑并补齐漂移件。
-                None => assets.base.model.clone(),
+                };
+                loaded.push((category, model));
             }
-        };
-        canvas_model.set(Some(Rc::new(model)));
-        let next_revision = *model_revision.peek() + 1;
-        model_revision.set(next_revision);
+            loaded
+        }
+    });
+
+    // 场景快照（hold-last）：件资源 Pending 期间保持上一次完整列表（换件不闪
+    // 空白，新件到达即增量上屏）；身体按捏脸 hex 判过期，过期/失败时整体清空。
+    let mut scene_assets = use_signal(|| None::<GlamourPreviewAssets>);
+    let mut scene_pieces = use_signal(|| Vec::<(u32, Rc<DressedPieceModel>)>::new());
+    let mut preview_error = use_signal(|| None::<String>);
+    {
+        let mut body_signal = body_load;
+        let mut customize_signal = preview_customize;
+        use_effect(move || {
+            let customize_hex = customize_to_hex(&customize_signal());
+            let body = body_signal.read().cloned().flatten();
+            match body {
+                // 完成：接受新身体（同捏脸的重跑 Pending 不动旧值）。
+                Some(Ok(assets)) if assets.customize_hex == customize_hex => {
+                    scene_assets.set(Some(assets));
+                    preview_error.set(None);
+                }
+                Some(Err(error)) => {
+                    scene_assets.set(None);
+                    scene_pieces.set(Vec::new());
+                    preview_error.set(Some(error));
+                }
+                // 未就绪：仅当旧快照已过期（捏脸已变）或此前在报错时清空。
+                _ => {
+                    let stale = scene_assets
+                        .peek()
+                        .as_ref()
+                        .map(|assets| assets.customize_hex != customize_hex)
+                        .unwrap_or(false);
+                    if stale || preview_error.peek().is_some() {
+                        scene_assets.set(None);
+                        scene_pieces.set(Vec::new());
+                        preview_error.set(None);
+                    }
+                }
+            }
+        });
+    }
+    use_effect(move || {
+        if let Some(pieces) = preview_pieces.read().clone() {
+            scene_pieces.set(pieces);
+        }
     });
 
     use_effect(move || {
@@ -791,21 +842,114 @@ fn GlamourSetEditor(
 
     let customize_snapshot = preview_customize();
     let race_code = customize_snapshot.race_code();
-    let current_progress =
-        model_progress().filter(|progress| progress.item_id == u32::from(race_code));
-    let current_preview = preview_load.read().cloned().flatten();
-    let preview_assets = current_preview
-        .as_ref()
-        .and_then(|result| result.as_ref().ok());
-    let playback: Option<AnimationPlaybackState> = preview_assets.and_then(|assets| {
-        animation_playback(&assets.skeleton, &assets.animations, animation_selection())
-    });
-    let canvas_model_snapshot = canvas_model();
     let has_weapon_pieces = set
         .pieces
         .keys()
         .any(|slot| matches!(slot, GlamourSlot::MainHand | GlamourSlot::OffHand));
     let has_previewable_pieces = set.pieces.values().any(is_previewable_piece);
+
+    let assets_snapshot = scene_assets();
+    let error_snapshot = preview_error();
+    let pieces_snapshot = scene_pieces();
+    let playback: Option<AnimationPlaybackState> = assets_snapshot.as_ref().and_then(|assets| {
+        animation_playback(&assets.skeleton, &assets.animations, animation_selection())
+    });
+    let piece_item_ids = set
+        .pieces
+        .values()
+        .map(|piece| piece.item_id)
+        .collect::<Vec<_>>();
+    let current_progress = model_progress().filter(|progress| {
+        progress.item_id == u32::from(race_code) || piece_item_ids.contains(&progress.item_id)
+    });
+    let preview_loading =
+        has_previewable_pieces && assets_snapshot.is_none() && error_snapshot.is_none();
+
+    // 场景组装（渲染期纯计算）：身体 + 各件 → 多实例画布条目。染色在此按件
+    // 落地（漂移件克隆重染，未染件 Rc 直传零拷贝）；遮蔽隐藏标签按当前件组合
+    // 现算（`plan_dressed_concealment`，不动缓存件数据本体）。
+    let scene_entries = {
+        let templates = staining_templates
+            .read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        let mut entries: Vec<SceneCanvasModel> = Vec::new();
+        let mut concealment: Option<DressedConcealmentPlan> = None;
+        if let Some(assets) = &assets_snapshot {
+            // DressedPieceModel 内部 Rc，按值克隆零拷贝。
+            let piece_models: Vec<DressedPieceModel> = pieces_snapshot
+                .iter()
+                .map(|(_, piece)| (**piece).clone())
+                .collect();
+            let plan = plan_dressed_concealment(&assets.body, &piece_models);
+            // 身体启用名 = 捏脸默认集合（脸部特征件等）− 遮蔽名。
+            let mut body_names =
+                character_enabled_attribute_names(&customize_snapshot, &assets.body);
+            for hidden in &plan.body_hidden_attributes {
+                body_names.retain(|name| name != hidden);
+            }
+            let mut body_options = PreparedModelOptions::default()
+                .with_component_preview_layout(false)
+                .with_hidden_mesh_indices(plan.body_hidden_meshes.clone());
+            if model_has_attribute_submeshes(&assets.body) {
+                body_options = body_options.with_enabled_attribute_names(body_names.clone());
+            }
+            let body_ptr = Rc::as_ptr(&assets.body) as usize;
+            entries.push(SceneCanvasModel {
+                key: "body".to_string(),
+                model: assets.body.clone(),
+                prepared_options: body_options,
+                revision: content_revision(&(body_ptr, &plan.body_hidden_meshes, &body_names)),
+                materials_revision: content_revision(&(body_ptr,)),
+            });
+            concealment = Some(plan);
+        }
+        for (category, piece) in &pieces_snapshot {
+            let stains = set
+                .pieces
+                .values()
+                .find(|set_piece| {
+                    u32::from(set_piece.equip_slot_category) == *category
+                        && set_piece.item_id == piece.item_id
+                })
+                .map(|set_piece| set_piece.stains)
+                .unwrap_or([0, 0]);
+            let stained = if stains == [0, 0] {
+                piece.model.clone()
+            } else {
+                match &templates {
+                    Some(templates) => {
+                        Rc::new(apply_weapon_model_stains(&piece.model, stains, templates))
+                    }
+                    // 染色模板未就绪：先显示免染基准，模板到达后本组件重跑补齐。
+                    None => piece.model.clone(),
+                }
+            };
+            let enabled_names = concealment.as_ref().and_then(|plan| {
+                plan.piece_enabled_attributes
+                    .iter()
+                    .find(|((slot, item_id), _)| *slot == *category && *item_id == piece.item_id)
+                    .map(|(_, names)| names.clone())
+            });
+            let mut piece_options =
+                PreparedModelOptions::default().with_component_preview_layout(false);
+            if model_has_attribute_submeshes(&stained) {
+                if let Some(names) = &enabled_names {
+                    piece_options = piece_options.with_enabled_attribute_names(names.clone());
+                }
+            }
+            entries.push(SceneCanvasModel {
+                key: format!("slot:{category}:{}", piece.item_id),
+                model: stained.clone(),
+                prepared_options: piece_options,
+                revision: content_revision(&(Rc::as_ptr(&piece.model) as usize, &enabled_names)),
+                materials_revision: content_revision(&(Rc::as_ptr(&stained) as usize, stains)),
+            });
+        }
+        entries
+    };
+    let orbit_reset_revision = content_revision(&customize_to_hex(&customize_snapshot));
 
     // 捏脸变更：持久化 hex 到 GlamourState（页面级保存 effect 落盘），并阻止
     // 待进行的默认捏脸采用覆盖用户选择。
@@ -882,19 +1026,14 @@ fn GlamourSetEditor(
 
                 aside { class: "flex w-full shrink-0 flex-col overflow-hidden rounded-lg border bg-card lg:sticky lg:top-4 lg:w-[22rem] xl:w-[24rem]",
                     div { class: "relative h-72 shrink-0 overflow-hidden bg-[#0e1117] sm:h-80",
-                        WeaponModelCanvas {
-                            model: canvas_model_snapshot.clone(),
+                        CharacterSceneCanvas {
+                            entries: scene_entries,
                             render_options,
-                            shape_mask: None,
-                            race_id: race_code,
-                            attribute_mask: 0,
-                            attribute_parts_only: false,
-                            enabled_attribute_names: canvas_model_snapshot
-                                .as_ref()
-                                .map(|model| character_enabled_attribute_names(&customize_snapshot, model)),
-                            component_preview_layout: false,
-                            model_revision: model_revision(),
                             animation: playback,
+                            skeleton: assets_snapshot
+                                .as_ref()
+                                .and_then(|assets| assets.skeleton.clone()),
+                            orbit_reset_revision,
                         }
                         if !has_previewable_pieces {
                             div { class: "absolute inset-0 flex items-center justify-center bg-[#0e1117] p-4",
@@ -904,33 +1043,27 @@ fn GlamourSetEditor(
                                     description: Some("为套装选择防具或饰品后，在此预览着装效果。".to_string()),
                                 }
                             }
-                        } else {
-                            match &current_preview {
-                                Some(Ok(_)) => rsx! {},
-                                Some(Err(error)) => rsx! {
-                                    div { class: "absolute inset-0 flex items-center justify-center bg-[#0e1117] p-4",
-                                        EmptyState {
-                                            icon: rsx! { Icon { kind: IconKind::PersonStanding, class: "h-6 w-6" } },
-                                            title: "着装预览加载失败".to_string(),
-                                            description: Some(error.clone()),
-                                            action: rsx! {
-                                                a { href: "#/settings",
-                                                    Button {
-                                                        variant: ButtonVariant::Outline,
-                                                        size: ButtonSize::Sm,
-                                                        Icon { kind: IconKind::Database, class: "h-4 w-4" }
-                                                        "设置页授权游戏目录"
-                                                    }
-                                                }
-                                            },
+                        } else if let Some(error) = &error_snapshot {
+                            div { class: "absolute inset-0 flex items-center justify-center bg-[#0e1117] p-4",
+                                EmptyState {
+                                    icon: rsx! { Icon { kind: IconKind::PersonStanding, class: "h-6 w-6" } },
+                                    title: "着装预览加载失败".to_string(),
+                                    description: Some(error.clone()),
+                                    action: rsx! {
+                                        a { href: "#/settings",
+                                            Button {
+                                                variant: ButtonVariant::Outline,
+                                                size: ButtonSize::Sm,
+                                                Icon { kind: IconKind::Database, class: "h-4 w-4" }
+                                                "设置页授权游戏目录"
+                                            }
                                         }
-                                    }
-                                },
-                                None => rsx! {
-                                    div { class: "absolute inset-0 bg-[#0e1117]",
-                                        WeaponModelLoadingView { progress: current_progress }
-                                    }
-                                },
+                                    },
+                                }
+                            }
+                        } else if preview_loading {
+                            div { class: "absolute inset-0 bg-[#0e1117]",
+                                WeaponModelLoadingView { progress: current_progress }
                             }
                         }
                     }
@@ -962,7 +1095,8 @@ fn GlamourSetEditor(
                                 customize: customize_snapshot,
                                 on_apply: move |next| apply_preview_customize_for_hex(next),
                             }
-                            if let Some(animations) = preview_assets
+                            if let Some(animations) = assets_snapshot
+                                .as_ref()
                                 .and_then(|assets| assets.animations.clone())
                             {
                                 AnimationControls {
