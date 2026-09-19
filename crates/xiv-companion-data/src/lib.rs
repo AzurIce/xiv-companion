@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod avfx;
 pub mod chara_assemble;
 pub mod chara_models;
 pub mod character_make;
@@ -23,6 +24,7 @@ pub mod vendor;
 pub mod weapon_models;
 
 pub use animation::*;
+pub use avfx::*;
 pub use chara_assemble::*;
 pub use chara_models::*;
 pub use character_make::*;
