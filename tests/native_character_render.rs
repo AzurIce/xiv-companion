@@ -59,8 +59,8 @@ fn render_au_ra_debug_channels() {
     let appearance = appearance_colors_from_palette(&customize, &palette.palette);
     let request =
         CharacterAssemblyLoadRequest::new(customize, "au-ra-female").with_appearance(appearance);
-    let model = load_character_assembly_from_resource(&mut resource, &request)
-        .expect("load assembly");
+    let model =
+        load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
     let names = character_enabled_attribute_names(&customize, &model);
     for mode in [ModelDebugMode::BaseColor, ModelDebugMode::Mask] {
         let mut render_options = xiv_companion_render::renderer::ModelRenderOptions::default();
@@ -94,8 +94,8 @@ fn render_au_ra_rear_view() {
     let appearance = appearance_colors_from_palette(&customize, &palette.palette);
     let request =
         CharacterAssemblyLoadRequest::new(customize, "au-ra-female").with_appearance(appearance);
-    let model = load_character_assembly_from_resource(&mut resource, &request)
-        .expect("load assembly");
+    let model =
+        load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
     let names = character_enabled_attribute_names(&customize, &model);
     let snapshot = render_model_snapshot_with_options(
         ModelSnapshotOptions::new("debug-au-ra-rear")
@@ -124,8 +124,8 @@ fn render_au_ra_head_closeup() {
     let appearance = appearance_colors_from_palette(&customize, &palette.palette);
     let request =
         CharacterAssemblyLoadRequest::new(customize, "au-ra-female").with_appearance(appearance);
-    let model = load_character_assembly_from_resource(&mut resource, &request)
-        .expect("load assembly");
+    let model =
+        load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
     let names = character_enabled_attribute_names(&customize, &model);
     let snapshot = render_model_snapshot_with_options(
         ModelSnapshotOptions::new("debug-au-ra-head-closeup")
@@ -156,8 +156,8 @@ fn probe_au_ra_eye_lash() {
     let appearance = appearance_colors_from_palette(&customize, &palette.palette);
     let request =
         CharacterAssemblyLoadRequest::new(customize, "au-ra-female").with_appearance(appearance);
-    let model = load_character_assembly_from_resource(&mut resource, &request)
-        .expect("load assembly");
+    let model =
+        load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
     let names = character_enabled_attribute_names(&customize, &model);
 
     let texture_path = |model: &xiv_companion_data::WeaponModelData, index: Option<usize>| {
@@ -218,12 +218,15 @@ fn probe_au_ra_eye_lash() {
                 uv_max[lane] = uv_max[lane].max(vertex.uv0[lane]);
             }
         }
-        println!("    uv0 min={uv_min:?} max={uv_max:?} verts={}", mesh.vertices.len());
+        println!(
+            "    uv0 min={uv_min:?} max={uv_max:?} verts={}",
+            mesh.vertices.len()
+        );
     }
 
     // 导出睫毛/眉毛材质的贴图通道供检查。
-    let out_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/tmp/lash-probe");
+    let out_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/tmp/lash-probe");
     std::fs::create_dir_all(&out_dir).unwrap();
     for texture in &model.textures {
         if !texture.path.contains("f0002_etc") {
@@ -308,10 +311,7 @@ fn probe_au_ra_eye_lash() {
         );
     }
     // 逐项排除：bloom / normal_mapping 对点状伪影的影响。
-    for (label, bloom, normal_mapping) in [
-        ("nobloom", false, true),
-        ("nonormal", false, false),
-    ] {
+    for (label, bloom, normal_mapping) in [("nobloom", false, true), ("nonormal", false, false)] {
         let mut render_options = xiv_companion_render::renderer::ModelRenderOptions::default();
         render_options.bloom = bloom;
         render_options.normal_mapping = normal_mapping;
@@ -400,8 +400,8 @@ fn probe_au_ra_limb_junction_seams() {
     let appearance = appearance_colors_from_palette(&customize, &palette.palette);
     let request =
         CharacterAssemblyLoadRequest::new(customize, "au-ra-female").with_appearance(appearance);
-    let model = load_character_assembly_from_resource(&mut resource, &request)
-        .expect("load assembly");
+    let model =
+        load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
     let names = character_enabled_attribute_names(&customize, &model);
 
     // 逐网格摘要：四肢相关文件的材质名与顶点 y/x 范围。对照中原女（原生无骨

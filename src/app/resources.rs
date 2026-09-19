@@ -11,10 +11,10 @@ use xiv_companion::{
     load_chara_model_with_skeleton_from_async_resource,
     load_character_assembly_with_skeleton_from_async_resource,
     load_equipment_model_from_async_resource, load_furniture_model_from_async_resource,
-    load_weapon_model_from_async_resource, register_chara_catalog_resource,
-    register_character_make_resource, register_character_palette_resource,
-    register_collection_catalog_resource, register_craft_data_resource,
-    register_furniture_catalog_resource, register_item_icon_resource,
+    load_weapon_model_from_async_resource, load_weapon_vfx_from_async_resource,
+    register_chara_catalog_resource, register_character_make_resource,
+    register_character_palette_resource, register_collection_catalog_resource,
+    register_craft_data_resource, register_furniture_catalog_resource, register_item_icon_resource,
     register_weapon_model_resources,
     resources::{
         chara_catalog::CharaCatalogKind, character_make::CharacterMakeKind,
@@ -1103,6 +1103,31 @@ mod local_release_tests {
     }
 }
 
+/// 加载武器常驻 VFX（imc → vw.avfx → 解析 + atex 解码）。无特效/文件缺失
+/// 返回 `None`（静默降级）；与模型加载并行调用，不报告加载进度。
+pub async fn load_weapon_vfx_from_local(
+    id: xiv_companion::WeaponModelId,
+) -> Option<xiv_companion::WeaponVfxData> {
+    let mut sqpack = BrowserSqPack::from_window_handle().await.ok()?;
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id: id.item_id,
+        stain_ids: id.stain_ids,
+        started_at_ms: log::now_ms(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+    let request = WeaponModelLoadRequest {
+        item_id: id.item_id,
+        item_name: id.item_name,
+        model_main: id.model_main,
+        model_sub: id.model_sub,
+        stain_ids: id.stain_ids,
+    };
+    load_weapon_vfx_from_async_resource(&mut resource, &request).await
+}
+
 pub async fn load_weapon_model_from_local(
     id: xiv_companion::WeaponModelId,
 ) -> Result<xiv_companion::WeaponModelData, String> {
@@ -1501,16 +1526,17 @@ pub async fn load_character_assembly_with_skeleton_from_local(
         loaded_bytes: 0,
     };
 
-    let result =
-        load_character_assembly_with_skeleton_from_async_resource(&mut resource, &request)
-            .await
-            .map_err(|error| format!("{error:#}"));
+    let result = load_character_assembly_with_skeleton_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
     let result = match result {
         Ok((data, skeleton)) => {
             // 拼接闭合诊断日志（浏览器 console 可见）：骨架缺失时骨变形与拼接
             // 闭合都不会执行；foot_top ≈ calf_bottom + 0.015 表示闭合已生效。
-            let junction =
-                xiv_companion::bare_limb_junction_diagnostics(&data.meshes, request.customize.race_code());
+            let junction = xiv_companion::bare_limb_junction_diagnostics(
+                &data.meshes,
+                request.customize.race_code(),
+            );
             log::info(
                 "character",
                 format!(

@@ -15,14 +15,14 @@
 mod installed {
     use physis::resource::{Resource, SqPackResource};
     use xiv_companion_data::{
+        AnimationSourceKind, CharaModelKind, CharaModelLoadRequest, CharaModelType,
+        CharacterAssemblyLoadRequest, ModelAnimationSet, PackedCharaModelId,
         animation_joint_matrices, default_customize_for_race_code,
         load_animation_set_from_pap_bytes, load_chara_model_with_skeleton_from_resource,
         load_character_assembly_with_skeleton_from_resource, pap_path_candidates,
-        AnimationSourceKind, CharaModelKind, CharaModelLoadRequest, CharaModelType,
-        CharacterAssemblyLoadRequest, ModelAnimationSet, PackedCharaModelId,
     };
     use xiv_companion_render::test_support::{
-        render_model_snapshot_with_skeleton_and_pose, ModelSnapshotOptions,
+        ModelSnapshotOptions, render_model_snapshot_with_skeleton_and_pose,
     };
 
     fn game_dir() -> String {
@@ -338,9 +338,9 @@ mod installed {
         );
         let options = xiv_companion_data::PreparedModelOptions::default()
             .with_component_preview_layout(false)
-            .with_enabled_attribute_names(
-                xiv_companion::character_enabled_attribute_names(&customize, &model),
-            );
+            .with_enabled_attribute_names(xiv_companion::character_enabled_attribute_names(
+                &customize, &model,
+            ));
         let snapshot = render_model_snapshot_with_skeleton_and_pose(
             ModelSnapshotOptions::new("animation-smoke-hyur-action-t50")
                 .with_viewport(640, 640)

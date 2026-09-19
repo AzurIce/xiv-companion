@@ -29,7 +29,7 @@ use xiv_companion::{
     CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
     FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAnimationSet,
     ModelAttributeOption, ModelSkeleton, PackedCharaModelId, PackedEquipmentModelId, PackedModelId,
-    WeaponModelData, WeaponModelTextureKind, WeaponStain, equipment_slot_info,
+    WeaponModelData, WeaponModelTextureKind, WeaponStain, WeaponVfxData, equipment_slot_info,
     is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
 };
 
@@ -37,7 +37,7 @@ use super::crafting::ItemIcon;
 use crate::app::data::{
     load_chara_catalog, load_chara_model_with_animation_assets, load_collection_catalog,
     load_equipment_model, load_furniture_catalog, load_furniture_model, load_weapon_catalog,
-    load_weapon_model, load_weapon_staining_templates, stain_weapon_model,
+    load_weapon_model, load_weapon_staining_templates, load_weapon_vfx, stain_weapon_model,
 };
 use crate::app::load_progress::{self, WeaponModelLoadProgress};
 
@@ -320,6 +320,8 @@ struct ModelResourceResult {
     skeleton: Option<Rc<ModelSkeleton>>,
     /// 宠物/坐骑的动画集（pap 候选全缺为 None）。
     animations: Option<Rc<ModelAnimationSet>>,
+    /// 武器常驻 VFX（imc 无 VfxId / 资源缺失为 None）。
+    vfx: Option<Rc<WeaponVfxData>>,
 }
 
 #[derive(Clone)]
@@ -328,6 +330,7 @@ struct ModelPreviewResult {
     result: Result<Rc<WeaponModelData>, String>,
     skeleton: Option<Rc<ModelSkeleton>>,
     animations: Option<Rc<ModelAnimationSet>>,
+    vfx: Option<Rc<WeaponVfxData>>,
 }
 
 impl PartialEq for ModelPreviewResult {
@@ -343,6 +346,7 @@ impl PartialEq for ModelPreviewResult {
         result_eq
             && optional_rc_eq(&self.skeleton, &other.skeleton)
             && optional_rc_eq(&self.animations, &other.animations)
+            && optional_rc_eq(&self.vfx, &other.vfx)
     }
 }
 
@@ -575,21 +579,29 @@ pub fn ModelPreviewPage() -> Element {
         let race_id = race_id();
         async move {
             let item = item?;
-            let (result, skeleton, animations) = match &item {
+            let (result, skeleton, animations, vfx) = match &item {
                 ModelCatalogItem::Equipment(equipment) => match model_preview_support(equipment) {
-                    ModelPreviewSupport::Weapon => (load_weapon_model(equipment).await, None, None),
-                    ModelPreviewSupport::Equipment => {
-                        (load_equipment_model(equipment, race_id).await, None, None)
+                    ModelPreviewSupport::Weapon => {
+                        // 模型先行，VFX 随后（读取很小）；失败互不阻塞。
+                        let result = load_weapon_model(equipment).await;
+                        let vfx = load_weapon_vfx(equipment).await;
+                        (result, None, None, vfx)
                     }
+                    ModelPreviewSupport::Equipment => (
+                        load_equipment_model(equipment, race_id).await,
+                        None,
+                        None,
+                        None,
+                    ),
                     _ => return None,
                 },
                 ModelCatalogItem::Furniture(furniture) => {
-                    (load_furniture_model(furniture).await, None, None)
+                    (load_furniture_model(furniture).await, None, None, None)
                 }
                 ModelCatalogItem::Chara(chara) => {
                     match load_chara_model_with_animation_assets(chara).await {
-                        Ok((data, skeleton, animations)) => (Ok(data), skeleton, animations),
-                        Err(error) => (Err(error), None, None),
+                        Ok((data, skeleton, animations)) => (Ok(data), skeleton, animations, None),
+                        Err(error) => (Err(error), None, None, None),
                     }
                 }
             };
@@ -599,6 +611,7 @@ pub fn ModelPreviewPage() -> Element {
                 result,
                 skeleton,
                 animations,
+                vfx,
             })
         }
     });
@@ -632,6 +645,7 @@ pub fn ModelPreviewPage() -> Element {
             result,
             skeleton: loaded.skeleton,
             animations: loaded.animations,
+            vfx: loaded.vfx,
         })
     });
 
@@ -1046,13 +1060,18 @@ fn ModelPreviewPane(
             })
             .clone()
     });
-    let current_model_result = current_snapshot.as_ref().map(|snapshot| snapshot.result.clone());
+    let current_model_result = current_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.result.clone());
     let current_skeleton = current_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.skeleton.clone());
     let current_animations = current_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.animations.clone());
+    let current_vfx = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.vfx.clone());
     let current_progress =
         requested_key.and_then(|key| progress.filter(|progress| progress.item_id == key.item_id));
 
@@ -1123,6 +1142,7 @@ fn ModelPreviewPane(
                                 rsx! {
                                     WeaponModelCanvas {
                                         model: canvas_model,
+                                        vfx: current_vfx,
                                         render_options,
                                         shape_mask,
                                         race_id,
@@ -1612,6 +1632,15 @@ fn WeaponRenderControls(
                     },
                 }
                 RenderCheckbox {
+                    label: "VFX",
+                    checked: current.vfx_enabled,
+                    on_change: move |checked| {
+                        let mut next = options();
+                        next.vfx_enabled = checked;
+                        options.set(next);
+                    },
+                }
+                RenderCheckbox {
                     label: "Flip Y",
                     checked: current.normal_y_sign < 0.0,
                     on_change: move |checked| {
@@ -1960,6 +1989,9 @@ const WEAPON_MODEL_CANVAS_ID: &str = "weapon-model-canvas";
 #[component]
 pub(crate) fn WeaponModelCanvas(
     model: Option<Rc<WeaponModelData>>,
+    /// 武器常驻 VFX（imc VfxId 命中时 Some）；随模型实例一起重建。
+    #[props(default)]
+    vfx: Option<Rc<WeaponVfxData>>,
     render_options: Signal<WeaponRenderOptions>,
     shape_mask: Option<u32>,
     race_id: u16,
@@ -2108,8 +2140,7 @@ pub(crate) fn WeaponModelCanvas(
             // （位是 MDL 本地表序，跨模型数值不可比），优先于数值掩码。
             if model_has_attribute_submeshes(&model) {
                 if let Some(names) = &instance_attribute_names {
-                    prepared_options =
-                        prepared_options.with_enabled_attribute_names(names.clone());
+                    prepared_options = prepared_options.with_enabled_attribute_names(names.clone());
                 } else {
                     prepared_options = prepared_options
                         .with_enabled_attribute_mask(attribute_mask)
@@ -2119,6 +2150,7 @@ pub(crate) fn WeaponModelCanvas(
             let orbit_key = model_orbit_reset_key(&model, race_id);
             let mut renderer = renderer.borrow_mut();
             renderer.set_model(&model, prepared_options);
+            renderer.set_vfx(vfx.as_deref());
             // 实例重建后 joint 名表/缓冲均重置（rest）：rAF 循环据此刷新动画运行时。
             let next_epoch = *effect_joint_epoch.peek() + 1;
             effect_joint_epoch.set(next_epoch);
@@ -2205,6 +2237,7 @@ fn start_weapon_render_loop(
                 );
                 let mut options = render_options();
                 options.uv_scroll_time = (time_ms as f32) / 1000.0;
+                options.vfx_time = (time_ms as f32) / 1000.0;
                 renderer.render_with_options(options);
                 true
             } else {
@@ -2743,8 +2776,13 @@ fn scoped_attribute_parts_only(selection: (Option<u32>, bool), item_id: u32) -> 
 }
 
 /// 动画选择按物品 id 作用域存储；切换物品后回到 None（rest）。
-fn scoped_animation_selection(selection: (Option<u32>, Option<usize>), item_id: u32) -> Option<usize> {
-    (selection.0 == Some(item_id)).then_some(selection.1).flatten()
+fn scoped_animation_selection(
+    selection: (Option<u32>, Option<usize>),
+    item_id: u32,
+) -> Option<usize> {
+    (selection.0 == Some(item_id))
+        .then_some(selection.1)
+        .flatten()
 }
 
 /// 动画播放状态：骨架 + 非空动画集齐备时可用（UI 出现「动画」下拉）。

@@ -12266,3 +12266,125 @@ mod chara_loader_tests {
         assert!(format!("{error:#}").contains("no renderable model meshes"));
     }
 }
+
+/// 解析武器挂载的常驻 VFX：primary model 的 body IMC → variant 对应 VfxId →
+/// `vw####.avfx` → 解析 + 贴图解码。无 IMC / 无特效 / 文件缺失时返回 `None`
+/// （静默降级，不阻塞模型加载）；解析问题记入 `diagnostics`。
+#[cfg(feature = "game-data")]
+pub fn load_weapon_vfx_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &WeaponModelLoadRequest,
+) -> Option<crate::avfx::WeaponVfxData> {
+    let model = request.primary_model();
+    for body_id in crate::weapon_body_ids(model) {
+        let imc_path = crate::weapon_body_imc_path(model.model_id, body_id);
+        let Some(imc_bytes) = resource.read(&imc_path) else {
+            continue;
+        };
+        let Ok(imc) = crate::imc::ImcFile::parse(&imc_bytes) else {
+            continue;
+        };
+        let Some(vfx_id) = imc
+            .subset_for_variant(model.variant_id)
+            .first()
+            .map(|entry| entry.vfx)
+        else {
+            continue;
+        };
+        if vfx_id == 0 {
+            continue;
+        }
+        for (_, avfx_path) in
+            crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id)
+        {
+            let Some(avfx_bytes) = resource.read(&avfx_path) else {
+                continue;
+            };
+            let Ok(file) = crate::avfx::AvfxFile::parse(&avfx_bytes) else {
+                continue;
+            };
+            let mut textures = Vec::new();
+            let mut diagnostics = Vec::new();
+            for texture_path in &file.texture_paths {
+                match resource
+                    .read(texture_path)
+                    .as_deref()
+                    .and_then(crate::avfx::decode_atex_rgba)
+                {
+                    Some(texture) => textures.push(Some(texture)),
+                    None => {
+                        diagnostics.push(format!("texture not decoded: {texture_path}"));
+                        textures.push(None);
+                    }
+                }
+            }
+            return Some(crate::avfx::WeaponVfxData {
+                avfx_path,
+                vfx_id,
+                file,
+                textures,
+                diagnostics,
+            });
+        }
+    }
+    None
+}
+
+/// [`load_weapon_vfx_from_resource`] 的异步版（web 目录句柄等）。
+#[cfg(feature = "game-data")]
+pub async fn load_weapon_vfx_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &WeaponModelLoadRequest,
+) -> Option<crate::avfx::WeaponVfxData> {
+    let model = request.primary_model();
+    for body_id in crate::weapon_body_ids(model) {
+        let imc_path = crate::weapon_body_imc_path(model.model_id, body_id);
+        let Ok(imc_bytes) = resource.read(&imc_path).await else {
+            continue;
+        };
+        let Ok(imc) = crate::imc::ImcFile::parse(&imc_bytes) else {
+            continue;
+        };
+        let Some(vfx_id) = imc
+            .subset_for_variant(model.variant_id)
+            .first()
+            .map(|entry| entry.vfx)
+        else {
+            continue;
+        };
+        if vfx_id == 0 {
+            continue;
+        }
+        for (_, avfx_path) in
+            crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id)
+        {
+            let Ok(avfx_bytes) = resource.read(&avfx_path).await else {
+                continue;
+            };
+            let Ok(file) = crate::avfx::AvfxFile::parse(&avfx_bytes) else {
+                continue;
+            };
+            let mut textures = Vec::new();
+            let mut diagnostics = Vec::new();
+            for texture_path in &file.texture_paths {
+                let decoded = resource
+                    .read(texture_path)
+                    .await
+                    .ok()
+                    .and_then(|bytes| crate::avfx::decode_atex_rgba(&bytes));
+                if decoded.is_none() {
+                    diagnostics.push(format!("texture not decoded: {texture_path}"));
+                }
+                textures.push(decoded);
+            }
+            return Some(crate::avfx::WeaponVfxData {
+                avfx_path,
+                vfx_id,
+                file,
+                textures,
+                diagnostics,
+            });
+        }
+    }
+    None
+}

@@ -1386,3 +1386,65 @@ mod tests {
         ));
     }
 }
+
+/// 武器挂载的常驻 VFX 数据：解析后的 avfx 子集 + 解码好的颜色贴图。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponVfxData {
+    /// 命中的 avfx 资源路径（`chara/weapon/.../vfx/eff/vw####.avfx`）。
+    pub avfx_path: String,
+    /// IMC 里的 VfxId。
+    pub vfx_id: u8,
+    pub file: AvfxFile,
+    /// 按文件 `Tex` 块顺序解码的贴图（RGBA8，取首层）；解码失败的项以
+    /// `diagnostics` 记录、此处缺位（渲染端按索引回退程序化贴图）。
+    pub textures: Vec<Option<VfxTextureRgba>>,
+    pub diagnostics: Vec<String>,
+}
+
+impl WeaponVfxData {
+    /// 构建常驻采样运行时。
+    pub fn runtime(&self) -> crate::avfx_sim::VfxRuntime {
+        crate::avfx_sim::VfxRuntime::new(&self.file)
+    }
+}
+
+/// 解码到 RGBA8 的 VFX 贴图（单层）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxTextureRgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// 解码 `.atex` 贴图（avfx 内 `Tex` 块引用）。atex 在 `.tex` 负载前有
+/// 8 字节头（`atex` 魔数 + 版本），tolerant：无魔数时按裸 tex 解析；
+/// 数组贴图取第 0 层。此头布局假设待 Windows 真实数据审计复核。
+#[cfg(feature = "game-data")]
+pub fn decode_atex_rgba(bytes: &[u8]) -> Option<VfxTextureRgba> {
+    let payload = bytes.strip_prefix(b"atex").map(|rest| &rest[4..]);
+    let payload: &[u8] = match payload {
+        Some(rest) if rest.len() >= 16 => rest,
+        None => bytes,
+        Some(_) => bytes,
+    };
+    let texture = <physis::tex::Texture as physis::ReadableFile>::from_existing(
+        physis::Platform::Win32,
+        payload,
+    )?;
+    let decoded = crate::texture_decode::decode_texture_rgba(&texture)?;
+    let width = texture.width as usize;
+    let layer_height = usize::from(texture.height).max(1);
+    let layer_bytes = width.checked_mul(layer_height)?.checked_mul(4)?;
+    let rgba = if decoded.len() >= layer_bytes {
+        decoded[..layer_bytes].to_vec()
+    } else {
+        return None;
+    };
+    Some(VfxTextureRgba {
+        width: texture.width as u32,
+        height: layer_height as u32,
+        rgba,
+    })
+}

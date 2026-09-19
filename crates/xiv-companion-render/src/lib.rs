@@ -39,6 +39,7 @@ pub use model::{
 
 #[cfg(feature = "renderer")]
 pub use renderer::{
-    ModelDebugMode, ModelGlassBlendMode, ModelInstance, ModelRenderContext, ModelRenderOptions,
-    ModelRenderer, WeaponRenderOptions, WeaponRenderer,
+    GpuVfxQuad, ModelDebugMode, ModelGlassBlendMode, ModelInstance, ModelRenderContext,
+    ModelRenderOptions, ModelRenderer, VfxParticles, VfxTextureInput, WeaponRenderOptions,
+    WeaponRenderer,
 };

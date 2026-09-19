@@ -28,9 +28,7 @@ use crate::app::ui::{
     GitHubRepoButton, dialog_key_action, input_class,
 };
 use crate::app::utils::{cx, format_integer};
-use xiv_companion::{
-    CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummary, SourceChoice,
-};
+use xiv_companion::{CraftDataPackage, CraftRecipe, CraftTreeNode, MaterialSummary, SourceChoice};
 
 const NOTES_STORAGE_KEY: &str = "xiv-companion-notes-v1";
 
@@ -1797,11 +1795,10 @@ fn market_subtree_cost(
     market_priority: bool,
     quotes: &HashMap<u32, TreeMarketQuote>,
 ) -> Option<u64> {
-    let is_leaf = node.children.is_empty() || collapsed.contains(&collapse_key(node.item_id, depth));
+    let is_leaf =
+        node.children.is_empty() || collapsed.contains(&collapse_key(node.item_id, depth));
     if is_leaf {
-        let unit_price = quotes
-            .get(&node.item_id)
-            .and_then(|quote| quote.unit_price);
+        let unit_price = quotes.get(&node.item_id).and_then(|quote| quote.unit_price);
         if !is_crystal_resource(data, node.item_id) {
             let sources = data
                 .sources
@@ -1809,8 +1806,12 @@ fn market_subtree_cost(
                 .cloned()
                 .unwrap_or_default();
             let marketable = is_marketable(get_item(data, node.item_id));
-            if !uses_market_source(marketable, &sources, choices.get(&node.item_id), market_priority)
-            {
+            if !uses_market_source(
+                marketable,
+                &sources,
+                choices.get(&node.item_id),
+                market_priority,
+            ) {
                 return None;
             }
         }
@@ -1818,8 +1819,15 @@ fn market_subtree_cost(
     }
     let mut total = 0u64;
     for child in &node.children {
-        total +=
-            market_subtree_cost(data, child, collapsed, depth + 1, choices, market_priority, quotes)?;
+        total += market_subtree_cost(
+            data,
+            child,
+            collapsed,
+            depth + 1,
+            choices,
+            market_priority,
+            quotes,
+        )?;
     }
     Some(total)
 }
@@ -1846,7 +1854,15 @@ fn collect_buy_suggestions(
     } else {
         None
     };
-    let craft = market_subtree_cost(data, node, collapsed, depth, choices, market_priority, quotes);
+    let craft = market_subtree_cost(
+        data,
+        node,
+        collapsed,
+        depth,
+        choices,
+        market_priority,
+        quotes,
+    );
     if let (Some(buy), Some(craft)) = (buy, craft)
         && buy < craft
     {
@@ -1873,7 +1889,11 @@ fn collect_buy_suggestions(
     }
 }
 
-fn collect_marketable_tree_items(data: &CraftDataPackage, node: &CraftTreeNode, ids: &mut Vec<u32>) {
+fn collect_marketable_tree_items(
+    data: &CraftDataPackage,
+    node: &CraftTreeNode,
+    ids: &mut Vec<u32>,
+) {
     if is_marketable(get_item(data, node.item_id)) {
         ids.push(node.item_id);
     }
@@ -4596,7 +4616,9 @@ pub fn NotesPage() -> Element {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let Some(data) = data else { return; };
+        let Some(data) = data else {
+            return;
+        };
         let engine = create_craft_data_engine(data.clone());
         let mut selected = selected_entry_ids();
         if selected.is_empty()
@@ -4634,7 +4656,6 @@ pub fn NotesPage() -> Element {
             );
         }
     });
-
 
     let data = craft_data
         .read()

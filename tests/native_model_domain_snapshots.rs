@@ -104,8 +104,8 @@ mod installed {
             race_id: 101,
             stain_ids: [0, 0],
         };
-        let model = load_equipment_model_from_resource(&mut resource, &accessory)
-            .expect("load accessory");
+        let model =
+            load_equipment_model_from_resource(&mut resource, &accessory).expect("load accessory");
         assert!(!model.meshes.is_empty());
         render("installed-equipment-49719-accessory", &model);
     }

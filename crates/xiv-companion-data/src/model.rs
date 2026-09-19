@@ -3592,6 +3592,53 @@ pub fn is_weapon_equip_slot_category(category: u32) -> bool {
     matches!(category, 1 | 2 | 13 | 14)
 }
 
+/// 武器 body 的 IMC 路径（VfxId 所在）。
+pub fn weapon_body_imc_path(model_id: u16, body_id: u16) -> String {
+    format!("chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/imc.imc")
+}
+
+/// 武器 body avfx 路径候选（`vw####`，含短数字填充探测），按优先级排序。
+pub fn weapon_vfx_avfx_candidate_paths(
+    model_id: u16,
+    body_id: u16,
+    vfx_id: u8,
+) -> Vec<(String, String)> {
+    let base = format!("chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/vfx/eff/vw");
+    let mut digit_forms = Vec::new();
+    for digits in [
+        format!("{vfx_id:04}"),
+        format!("{vfx_id:03}"),
+        format!("{vfx_id:02}"),
+        vfx_id.to_string(),
+    ] {
+        if !digit_forms.contains(&digits) {
+            digit_forms.push(digits);
+        }
+    }
+    digit_forms
+        .into_iter()
+        .map(|digits| (format!("vw{digits}"), format!("{base}{digits}.avfx")))
+        .collect()
+}
+
+/// 候选模型路径里的 body id（按候选顺序去重）。
+pub fn weapon_body_ids(model: PackedModelId) -> Vec<u16> {
+    let mut body_ids = Vec::new();
+    for path in weapon_model_candidate_paths(model) {
+        if let Some(body_id) = path
+            .split("/obj/body/b")
+            .nth(1)
+            .and_then(|rest| rest.get(..4))
+            .and_then(|digits| digits.parse().ok())
+        {
+            if !body_ids.contains(&body_id) {
+                body_ids.push(body_id);
+            }
+        }
+    }
+    body_ids
+}
+
 pub fn weapon_model_candidate_paths(model: PackedModelId) -> Vec<String> {
     if model.model_id == 0 {
         return Vec::new();

@@ -278,5 +278,4 @@ mod tests {
         assert_eq!(default_source_index(&sources), Some(1));
         assert!(source_priority(&sources[1]) < source_priority(&sources[0]));
     }
-
 }

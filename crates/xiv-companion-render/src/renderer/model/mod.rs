@@ -24,6 +24,7 @@ mod material;
 mod options;
 mod pipelines;
 mod postprocess;
+mod vfx;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +33,7 @@ pub use context::{ModelInstance, ModelRenderContext, ModelRenderer};
 pub use options::{
     ModelDebugMode, ModelGlassBlendMode, ModelRenderOptions, WeaponRenderOptions, WeaponRenderer,
 };
+pub use vfx::{GpuVfxQuad, VfxParticles, VfxTextureInput};
 
 use context::*;
 use instance::*;
@@ -39,3 +41,4 @@ use material::*;
 use options::*;
 use pipelines::*;
 use postprocess::*;
+use vfx::*;

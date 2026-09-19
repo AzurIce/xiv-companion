@@ -40,6 +40,9 @@ pub struct ModelRenderContext {
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_pipeline: wgpu::RenderPipeline,
+    vfx_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_sampler: wgpu::Sampler,
     post_process: Option<PostProcessState>,
     format: wgpu::TextureFormat,
     msaa_samples: u32,
@@ -182,6 +185,7 @@ impl ModelRenderer {
         zoom: f32,
         pan: [f32; 2],
         options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
     ) {
         self.context.render(
             &self.instance,
@@ -193,6 +197,7 @@ impl ModelRenderer {
             zoom,
             pan,
             options,
+            vfx,
         );
     }
 
@@ -797,6 +802,103 @@ impl ModelRenderContext {
             msaa_samples,
         );
 
+        let vfx_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("weapon vfx particle shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!(concat!(env!("OUT_DIR"), "/vfx.wgsl")).into(),
+            ),
+        });
+        let vfx_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon vfx particle bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let vfx_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("weapon vfx particle pipeline layout"),
+            bind_group_layouts: &[
+                Some(&camera_bind_group_layout),
+                Some(&vfx_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
+        let vfx_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("weapon vfx particle pipeline"),
+            layout: Some(&vfx_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vfx_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[GpuVfxQuad::LAYOUT],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &vfx_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: msaa_samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+        let vfx_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("weapon vfx particle sampler"),
+            // UVSet scroll 环绕采样。
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
         let blur_pipeline = create_post_pipeline(
             &device,
             &post_shader,
@@ -860,6 +962,9 @@ impl ModelRenderContext {
             compose_uniform_buffer,
             blur_bind_group_layout,
             compose_bind_group_layout,
+            vfx_pipeline,
+            vfx_bind_group_layout,
+            vfx_sampler,
             post_process: None,
             format,
             msaa_samples,
@@ -1010,6 +1115,7 @@ impl ModelRenderContext {
         zoom: f32,
         pan: [f32; 2],
         options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
     ) {
         let uniform = camera_uniform(
             model.bounds_center,
@@ -1186,6 +1292,18 @@ impl ModelRenderContext {
                 });
                 draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
+
+            // VFX 粒子最后画：加色进 HDR 目标（bloom 拾取），深度只测不写
+            // （武器遮挡身后的粒子，粒子不遮挡后续无）。
+            if let Some(vfx) = vfx {
+                if vfx.count() > 0 {
+                    render_pass.set_pipeline(&self.vfx_pipeline);
+                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    render_pass.set_bind_group(1, vfx.bind_group(), &[]);
+                    render_pass.set_vertex_buffer(0, vfx.instance_slice());
+                    render_pass.draw(0..6, 0..vfx.count() as u32);
+                }
+            }
         }
 
         {
@@ -1339,5 +1457,47 @@ impl ModelInstance {
             JOINT_STORAGE_HEADER_SIZE,
             bytemuck::cast_slice(&matrices[..count]),
         );
+    }
+}
+
+/// VFX 粒子批次创建（独立 impl 块，vfx 模块协作）。
+impl ModelRenderContext {
+    /// 粒子批次容量上限（超过由采样器截断）。
+    pub const VFX_PARTICLE_CAPACITY: usize = 4096;
+
+    /// 创建 VFX 粒子批次：固定容量实例缓冲 + 颜色贴图 bind group。
+    /// `texture` 为 `None` 时使用内置径向光点回退贴图。
+    pub fn create_vfx_particles(&self, texture: Option<VfxTextureInput>) -> VfxParticles {
+        let instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon vfx particle instances"),
+            size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxQuad>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let view = create_vfx_texture_view(
+            &self.device,
+            &self.queue,
+            &texture.unwrap_or_else(fallback_vfx_texture_rgba),
+        );
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("weapon vfx particle bind group"),
+            layout: &self.vfx_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.vfx_sampler),
+                },
+            ],
+        });
+        VfxParticles {
+            instance_buffer,
+            bind_group,
+            capacity: Self::VFX_PARTICLE_CAPACITY,
+            count: 0,
+        }
     }
 }

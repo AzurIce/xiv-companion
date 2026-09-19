@@ -2,6 +2,7 @@
 
 ## 开发中
 
+- 模型预览（武器）新增常驻武器特效（VFX）渲染，补齐武器光效的粒子层：数据层新增 avfx 解析器（递归块 walker + Scheduler/Timeline/Emitter/Particle/Binder/Curve/UVSet 类型化子集 + 曲线求值——线性/阶梯/样条贝塞尔与首尾行为，字段表逐项对齐 VFXEditor 源码）与确定性粒子采样器（timeline 循环 → emitter 创建事件网格 → Point/Cone/SphereModel 形状 + 注入速度 + 重力，splitmix64 按事件播种，任意时刻解析式采样、可快照复现）；加载链路按 IMC VfxId 判定（不按物品名猜）→ `vw####.avfx` → atex 贴图解码（缺贴图回退内置径向光点，无特效武器静默降级）；渲染器新增 vfx 粒子管线（相机朝向加色四边形实例批次，HDR 颜色直写 Rgba16Float 场景由 bloom 拾取，深度只测不写保持武器遮挡关系），模型页新增「VFX」开关，特效随模型加载自动挂载并按 rAF 时钟采样播放。合成 avfx fixture 的解析/求值/采样单测与 native GPU 快照测试（加色粒子环与基线像素差异、暖色像素增量、二次渲染逐位一致）全程守护；IMC 解析（variant/material-set 表）同步落地并新增武器 VFX 审计测试挂入 `verify-weapon-render.ps1`（真实客户端数据核对，产物落 `target/weapon-vfx-audit/`）。
 - 新增 IMC 解析与武器 VFX 审计，作为武器光效调研的数据基线：数据层新增 `imc` 模块（variant/material-set 表读取，布局对齐 xivModdingFramework：头部 `subset_count + kind`（1=武器 NonSet/31=装备 Set），每条 6 字节 MaterialSet/Decal/Mask/Vfx/Animation，含合成字节单元测试）；新增 `weapon_vfx_audit` 测试——以 IMC 的 VfxId 为唯一判定依据（不按物品名猜系列），枚举武器目录各模型的 `vw*.avfx` 引用、探测文件存在性与数字填充风格、扫描 avfx 顶层块构成（Schd/Emit/Ptcl 等），并统计带特效模型的 mtrl shpk 分布；产物落 `target/weapon-vfx-audit/`，已挂入 `verify-weapon-render.ps1`。
 - 角色页「渲染」区块新增「角膜环强度」滑杆（0–2，默认 1）：渲染侧已消费虹膜色 alpha 作每侧角膜环强度，但 26 字节捏脸与调色板均无此数据，此前恒满强度；现作为外观覆盖随拼装重载生效（会话内调整，不进 ?c= 链接）。
 - bg 域新增逐贴图 UV 缩放：解析 `g_ColorUVScale`/`g_NormalUVScale`/`g_SpecularUVScale`（各含 map0/map1 两组 xy），bg 家族材质的 color/normal/specular 六个采样点按常量缩放，其余家族 uniform 恒 1 渲染不变。

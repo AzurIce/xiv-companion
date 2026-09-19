@@ -50,9 +50,7 @@ pub fn HomePage() -> Element {
                     local_data_status.set(IntegrationStatus::Available(directory.name));
                 }
                 RestoreUserLocalDirectoryOutcome::Ready(_) => local_data_status.set(
-                    IntegrationStatus::NeedsAttention(
-                        "已保存的目录中没有找到 sqpack".to_string(),
-                    ),
+                    IntegrationStatus::NeedsAttention("已保存的目录中没有找到 sqpack".to_string()),
                 ),
                 RestoreUserLocalDirectoryOutcome::NeedsReauthorize { .. } => {
                     local_data_status.set(IntegrationStatus::NeedsAttention(

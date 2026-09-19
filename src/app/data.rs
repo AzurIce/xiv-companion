@@ -10,7 +10,7 @@ use crate::app::resource_settings::{
 use crate::app::resources::{
     load_chara_model_with_skeleton_from_local, load_equipment_model_from_local,
     load_furniture_model_from_local, load_weapon_model_from_local,
-    load_weapon_staining_templates_from_local,
+    load_weapon_staining_templates_from_local, load_weapon_vfx_from_local,
 };
 use xiv_companion::{
     CharaCatalogId, CharaCatalogItem, CharaCatalogPackage, CharaCatalogResource, CharaModelId,
@@ -22,7 +22,7 @@ use xiv_companion::{
     FurnitureCatalogResource, FurnitureModelId, ItemIconId, ItemIconResource, ItemIconResourceInfo,
     ItemSource, MaterialSummary, ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId,
     WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId,
-    WeaponStainingTemplates, apply_weapon_model_stains, build_craft_tree,
+    WeaponStainingTemplates, WeaponVfxData, apply_weapon_model_stains, build_craft_tree,
     craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
@@ -117,6 +117,19 @@ pub async fn load_weapon_model(item: &CollectionItem) -> Result<Rc<WeaponModelDa
     Ok(Rc::new(data))
 }
 
+/// 武器常驻 VFX（无特效或资源缺失为 None）。
+pub async fn load_weapon_vfx(item: &CollectionItem) -> Option<Rc<WeaponVfxData>> {
+    let data = load_weapon_vfx_from_local(WeaponModelId {
+        item_id: item.id,
+        item_name: item.name.clone(),
+        model_main: item.model_main,
+        model_sub: item.model_sub,
+        stain_ids: [0, 0],
+    })
+    .await?;
+    Some(Rc::new(data))
+}
+
 pub async fn load_equipment_model(
     item: &CollectionItem,
     race_id: u16,
@@ -159,14 +172,13 @@ pub async fn load_chara_model_with_animation_assets(
     ),
     String,
 > {
-    let (data, skeleton, animations) =
-        load_chara_model_with_skeleton_from_local(CharaModelId {
-            item_id: item.id,
-            item_name: item.name.clone(),
-            kind: item.kind,
-            model: item.model,
-        })
-        .await?;
+    let (data, skeleton, animations) = load_chara_model_with_skeleton_from_local(CharaModelId {
+        item_id: item.id,
+        item_name: item.name.clone(),
+        kind: item.kind,
+        model: item.model,
+    })
+    .await?;
     Ok((
         Rc::new(data),
         skeleton.map(Rc::new),

@@ -233,9 +233,9 @@ mod installed {
         // 与角色渲染页一致：全部件原位重叠，attribute 按名启用。
         let options = xiv_companion_data::PreparedModelOptions::default()
             .with_component_preview_layout(false)
-            .with_enabled_attribute_names(
-                xiv_companion::character_enabled_attribute_names(&customize, &model),
-            );
+            .with_enabled_attribute_names(xiv_companion::character_enabled_attribute_names(
+                &customize, &model,
+            ));
         let unskinned = render(
             "skeleton-smoke-hyur-unskinned",
             &model,

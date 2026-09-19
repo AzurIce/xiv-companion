@@ -225,7 +225,8 @@ fn render_mock_msaa_edge_smoothing_snapshot() {
     let on = render("native-msaa-4x", 4);
     // 自校准边界：左上角为背景，画面中心在三角形内部。
     let luminance = |pixels: &[u8], index: usize| {
-        (u32::from(pixels[index * 4]) + u32::from(pixels[index * 4 + 1])
+        (u32::from(pixels[index * 4])
+            + u32::from(pixels[index * 4 + 1])
             + u32::from(pixels[index * 4 + 2]))
             / 3
     };
@@ -5190,4 +5191,98 @@ fn mock_metallic_fixture_model(metalness: f32, roughness: f32) -> WeaponModelDat
             indices: vec![0, 1, 2, 0, 2, 3],
         }],
     }
+}
+
+#[test]
+#[ignore = "writes synthetic weapon VFX particle snapshots with native wgpu"]
+fn render_mock_weapon_vfx_particle_snapshot() {
+    let model = mock_weapon_model();
+    let camera = (0.0_f32, 0.0_f32, 3.2_f32, [0.0_f32, 0.0_f32]);
+    let baseline = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-baseline")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3),
+        &model,
+    )
+    .expect("render vfx baseline");
+
+    // 围绕武器的亮橙粒子环（HDR 颜色 >1，走加色 + bloom）。
+    let quads = (0..24)
+        .map(|index| {
+            let angle = index as f32 / 24.0 * std::f32::consts::TAU;
+            xiv_companion::VfxQuad {
+                position: [angle.cos() * 0.7, 0.15, angle.sin() * 0.7],
+                size: [0.14, 0.14],
+                rotation: 0.0,
+                color: [3.0, 1.8, 0.6, 1.0],
+                uv_origin: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                texture_index: -1,
+            }
+        })
+        .collect::<Vec<_>>();
+    let lit = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-lit")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3)
+            .with_vfx_quads(quads.clone()),
+        &model,
+    )
+    .expect("render vfx snapshot");
+
+    // 确定性：同参数二次渲染逐位一致。
+    let repeat = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-repeat")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3)
+            .with_vfx_quads(quads),
+        &model,
+    )
+    .expect("render vfx repeat snapshot");
+
+    let read_pixels = |path: &std::path::Path| -> Vec<u8> {
+        image::open(path)
+            .expect("decode snapshot PNG")
+            .to_rgba8()
+            .into_raw()
+    };
+    let baseline_pixels = read_pixels(&baseline.png_path);
+    let lit_pixels = read_pixels(&lit.png_path);
+    let repeat_pixels = read_pixels(&repeat.png_path);
+    assert_eq!(baseline_pixels.len(), lit_pixels.len());
+
+    // 确定性断言：两次带 VFX 的渲染完全一致。
+    assert_eq!(
+        lit_pixels, repeat_pixels,
+        "vfx snapshot must be deterministic"
+    );
+
+    // 与基线差异显著（粒子环可见）。
+    let difference: u64 = baseline_pixels
+        .chunks_exact(4)
+        .zip(lit_pixels.chunks_exact(4))
+        .map(|(left, right)| {
+            (0..3)
+                .map(|channel| u64::from(left[channel].abs_diff(right[channel])))
+                .sum::<u64>()
+        })
+        .sum();
+    assert!(
+        difference > 200_000,
+        "vfx snapshot differs by only {difference} from baseline"
+    );
+
+    // 暖色（橙）像素大量出现：R 通道显著高于 B 通道，且总量超过基线。
+    let warm_pixels = |pixels: &[u8]| -> usize {
+        pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] > 140 && pixel[0] >= pixel[2].saturating_add(40))
+            .count()
+    };
+    let warm_delta = warm_pixels(&lit_pixels).saturating_sub(warm_pixels(&baseline_pixels));
+    assert!(
+        warm_delta > 1500,
+        "expected >1500 new warm-lit pixels from vfx ring, got {warm_delta}"
+    );
+    eprintln!("vfx snapshot: rgb diff {difference}, warm delta {warm_delta}");
 }

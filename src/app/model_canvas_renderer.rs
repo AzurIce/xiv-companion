@@ -8,8 +8,10 @@ use raw_window_handle::{
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
-use xiv_companion::renderer::{ModelInstance, ModelRenderContext, ModelRenderOptions};
-use xiv_companion::{ModelRenderData, PreparedModelOptions};
+use xiv_companion::renderer::{
+    ModelInstance, ModelRenderContext, ModelRenderOptions, VfxParticles, VfxTextureInput,
+};
+use xiv_companion::{ModelRenderData, PreparedModelOptions, VfxQuad, WeaponVfxData};
 
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -18,6 +20,10 @@ pub struct WebModelCanvasRenderer {
     depth_texture: wgpu::Texture,
     context: ModelRenderContext,
     instance: Option<ModelInstance>,
+    /// 常驻 VFX 运行时与 GPU 批次（模型切换时经 `set_vfx` 整体替换）。
+    vfx_runtime: Option<xiv_companion::VfxRuntime>,
+    vfx_batch: Option<VfxParticles>,
+    vfx_scratch: Vec<VfxQuad>,
     orbit: Rc<RefCell<OrbitState>>,
     msaa_samples: u32,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -117,6 +123,9 @@ impl WebModelCanvasRenderer {
             depth_texture,
             context,
             instance: None,
+            vfx_runtime: None,
+            vfx_batch: None,
+            vfx_scratch: Vec::new(),
             orbit,
             msaa_samples,
             _on_mouse_down: on_mouse_down,
@@ -125,6 +134,23 @@ impl WebModelCanvasRenderer {
             _on_wheel: on_wheel,
             _on_context_menu: on_context_menu,
         })
+    }
+
+    /// 同步替换常驻 VFX（模型/物品切换时调用）。贴图取首个解码成功的
+    /// atex；全部缺失时用内置径向光点回退。
+    pub fn set_vfx(&mut self, vfx: Option<&WeaponVfxData>) {
+        self.vfx_runtime = vfx.map(|data| data.runtime());
+        self.vfx_batch = Some(self.context.create_vfx_particles(vfx.and_then(|data| {
+            data.textures
+                .iter()
+                .flatten()
+                .next()
+                .map(|texture| VfxTextureInput {
+                    rgba: texture.rgba.clone(),
+                    width: texture.width,
+                    height: texture.height,
+                })
+        })));
     }
 
     /// 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与材质 bind group，
@@ -161,6 +187,17 @@ impl WebModelCanvasRenderer {
         let depth_view = self
             .depth_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // VFX 粒子按渲染时钟采样并上传；时间由页面循环写入
+        // `options.vfx_time`（快照路径传固定值保持确定性）。
+        if options.vfx_enabled {
+            if let (Some(runtime), Some(batch)) = (&self.vfx_runtime, &mut self.vfx_batch) {
+                runtime.sample(options.vfx_time, &mut self.vfx_scratch);
+                batch.update(&self.context, &self.vfx_scratch);
+            }
+        }
+        let vfx = (options.vfx_enabled)
+            .then_some(self.vfx_batch.as_ref())
+            .flatten();
         let orbit = self.orbit.borrow();
         self.context.render(
             instance,
@@ -172,6 +209,7 @@ impl WebModelCanvasRenderer {
             orbit.zoom,
             [orbit.pan_x, orbit.pan_y],
             options,
+            vfx,
         );
         output.present();
     }
@@ -390,7 +428,8 @@ trait StorageBufferLimitsForSkinning {
 
 impl StorageBufferLimitsForSkinning for wgpu::Limits {
     fn with_storage_buffer_limits_for_skinning(mut self) -> Self {
-        self.max_storage_buffers_per_shader_stage = self.max_storage_buffers_per_shader_stage.max(1);
+        self.max_storage_buffers_per_shader_stage =
+            self.max_storage_buffers_per_shader_stage.max(1);
         self.max_storage_buffer_binding_size = self.max_storage_buffer_binding_size.max(16_400);
         self
     }

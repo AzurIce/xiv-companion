@@ -213,13 +213,17 @@ pub(crate) async fn reauthorize_saved_user_local_directory()
     reauthorize_directory_handle(handle).await
 }
 
-async fn reauthorize_directory_handle(handle: JsValue) -> Result<AuthorizedUserLocalDirectory, String>
-{
+async fn reauthorize_directory_handle(
+    handle: JsValue,
+) -> Result<AuthorizedUserLocalDirectory, String> {
     let name = directory_handle_name(&handle);
     let permission = request_directory_read_permission(&handle).await;
     log::info(
         "local-dir",
-        format!("re-authorized handle {name}; permission={}", permission.label()),
+        format!(
+            "re-authorized handle {name}; permission={}",
+            permission.label()
+        ),
     );
     if permission != DirectoryPermission::Granted {
         return Err(reauthorize_rejection_message(&name, permission));
@@ -492,12 +496,24 @@ mod tests {
     #[test]
     fn permission_maps_to_restore_action() {
         let cases = [
-            (DirectoryPermission::Granted, DirectoryPermissionAction::UseHandle),
-            (DirectoryPermission::Prompt, DirectoryPermissionAction::Reauthorize),
-            (DirectoryPermission::Denied, DirectoryPermissionAction::Repick),
+            (
+                DirectoryPermission::Granted,
+                DirectoryPermissionAction::UseHandle,
+            ),
+            (
+                DirectoryPermission::Prompt,
+                DirectoryPermissionAction::Reauthorize,
+            ),
+            (
+                DirectoryPermission::Denied,
+                DirectoryPermissionAction::Repick,
+            ),
             // Reflection failures keep the historical use-the-handle behavior so
             // environments without `queryPermission` do not regress to the picker.
-            (DirectoryPermission::Unknown, DirectoryPermissionAction::UseHandle),
+            (
+                DirectoryPermission::Unknown,
+                DirectoryPermissionAction::UseHandle,
+            ),
         ];
         for (permission, action) in cases {
             assert_eq!(directory_permission_action(permission), action);
@@ -514,10 +530,7 @@ mod tests {
             name: "game".to_string(),
         };
         assert_ne!(ready, reauthorize);
-        assert_ne!(
-            reauthorize,
-            RestoreUserLocalDirectoryOutcome::NotSaved,
-        );
+        assert_ne!(reauthorize, RestoreUserLocalDirectoryOutcome::NotSaved,);
         assert_ne!(
             RestoreUserLocalDirectoryOutcome::NotSaved,
             RestoreUserLocalDirectoryOutcome::Failed("denied".to_string()),

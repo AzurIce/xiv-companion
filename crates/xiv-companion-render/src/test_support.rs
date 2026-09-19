@@ -24,6 +24,8 @@ pub struct WeaponModelSnapshotOptions {
     pub power_preference: wgpu::PowerPreference,
     pub force_fallback_adapter: bool,
     pub capture_hdr_scene: bool,
+    /// 固定的 VFX 粒子批次（合成特效/确定性快照用）。
+    pub vfx_quads: Vec<xiv_companion_data::VfxQuad>,
 }
 
 impl WeaponModelSnapshotOptions {
@@ -75,6 +77,15 @@ impl WeaponModelSnapshotOptions {
         self.capture_hdr_scene = true;
         self
     }
+
+    /// 固定 VFX 粒子批次（时间已由调用方采样，保证快照确定性）。
+    pub fn with_vfx_quads(
+        mut self,
+        quads: impl IntoIterator<Item = xiv_companion_data::VfxQuad>,
+    ) -> Self {
+        self.vfx_quads = quads.into_iter().collect();
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -102,6 +113,7 @@ impl Default for WeaponModelSnapshotOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             capture_hdr_scene: false,
+            vfx_quads: Vec::new(),
         }
     }
 }
@@ -297,6 +309,11 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         let matrices = cache.joint_matrices(skeleton, pose, &joint_names);
         renderer.update_joint_matrices(&matrices);
     }
+    let vfx_particles = (!options.vfx_quads.is_empty()).then(|| {
+        let mut batch = renderer.context().create_vfx_particles(None);
+        batch.update(renderer.context(), &options.vfx_quads);
+        batch
+    });
     renderer.render_to(
         &target_view,
         &depth_view,
@@ -306,6 +323,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         options.zoom,
         options.pan,
         options.render_options,
+        vfx_particles.as_ref(),
     );
 
     let hdr_scene_rgba = if options.capture_hdr_scene {

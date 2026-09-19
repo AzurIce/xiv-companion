@@ -1,6 +1,7 @@
 pub mod model;
 
 pub use model::{
-    ModelDebugMode, ModelGlassBlendMode, ModelInstance, ModelRenderContext, ModelRenderOptions,
-    ModelRenderer, WeaponRenderOptions, WeaponRenderer,
+    GpuVfxQuad, ModelDebugMode, ModelGlassBlendMode, ModelInstance, ModelRenderContext,
+    ModelRenderOptions, ModelRenderer, VfxParticles, VfxTextureInput, WeaponRenderOptions,
+    WeaponRenderer,
 };

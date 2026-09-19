@@ -45,8 +45,11 @@ fn load_default_character_assemblies_from_installed_game() {
             Ok(data) => {
                 if race_code == 101 {
                     let out = std::path::PathBuf::from("target/character-assembly-101.json");
-                    std::fs::write(&out, serde_json::to_vec(&data).expect("serialize character assembly"))
-                        .expect("write character assembly export");
+                    std::fs::write(
+                        &out,
+                        serde_json::to_vec(&data).expect("serialize character assembly"),
+                    )
+                    .expect("write character assembly export");
                     println!("wrote {}", out.display());
                 }
                 let mut parts: Vec<String> = Vec::new();
@@ -90,7 +93,11 @@ fn export_user_au_ra_preset() {
     let request = CharacterAssemblyLoadRequest::new(customize, "user-au-ra");
     let mut resource = SqPackResource::from_existing(&game_dir());
     let data = load_character_assembly_from_resource(&mut resource, &request).expect("load");
-    std::fs::write("target/character-assembly-user.json", serde_json::to_vec(&data).unwrap()).unwrap();
+    std::fs::write(
+        "target/character-assembly-user.json",
+        serde_json::to_vec(&data).unwrap(),
+    )
+    .unwrap();
 }
 
 /// 共享发装配：维埃拉女换 h0116（模型回退中原男根 c0101，材质按模型路径
@@ -323,9 +330,10 @@ fn dump_part_attribute_tables_from_installed_game() {
     for race_code in [101u16, 801, 1401] {
         let customize = xiv_companion::default_customize_for_race_code(&make, race_code)
             .expect("default customize");
-        let request = CharacterAssemblyLoadRequest::new(customize, format!("race-code-{race_code}"));
-        let data = load_character_assembly_from_resource(&mut resource, &request)
-            .expect("load assembly");
+        let request =
+            CharacterAssemblyLoadRequest::new(customize, format!("race-code-{race_code}"));
+        let data =
+            load_character_assembly_from_resource(&mut resource, &request).expect("load assembly");
         println!("== race code {race_code} ==");
         let mut last_path = String::new();
         for mesh in &data.meshes {
@@ -336,9 +344,7 @@ fn dump_part_attribute_tables_from_installed_game() {
             if let Some(submesh) = &mesh.submesh {
                 println!(
                     "    mesh mat={} mask={} names(zip)={:?}",
-                    mesh.material_name,
-                    submesh.attribute_index_mask_hex,
-                    submesh.attribute_names,
+                    mesh.material_name, submesh.attribute_index_mask_hex, submesh.attribute_names,
                 );
             } else {
                 println!("    mesh mat={} (no submesh info)", mesh.material_name);
@@ -356,8 +362,8 @@ fn dump_tail_and_scalp_textures_from_installed_game() {
     let customize = xiv_companion::default_customize_for_race_code(&make, 1401).unwrap();
     let request = CharacterAssemblyLoadRequest::new(customize, "au-ra-female");
     let data = load_character_assembly_from_resource(&mut resource, &request).expect("load");
-    let out_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/tmp/texture-probe");
+    let out_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/tmp/texture-probe");
     std::fs::create_dir_all(&out_dir).unwrap();
     for texture in &data.textures {
         if !(texture.path.contains("t0001") || texture.path.contains("h0001_hir")) {
@@ -417,7 +423,13 @@ fn dump_tail_mesh_geometry_from_installed_game() {
             skinned,
             min,
             max,
-            mesh.bone_table.as_ref().map(|t| t.bone_names.iter().flatten().take(8).cloned().collect::<Vec<_>>()),
+            mesh.bone_table.as_ref().map(|t| t
+                .bone_names
+                .iter()
+                .flatten()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()),
         );
         // 顶点 y/z 分布直方（看是否成段分离）。
         let mut histogram = [0usize; 10];
@@ -455,7 +467,12 @@ fn dump_hair_submesh_composition_from_installed_game() {
             let (mask, names) = mesh
                 .submesh
                 .as_ref()
-                .map(|s| (s.attribute_index_mask_hex.clone(), s.attribute_names.clone()))
+                .map(|s| {
+                    (
+                        s.attribute_index_mask_hex.clone(),
+                        s.attribute_names.clone(),
+                    )
+                })
                 .unwrap_or_default();
             println!(
                 "  {} verts={} mask={} names={:?} mat={} min={:?} max={:?}",
@@ -536,18 +553,16 @@ fn baked_hand_mesh_deforms_to_au_ra_wrist() {
 fn sync_and_async_assembly_loads_are_identical() {
     use futures_executor::block_on;
     use physis::resource::Resource;
-    use xiv_companion_data::{AsyncGameResource, load_character_assembly_with_skeleton_from_async_resource};
+    use xiv_companion_data::{
+        AsyncGameResource, load_character_assembly_with_skeleton_from_async_resource,
+    };
 
     struct SyncAsAsync(SqPackResource);
     impl AsyncGameResource for SyncAsAsync {
         type Error = String;
         type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
         fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
-            std::future::ready(
-                self.0
-                    .read(path)
-                    .ok_or_else(|| format!("missing {path}")),
-            )
+            std::future::ready(self.0.read(path).ok_or_else(|| format!("missing {path}")))
         }
         fn platform(&self) -> physis::Platform {
             self.0.platform()
@@ -568,10 +583,26 @@ fn sync_and_async_assembly_loads_are_identical() {
     })
     .expect("async load");
 
-    assert_eq!(sync_data.meshes.len(), async_data.meshes.len(), "mesh count");
-    assert_eq!(sync_data.materials.len(), async_data.materials.len(), "materials");
-    assert_eq!(sync_data.textures.len(), async_data.textures.len(), "textures");
-    assert_eq!(sync_skeleton.is_some(), async_skeleton.is_some(), "skeleton");
+    assert_eq!(
+        sync_data.meshes.len(),
+        async_data.meshes.len(),
+        "mesh count"
+    );
+    assert_eq!(
+        sync_data.materials.len(),
+        async_data.materials.len(),
+        "materials"
+    );
+    assert_eq!(
+        sync_data.textures.len(),
+        async_data.textures.len(),
+        "textures"
+    );
+    assert_eq!(
+        sync_skeleton.is_some(),
+        async_skeleton.is_some(),
+        "skeleton"
+    );
     for (index, (a, b)) in sync_data.meshes.iter().zip(&async_data.meshes).enumerate() {
         assert_eq!(a.path, b.path, "mesh[{index}] path");
         assert_eq!(a.vertices.len(), b.vertices.len(), "mesh[{index}] verts");
@@ -582,10 +613,18 @@ fn sync_and_async_assembly_loads_are_identical() {
                 va.position, vb.position,
                 "mesh[{index}] vertex[{vertex}] position"
             );
-            assert_eq!(va.normal, vb.normal, "mesh[{index}] vertex[{vertex}] normal");
+            assert_eq!(
+                va.normal, vb.normal,
+                "mesh[{index}] vertex[{vertex}] normal"
+            );
         }
     }
-    for (index, (a, b)) in sync_data.textures.iter().zip(&async_data.textures).enumerate() {
+    for (index, (a, b)) in sync_data
+        .textures
+        .iter()
+        .zip(&async_data.textures)
+        .enumerate()
+    {
         assert_eq!(a.path, b.path, "texture[{index}] path");
         assert_eq!(a.rgba, b.rgba, "texture[{index}] rgba");
     }
