@@ -1,0 +1,549 @@
+//! avfx 常驻特效的确定性 CPU 模拟：timeline items → emitter → 粒子四边形批次。
+//!
+//! v1 语义（对游戏运行时的近似，字段语义对齐 VFXEditor/社区逆向）：
+//! - 帧率 30fps（avfx 时间轴单位为帧，见 `AVFX_FPS`）；
+//! - 常驻路径直接遍历全部 timeline（scheduler `items` 即常驻 timeline 的
+//!   起始表；12 个 trigger 的拔刀/收刀切换不在 v1 范围）；
+//! - timeline 在 `[LpSt, LpEd]` 内循环，item 按启用窗口驱动 emitter；
+//! - emitter 的创建事件按 `CrI`（间隔曲线）整数倍对齐，一次事件生成
+//!   `CrC`（数量曲线）× `ItPr.CrCn` 个粒子，粒子状态由出生时间解析式
+//!   计算（无增量状态，任意时刻采样一致，可单测/快照）；
+//! - 形状支持 Point / Cone（XZ 圆盘 + 沿 Y 注入）/ SphereModel（球面 +
+//!   径向注入），其余回退为点；
+//! - 随机数用 splitmix64 按 (timeline, item, emitter, 事件, 粒子) 播种，
+//!   确定性可复现。
+
+use crate::avfx::{AvfxCurve, AvfxEmitter, AvfxEmitterItem, AvfxFile, AvfxParticle, AvfxTimeline};
+
+/// avfx 时间轴帧率；VFXEditor 默认 30fps，帧 → 秒换算只用这里。
+pub const AVFX_FPS: f32 = 30.0;
+
+/// 单个粒子四边形（渲染端实例数据，世界单位）。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxQuad {
+    pub position: [f32; 3],
+    /// 宽/高（世界单位，粒子 scale 的 x/y）。
+    pub size: [f32; 2],
+    /// 面内旋转（弧度）。
+    pub rotation: f32,
+    /// HDR 颜色（rgb 可 >1，a 为不透明度）。
+    pub color: [f32; 4],
+    /// 贴图帧基点 + 缩放（UVSet scroll/scale 求值结果）。
+    pub uv_origin: [f32; 2],
+    pub uv_scale: [f32; 2],
+    /// 文件级贴图索引（TC1.TxNo；渲染端据此选纹理，-1 = 程序化回退）。
+    pub texture_index: i32,
+}
+
+/// 从解析后的 avfx 构建的采样运行时（拷贝子集，构建后与文件解耦）。
+#[derive(Debug, Clone)]
+pub struct VfxRuntime {
+    timelines: Vec<AvfxTimeline>,
+    emitters: Vec<AvfxEmitter>,
+    particles: Vec<AvfxParticle>,
+    /// 采样硬上限，超出丢弃（child_limit 语义的保守版）。
+    max_quads: usize,
+}
+
+impl VfxRuntime {
+    pub fn new(file: &AvfxFile) -> Self {
+        Self {
+            timelines: file.timelines.clone(),
+            emitters: file.emitters.clone(),
+            particles: file.particles.clone(),
+            max_quads: 4096,
+        }
+    }
+
+    pub fn max_quads(&self) -> usize {
+        self.max_quads
+    }
+
+    /// 采样 `time_seconds` 时刻的全部存活粒子四边形（out 先清空）。
+    pub fn sample(&self, time_seconds: f32, out: &mut Vec<VfxQuad>) {
+        out.clear();
+        let frame = time_seconds * AVFX_FPS;
+        for timeline in &self.timelines {
+            let (loop_start, loop_end) = timeline_span(timeline);
+            let local = loop_start + (frame - loop_start).rem_euclid(loop_end - loop_start);
+            for (item_index, item) in timeline.items.iter().enumerate() {
+                if !item.enabled || item.emitter_index < 0 {
+                    continue;
+                }
+                if local < item.start_time as f32 || local > item.end_time as f32 {
+                    continue;
+                }
+                let Some(emitter) = self.emitters.get(item.emitter_index as usize) else {
+                    continue;
+                };
+                self.sample_emitter(
+                    item_index,
+                    item,
+                    emitter,
+                    local - item.start_time as f32,
+                    out,
+                );
+                if out.len() >= self.max_quads {
+                    out.truncate(self.max_quads);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn sample_emitter(
+        &self,
+        item_index: usize,
+        item: &crate::avfx::AvfxTimelineItem,
+        emitter: &AvfxEmitter,
+        emitter_frame: f32,
+        out: &mut Vec<VfxQuad>,
+    ) {
+        if emitter.particle_items.is_empty() {
+            return;
+        }
+        let emitter_offset = emitter.position.evaluate(emitter_frame);
+
+        for particle_item in &emitter.particle_items {
+            if !particle_item.enabled || particle_item.target_index < 0 {
+                continue;
+            }
+            let Some(particle) = self.particles.get(particle_item.target_index as usize) else {
+                continue;
+            };
+            // 生命周期：emitter Life 优先，其次 particle Life，缺省 60 帧。
+            let life_frames = if emitter.life.enabled {
+                emitter.life.value.max(1.0)
+            } else if particle.life.enabled {
+                particle.life.value.max(1.0)
+            } else {
+                60.0
+            };
+            let interval = emitter.create_interval.evaluate(emitter_frame)[2].max(1.0);
+            // 事件网格：出生帧 = k × interval，k 覆盖整个生命窗口，
+            // 保证任意时刻解析出同一批存活粒子。
+            let first_event = ((emitter_frame - life_frames) / interval).ceil().max(0.0);
+            let last_event = (emitter_frame / interval).floor();
+            if last_event < first_event {
+                continue;
+            }
+            let per_event = emitter.create_count.evaluate(emitter_frame)[2].round()
+                * particle_item.create_count.max(0) as f32;
+            let per_event = per_event.round().clamp(0.0, 64.0) as u32;
+            if per_event == 0 {
+                continue;
+            }
+            for event in (first_event as u64)..=(last_event as u64) {
+                let spawn_frame = event as f32 * interval;
+                if spawn_frame > emitter_frame {
+                    continue;
+                }
+                let age = emitter_frame - spawn_frame;
+                for particle_index in 0..per_event {
+                    let mut rng = SplitMix64::seeded(
+                        item_index as u64,
+                        event,
+                        particle_item.target_index as u64,
+                        particle_index as u64,
+                    );
+                    let (shape_offset, injection_dir, injection_speed) =
+                        sample_shape(emitter, &mut rng);
+                    self.sample_particle(
+                        particle,
+                        age,
+                        life_frames,
+                        &emitter_offset,
+                        &shape_offset,
+                        injection_dir,
+                        injection_speed * age,
+                        &mut rng,
+                        out,
+                    );
+                    if out.len() >= self.max_quads {
+                        out.truncate(self.max_quads);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn sample_particle(
+        &self,
+        particle: &AvfxParticle,
+        age: f32,
+        life_frames: f32,
+        emitter_offset: &[f32; 3],
+        shape_offset: &[f32; 3],
+        injection_dir: [f32; 3],
+        injection_distance: f32,
+        rng: &mut SplitMix64,
+        out: &mut Vec<VfxQuad>,
+    ) {
+        if age > life_frames {
+            return;
+        }
+        let alpha = 1.0 - age / life_frames;
+
+        // 位置 = 发射器曲线 + 形状偏移 + 注入位移 + 重力半积分（-Y）。
+        let curve_position = particle.position.evaluate(age);
+        let gravity = particle.gravity.evaluate(age)[2];
+        let position = [
+            curve_position[0]
+                + emitter_offset[0]
+                + shape_offset[0]
+                + injection_dir[0] * injection_distance,
+            curve_position[1]
+                + emitter_offset[1]
+                + shape_offset[1]
+                + injection_dir[1] * injection_distance
+                - 0.5 * gravity * age * age,
+            curve_position[2]
+                + emitter_offset[2]
+                + shape_offset[2]
+                + injection_dir[2] * injection_distance,
+        ];
+
+        let scale = particle.scale.evaluate(age);
+        let size = [scale[0].abs().max(1.0e-4), scale[1].abs().max(1.0e-4)];
+
+        // 颜色 = 粒子 Color × emitter 无关项（v1 只取粒子曲线；HDR 不截断，
+        // 饱和交给 bloom）。颜色曲线按线性插值（VFXEditor 语义）。
+        let rgb = particle.color.evaluate(age);
+        let color = [rgb[0], rgb[1], rgb[2], alpha];
+
+        // UV：首个 UVSet 的 scroll（x/y，环绕）与 scale。
+        let (uv_origin, uv_scale) = match particle.uv_sets.first() {
+            Some(uv_set) => {
+                let scroll = uv_set.scroll.evaluate(age);
+                let scale = uv_set.scale.evaluate(age);
+                ([scroll[0], scroll[1]], [scale[0], scale[1]])
+            }
+            None => ([0.0, 0.0], [1.0, 1.0]),
+        };
+
+        // 面内旋转：Rot 曲线 z + z 角速度积分近似；随机抖动叠加 ±ε。
+        let mut rotation = particle.rotation.evaluate(age)[2];
+        rotation += particle.rotation_velocity[2].evaluate(age)[2] * age;
+        rotation += (rng.next_f32() - 0.5) * 1.0e-3;
+
+        let texture_index = particle
+            .texture_color1
+            .as_ref()
+            .filter(|texture| texture.enabled)
+            .map(|texture| texture.texture_index)
+            .unwrap_or(-1);
+
+        out.push(VfxQuad {
+            position,
+            size,
+            rotation,
+            color,
+            uv_origin,
+            uv_scale,
+            texture_index,
+        });
+    }
+}
+
+/// timeline 循环区间；无 item 时取 LpEd，退化区间给最小跨度。
+fn timeline_span(timeline: &AvfxTimeline) -> (f32, f32) {
+    let mut start = timeline.loop_start as f32;
+    let mut end = timeline.loop_end as f32;
+    for item in &timeline.items {
+        if item.enabled {
+            start = start.min(item.start_time as f32);
+            end = end.max(item.end_time as f32);
+        }
+    }
+    if end <= start {
+        end = start + 1.0;
+    }
+    (start, end)
+}
+
+/// 发射器形状采样：返回 (形状偏移, 注入方向, 注入速度)。
+fn sample_shape(emitter: &AvfxEmitter, rng: &mut SplitMix64) -> ([f32; 3], [f32; 3], f32) {
+    let frame = 0.0; // 形状曲线随 emitter 时间变化时在此传参（v1 取常量键）。
+    let _ = frame;
+    match (&emitter.emitter_type, &emitter.cone, &emitter.sphere_model) {
+        (Some(crate::avfx::EmitterType::Cone), Some(cone), _) => {
+            let inner = cone.inner_size.evaluate(0.0)[2];
+            let outer = cone.outer_size.evaluate(0.0)[2];
+            let radius = inner + (outer - inner) * rng.next_f32();
+            let theta = rng.next_f32() * std::f32::consts::TAU;
+            let speed = cone.injection_speed.evaluate(0.0)[2];
+            (
+                [radius * theta.cos(), 0.0, radius * theta.sin()],
+                [0.0, 1.0, 0.0],
+                speed,
+            )
+        }
+        (Some(crate::avfx::EmitterType::SphereModel), _, Some(sphere)) => {
+            let radius = sphere.radius.evaluate(0.0)[2];
+            let phi = rng.next_f32() * std::f32::consts::TAU;
+            let cos_theta = 2.0 * rng.next_f32() - 1.0;
+            let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+            let dir = [sin_theta * phi.cos(), cos_theta, sin_theta * phi.sin()];
+            let speed = sphere.injection_speed.evaluate(0.0)[2];
+            (
+                [dir[0] * radius, dir[1] * radius, dir[2] * radius],
+                dir,
+                speed,
+            )
+        }
+        // Point 与未建模形状：原点、无注入。
+        _ => ([0.0; 3], [0.0, 1.0, 0.0], 0.0),
+    }
+}
+
+/// 确定性随机（splitmix64）：同种子序列恒同输出。
+#[derive(Debug, Clone)]
+pub struct SplitMix64 {
+    state: u64,
+}
+
+impl SplitMix64 {
+    /// 四个索引混合成种子（黄金比例常数旋转混合，避免结构性零）。
+    fn seeded(a: u64, b: u64, c: u64, d: u64) -> Self {
+        let mut state = a.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ b.rotate_left(17)
+            ^ c.rotate_left(33)
+            ^ d.rotate_left(49);
+        if state == 0 {
+            state = 0x9E37_79B9_7F4A_7C15;
+        }
+        Self { state }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// [0, 1) 均匀。
+    fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1_u64 << 24) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::avfx::{
+        AvfxBinder, AvfxCurveKey, AvfxLife, AvfxParticleTexture, AvfxScheduler, AvfxSchedulerItem,
+        AvfxTimelineItem, AvfxUvSet, ConeEmitterData, EmitterType, ParticleType,
+    };
+
+    fn linear_curve(values: &[(i16, f32)]) -> AvfxCurve {
+        axis_curve(values, |v| [0.0, 0.0, v])
+    }
+
+    /// 2 轴曲线（UVSet scale/scroll）：数值在键的 x/y。
+    fn uv_axis_curve(values: &[(i16, f32)]) -> AvfxCurve {
+        axis_curve(values, |v| [v, v, 0.0])
+    }
+
+    fn axis_curve(values: &[(i16, f32)], axes: impl Fn(f32) -> [f32; 3]) -> AvfxCurve {
+        AvfxCurve {
+            keys: values
+                .iter()
+                .map(|&(time, value)| {
+                    let [x, y, z] = axes(value);
+                    AvfxCurveKey {
+                        time,
+                        interpolation: 1,
+                        x,
+                        y,
+                        z,
+                    }
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn fixture_file() -> AvfxFile {
+        AvfxFile {
+            version: 0x2011_0913,
+            schedulers: vec![AvfxScheduler {
+                items: vec![AvfxSchedulerItem {
+                    enabled: true,
+                    start_time: 0,
+                    timeline_index: 0,
+                }],
+                triggers: Vec::new(),
+            }],
+            timelines: vec![AvfxTimeline {
+                loop_start: 0,
+                loop_end: 120,
+                binder_index: 0,
+                items: vec![AvfxTimelineItem {
+                    enabled: true,
+                    start_time: 0,
+                    end_time: 120,
+                    binder_index: -1,
+                    effector_index: -1,
+                    emitter_index: 0,
+                    platform: 0,
+                    clip_index: -1,
+                }],
+                clip_count: 0,
+            }],
+            emitters: vec![AvfxEmitter {
+                emitter_type: Some(EmitterType::Cone),
+                raw_emitter_type: 1,
+                loop_start: 0,
+                loop_end: 120,
+                child_limit: 128,
+                particle_count: 0,
+                emitter_count: 0,
+                life: AvfxLife {
+                    enabled: true,
+                    value: 30.0,
+                    value_random: 0.0,
+                    random_type: 0,
+                },
+                create_count: linear_curve(&[(0, 2.0)]),
+                create_interval: linear_curve(&[(0, 15.0)]),
+                color: linear_curve(&[(0, 1.0)]),
+                position: linear_curve(&[(0, 0.0)]),
+                rotation: linear_curve(&[(0, 0.0)]),
+                scale: linear_curve(&[(0, 1.0)]),
+                particle_items: vec![AvfxEmitterItem {
+                    enabled: true,
+                    target_index: 0,
+                    create_time: 1,
+                    create_count: 3,
+                    create_probability: 100,
+                    start_frame: 0,
+                    generate_delay: 0,
+                }],
+                emitter_items: Vec::new(),
+                cone: Some(ConeEmitterData {
+                    inner_size: linear_curve(&[(0, 0.1)]),
+                    outer_size: linear_curve(&[(0, 0.5)]),
+                    injection_speed: linear_curve(&[(0, 0.03)]),
+                    injection_angle: linear_curve(&[(0, 0.0)]),
+                }),
+                sphere_model: None,
+            }],
+            particles: vec![AvfxParticle {
+                particle_type: Some(ParticleType::Quad),
+                raw_particle_type: 8,
+                loop_start: 0,
+                loop_end: 30,
+                draw_mode: 2,
+                depth_test: true,
+                depth_write: false,
+                life: AvfxLife::default(),
+                gravity: linear_curve(&[(0, 0.0)]),
+                air_resistance: linear_curve(&[(0, 0.0)]),
+                scale: axis_curve(&[(0, 0.2)], |v| [v, v, 0.0]),
+                rotation: linear_curve(&[(0, 0.0)]),
+                position: linear_curve(&[(0, 0.0)]),
+                color: linear_curve(&[(0, 0.8)]),
+                rotation_velocity: Default::default(),
+                texture_color1: Some(AvfxParticleTexture {
+                    enabled: true,
+                    uv_set_index: 0,
+                    texture_index: 2,
+                }),
+                uv_sets: vec![AvfxUvSet {
+                    calculate_uv: 0,
+                    scale: uv_axis_curve(&[(0, 1.0)]),
+                    scroll: uv_axis_curve(&[(0, 0.25)]),
+                    rotation: linear_curve(&[(0, 0.0)]),
+                    rotation_random: linear_curve(&[(0, 0.0)]),
+                }],
+            }],
+            binders: vec![AvfxBinder { binder_type: 0 }],
+            texture_paths: vec!["vfx/eff/test.atex".to_string()],
+            warnings: Vec::new(),
+            unknown_blocks: Default::default(),
+        }
+    }
+
+    #[test]
+    fn samples_deterministic_particle_batches() {
+        let file = fixture_file();
+        let runtime = VfxRuntime::new(&file);
+        let mut quads_a = Vec::new();
+        let mut quads_b = Vec::new();
+        runtime.sample(1.0, &mut quads_a);
+        runtime.sample(1.0, &mut quads_b);
+        // 确定性：同时刻两次采样完全一致。
+        assert_eq!(quads_a, quads_b);
+        // 间隔 15 帧、生命 30 帧：30 帧处恰有 3 个事件（k=0,1,2，边界
+        // 粒子视为存活）；每事件 CrC=2 × ItPr.CrCn=3 = 6 粒子。
+        assert_eq!(quads_a.len(), 18);
+
+        // 颜色/贴图/UV/尺寸语义落位。
+        let quad = &quads_a[0];
+        assert!((quad.color[2] - 0.8).abs() < 1.0e-6);
+        assert_eq!(quad.texture_index, 2);
+        assert!((quad.uv_scale[0] - 1.0).abs() < 1.0e-6);
+        assert!((quad.size[0] - 0.2).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn fades_with_age_and_loops_timeline() {
+        let file = fixture_file();
+        let runtime = VfxRuntime::new(&file);
+        let mut at_zero = Vec::new();
+        let mut mid = Vec::new();
+        let mut looped = Vec::new();
+        runtime.sample(0.0, &mut at_zero);
+        runtime.sample(0.5, &mut mid);
+        // t=0 只有一个事件批，全部新生（alpha=1）。
+        assert_eq!(at_zero.len(), 6);
+        assert!(
+            at_zero
+                .iter()
+                .all(|quad| (quad.color[3] - 1.0).abs() < 1.0e-6)
+        );
+        // t=0.5s（15 帧）出现老一批（alpha≈0.5）。
+        assert!(mid.iter().any(|quad| (quad.color[3] - 0.5).abs() < 0.01));
+
+        // 时间轴 120 帧 = 4 秒循环：t=0 与 t=4s 的粒子集合一致。
+        runtime.sample(4.0, &mut looped);
+        assert_eq!(at_zero, looped);
+    }
+
+    #[test]
+    fn cone_positions_stay_within_bounds_and_inject_upward() {
+        let file = fixture_file();
+        let runtime = VfxRuntime::new(&file);
+        let mut quads = Vec::new();
+        runtime.sample(0.9, &mut quads);
+        assert!(!quads.is_empty());
+        for quad in &quads {
+            let radial =
+                (quad.position[0] * quad.position[0] + quad.position[2] * quad.position[2]).sqrt();
+            // 圆盘半径 ≤ 外径 0.5。
+            assert!(radial <= 0.5 + 1.0e-3, "radial {radial} beyond cone outer");
+            // 注入沿 +Y：老粒子更高（同批内至少存在非零 Y）。
+            assert!(quad.position[1] >= -1.0e-5);
+        }
+        let max_y = quads
+            .iter()
+            .map(|quad| quad.position[1])
+            .fold(f32::MIN, f32::max);
+        assert!(
+            max_y > 0.1,
+            "no injected particles above origin (max {max_y})"
+        );
+    }
+
+    #[test]
+    fn empty_file_samples_nothing() {
+        let runtime = VfxRuntime::new(&AvfxFile::default());
+        let mut quads = Vec::new();
+        runtime.sample(1.0, &mut quads);
+        assert!(quads.is_empty());
+    }
+}
