@@ -44,6 +44,7 @@ struct WeaponVfxAudit {
     avfx_missing: usize,
     vw_padding_hits: BTreeMap<String, usize>,
     block_name_counts: BTreeMap<String, usize>,
+    avfx_parse_warnings: Vec<String>,
     shader_package_counts: BTreeMap<String, usize>,
     models: Vec<VfxModelReport>,
     missing_avfx_entries: Vec<WeaponVfxEntry>,
@@ -140,6 +141,7 @@ fn audit_installed_weapon_vfx() -> Result<()> {
         avfx_missing: 0,
         vw_padding_hits: BTreeMap::new(),
         block_name_counts: BTreeMap::new(),
+        avfx_parse_warnings: Vec::new(),
         shader_package_counts: BTreeMap::new(),
         models: Vec::new(),
         missing_avfx_entries: Vec::new(),
@@ -231,10 +233,7 @@ fn audit_model_vfx(
     let mut entries = Vec::new();
     let mut found_any_imc = false;
     for body_id in weapon_body_ids(model) {
-        let imc_path = format!(
-            "chara/weapon/w{:04}/obj/body/b{:04}/imc.imc",
-            model.model_id, body_id
-        );
+        let imc_path = xiv_companion::weapon_body_imc_path(model.model_id, body_id);
         let Some(bytes) = resource.read(&imc_path) else {
             continue;
         };
@@ -273,7 +272,8 @@ fn audit_model_vfx(
                 if let Some((padding, path, bytes)) =
                     resolve_vw_avfx(resource, model.model_id, body_id, entry.vfx)
                 {
-                    let block_counts = avfx_top_level_block_counts(&bytes);
+                    let block_counts =
+                        parsed_avfx_block_counts(&bytes, &mut audit.avfx_parse_warnings);
                     if let Some(counts) = &block_counts {
                         for (name, count) in counts {
                             *audit.block_name_counts.entry(name.clone()).or_default() += count;
@@ -367,6 +367,46 @@ fn resolve_vw_avfx(
         }
     }
     None
+}
+
+/// 用数据层解析器统计 avfx 的节点构成（scheduler/timeline/emitter/particle/
+/// binder 数 + 贴图路径数 + 未知块计数合并）。
+fn parsed_avfx_block_counts(
+    bytes: &[u8],
+    warnings: &mut Vec<String>,
+) -> Option<BTreeMap<String, usize>> {
+    match xiv_companion::AvfxFile::parse(bytes) {
+        Ok(file) => {
+            warnings.extend(file.warnings.iter().take(3).cloned());
+            let mut counts = BTreeMap::new();
+            for (name, count) in &file.unknown_blocks {
+                counts.insert(name.clone(), *count);
+            }
+            if !file.schedulers.is_empty() {
+                counts.insert("Schd".into(), file.schedulers.len());
+            }
+            if !file.timelines.is_empty() {
+                counts.insert("TmLn".into(), file.timelines.len());
+            }
+            if !file.emitters.is_empty() {
+                counts.insert("Emit".into(), file.emitters.len());
+            }
+            if !file.particles.is_empty() {
+                counts.insert("Ptcl".into(), file.particles.len());
+            }
+            if !file.binders.is_empty() {
+                counts.insert("Bind".into(), file.binders.len());
+            }
+            if !file.texture_paths.is_empty() {
+                counts.insert("Tex".into(), file.texture_paths.len());
+            }
+            Some(counts)
+        }
+        Err(error) => {
+            warnings.push(error.to_string());
+            None
+        }
+    }
 }
 
 /// avfx 顶层块（XFVA 内部）计数。块头为反写 4 字节名 + u32 size，size 按 4 字节对齐推进。

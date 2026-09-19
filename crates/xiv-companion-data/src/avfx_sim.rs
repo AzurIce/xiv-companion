@@ -71,7 +71,10 @@ impl VfxRuntime {
                 if !item.enabled || item.emitter_index < 0 {
                     continue;
                 }
-                if local < item.start_time as f32 || local > item.end_time as f32 {
+                if local < item.start_time as f32 {
+                    continue;
+                }
+                if item.end_time >= 0 && local > item.end_time as f32 {
                     continue;
                 }
                 let Some(emitter) = self.emitters.get(item.emitter_index as usize) else {
@@ -112,17 +115,18 @@ impl VfxRuntime {
             let Some(particle) = self.particles.get(particle_item.target_index as usize) else {
                 continue;
             };
-            // 生命周期：emitter Life 优先，其次 particle Life，缺省 60 帧。
-            let life_frames = if emitter.life.enabled {
-                emitter.life.value.max(1.0)
-            } else if particle.life.enabled {
-                particle.life.value.max(1.0)
+            // 生命周期（真实文件里 Life 常写 -1 = 跟随 timeline）：ItPr 的
+            // Override 优先，其次 particle Life、emitter Life；无有效值或
+            // <=0 视为跟随循环，clamp 到上限防止无穷累积。
+            let life_frames = resolve_life_frames(particle_item, particle, emitter);
+            // 发射节奏（真实文件普遍用 ItPr.CrTm/CrCn；CrI/CrC 是 emitter
+            // 级连续发射，缺省时回退到它）：出生帧 = 起始 + k × 间隔，k 覆盖
+            // 整个生命窗口，任意时刻解析出同一批存活粒子。
+            let interval = if particle_item.create_time > 0 {
+                particle_item.create_time as f32
             } else {
-                60.0
+                emitter.create_interval.evaluate(emitter_frame)[2].max(1.0)
             };
-            let interval = emitter.create_interval.evaluate(emitter_frame)[2].max(1.0);
-            // 事件网格：出生帧 = k × interval，k 覆盖整个生命窗口，
-            // 保证任意时刻解析出同一批存活粒子。
             let first_event = ((emitter_frame - life_frames) / interval).ceil().max(0.0);
             let last_event = (emitter_frame / interval).floor();
             if last_event < first_event {
@@ -130,10 +134,7 @@ impl VfxRuntime {
             }
             let per_event = emitter.create_count.evaluate(emitter_frame)[2].round()
                 * particle_item.create_count.max(0) as f32;
-            let per_event = per_event.round().clamp(0.0, 64.0) as u32;
-            if per_event == 0 {
-                continue;
-            }
+            let per_event = per_event.max(1.0).round().clamp(1.0, 64.0) as u32;
             for event in (first_event as u64)..=(last_event as u64) {
                 let spawn_frame = event as f32 * interval;
                 if spawn_frame > emitter_frame {
@@ -205,12 +206,38 @@ impl VfxRuntime {
                 + injection_dir[2] * injection_distance,
         ];
 
-        let scale = particle.scale.evaluate(age);
-        let size = [scale[0].abs().max(1.0e-4), scale[1].abs().max(1.0e-4)];
+        // 缺省曲线语义（真实武器特效普遍不写这些块）：color 缺省为白。
+        // 尺寸：Quad 类用 scale 曲线原值（缺省小亮片）；Model/LightModel 等
+        // 贴图层近似的粒子本体尺寸来自内嵌几何，游戏内约指关节大小，此处以
+        // APPROXimated 半径 × scale 系数（缺省 1）近似，避免把 1.0 系数当成
+        // 1 米边长。
+        let uses_raw_scale = matches!(
+            particle.particle_type,
+            Some(crate::avfx::ParticleType::Quad)
+                | Some(crate::avfx::ParticleType::Powder)
+                | Some(crate::avfx::ParticleType::Disc)
+                | Some(crate::avfx::ParticleType::Polygon)
+        );
+        let scale = if particle.scale.keys.is_empty() {
+            [1.0, 1.0, 1.0]
+        } else {
+            particle.scale.evaluate(age)
+        };
+        let size = if uses_raw_scale {
+            [scale[0].abs().max(1.0e-4), scale[1].abs().max(1.0e-4)]
+        } else {
+            [
+                DEFAULT_QUAD_SIZE * scale[0].abs().max(1.0e-4),
+                DEFAULT_QUAD_SIZE * scale[1].abs().max(1.0e-4),
+            ]
+        };
 
-        // 颜色 = 粒子 Color × emitter 无关项（v1 只取粒子曲线；HDR 不截断，
-        // 饱和交给 bloom）。颜色曲线按线性插值（VFXEditor 语义）。
-        let rgb = particle.color.evaluate(age);
+        // 颜色 = 粒子 Color 曲线（缺省白；HDR 不截断，饱和交给 bloom）。
+        let rgb = if particle.color.keys.is_empty() {
+            [1.0, 1.0, 1.0]
+        } else {
+            particle.color.evaluate(age)
+        };
         let color = [rgb[0], rgb[1], rgb[2], alpha];
 
         // UV：首个 UVSet 的 scroll（x/y，环绕）与 scale。
@@ -247,20 +274,56 @@ impl VfxRuntime {
     }
 }
 
-/// timeline 循环区间；无 item 时取 LpEd，退化区间给最小跨度。
+/// 无界 item（end_time=-1）与空循环区间（LpSt=LpEd=0，武器常驻特效普遍
+/// 如此）的近似循环长度（帧）；游戏内由 scheduler 触发结束，此处取 4 秒。
+const DEFAULT_TIMELINE_SPAN: f32 = 120.0;
+
+/// timeline 循环区间；item 的 end_time=-1 视为无界（到循环尾）。
 fn timeline_span(timeline: &AvfxTimeline) -> (f32, f32) {
     let mut start = timeline.loop_start as f32;
-    let mut end = timeline.loop_end as f32;
+    let mut end = if timeline.loop_end > 0 {
+        timeline.loop_end as f32
+    } else {
+        0.0
+    };
     for item in &timeline.items {
-        if item.enabled {
-            start = start.min(item.start_time as f32);
-            end = end.max(item.end_time as f32);
+        if !item.enabled || item.end_time < 0 {
+            continue;
         }
+        start = start.min(item.start_time as f32);
+        end = end.max(item.end_time as f32);
     }
     if end <= start {
-        end = start + 1.0;
+        end = start + DEFAULT_TIMELINE_SPAN;
     }
     (start, end)
+}
+
+/// 无有效 Life 时的粒子寿命上限（帧）：跟随 timeline 的粒子 clamp 到
+/// 20 秒，防止无界累积。
+const MAX_PARTICLE_LIFE: f32 = 600.0;
+/// 缺省粒子四边形尺寸（世界单位；Quad 类无 scale 曲线时的亮片大小）。
+const DEFAULT_QUAD_SIZE: f32 = 0.05;
+/// Point 发射器近似散布半径（世界单位）：贴图层近似粒子的体积感。
+const POINT_SCATTER_RADIUS: f32 = 0.18;
+
+/// ItPr.Override > particle Life > emitter Life；<=0（-1 = 跟随 timeline）
+/// 视为无界并 clamp。
+fn resolve_life_frames(
+    item: &AvfxEmitterItem,
+    particle: &AvfxParticle,
+    emitter: &AvfxEmitter,
+) -> f32 {
+    let value = if item.override_life && item.override_life_value > 0 {
+        item.override_life_value as f32
+    } else if particle.life.enabled && particle.life.value > 0.0 {
+        particle.life.value
+    } else if emitter.life.enabled && emitter.life.value > 0.0 {
+        emitter.life.value
+    } else {
+        MAX_PARTICLE_LIFE
+    };
+    value.clamp(1.0, MAX_PARTICLE_LIFE)
 }
 
 /// 发射器形状采样：返回 (形状偏移, 注入方向, 注入速度)。
@@ -293,8 +356,23 @@ fn sample_shape(emitter: &AvfxEmitter, rng: &mut SplitMix64) -> ([f32; 3], [f32;
                 speed,
             )
         }
-        // Point 与未建模形状：原点、无注入。
-        _ => ([0.0; 3], [0.0, 1.0, 0.0], 0.0),
+        // Point 与未建模形状：贴点发射（近似给小半径球面散布，避免
+        // Model/LightModel 近似粒子全部重叠在原点）。
+        _ => {
+            let phi = rng.next_f32() * std::f32::consts::TAU;
+            let cos_theta = 2.0 * rng.next_f32() - 1.0;
+            let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+            let radius = POINT_SCATTER_RADIUS * rng.next_f32();
+            (
+                [
+                    sin_theta * phi.cos() * radius,
+                    cos_theta * radius,
+                    sin_theta * phi.sin() * radius,
+                ],
+                [0.0, 1.0, 0.0],
+                0.0,
+            )
+        }
     }
 }
 
@@ -417,11 +495,13 @@ mod tests {
                 particle_items: vec![AvfxEmitterItem {
                     enabled: true,
                     target_index: 0,
-                    create_time: 1,
+                    create_time: 15,
                     create_count: 3,
                     create_probability: 100,
                     start_frame: 0,
                     generate_delay: 0,
+                    override_life: false,
+                    override_life_value: 60,
                 }],
                 emitter_items: Vec::new(),
                 cone: Some(ConeEmitterData {

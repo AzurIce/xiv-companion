@@ -28,8 +28,9 @@ pub use xiv_companion_data::model::{
     prepared_material_resource_availability, prepared_material_runtime_fallbacks,
     prepared_material_runtime_input_requirements, prepared_material_unsupported_inputs,
     prepared_model_runtime_geometry_requirements, prepared_texture_bindings,
-    prepared_texture_sampling_for_kind, weapon_material_candidate_paths,
-    weapon_model_candidate_paths, weapon_model_mesh_component_index, weapon_slot_label,
+    prepared_texture_sampling_for_kind, weapon_body_ids, weapon_body_imc_path,
+    weapon_material_candidate_paths, weapon_model_candidate_paths,
+    weapon_model_mesh_component_index, weapon_slot_label, weapon_vfx_avfx_candidate_paths,
 };
 
 #[cfg(feature = "game-data")]

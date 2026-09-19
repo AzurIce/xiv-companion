@@ -3592,9 +3592,10 @@ pub fn is_weapon_equip_slot_category(category: u32) -> bool {
     matches!(category, 1 | 2 | 13 | 14)
 }
 
-/// 武器 body 的 IMC 路径（VfxId 所在）。
+/// 武器 body 的 IMC 路径（VfxId 所在）。文件名与 body 同名（`b####.imc`，
+/// xivModdingFramework `Imc.GetImcPath`：武器用 secondaryId）。
 pub fn weapon_body_imc_path(model_id: u16, body_id: u16) -> String {
-    format!("chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/imc.imc")
+    format!("chara/weapon/w{model_id:04}/obj/body/b{body_id:04}/b{body_id:04}.imc")
 }
 
 /// 武器 body avfx 路径候选（`vw####`，含短数字填充探测），按优先级排序。

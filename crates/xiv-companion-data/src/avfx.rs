@@ -184,6 +184,9 @@ pub struct AvfxEmitterItem {
     pub create_probability: i32,
     pub start_frame: i32,
     pub generate_delay: i32,
+    /// ItPr 覆盖粒子寿命（`bOvr`/`OvrV`）。
+    pub override_life: bool,
+    pub override_life_value: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -551,8 +554,10 @@ fn reverse_name_bytes(raw: &[u8; 4]) -> String {
     for (index, byte) in raw.iter().rev().take(4).enumerate() {
         name[index] = *byte;
     }
+    // 块名不足 4 字节时在原名尾部补 NUL 再反写存储（VFXEditor 写序），
+    // 读回反写后补位落在名字前部（如 "\0TC1"）；两侧 trim NUL/空格归一。
     String::from_utf8_lossy(&name)
-        .trim_end_matches(['\0', ' '])
+        .trim_matches(['\0', ' '])
         .to_string()
 }
 
@@ -766,6 +771,8 @@ fn parse_emitter_items(node: &AvfxNodeView, name: &str) -> Vec<AvfxEmitterItem> 
                 create_probability: fields.i32("CrPr").unwrap_or(100),
                 start_frame: fields.i32("StFr").unwrap_or(0),
                 generate_delay: fields.i32("GenD").unwrap_or(0),
+                override_life: fields.boolean("bOvr").unwrap_or(false),
+                override_life_value: fields.i32("OvrV").unwrap_or(60),
             }
         })
         .collect()
@@ -846,10 +853,10 @@ fn parse_emitter(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxEmitter
                         .unwrap_or_default(),
                 });
             }
-            _ => warnings.push(format!(
-                "emitter data for type {} not modeled",
-                emitter.raw_emitter_type
-            )),
+            // Point 本就无形状数据；其余类型（ConeModel/CylinderModel/Model）
+            // 未建模时提示一次。
+            Some(EmitterType::Point) | None => {}
+            other => warnings.push(format!("emitter data for type {other:?} not modeled")),
         }
     }
     emitter
