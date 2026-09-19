@@ -14,9 +14,10 @@ pub use crate::model::{
     WeaponModelLoadCandidateDiagnostic, WeaponModelLoadCandidateStatus, WeaponModelLoadDiagnostic,
     WeaponModelLoadRole, WeaponModelMaterial, WeaponModelMesh, WeaponModelTexture,
     WeaponModelTextureKind, WeaponModelVertex, bake_color_table_maps, calculate_model_bounds,
-    equipment_material_candidate_paths, equipment_model_candidate_paths, equipment_slot_info,
-    is_weapon_equip_slot_category, material_color, mesh_draw_role_for_category,
-    weapon_material_candidate_paths, weapon_model_candidate_paths, weapon_slot_label,
+    equipment_material_candidate_paths, equipment_material_candidate_paths_with_version,
+    equipment_model_candidate_paths, equipment_slot_info, is_weapon_equip_slot_category,
+    material_color, mesh_draw_role_for_category, weapon_material_candidate_paths,
+    weapon_model_candidate_paths, weapon_slot_label,
 };
 
 #[cfg(feature = "game-data")]
@@ -51,6 +52,12 @@ use crate::chara_assemble::{
 
 #[cfg(feature = "game-data")]
 use crate::character_make::CharacterAppearanceColors;
+
+#[cfg(feature = "game-data")]
+use crate::equipment_params::{
+    EQUIPMENT_PARAMETER_PATH, EquipmentParameterEntry, EquipmentParameterTable, ImcEntry, ImcFile,
+    equipment_imc_path, imc_slot_offset,
+};
 
 #[cfg(feature = "game-data")]
 use crate::model::{MaterialShaderFamily, ModelMaterialCharacterColors, material_shader_family};
@@ -1492,6 +1499,7 @@ pub fn load_equipment_model_from_resource<R: physis::resource::Resource>(
         model: model_main,
         slot,
         race_id: request.race_id,
+        material_version: None,
     });
     load_model_meshes_from_resource(
         resource,
@@ -1511,6 +1519,7 @@ pub fn load_equipment_model_from_resource<R: physis::resource::Resource>(
                 model: model_sub,
                 slot,
                 race_id: request.race_id,
+                material_version: None,
             });
             if let Err(failure) = load_model_meshes_from_resource(
                 resource,
@@ -2714,6 +2723,9 @@ struct EquipmentModelPathContext {
     model: PackedEquipmentModelId,
     slot: EquipmentSlotInfo,
     race_id: u16,
+    /// 材质版本目录覆盖（着装装配从 IMC 条目解析的 MaterialSet）；None 时按
+    /// variant 猜测（`equipment_material_candidate_paths` 原行为）。
+    material_version: Option<u16>,
 }
 
 /// 家具路径上下文：SGB 给出的精确 MDL 路径 + 同一家具全部 SGB 引用文件
@@ -2765,9 +2777,12 @@ impl ModelPathContext {
             Self::Weapon(model) => {
                 weapon_material_candidate_paths(*model, model_path, material_name)
             }
-            Self::Equipment(context) => {
-                equipment_material_candidate_paths(context.model, model_path, material_name)
-            }
+            Self::Equipment(context) => equipment_material_candidate_paths_with_version(
+                context.model,
+                model_path,
+                material_name,
+                context.material_version,
+            ),
             Self::Furniture(context) => {
                 furniture_material_candidate_paths(model_path, material_name, &context.sgb_files)
             }
@@ -3482,6 +3497,7 @@ pub async fn load_equipment_model_from_async_resource<R: AsyncGameResource>(
         model: model_main,
         slot,
         race_id: request.race_id,
+        material_version: None,
     });
     load_model_meshes_from_async_resource(
         resource,
@@ -3502,6 +3518,7 @@ pub async fn load_equipment_model_from_async_resource<R: AsyncGameResource>(
                 model: model_sub,
                 slot,
                 race_id: request.race_id,
+                material_version: None,
             });
             if let Err(failure) = load_model_meshes_from_async_resource(
                 resource,
@@ -4637,6 +4654,1140 @@ pub fn load_character_assembly_from_game_dir(
         .with_context(|| format!("failed to load character assembly for {}", request.name))
 }
 
+/// 着装角色的单件装备请求。字段语义同 [`EquipmentModelLoadRequest`]（无
+/// `race_id`：装备模型种族恒取角色自身 race code，[race, 101] 候选回退不变）；
+/// `stain_ids` 双通道染色在加载时落地到该件的材质切片（材质仍保留未染色
+/// 基准色表，运行时改色走 [`apply_dressed_piece_stains`]）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DressedEquipmentPiece {
+    pub item_id: u32,
+    pub item_name: String,
+    pub model_main: u64,
+    pub model_sub: u64,
+    pub equip_slot_category: u32,
+    pub stain_ids: [u8; 2],
+}
+
+/// 着装角色加载请求：裸装身体（`customize`/`appearance` 语义同
+/// [`CharacterAssemblyLoadRequest`]）+ 装备件列表。每槽位至多一件（由调用方
+/// 保证）；加载按槽位排序，传入顺序不影响结果。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DressedCharacterLoadRequest {
+    pub customize: CharacterCustomize,
+    pub name: String,
+    pub appearance: Option<CharacterAppearanceColors>,
+    pub equipment: Vec<DressedEquipmentPiece>,
+}
+
+#[cfg(feature = "game-data")]
+impl DressedCharacterLoadRequest {
+    pub fn new(customize: CharacterCustomize, name: impl Into<String>) -> Self {
+        Self {
+            customize,
+            name: name.into(),
+            appearance: None,
+            equipment: Vec::new(),
+        }
+    }
+
+    pub fn with_appearance(mut self, appearance: CharacterAppearanceColors) -> Self {
+        self.appearance = Some(appearance);
+        self
+    }
+
+    pub fn with_equipment(mut self, equipment: Vec<DressedEquipmentPiece>) -> Self {
+        self.equipment = equipment;
+        self
+    }
+}
+
+/// 单件装备在着装结果里的材质区间（`model.materials` 切片），增量染色
+/// （[`apply_dressed_piece_stains`]）按它定位。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EquipmentMaterialRange {
+    pub item_id: u32,
+    pub equip_slot_category: u32,
+    pub material_start: usize,
+    pub material_end: usize,
+}
+
+/// 着装角色加载结果：合并模型复用角色拼装结果结构（`model_main` 打包 race
+/// code、`model_sub` 恒 None、模型级 `stain_ids` 恒 `[0, 0]`——每件装备的
+/// 染色已落地到各自材质切片）。`equipment_material_ranges` 按槽位序；
+/// `hidden_body_attributes` 记录被装备遮蔽的身体/头发 attribute（诊断用，
+/// 条目格式 `{部位}:{细节}`）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DressedCharacterData {
+    pub model: CharacterAssemblyData,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equipment_material_ranges: Vec<EquipmentMaterialRange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_body_attributes: Vec<String>,
+}
+
+/// 单件已加载装备的合并记录：网格/材质区间 + 该件的 IMC/EQP 解析结果。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Debug)]
+struct DressedPieceLoad {
+    item_id: u32,
+    equip_slot_category: u32,
+    is_accessory: bool,
+    mesh_start: usize,
+    mesh_end: usize,
+    material_start: usize,
+    material_end: usize,
+    /// IMC 条目 attribute 可见性位（该件 MDL 本地表序）；缺失 → None（全显示）。
+    imc_mask: Option<u16>,
+    /// 套装 EQP 条目（饰品无 EQP；表/块缺失 → None，按不遮蔽降级）。
+    eqp: Option<EquipmentParameterEntry>,
+}
+
+/// 装备参数文件（IMC/EQP）读取失败的 Secondary 诊断（不阻断装配）。
+#[cfg(feature = "game-data")]
+fn equipment_params_diagnostic(
+    model: PackedModelId,
+    path: String,
+    status: WeaponModelLoadCandidateStatus,
+    error: impl Into<String>,
+) -> WeaponModelLoadDiagnostic {
+    let candidate = model_load_candidate(path, status, error.into());
+    WeaponModelLoadDiagnostic {
+        role: WeaponModelLoadRole::Secondary,
+        model,
+        error: format!(
+            "unable to read equipment parameter file (tried: {}: {})",
+            candidate.path, candidate.error
+        ),
+        candidates: vec![candidate],
+    }
+}
+
+/// 读取 EQP 表（全装配一次）。文件缺失 → None + Secondary 诊断，调用方按
+/// 空表降级（不遮蔽任何身体网格）。
+#[cfg(feature = "game-data")]
+fn load_equipment_parameter_table_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    loaded_paths: &mut Vec<String>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+) -> Option<EquipmentParameterTable> {
+    let Some(bytes) = resource.read(EQUIPMENT_PARAMETER_PATH) else {
+        load_diagnostics.push(equipment_params_diagnostic(
+            PackedModelId::from_raw(0),
+            EQUIPMENT_PARAMETER_PATH.to_string(),
+            WeaponModelLoadCandidateStatus::Missing,
+            "resource read returned no bytes",
+        ));
+        return None;
+    };
+    push_loaded_path(loaded_paths, EQUIPMENT_PARAMETER_PATH.to_string());
+    Some(EquipmentParameterTable::from_bytes(&bytes))
+}
+
+/// [`load_equipment_parameter_table_from_resource`] 的异步版本。
+#[cfg(feature = "game-data")]
+async fn load_equipment_parameter_table_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    loaded_paths: &mut Vec<String>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+) -> Option<EquipmentParameterTable> {
+    let bytes = match resource.read(EQUIPMENT_PARAMETER_PATH).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            load_diagnostics.push(equipment_params_diagnostic(
+                PackedModelId::from_raw(0),
+                EQUIPMENT_PARAMETER_PATH.to_string(),
+                WeaponModelLoadCandidateStatus::ReadError,
+                error.to_string(),
+            ));
+            return None;
+        }
+    };
+    push_loaded_path(loaded_paths, EQUIPMENT_PARAMETER_PATH.to_string());
+    Some(EquipmentParameterTable::from_bytes(&bytes))
+}
+
+/// 读取并解析装备/饰品 set 的 IMC（按 set 缓存），返回该模型（variant 子集
+/// × 槽位）的条目。文件缺失/解析失败 → None + Secondary 诊断（该件按全显示
+/// 降级、材质版本回退 variant 猜测）。
+#[cfg(feature = "game-data")]
+fn load_imc_entry_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    cache: &mut HashMap<(bool, u16), Option<Rc<ImcFile>>>,
+    model: PackedEquipmentModelId,
+    slot: EquipmentSlotInfo,
+    loaded_paths: &mut Vec<String>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+) -> Option<ImcEntry> {
+    let key = (slot.is_accessory, model.set_id);
+    if !cache.contains_key(&key) {
+        let path = equipment_imc_path(model.set_id, slot.is_accessory);
+        let parsed = match resource.read(&path) {
+            Some(bytes) => match ImcFile::from_bytes(&bytes) {
+                Ok(file) => {
+                    push_loaded_path(loaded_paths, path);
+                    Some(Rc::new(file))
+                }
+                Err(error) => {
+                    load_diagnostics.push(equipment_params_diagnostic(
+                        PackedModelId::from_raw(model.raw),
+                        path,
+                        WeaponModelLoadCandidateStatus::ParseError,
+                        format!("{error:#}"),
+                    ));
+                    None
+                }
+            },
+            None => {
+                load_diagnostics.push(equipment_params_diagnostic(
+                    PackedModelId::from_raw(model.raw),
+                    path,
+                    WeaponModelLoadCandidateStatus::Missing,
+                    "resource read returned no bytes",
+                ));
+                None
+            }
+        };
+        cache.insert(key, parsed);
+    }
+    imc_entry_from_cache(&cache, key, model, slot)
+}
+
+#[cfg(feature = "game-data")]
+fn imc_entry_from_cache(
+    cache: &HashMap<(bool, u16), Option<Rc<ImcFile>>>,
+    key: (bool, u16),
+    model: PackedEquipmentModelId,
+    slot: EquipmentSlotInfo,
+) -> Option<ImcEntry> {
+    let slot_offset = imc_slot_offset(slot.abbreviation).unwrap_or(0);
+    cache
+        .get(&key)
+        .and_then(|cached| cached.as_ref())
+        .map(|file| *file.entry(model.variant_id, slot_offset))
+}
+
+/// [`load_imc_entry_from_resource`] 的异步版本。
+#[cfg(feature = "game-data")]
+async fn load_imc_entry_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    cache: &mut HashMap<(bool, u16), Option<Rc<ImcFile>>>,
+    model: PackedEquipmentModelId,
+    slot: EquipmentSlotInfo,
+    loaded_paths: &mut Vec<String>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+) -> Option<ImcEntry> {
+    let key = (slot.is_accessory, model.set_id);
+    if !cache.contains_key(&key) {
+        let path = equipment_imc_path(model.set_id, slot.is_accessory);
+        let parsed = match resource.read(&path).await {
+            Ok(bytes) => match ImcFile::from_bytes(&bytes) {
+                Ok(file) => {
+                    push_loaded_path(loaded_paths, path);
+                    Some(Rc::new(file))
+                }
+                Err(error) => {
+                    load_diagnostics.push(equipment_params_diagnostic(
+                        PackedModelId::from_raw(model.raw),
+                        path,
+                        WeaponModelLoadCandidateStatus::ParseError,
+                        format!("{error:#}"),
+                    ));
+                    None
+                }
+            },
+            Err(error) => {
+                load_diagnostics.push(equipment_params_diagnostic(
+                    PackedModelId::from_raw(model.raw),
+                    path,
+                    WeaponModelLoadCandidateStatus::ReadError,
+                    error.to_string(),
+                ));
+                None
+            }
+        };
+        cache.insert(key, parsed);
+    }
+    imc_entry_from_cache(&cache, key, model, slot)
+}
+
+/// 共享染色模板按件克隆并覆写 stain_ids（模板本体 stain-agnostic，全装配
+/// 只读取一次 STM 文件）。
+#[cfg(feature = "game-data")]
+fn staining_templates_for_piece(
+    shared: &WeaponStainingTemplates,
+    stain_ids: [u8; 2],
+) -> WeaponStainingTemplates {
+    WeaponStainingTemplates {
+        stain_ids: normalize_stain_ids(stain_ids),
+        legacy: shared.legacy.clone(),
+        dawntrail: shared.dawntrail.clone(),
+    }
+}
+
+/// [`load_dressed_character_from_resource`] 的骨架并行版：部件合并后读取角色
+/// race code 对应 sklb 构建 rest pose 骨架一并返回（缺失 → None，同角色装配）。
+#[cfg(feature = "game-data")]
+pub fn load_dressed_character_with_skeleton_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &DressedCharacterLoadRequest,
+) -> anyhow::Result<(DressedCharacterData, Option<ModelSkeleton>)> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    // 身体部件循环与裸装装配一致（禁用染色 + per-part 外观切片写入）。
+    for part in character_part_paths(&request.customize) {
+        let mut model_candidates = vec![part.model_path.clone()];
+        model_candidates.extend(part.alternate_model_paths.clone());
+        let context = ModelPathContext::Character(CharacterModelPathContext {
+            customize: request.customize,
+            part: part.kind,
+            model_candidates,
+        });
+        let materials_before = materials.len();
+        let result = load_model_meshes_from_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        );
+        match (part.required, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {
+                if let Some(appearance) = &request.appearance {
+                    let decal_texture = load_character_decal_texture_from_resource(
+                        resource,
+                        request.customize.face_paint,
+                        part.kind,
+                        &mut textures,
+                        &mut loaded_paths,
+                    );
+                    apply_character_appearance_to_materials(
+                        &mut materials[materials_before..],
+                        appearance,
+                        decal_texture,
+                    );
+                }
+            }
+        }
+    }
+    let body_mesh_count = meshes.len();
+
+    // 任一装备件染色才读取 STM 模板（全装配一次）；EQP 表缺失按空表降级。
+    let any_stains = request
+        .equipment
+        .iter()
+        .any(|piece| piece.stain_ids.iter().any(|stain_id| *stain_id != 0));
+    let equipment_staining = if any_stains {
+        load_weapon_staining_templates_from_resource(resource, [1, 0], &mut loaded_paths)
+    } else {
+        WeaponStainingTemplates::disabled([0, 0])
+    };
+    let eqp_table = load_equipment_parameter_table_from_resource(
+        resource,
+        &mut loaded_paths,
+        &mut load_diagnostics,
+    );
+    let mut imc_cache = HashMap::new();
+
+    let mut pieces: Vec<&DressedEquipmentPiece> = request.equipment.iter().collect();
+    pieces.sort_by_key(|piece| piece.equip_slot_category);
+    let mut loaded_pieces = Vec::new();
+    for piece in pieces {
+        let Some(slot) = equipment_slot_info(piece.equip_slot_category) else {
+            load_diagnostics.push(WeaponModelLoadDiagnostic {
+                role: WeaponModelLoadRole::Secondary,
+                model: PackedModelId::from_raw(piece.model_main),
+                candidates: Vec::new(),
+                error: format!(
+                    "equip slot category {} has no equipment model",
+                    piece.equip_slot_category
+                ),
+            });
+            continue;
+        };
+        let model_main = PackedEquipmentModelId::from_raw(piece.model_main);
+        if model_main.set_id == 0 {
+            continue;
+        }
+        let imc_entry = load_imc_entry_from_resource(
+            resource,
+            &mut imc_cache,
+            model_main,
+            slot,
+            &mut loaded_paths,
+            &mut load_diagnostics,
+        );
+        let material_version = imc_entry
+            .map(|entry| u16::from(entry.material_set))
+            .filter(|version| *version > 0);
+        let piece_staining = staining_templates_for_piece(&equipment_staining, piece.stain_ids);
+        let materials_before = materials.len();
+        let meshes_before = meshes.len();
+        let result = load_model_meshes_from_resource(
+            resource,
+            ModelPathContext::Equipment(EquipmentModelPathContext {
+                model: model_main,
+                slot,
+                race_id: request.customize.race_code(),
+                material_version,
+            }),
+            &piece_staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        );
+        if let Err(failure) = result {
+            load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            continue;
+        }
+        if let Some(model_sub) =
+            (piece.model_sub != 0).then(|| PackedEquipmentModelId::from_raw(piece.model_sub))
+        {
+            if model_sub.raw != model_main.raw {
+                // 次模型按自身 set 解析 IMC（材质版本），失败记 Secondary 诊断。
+                let sub_version = load_imc_entry_from_resource(
+                    resource,
+                    &mut imc_cache,
+                    model_sub,
+                    slot,
+                    &mut loaded_paths,
+                    &mut load_diagnostics,
+                )
+                .map(|entry| u16::from(entry.material_set))
+                .filter(|version| *version > 0);
+                if let Err(failure) = load_model_meshes_from_resource(
+                    resource,
+                    ModelPathContext::Equipment(EquipmentModelPathContext {
+                        model: model_sub,
+                        slot,
+                        race_id: request.customize.race_code(),
+                        material_version: sub_version,
+                    }),
+                    &piece_staining,
+                    &mut loaded_paths,
+                    &mut materials,
+                    &mut textures,
+                    &mut meshes,
+                    &mut color_table_sources,
+                ) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+        }
+        loaded_pieces.push(DressedPieceLoad {
+            item_id: piece.item_id,
+            equip_slot_category: piece.equip_slot_category,
+            is_accessory: slot.is_accessory,
+            mesh_start: meshes_before,
+            mesh_end: meshes.len(),
+            material_start: materials_before,
+            material_end: materials.len(),
+            imc_mask: imc_entry.map(|entry| entry.attribute_mask()),
+            eqp: if slot.is_accessory {
+                None
+            } else {
+                eqp_table
+                    .as_ref()
+                    .and_then(|table| table.entry(model_main.set_id))
+            },
+        });
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.name
+        ));
+    }
+
+    let skeleton = load_optional_skeleton_from_resource(
+        resource,
+        &character_skeleton_path(request.customize.race_code()),
+        &request.name,
+    );
+    if let Some(target) = &skeleton {
+        bake_assembly_race_deforms_from_resource(
+            resource,
+            &mut meshes,
+            request.customize.race_code(),
+            target,
+            &request.name,
+        );
+    }
+
+    // 可见性按网格过滤落地（骨变形之后、包围盒之前）。
+    let hidden_body_attributes =
+        apply_dressed_visibility(&mut meshes, body_mesh_count, &loaded_pieces);
+    let equipment_material_ranges = loaded_pieces
+        .iter()
+        .map(|piece| EquipmentMaterialRange {
+            item_id: piece.item_id,
+            equip_slot_category: piece.equip_slot_category,
+            material_start: piece.material_start,
+            material_end: piece.material_end,
+        })
+        .collect();
+
+    Ok((
+        DressedCharacterData {
+            model: WeaponModelData {
+                item_id: 0,
+                item_name: request.name.clone(),
+                model_main: PackedModelId::from_raw(u64::from(request.customize.race_code())),
+                model_sub: None,
+                stain_ids: [0, 0],
+                load_diagnostics,
+                loaded_paths,
+                bounds: calculate_model_bounds(&meshes),
+                materials,
+                textures,
+                meshes,
+            },
+            equipment_material_ranges,
+            hidden_body_attributes,
+        },
+        skeleton,
+    ))
+}
+
+/// 着装角色装配：裸装身体 + 装备件逐件合并（共享累加器，同角色装配的部件
+/// 循环）。装备件按槽位排序加载；单件失败记 Secondary 诊断并跳过（不阻断
+/// 整体）。可见性按网格过滤落地（合并后 attribute 名在装备/身体间全局冲突，
+/// 不能用按名启用表）：装备件按自身 IMC 条目 attribute 位裁剪变体子网格，
+/// 被覆盖槽位的身体网格按各套装 EQP 条目隐藏。
+#[cfg(feature = "game-data")]
+pub fn load_dressed_character_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    request: &DressedCharacterLoadRequest,
+) -> anyhow::Result<DressedCharacterData> {
+    load_dressed_character_with_skeleton_from_resource(resource, request)
+        .map(|(data, _skeleton)| data)
+}
+
+/// [`load_dressed_character_from_resource`] 的异步 Resource 版本。
+#[cfg(feature = "game-data")]
+pub async fn load_dressed_character_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &DressedCharacterLoadRequest,
+) -> anyhow::Result<DressedCharacterData> {
+    load_dressed_character_with_skeleton_from_async_resource(resource, request)
+        .await
+        .map(|(data, _skeleton)| data)
+}
+
+/// [`load_dressed_character_with_skeleton_from_resource`] 的异步 Resource
+/// 版本：随装配返回 race code 对应 sklb 的 rest pose 骨架（缺失 → None）。
+#[cfg(feature = "game-data")]
+pub async fn load_dressed_character_with_skeleton_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    request: &DressedCharacterLoadRequest,
+) -> anyhow::Result<(DressedCharacterData, Option<ModelSkeleton>)> {
+    let mut load_diagnostics = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let staining = WeaponStainingTemplates::disabled([0, 0]);
+
+    for part in character_part_paths(&request.customize) {
+        let mut model_candidates = vec![part.model_path.clone()];
+        model_candidates.extend(part.alternate_model_paths.clone());
+        let context = ModelPathContext::Character(CharacterModelPathContext {
+            customize: request.customize,
+            part: part.kind,
+            model_candidates,
+        });
+        let materials_before = materials.len();
+        let result = load_model_meshes_from_async_resource(
+            resource,
+            context,
+            &staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await;
+        match (part.required, result) {
+            (true, Err(failure)) => return Err(failure.into_error()),
+            (false, Err(failure)) => {
+                if !chara_probe_failure_is_absent(&failure) {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+            (_, Ok(())) => {
+                if let Some(appearance) = &request.appearance {
+                    let decal_texture = load_character_decal_texture_from_async_resource(
+                        resource,
+                        request.customize.face_paint,
+                        part.kind,
+                        &mut textures,
+                        &mut loaded_paths,
+                    )
+                    .await;
+                    apply_character_appearance_to_materials(
+                        &mut materials[materials_before..],
+                        appearance,
+                        decal_texture,
+                    );
+                }
+            }
+        }
+    }
+    let body_mesh_count = meshes.len();
+
+    let any_stains = request
+        .equipment
+        .iter()
+        .any(|piece| piece.stain_ids.iter().any(|stain_id| *stain_id != 0));
+    let equipment_staining = if any_stains {
+        load_weapon_staining_templates_from_async_resource(resource, [1, 0], &mut loaded_paths)
+            .await
+    } else {
+        WeaponStainingTemplates::disabled([0, 0])
+    };
+    let eqp_table = load_equipment_parameter_table_from_async_resource(
+        resource,
+        &mut loaded_paths,
+        &mut load_diagnostics,
+    )
+    .await;
+    let mut imc_cache = HashMap::new();
+
+    let mut pieces: Vec<&DressedEquipmentPiece> = request.equipment.iter().collect();
+    pieces.sort_by_key(|piece| piece.equip_slot_category);
+    let mut loaded_pieces = Vec::new();
+    for piece in pieces {
+        let Some(slot) = equipment_slot_info(piece.equip_slot_category) else {
+            load_diagnostics.push(WeaponModelLoadDiagnostic {
+                role: WeaponModelLoadRole::Secondary,
+                model: PackedModelId::from_raw(piece.model_main),
+                candidates: Vec::new(),
+                error: format!(
+                    "equip slot category {} has no equipment model",
+                    piece.equip_slot_category
+                ),
+            });
+            continue;
+        };
+        let model_main = PackedEquipmentModelId::from_raw(piece.model_main);
+        if model_main.set_id == 0 {
+            continue;
+        }
+        let imc_entry = load_imc_entry_from_async_resource(
+            resource,
+            &mut imc_cache,
+            model_main,
+            slot,
+            &mut loaded_paths,
+            &mut load_diagnostics,
+        )
+        .await;
+        let material_version = imc_entry
+            .map(|entry| u16::from(entry.material_set))
+            .filter(|version| *version > 0);
+        let piece_staining = staining_templates_for_piece(&equipment_staining, piece.stain_ids);
+        let materials_before = materials.len();
+        let meshes_before = meshes.len();
+        let result = load_model_meshes_from_async_resource(
+            resource,
+            ModelPathContext::Equipment(EquipmentModelPathContext {
+                model: model_main,
+                slot,
+                race_id: request.customize.race_code(),
+                material_version,
+            }),
+            &piece_staining,
+            &mut loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await;
+        if let Err(failure) = result {
+            load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            continue;
+        }
+        if let Some(model_sub) =
+            (piece.model_sub != 0).then(|| PackedEquipmentModelId::from_raw(piece.model_sub))
+        {
+            if model_sub.raw != model_main.raw {
+                let sub_version = load_imc_entry_from_async_resource(
+                    resource,
+                    &mut imc_cache,
+                    model_sub,
+                    slot,
+                    &mut loaded_paths,
+                    &mut load_diagnostics,
+                )
+                .await
+                .map(|entry| u16::from(entry.material_set))
+                .filter(|version| *version > 0);
+                if let Err(failure) = load_model_meshes_from_async_resource(
+                    resource,
+                    ModelPathContext::Equipment(EquipmentModelPathContext {
+                        model: model_sub,
+                        slot,
+                        race_id: request.customize.race_code(),
+                        material_version: sub_version,
+                    }),
+                    &piece_staining,
+                    &mut loaded_paths,
+                    &mut materials,
+                    &mut textures,
+                    &mut meshes,
+                    &mut color_table_sources,
+                )
+                .await
+                {
+                    load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+                }
+            }
+        }
+        loaded_pieces.push(DressedPieceLoad {
+            item_id: piece.item_id,
+            equip_slot_category: piece.equip_slot_category,
+            is_accessory: slot.is_accessory,
+            mesh_start: meshes_before,
+            mesh_end: meshes.len(),
+            material_start: materials_before,
+            material_end: materials.len(),
+            imc_mask: imc_entry.map(|entry| entry.attribute_mask()),
+            eqp: if slot.is_accessory {
+                None
+            } else {
+                eqp_table
+                    .as_ref()
+                    .and_then(|table| table.entry(model_main.set_id))
+            },
+        });
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        &mut loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{} has no renderable model meshes",
+            request.name
+        ));
+    }
+
+    let skeleton = load_optional_skeleton_from_async_resource(
+        resource,
+        &character_skeleton_path(request.customize.race_code()),
+        &request.name,
+    )
+    .await;
+    if let Some(target) = &skeleton {
+        bake_assembly_race_deforms_from_async_resource(
+            resource,
+            &mut meshes,
+            request.customize.race_code(),
+            target,
+            &request.name,
+        )
+        .await;
+    }
+
+    let hidden_body_attributes =
+        apply_dressed_visibility(&mut meshes, body_mesh_count, &loaded_pieces);
+    let equipment_material_ranges = loaded_pieces
+        .iter()
+        .map(|piece| EquipmentMaterialRange {
+            item_id: piece.item_id,
+            equip_slot_category: piece.equip_slot_category,
+            material_start: piece.material_start,
+            material_end: piece.material_end,
+        })
+        .collect();
+
+    Ok((
+        DressedCharacterData {
+            model: WeaponModelData {
+                item_id: 0,
+                item_name: request.name.clone(),
+                model_main: PackedModelId::from_raw(u64::from(request.customize.race_code())),
+                model_sub: None,
+                stain_ids: [0, 0],
+                load_diagnostics,
+                loaded_paths,
+                bounds: calculate_model_bounds(&meshes),
+                materials,
+                textures,
+                meshes,
+            },
+            equipment_material_ranges,
+            hidden_body_attributes,
+        },
+        skeleton,
+    ))
+}
+
+/// 从本地游戏目录加载着装角色，对齐 [`load_character_assembly_from_game_dir`]。
+#[cfg(feature = "game-data")]
+pub fn load_dressed_character_from_game_dir(
+    game_dir: &std::path::Path,
+    request: &DressedCharacterLoadRequest,
+) -> anyhow::Result<DressedCharacterData> {
+    use anyhow::{Context, anyhow};
+
+    let game_dir = normalize_game_dir(game_dir)?;
+    let game_dir = game_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?;
+    let mut resource = physis::resource::SqPackResource::from_existing(game_dir);
+    load_dressed_character_from_resource(&mut resource, request)
+        .with_context(|| format!("failed to load dressed character for {}", request.name))
+}
+
+/// 着装合并的身体区域判定。身体网格按 `mesh.path` 识别（小衣 e0001 / 裸肤
+/// e0000 装备域路径 + `/obj/hair/` 头发；布料/皮肤按内嵌材质名 `b0001`
+/// 区分，同 [`close_bare_limb_junctions`] 的判定）。跨族回退件路径含回退
+/// race code，但 `e0001_top` 等标记段不变。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DressedBodyRegion {
+    TopCloth,
+    TopSkin,
+    DwnCloth,
+    DwnSkin,
+    BodySho,
+    BodyGlv,
+    Hair,
+    Other,
+}
+
+#[cfg(feature = "game-data")]
+fn classify_dressed_body_mesh(mesh: &WeaponModelMesh) -> DressedBodyRegion {
+    let path = mesh.path.as_str();
+    if path.contains("/obj/hair/") {
+        return DressedBodyRegion::Hair;
+    }
+    let is_skin = mesh.material_name.contains("b0001");
+    if path.contains("e0001_top") {
+        return if is_skin {
+            DressedBodyRegion::TopSkin
+        } else {
+            DressedBodyRegion::TopCloth
+        };
+    }
+    if path.contains("e0001_dwn") {
+        return if is_skin {
+            DressedBodyRegion::DwnSkin
+        } else {
+            DressedBodyRegion::DwnCloth
+        };
+    }
+    if path.contains("e0001_sho") || path.contains("e0000_sho") {
+        return DressedBodyRegion::BodySho;
+    }
+    if path.contains("e0000_glv") {
+        return DressedBodyRegion::BodyGlv;
+    }
+    DressedBodyRegion::Other
+}
+
+/// submesh 的 attribute 名集合（`attribute_names` 与掩码置位按位升序 zip
+/// 对应，同 [`character_enabled_attribute_names`] 的判读）。
+#[cfg(feature = "game-data")]
+fn submesh_zipped_attribute_names(mesh: &WeaponModelMesh) -> Vec<&str> {
+    let Some(submesh) = &mesh.submesh else {
+        return Vec::new();
+    };
+    let mut names = submesh.attribute_names.iter();
+    let mut zipped = Vec::new();
+    for bit in 0..u32::BITS {
+        if submesh.attribute_index_mask & (1 << bit) == 0 {
+            continue;
+        }
+        let Some(name) = names.next() else {
+            break;
+        };
+        zipped.push(name.as_str());
+    }
+    zipped
+}
+
+/// 着装可见性落地：按网格过滤（合并后 attribute 名在装备/身体间全局冲突
+/// ——如 atr_ude 两边都有——按名启用表是全局的、无法表达槽位差异），返回
+/// 身体遮蔽诊断记录。
+///
+/// 规则（EQP 位语义见 [`EquipmentParameterEntry`]；身体 attribute 名为真实
+/// 数据探测结论：top 皮肤 atr_hij 肘/atr_ude 腕前臂/atr_nek 颈，dwn 皮肤
+/// atr_hiz 膝/atr_sne 小腿踝，e0000 裸肤手足无 attribute）：
+/// - top 装备：丢弃全部 e0001_top 布料网格；皮肤按 top 条目 HideGorget→
+///   atr_nek、HideShortGloves|HideMidGloves→atr_ude、HideLongGloves→atr_hij
+///   +atr_ude；手部遮蔽（HandHideForearm→atr_ude、HandHideElbow+Forearm→
+///   atr_hij）默认读 glv 条目，top 条目 BodyShowHand 关闭时改读 top 条目。
+/// - glv 装备：丢弃全部 e0000_glv 裸肤手网格（露指手套自带皮肤网格）。
+/// - dwn 装备：丢弃全部 e0001_dwn 布料网格；皮肤按 dwn 条目
+///   LegHideKneePads→atr_hiz、LegHideShortBoot|LegHideHalfBoot→atr_sne，加
+///   sho 条目 FootHideKnee(+Calf)→atr_hiz、FootHideAnkle→atr_sne；top 条目
+///   BodyShowLeg 关闭时两者都改读 top 条目。sho 装备时额外丢弃 dwn 装备自身
+///   的 atr_leg 子网格（裤脚塞靴）。
+/// - sho 装备：丢弃全部 e0001_sho/e0000_sho 网格。
+/// - met 装备：身体不动；HeadHideScalp→丢弃带 atr_top 的头发子网格，
+///   HeadHideHair 且无 HeadShowHairOverride→丢弃全部头发网格，
+///   HeadHideNeck→top 皮肤 atr_nek。耳饰/耳显隐位（47-53）暂不落地，仅
+///   eprintln 诊断。
+/// - 每件装备再按自身 IMC 条目 attribute 位裁剪变体子网格（位是该件 MDL
+///   本地表序，数值比较仅在同 MDL 内有效）；IMC 缺失 → 全显示。
+#[cfg(feature = "game-data")]
+fn apply_dressed_visibility(
+    meshes: &mut Vec<WeaponModelMesh>,
+    body_mesh_count: usize,
+    pieces: &[DressedPieceLoad],
+) -> Vec<String> {
+    use EquipmentParameterEntry as E;
+
+    let piece_in_slot = |category: u32| {
+        pieces
+            .iter()
+            .find(|piece| piece.equip_slot_category == category && !piece.is_accessory)
+    };
+    let met = piece_in_slot(3);
+    let top = piece_in_slot(4);
+    let glv = piece_in_slot(5);
+    let dwn = piece_in_slot(7);
+    let sho = piece_in_slot(8);
+    let top_eqp = top.and_then(|piece| piece.eqp);
+    // 身体显示位关闭时，对应区域的遮蔽数据改从 top 套装条目解析
+    // （xivModdingFramework `EquipmentParameterFlag` 注释）；条目缺失按显示处理。
+    let body_show_leg = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_LEG));
+    let body_show_hand = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_HAND));
+
+    let mut top_skin_hide: Vec<&'static str> = Vec::new();
+    if top.is_some() {
+        if let Some(eqp) = top_eqp {
+            if eqp.flag(E::BODY_HIDE_GORGET) {
+                top_skin_hide.push("atr_nek");
+            }
+            if eqp.flag(E::BODY_HIDE_SHORT_GLOVES) || eqp.flag(E::BODY_HIDE_MID_GLOVES) {
+                top_skin_hide.push("atr_ude");
+            }
+            if eqp.flag(E::BODY_HIDE_LONG_GLOVES) {
+                top_skin_hide.extend(["atr_hij", "atr_ude"]);
+            }
+        }
+    }
+    let hand_source = if body_show_hand {
+        glv.and_then(|piece| piece.eqp)
+    } else {
+        top_eqp
+    };
+    if let Some(source) = hand_source {
+        if source.flag(E::HAND_HIDE_FOREARM) {
+            top_skin_hide.push("atr_ude");
+        }
+        if source.flag(E::HAND_HIDE_ELBOW) && source.flag(E::HAND_HIDE_FOREARM) {
+            top_skin_hide.push("atr_hij");
+        }
+    }
+
+    let mut dwn_skin_hide: Vec<&'static str> = Vec::new();
+    let (dwn_source, sho_source) = if body_show_leg {
+        (
+            dwn.and_then(|piece| piece.eqp),
+            sho.and_then(|piece| piece.eqp),
+        )
+    } else {
+        (top_eqp, top_eqp)
+    };
+    if let Some(source) = dwn_source {
+        if source.flag(E::LEG_HIDE_KNEE_PADS) {
+            dwn_skin_hide.push("atr_hiz");
+        }
+        if source.flag(E::LEG_HIDE_SHORT_BOOT) || source.flag(E::LEG_HIDE_HALF_BOOT) {
+            dwn_skin_hide.push("atr_sne");
+        }
+    }
+    if let Some(source) = sho_source {
+        if source.flag(E::FOOT_HIDE_KNEE) && source.flag(E::FOOT_HIDE_CALF) {
+            dwn_skin_hide.push("atr_hiz");
+        }
+        if source.flag(E::FOOT_HIDE_ANKLE) {
+            dwn_skin_hide.push("atr_sne");
+        }
+    }
+
+    let mut hair_hide_scalp = false;
+    let mut hair_hide_all = false;
+    if let Some(met) = met {
+        if let Some(eqp) = met.eqp {
+            if eqp.flag(E::HEAD_HIDE_SCALP) {
+                hair_hide_scalp = true;
+            }
+            if eqp.flag(E::HEAD_HIDE_HAIR) && !eqp.flag(E::HEAD_SHOW_HAIR_OVERRIDE) {
+                hair_hide_all = true;
+            }
+            if eqp.flag(E::HEAD_HIDE_NECK) {
+                top_skin_hide.push("atr_nek");
+            }
+            if (E::HEAD_SHOW_EARRINGS..=E::HEAD_SHOW_EAR_VIERA).any(|bit| !eqp.flag(bit)) {
+                eprintln!(
+                    "dressed character: head piece {} gates earrings/ears (EQP bits 47-53); accessory visibility gating not implemented",
+                    met.item_id
+                );
+            }
+        }
+    }
+
+    let mut dropped = vec![false; meshes.len()];
+    let mut hidden: Vec<String> = Vec::new();
+    let record = |hidden: &mut Vec<String>, entry: String| {
+        if !hidden.contains(&entry) {
+            hidden.push(entry);
+        }
+    };
+    for (index, mesh) in meshes.iter().enumerate().take(body_mesh_count) {
+        match classify_dressed_body_mesh(mesh) {
+            DressedBodyRegion::TopCloth if top.is_some() => {
+                dropped[index] = true;
+                record(&mut hidden, "top:cloth".to_string());
+            }
+            DressedBodyRegion::TopSkin => {
+                for name in submesh_zipped_attribute_names(mesh) {
+                    if top_skin_hide.contains(&name) {
+                        dropped[index] = true;
+                        record(&mut hidden, format!("top:skin:{name}"));
+                    }
+                }
+            }
+            DressedBodyRegion::DwnCloth if dwn.is_some() => {
+                dropped[index] = true;
+                record(&mut hidden, "dwn:cloth".to_string());
+            }
+            DressedBodyRegion::DwnSkin => {
+                for name in submesh_zipped_attribute_names(mesh) {
+                    if dwn_skin_hide.contains(&name) {
+                        dropped[index] = true;
+                        record(&mut hidden, format!("dwn:skin:{name}"));
+                    }
+                }
+            }
+            DressedBodyRegion::BodySho if sho.is_some() => {
+                dropped[index] = true;
+                record(&mut hidden, "sho:body".to_string());
+            }
+            DressedBodyRegion::BodyGlv if glv.is_some() => {
+                dropped[index] = true;
+                record(&mut hidden, "glv:body".to_string());
+            }
+            DressedBodyRegion::Hair => {
+                if hair_hide_all {
+                    dropped[index] = true;
+                    record(&mut hidden, "hair:all".to_string());
+                } else if hair_hide_scalp
+                    && submesh_zipped_attribute_names(mesh).contains(&"atr_top")
+                {
+                    dropped[index] = true;
+                    record(&mut hidden, "hair:atr_top".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for piece in pieces {
+        if let Some(mask) = piece.imc_mask {
+            for index in piece.mesh_start..piece.mesh_end {
+                let Some(submesh) = &meshes[index].submesh else {
+                    continue;
+                };
+                if submesh.attribute_index_mask & !u32::from(mask) != 0 {
+                    dropped[index] = true;
+                }
+            }
+        }
+        if piece.equip_slot_category == 7 && sho.is_some() {
+            for index in piece.mesh_start..piece.mesh_end {
+                if submesh_zipped_attribute_names(&meshes[index]).contains(&"atr_leg") {
+                    dropped[index] = true;
+                    record(&mut hidden, "dwn-gear:atr_leg".to_string());
+                }
+            }
+        }
+    }
+
+    if dropped.iter().any(|dropped| *dropped) {
+        let mut kept = Vec::with_capacity(meshes.len());
+        for (index, mesh) in meshes.drain(..).enumerate() {
+            if !dropped[index] {
+                kept.push(mesh);
+            }
+        }
+        *meshes = kept;
+    }
+    hidden
+}
+
+/// 着装结果的单件增量染色：克隆合并模型，仅从各材质的未染色基准色表重新
+/// 染色该件材质切片并重烘焙其 ColorTable 派生贴图（其余部件不动）。
+/// `item_id` 不在 `equipment_material_ranges` 中时原样返回克隆。
+#[cfg(feature = "game-data")]
+pub fn apply_dressed_piece_stains(
+    base: &DressedCharacterData,
+    item_id: u32,
+    stain_ids: [u8; 2],
+    staining: &WeaponStainingTemplates,
+) -> WeaponModelData {
+    let mut model = base.model.clone();
+    let Some(range) = base
+        .equipment_material_ranges
+        .iter()
+        .find(|range| range.item_id == item_id)
+    else {
+        return model;
+    };
+    let start = range.material_start.min(model.materials.len());
+    let end = range.material_end.min(model.materials.len());
+    restain_materials_with_templates(
+        &mut model.materials[start..end],
+        &mut model.textures,
+        normalize_stain_ids(stain_ids),
+        staining,
+    );
+    model
+}
+
 #[cfg(feature = "game-data")]
 pub fn apply_weapon_model_stains(
     base: &WeaponModelData,
@@ -4647,8 +5798,25 @@ pub fn apply_weapon_model_stains(
         stain_ids.map(|stain_id| (stain_id <= MAX_STAIN_ID).then_some(stain_id).unwrap_or(0));
     let mut model = base.clone();
     model.stain_ids = stain_ids;
+    restain_materials_with_templates(
+        &mut model.materials,
+        &mut model.textures,
+        stain_ids,
+        staining,
+    );
+    model
+}
 
-    let (materials, textures) = (&mut model.materials, &mut model.textures);
+/// 运行时染色落地的材质区间版：从各材质的未染色基准色表（`color_table_rows`）
+/// 重新应用染色并重烘焙 ColorTable 派生贴图，仅作用于给定切片（着装装配的
+/// 单件增量染色用；整模型染色 = 全切片）。
+#[cfg(feature = "game-data")]
+fn restain_materials_with_templates(
+    materials: &mut [WeaponModelMaterial],
+    textures: &mut Vec<WeaponModelTexture>,
+    stain_ids: [u8; 2],
+    staining: &WeaponStainingTemplates,
+) {
     for material in materials {
         let mut rows = material.color_table_rows.clone();
         material.staining_application = apply_weapon_staining_with_ids(
@@ -4690,8 +5858,6 @@ pub fn apply_weapon_model_stains(
         material.roughness = summary.roughness;
         material.metalness = summary.metalness;
     }
-
-    model
 }
 
 #[cfg(feature = "game-data")]
@@ -12264,5 +13430,799 @@ mod chara_loader_tests {
         ))
         .expect_err("demihuman without any slot mdl must fail");
         assert!(format!("{error:#}").contains("no renderable model meshes"));
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "game-data")]
+mod dressed_character_tests {
+    use super::*;
+
+    fn mesh(path: &str, material_name: &str, mask: u32, names: &[&str]) -> WeaponModelMesh {
+        ModelMesh {
+            path: path.to_string(),
+            part_index: 0,
+            mesh_category: None,
+            submesh: Some(ModelSubmeshInfo {
+                index: 0,
+                table_index: 0,
+                attribute_index_mask: mask,
+                attribute_index_mask_hex: format!("0x{mask:08X}"),
+                attribute_names: names.iter().map(|name| name.to_string()).collect(),
+                bone_start_index: 0,
+                bone_count: 0,
+            }),
+            shape_influences: Vec::new(),
+            shape_targets: Vec::new(),
+            material_index: 0,
+            material_slot: 0,
+            material_name: material_name.to_string(),
+            color: [0.0; 3],
+            bone_table: None,
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
+
+    fn piece(
+        category: u32,
+        mesh_start: usize,
+        mesh_end: usize,
+        imc_mask: Option<u16>,
+        eqp_raw: u64,
+    ) -> DressedPieceLoad {
+        DressedPieceLoad {
+            item_id: category,
+            equip_slot_category: category,
+            is_accessory: category >= 9,
+            mesh_start,
+            mesh_end,
+            material_start: 0,
+            material_end: 0,
+            imc_mask,
+            eqp: Some(EquipmentParameterEntry { raw: eqp_raw }),
+        }
+    }
+
+    fn kept_paths(meshes: &[WeaponModelMesh]) -> Vec<&str> {
+        meshes.iter().map(|mesh| mesh.path.as_str()).collect()
+    }
+
+    const TOP_CLOTH: &str = "chara/equipment/e0001/model/c1301e0001_top.mdl#part-0-submesh-0";
+    const TOP_SKIN: &str = "chara/equipment/e0001/model/c1301e0001_top.mdl#part-0-submesh-1";
+    const DWN_CLOTH: &str = "chara/equipment/e0001/model/c1301e0001_dwn.mdl#part-0-submesh-0";
+    const DWN_SKIN: &str = "chara/equipment/e0001/model/c1301e0001_dwn.mdl#part-0-submesh-1";
+    const BARE_GLV: &str = "chara/equipment/e0000/model/c1301e0000_glv.mdl#part-0-submesh-0";
+    const BARE_SHO: &str = "chara/equipment/e0000/model/c1301e0000_sho.mdl#part-0-submesh-0";
+    const SMALL_SHO: &str = "chara/equipment/e0001/model/c1301e0001_sho.mdl#part-0-submesh-0";
+    const HAIR: &str = "chara/human/c1301/obj/hair/h0001/model/c1301h0001_hir.mdl#part-0-submesh-0";
+    const GEAR_TOP: &str = "chara/equipment/e0908/model/c1301e0908_top.mdl#part-0-submesh-0";
+    const SKIN_MAT: &str = "mt_c1301b0001_a.mtrl";
+    const CLOTH_MAT: &str = "mt_c1301e0001_top_a.mtrl";
+
+    #[test]
+    fn visibility_removes_top_cloth_and_flagged_skin() {
+        use EquipmentParameterEntry as E;
+        let mut meshes = vec![
+            mesh(TOP_CLOTH, CLOTH_MAT, 0x1, &["atr_nek"]),
+            mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"]),
+            mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_nek"]),
+            mesh(GEAR_TOP, "mt_c1301e0908_top_a.mtrl", 0, &[]),
+        ];
+        let eqp = (1 << E::BODY_HIDE_SHORT_GLOVES) | (1 << E::BODY_HIDE_GORGET);
+        let pieces = [piece(4, 3, 4, None, eqp)];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        assert_eq!(kept_paths(&meshes), [GEAR_TOP]);
+        assert_eq!(
+            hidden,
+            ["top:cloth", "top:skin:atr_ude", "top:skin:atr_nek"]
+        );
+
+        // 无 top 装备：小衣布料与皮肤全部保留。
+        let mut meshes = vec![
+            mesh(TOP_CLOTH, CLOTH_MAT, 0x1, &["atr_nek"]),
+            mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"]),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &[]);
+        assert!(hidden.is_empty());
+        assert_eq!(meshes.len(), 2);
+    }
+
+    #[test]
+    fn visibility_removes_bare_limbs_for_glv_and_sho() {
+        let mut meshes = vec![
+            mesh(BARE_GLV, SKIN_MAT, 0, &[]),
+            mesh(SMALL_SHO, "mt_c1301e0001_sho_a.mtrl", 0, &[]),
+            mesh(BARE_SHO, SKIN_MAT, 0, &[]),
+        ];
+        let pieces = [piece(5, 3, 3, None, 0), piece(8, 3, 3, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["glv:body", "sho:body"]);
+
+        // 仅 glv 装备：只去裸肤手，小衣/裸肤足保留。
+        let mut meshes = vec![
+            mesh(BARE_GLV, SKIN_MAT, 0, &[]),
+            mesh(SMALL_SHO, "mt_c1301e0001_sho_a.mtrl", 0, &[]),
+            mesh(BARE_SHO, SKIN_MAT, 0, &[]),
+        ];
+        let pieces = [piece(5, 3, 3, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        assert_eq!(kept_paths(&meshes), [SMALL_SHO, BARE_SHO]);
+        assert_eq!(hidden, ["glv:body"]);
+    }
+
+    #[test]
+    fn visibility_gear_imc_mask_is_mdl_local_and_name_collision_safe() {
+        use EquipmentParameterEntry as E;
+        // 身体与装备的 attribute 名冲突（atr_ude 两边都有）：身体侧按 EQP 名
+        // 集合丢弃，装备侧按 IMC 位（MDL 本地表序）裁剪，同名不受影响。
+        let mut meshes = vec![
+            mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"]),
+            mesh(
+                "chara/equipment/e0908/model/c1301e0908_glv.mdl#part-0-submesh-0",
+                "mt_c1301e0908_glv_a.mtrl",
+                0x1,
+                &["atr_ude"],
+            ),
+            mesh(
+                "chara/equipment/e0908/model/c1301e0908_glv.mdl#part-0-submesh-1",
+                "mt_c1301e0908_glv_a.mtrl",
+                0x2,
+                &["atr_ude", "atr_lpd"],
+            ),
+        ];
+        let pieces = [piece(5, 1, 3, Some(0b001), 1 << E::HAND_HIDE_FOREARM)];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert_eq!(
+            kept_paths(&meshes),
+            ["chara/equipment/e0908/model/c1301e0908_glv.mdl#part-0-submesh-0"]
+        );
+        assert_eq!(hidden, ["top:skin:atr_ude"]);
+    }
+
+    #[test]
+    fn visibility_hand_hiding_cross_slot_override() {
+        use EquipmentParameterEntry as E;
+        // 常规：手部遮蔽读 glv 条目（HandHideForearm → atr_ude）。
+        let mut meshes = vec![mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"])];
+        let pieces = [
+            piece(4, 1, 1, None, 1 << E::BODY_SHOW_HAND),
+            piece(5, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
+        ];
+        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert!(meshes.is_empty());
+
+        // top 条目 BodyShowHand 关闭：改读 top 条目自身（无手部位）→ 不遮蔽。
+        let mut meshes = vec![mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"])];
+        let pieces = [
+            piece(4, 1, 1, None, 0),
+            piece(5, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert_eq!(meshes.len(), 1);
+        assert!(hidden.is_empty());
+
+        // BodyShowHand 关闭且 top 条目带 HandHideForearm：遮蔽来自 top 条目。
+        let mut meshes = vec![mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"])];
+        let pieces = [
+            piece(4, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
+            piece(5, 1, 1, None, 0),
+        ];
+        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert!(meshes.is_empty());
+    }
+
+    #[test]
+    fn visibility_hair_rules_follow_met_eqp() {
+        use EquipmentParameterEntry as E;
+        let hair_pair = || {
+            vec![
+                mesh(HAIR, "mt_c1301h0001_a.mtrl", 0x1, &["atr_top"]),
+                mesh(HAIR, "mt_c1301h0001_a.mtrl", 0x1, &["atr_kam"]),
+            ]
+        };
+        // HeadHideScalp：只去 atr_top 子网格。
+        let mut meshes = hair_pair();
+        let pieces = [piece(3, 2, 2, None, 1 << E::HEAD_HIDE_SCALP)];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(hidden, ["hair:atr_top"]);
+
+        // HeadHideHair：全部头发网格。
+        let mut meshes = hair_pair();
+        let pieces = [piece(3, 2, 2, None, 1 << E::HEAD_HIDE_HAIR)];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["hair:all"]);
+
+        // HeadShowHairOverride 覆盖 HeadHideHair。
+        let mut meshes = hair_pair();
+        let pieces = [piece(
+            3,
+            2,
+            2,
+            None,
+            (1 << E::HEAD_HIDE_HAIR) | (1 << E::HEAD_SHOW_HAIR_OVERRIDE),
+        )];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        assert_eq!(meshes.len(), 2);
+        assert!(hidden.is_empty());
+
+        // HeadHideNeck → top 皮肤 atr_nek。
+        let mut meshes = vec![mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_nek"])];
+        let pieces = [piece(3, 1, 1, None, 1 << E::HEAD_HIDE_NECK)];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["top:skin:atr_nek"]);
+    }
+
+    #[test]
+    fn visibility_dwn_leg_hiding_and_pants_tuck() {
+        use EquipmentParameterEntry as E;
+        let gear_dwn_leg = "chara/equipment/e0908/model/c1301e0908_dwn.mdl#part-0-submesh-0";
+        let gear_dwn_hip = "chara/equipment/e0908/model/c1301e0908_dwn.mdl#part-0-submesh-1";
+        let mut meshes = vec![
+            mesh(DWN_CLOTH, "mt_c1301e0001_dwn_a.mtrl", 0x1, &["atr_hiz"]),
+            mesh(DWN_SKIN, SKIN_MAT, 0x1, &["atr_hiz"]),
+            mesh(DWN_SKIN, SKIN_MAT, 0x1, &["atr_sne"]),
+            mesh(gear_dwn_leg, "mt_c1301e0908_dwn_a.mtrl", 0x1, &["atr_leg"]),
+            mesh(gear_dwn_hip, "mt_c1301e0908_dwn_a.mtrl", 0x1, &["atr_hip"]),
+        ];
+        let pieces = [
+            piece(7, 3, 5, None, 1 << E::LEG_HIDE_KNEE_PADS),
+            piece(8, 5, 5, None, 1 << E::FOOT_HIDE_ANKLE),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        assert_eq!(kept_paths(&meshes), [gear_dwn_hip]);
+        assert_eq!(
+            hidden,
+            [
+                "dwn:cloth",
+                "dwn:skin:atr_hiz",
+                "dwn:skin:atr_sne",
+                "dwn-gear:atr_leg"
+            ]
+        );
+
+        // BodyShowLeg 关闭：腿部遮蔽改读 top 条目（dwn/sho 条目忽略）。
+        let mut meshes = vec![mesh(DWN_SKIN, SKIN_MAT, 0x1, &["atr_hiz"])];
+        let pieces = [
+            piece(4, 1, 1, None, 1 << E::LEG_HIDE_KNEE_PADS),
+            piece(7, 1, 1, None, 0),
+        ];
+        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert!(meshes.is_empty());
+
+        // 对照：BodyShowLeg 开启时 top 条目的 LEG 位不生效。
+        let mut meshes = vec![mesh(DWN_SKIN, SKIN_MAT, 0x1, &["atr_hiz"])];
+        let pieces = [
+            piece(
+                4,
+                1,
+                1,
+                None,
+                (1 << E::BODY_SHOW_LEG) | (1 << E::LEG_HIDE_KNEE_PADS),
+            ),
+            piece(7, 1, 1, None, 0),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        assert_eq!(meshes.len(), 1);
+        assert!(hidden.is_empty());
+    }
+
+    /// 双 stain 行的 legacy STM 夹具（diffuse 列满表：行 1/2 不同 diffuse，
+    /// 其余行零；其余列空 = 广播默认值。列长只能是 0/单元素/满表，见
+    /// `staining::decode_array`）。
+    fn staining_fixture(template: u32, diffuse_a: [f32; 3], diffuse_b: [f32; 3]) -> Vec<u8> {
+        const STM_MAGIC: u16 = 0x534d;
+        const STM_VERSION_LEGACY: u16 = 0x0101;
+        const STAINS: usize = 254;
+        let color_row = |color: [f32; 3]| {
+            color
+                .into_iter()
+                .flat_map(|value| half::f16::from_f32(value).to_bits().to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let mut diffuse_column = [color_row(diffuse_a), color_row(diffuse_b)].concat();
+        diffuse_column.resize(STAINS * 6, 0);
+        let columns = vec![
+            diffuse_column,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&STM_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&STM_VERSION_LEGACY.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&template.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        let mut cumulative_bytes = 0_usize;
+        for column in &columns {
+            cumulative_bytes += column.len();
+            bytes.extend_from_slice(
+                &u16::try_from(cumulative_bytes / 2)
+                    .expect("fixture offset")
+                    .to_le_bytes(),
+            );
+        }
+        for column in columns {
+            bytes.extend_from_slice(&column);
+        }
+        bytes
+    }
+
+    fn dyeable_material(name: &str) -> WeaponModelMaterial {
+        let base_row = ColorTableRowColors {
+            diffuse: [0.1, 0.2, 0.3],
+            specular: [0.2, 0.3, 0.4],
+            ..ColorTableRowColors::default()
+        };
+        let dye_row = ModelLegacyColorDyeTableRow {
+            template: 42,
+            diffuse: true,
+            specular: false,
+            emissive: false,
+            gloss: false,
+            specular_strength: false,
+        };
+        let mut material = fallback_weapon_material(0, 0, name.to_string(), [0.5; 3]);
+        material.path = Some(format!("chara/equipment/{name}"));
+        material.has_color_dye_table = true;
+        material.color_dye_table = Some(ModelColorDyeTable::Legacy(vec![dye_row.clone(), dye_row]));
+        material.color_table_rows = Some(vec![base_row, base_row]);
+        material.index_texture = Some(0);
+        material.texture_indices = vec![0];
+        material
+    }
+
+    /// 按材质路径片段找重烘焙的 colorset-diffuse 贴图内容（切片重染色与整
+    /// 模型重染色的贴图索引不同，按内容比较）。
+    fn baked_colorset_diffuse_rgba<'a>(
+        model: &'a WeaponModelData,
+        material_fragment: &str,
+    ) -> &'a [u8] {
+        &model
+            .textures
+            .iter()
+            .find(|texture| {
+                texture.path.contains(material_fragment)
+                    && texture.path.ends_with("#colorset-diffuse")
+            })
+            .expect("baked colorset diffuse texture")
+            .rgba
+    }
+
+    #[test]
+    fn apply_dressed_piece_stains_restains_only_target_slice() {
+        let base = DressedCharacterData {
+            model: WeaponModelData {
+                item_id: 0,
+                item_name: "dressed".to_string(),
+                model_main: PackedModelId::from_raw(101),
+                model_sub: None,
+                stain_ids: [0, 0],
+                load_diagnostics: Vec::new(),
+                loaded_paths: Vec::new(),
+                bounds: ModelBounds::default(),
+                materials: vec![
+                    dyeable_material("body.mtrl"),
+                    dyeable_material("piece-a.mtrl"),
+                    dyeable_material("piece-b.mtrl"),
+                ],
+                textures: vec![WeaponModelTexture {
+                    path: "index.tex".to_string(),
+                    kind: WeaponModelTextureKind::Index,
+                    texel_layout: ModelTextureTexelLayout::Standard,
+                    width: 1,
+                    height: 1,
+                    array_size: 1,
+                    array_layer_height: 1,
+                    rgba: vec![0, 0, 0, 255],
+                    rgba_f32: None,
+                }],
+                meshes: Vec::new(),
+            },
+            equipment_material_ranges: vec![
+                EquipmentMaterialRange {
+                    item_id: 10,
+                    equip_slot_category: 4,
+                    material_start: 1,
+                    material_end: 2,
+                },
+                EquipmentMaterialRange {
+                    item_id: 20,
+                    equip_slot_category: 5,
+                    material_start: 2,
+                    material_end: 3,
+                },
+            ],
+            hidden_body_attributes: Vec::new(),
+        };
+        let templates = WeaponStainingTemplates::from_load_results(
+            Ok(staining_fixture(42, [0.8, 0.4, 0.2], [0.1, 0.9, 0.3])),
+            Err("not needed".to_string()),
+        );
+
+        let stained_b = apply_dressed_piece_stains(&base, 20, [1, 0], &templates);
+        // 其余切片不动：无染色记录、材质原样。
+        assert!(stained_b.materials[0].staining_application.is_none());
+        assert!(stained_b.materials[1].staining_application.is_none());
+        assert_eq!(stained_b.materials[0], base.model.materials[0]);
+        assert_eq!(stained_b.materials[1], base.model.materials[1]);
+        assert_eq!(
+            stained_b.materials[2]
+                .staining_application
+                .as_ref()
+                .map(|application| application.report.rows_changed),
+            Some(2)
+        );
+        // 目标切片染色结果与整模型染色一致（同基准色表 + 同模板）。
+        let whole = apply_weapon_model_stains(&base.model, [1, 0], &templates);
+        assert_eq!(
+            stained_b.materials[2].staining_application,
+            whole.materials[2].staining_application
+        );
+        assert_eq!(
+            baked_colorset_diffuse_rgba(&stained_b, "piece-b"),
+            baked_colorset_diffuse_rgba(&whole, "piece-b")
+        );
+
+        // 同切片换色：只影响目标切片，且两行 stain 产出不同颜色。
+        let stained_b2 = apply_dressed_piece_stains(&base, 20, [2, 0], &templates);
+        assert_eq!(stained_b2.materials[0], base.model.materials[0]);
+        assert_eq!(stained_b2.materials[1], base.model.materials[1]);
+        assert_ne!(
+            baked_colorset_diffuse_rgba(&stained_b, "piece-b"),
+            baked_colorset_diffuse_rgba(&stained_b2, "piece-b")
+        );
+
+        // 清除染色：恢复基准色表（重烘焙贴图与未染色整模型一致）。
+        let reset = apply_dressed_piece_stains(&base, 20, [0, 0], &templates);
+        let neutral = apply_weapon_model_stains(&base.model, [0, 0], &templates);
+        assert!(reset.materials[2].staining_application.is_none());
+        assert_eq!(
+            baked_colorset_diffuse_rgba(&reset, "piece-b"),
+            baked_colorset_diffuse_rgba(&neutral, "piece-b")
+        );
+
+        // 未知 item_id：原样返回。
+        let untouched = apply_dressed_piece_stains(&base, 99, [1, 0], &templates);
+        assert_eq!(untouched, base.model);
+    }
+
+    /// 真实数据集成探针：敖龙女默认身体 + e0908 制敌五件（总冠军制敌系列，
+    /// ilvl 790；model_main 低 16 位 = set 908、次段 = IMC 子集 2），glv 染色。
+    #[test]
+    #[ignore = "loads a dressed character from the installed game; requires XIV_GAME_DIR"]
+    fn load_dressed_au_ra_with_e0908_set_from_installed_game() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        // 敖龙女有效取值：tribe 11（晨曦）/12（暮晖），head 0-3（→ f0001-f0004），
+        // hair 须命中 character-make.json 的 hairOptions（51 不在其中）。
+        let customize = CharacterCustomize {
+            race: 6,
+            gender: 1,
+            age: 1,
+            height: 50,
+            tribe: 11,
+            head: 1,
+            hair: 1,
+            ..Default::default()
+        };
+        assert_eq!(customize.race_code(), 1401);
+        let naked = load_character_assembly_from_resource(
+            &mut resource,
+            &CharacterAssemblyLoadRequest::new(customize, "naked"),
+        )
+        .expect("naked assembly");
+
+        let piece =
+            |item_id: u32, name: &str, category: u32, stain_ids: [u8; 2]| DressedEquipmentPiece {
+                item_id,
+                item_name: name.to_string(),
+                model_main: 0x2_038C,
+                model_sub: 0,
+                equip_slot_category: category,
+                stain_ids,
+            };
+        let equipment = vec![
+            piece(49685, "总冠军制敌头甲", 3, [0, 0]),
+            piece(49686, "总冠军制敌上衣", 4, [0, 0]),
+            piece(49687, "总冠军制敌手套", 5, [1, 0]),
+            piece(49688, "总冠军制敌马裤", 7, [0, 0]),
+            piece(49689, "总冠军制敌矮靴", 8, [0, 0]),
+        ];
+        let request =
+            DressedCharacterLoadRequest::new(customize, "dressed-au-ra").with_equipment(equipment);
+        let (data, skeleton) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+                .expect("dressed load");
+        eprintln!(
+            "dressed: meshes={} (naked {}) materials={} textures={} diagnostics={} hidden={:?}",
+            data.model.meshes.len(),
+            naked.meshes.len(),
+            data.model.materials.len(),
+            data.model.textures.len(),
+            data.model.load_diagnostics.len(),
+            data.hidden_body_attributes
+        );
+
+        assert!(data.model.meshes.len() > naked.meshes.len());
+        assert!(skeleton.is_some());
+        // 材质区间不相交且在界内（按槽位序单调）。
+        let ranges = &data.equipment_material_ranges;
+        assert_eq!(ranges.len(), 5);
+        let mut end = 0;
+        for range in ranges {
+            assert!(range.material_start >= end && range.material_end > range.material_start);
+            end = range.material_end;
+        }
+        assert!(end <= data.model.materials.len());
+        // 骨骼名并集在渲染器关节表上限内。
+        let joints: HashSet<&str> = data
+            .model
+            .meshes
+            .iter()
+            .flat_map(|mesh| mesh.bone_table.iter())
+            .flat_map(|table| table.bone_names.iter().flatten())
+            .map(|name| name.as_str())
+            .collect();
+        assert!(joints.len() <= 256, "joint union {}", joints.len());
+        // top/dwn 装备 → 小衣布料遮蔽。
+        assert!(
+            data.hidden_body_attributes
+                .iter()
+                .any(|entry| entry == "top:cloth")
+        );
+        assert!(
+            data.hidden_body_attributes
+                .iter()
+                .any(|entry| entry == "dwn:cloth")
+        );
+        // 染色的 glv 件：材质切片内有染色落地。
+        let glv = ranges
+            .iter()
+            .find(|range| range.item_id == 49687)
+            .expect("glv range");
+        assert!(
+            data.model.materials[glv.material_start..glv.material_end]
+                .iter()
+                .any(|material| material.staining_application.is_some())
+        );
+    }
+
+    /// 女仆装（e6016）种族变体与 EQDP 地面真值探针：
+    /// 1. 全部 18 族 × 5 槽的 `c{race}e6016_{slot}.mdl` 存在性矩阵；
+    /// 2. 各族 EQDP（`chara/xls/charadb/equipmentdeformerparameter/c{race}.eqdp`）
+    ///    set 6016 条目的 HasMaterial/HasModel 位（xivModdingFramework `Eqp.cs`
+    ///    布局：u16 条目，槽序 [met,top,glv,dwn,sho] 各 2 位，bit0 材质 bit1 模型）；
+    /// 3. 敖龙女着装女仆装五件实际命中的模型路径。
+    #[test]
+    #[ignore = "probes e6016 race variants and EQDP from the installed game; requires XIV_GAME_DIR"]
+    fn probe_e6016_race_variants_and_eqdp() {
+        use physis::resource::Resource;
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+
+        let races: [u16; 18] = [
+            101, 201, 301, 401, 501, 601, 701, 801, 901, 1001, 1101, 1201, 1301, 1401, 1501, 1601,
+            1701, 1801,
+        ];
+        let slots = ["met", "top", "glv", "dwn", "sho"];
+
+        eprintln!("== e6016 MDL existence (race x slot) ==");
+        for race in races {
+            let mut row = String::new();
+            for slot in slots {
+                let path = format!("chara/equipment/e6016/model/c{race:04}e6016_{slot}.mdl");
+                row.push_str(&format!(" {slot}={}", if resource.exists(&path) { "1" } else { "0" }));
+            }
+            eprintln!("c{race:04}:{row}");
+        }
+
+        let eqdp_entry = |bytes: &[u8], set_id: u16| -> Option<u16> {
+            let block_size = usize::from(u16::from_le_bytes([bytes[2], bytes[3]]));
+            let block_count = usize::from(u16::from_le_bytes([bytes[4], bytes[5]]));
+            let header_entry_offset = 6 + 2 * (usize::from(set_id) / block_size);
+            let base_data_offset =
+                u16::from_le_bytes([bytes[header_entry_offset], bytes[header_entry_offset + 1]]);
+            if base_data_offset == 0xFFFF {
+                return None;
+            }
+            let full_header = 6 + 2 * block_count;
+            let offset = full_header
+                + usize::from(base_data_offset) * 2
+                + (usize::from(set_id) % block_size) * 2;
+            Some(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
+        };
+
+        eprintln!("== EQDP set 6016 (M=HasMaterial m=HasModel, slot order met/top/glv/dwn/sho) ==");
+        for race in races {
+            let path = format!("chara/xls/charadb/equipmentdeformerparameter/c{race:04}.eqdp");
+            let Some(bytes) = resource.read(&path) else {
+                eprintln!("c{race:04}: eqdp missing");
+                continue;
+            };
+            match eqdp_entry(&bytes, 6016) {
+                None => eprintln!("c{race:04}: block omitted (all zero)"),
+                Some(raw) => {
+                    let mut row = String::new();
+                    for (idx, slot) in slots.iter().enumerate() {
+                        let has_material = (raw >> (idx * 2)) & 1 != 0;
+                        let has_model = (raw >> (idx * 2 + 1)) & 1 != 0;
+                        row.push_str(&format!(
+                            " {slot}=M{}m{}",
+                            u8::from(has_material),
+                            u8::from(has_model)
+                        ));
+                    }
+                    eprintln!("c{race:04}: raw=0x{raw:04x}{row}");
+                }
+            }
+        }
+
+        // 一致性校验：候选链（骨变形树祖先）上首个文件存在者 == 首个 EQDP
+        // HasModel=1 者。覆盖多个年代的装备套装与饰品套装 × 18 族 × 全槽位。
+        let eqdp_has_model = |bytes: &[u8], set_id: u16, slot_idx: usize| -> Option<bool> {
+            eqdp_entry(bytes, set_id).map(|raw| (raw >> (slot_idx * 2 + 1)) & 1 != 0)
+        };
+        let mut mismatches = 0usize;
+        for (set_id, is_accessory) in [(1u16, false), (908, false), (6016, false), (55, true), (98, true)] {
+            let (root, type_prefix, eqdp_root, slot_list): (&str, char, &str, &[&str]) =
+                if is_accessory {
+                    (
+                        "chara/accessory/a",
+                        'a',
+                        "chara/xls/charadb/accessorydeformerparameter",
+                        &["ear", "nek", "wrs", "rir", "ril"],
+                    )
+                } else {
+                    (
+                        "chara/equipment/e",
+                        'e',
+                        "chara/xls/charadb/equipmentdeformerparameter",
+                        &slots,
+                    )
+                };
+            let eqdp_by_race: HashMap<u16, Option<Vec<u8>>> = races
+                .iter()
+                .map(|race| {
+                    let bytes = resource.read(&format!("{eqdp_root}/c{race:04}.eqdp"));
+                    (*race, bytes)
+                })
+                .collect();
+            for (slot_idx, slot) in slot_list.iter().enumerate() {
+                for race in races {
+                    let chain = crate::model::equipment_model_race_candidates(race);
+                    let file_pick = chain.iter().copied().find(|candidate| {
+                        resource.exists(&format!(
+                            "{root}{set_id:04}/model/c{candidate:04}{type_prefix}{set_id:04}_{slot}.mdl"
+                        ))
+                    });
+                    let eqdp_pick = chain.iter().copied().find(|candidate| {
+                        eqdp_by_race
+                            .get(candidate)
+                            .and_then(|bytes| bytes.as_ref())
+                            .and_then(|bytes| eqdp_has_model(bytes, set_id, slot_idx))
+                            .unwrap_or(false)
+                    });
+                    if file_pick != eqdp_pick {
+                        mismatches += 1;
+                        eprintln!(
+                            "MISMATCH {type_prefix}{set_id:04} {slot} c{race:04}: file={file_pick:?} eqdp={eqdp_pick:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(mismatches, 0, "chain existence probing must match EQDP");
+
+        // 女仆装（e6016）关键断言：敖龙女 top 经链回退到中原女 c0201（而不是
+        // 旧实现的 c0101 中原男）；met 用自有模型。
+        let top_pick = crate::model::equipment_model_race_candidates(1401)
+            .into_iter()
+            .find(|race| {
+                resource.exists(&format!(
+                    "chara/equipment/e6016/model/c{race:04}e6016_top.mdl"
+                ))
+            });
+        assert_eq!(top_pick, Some(201));
+
+        // 小衣 e0001 的 EQDP HasModel（对照 `smallclothes_model_race_candidates`）。
+        eprintln!("== EQDP set 1 top HasModel ==");
+        for race in [1601u16, 1001, 201, 1701, 701, 1801, 801, 1501, 901, 101] {
+            let path = format!("chara/xls/charadb/equipmentdeformerparameter/c{race:04}.eqdp");
+            let Some(bytes) = resource.read(&path) else { continue };
+            let top = eqdp_has_model(&bytes, 1, 1).unwrap_or(false);
+            eprintln!("c{race:04} e0001 top HasModel={}", u8::from(top));
+        }
+
+        // 敖龙女 + 女仆装五件（14972-14976，model_main 0x11780 = set 6016 + IMC 子集 1）。
+        let customize = CharacterCustomize {
+            race: 6,
+            gender: 1,
+            age: 1,
+            height: 50,
+            tribe: 11,
+            head: 1,
+            hair: 1,
+            ..Default::default()
+        };
+        let piece = |item_id: u32, category: u32| DressedEquipmentPiece {
+            item_id,
+            item_name: format!("maid-{item_id}"),
+            model_main: 0x1_1780,
+            model_sub: 0,
+            equip_slot_category: category,
+            stain_ids: [0, 0],
+        };
+        let equipment = vec![
+            piece(14972, 3),
+            piece(14973, 4),
+            piece(14974, 5),
+            piece(14975, 7),
+            piece(14976, 8),
+        ];
+        let request = DressedCharacterLoadRequest::new(customize, "dressed-au-ra-maid-probe")
+            .with_equipment(equipment);
+        let (data, _) = load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+            .expect("dressed maid load");
+        eprintln!("== c1401 maid loaded paths (e6016) ==");
+        for path in &data.model.loaded_paths {
+            if path.contains("e6016") {
+                eprintln!("{path}");
+            }
+        }
+        eprintln!("== c1401 maid mesh paths ==");
+        for mesh in &data.model.meshes {
+            eprintln!("{}", mesh.path);
+        }
+
+        // human.pbd 种族骨变形树：item = (body_id, link_index)，link =
+        // (parent, first_child, next_sibling, deformer_index)（physis pbd.rs /
+        // Meddle PbdFile 布局）。
+        eprintln!("== human.pbd deform tree ==");
+        let Some(pbd) = resource.read("chara/xls/boneDeformer/human.pbd") else {
+            panic!("human.pbd missing");
+        };
+        let pbd = pbd.as_slice();
+        let count = i32::from_le_bytes(pbd[0..4].try_into().unwrap()) as usize;
+        let mut items = Vec::new();
+        for i in 0..count {
+            let base = 4 + i * 12;
+            let body_id = u16::from_le_bytes(pbd[base..base + 2].try_into().unwrap());
+            let link_index = i16::from_le_bytes(pbd[base + 2..base + 4].try_into().unwrap());
+            items.push((body_id, link_index));
+        }
+        let links_base = 4 + count * 12;
+        let mut links = Vec::new();
+        for i in 0..count {
+            let base = links_base + i * 8;
+            let parent = i16::from_le_bytes(pbd[base..base + 2].try_into().unwrap());
+            let deformer_index =
+                u16::from_le_bytes(pbd[base + 6..base + 8].try_into().unwrap());
+            links.push((parent, deformer_index));
+        }
+        for (body_id, link_index) in &items {
+            let mut chain = vec![*body_id];
+            let mut link = *link_index;
+            while link >= 0 {
+                let (parent, deformer_index) = links[link as usize];
+                if parent < 0 {
+                    break;
+                }
+                let parent_body = items[links[parent as usize].1 as usize].0;
+                chain.push(parent_body);
+                let _ = deformer_index;
+                link = parent;
+            }
+            eprintln!("c{body_id:04} deform chain to root: {chain:04?}");
+        }
     }
 }

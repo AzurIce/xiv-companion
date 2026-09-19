@@ -2,10 +2,12 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
 pub(crate) mod browser_sqpack;
+mod character_customize;
 mod collection_bridge;
 mod collection_index;
 mod collection_state;
 mod data;
+mod glamour_state;
 mod icons;
 mod indexed_db_cache;
 mod inventory_bridge;

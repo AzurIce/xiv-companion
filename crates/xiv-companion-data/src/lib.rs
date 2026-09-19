@@ -5,6 +5,8 @@ pub mod character_make;
 pub mod collection;
 pub mod collection_classification;
 pub mod craft_data;
+#[cfg(feature = "game-data")]
+pub mod equipment_params;
 pub mod furniture;
 #[cfg(feature = "game-data")]
 pub mod game_data;
@@ -28,6 +30,8 @@ pub use character_make::*;
 pub use collection::*;
 pub use collection_classification::*;
 pub use craft_data::*;
+#[cfg(feature = "game-data")]
+pub use equipment_params::*;
 pub use furniture::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;

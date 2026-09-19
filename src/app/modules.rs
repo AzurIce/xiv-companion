@@ -99,6 +99,14 @@ pub const APP_MODULES: &[AppModule] = &[
         capabilities: WEB_ONLY,
     },
     AppModule {
+        id: "glamour",
+        label: "幻化套装",
+        href: "/glamour",
+        group: ModuleGroup::Tools,
+        status: ModuleStatus::Experimental,
+        capabilities: WEB_WITH_LOCAL_DATA,
+    },
+    AppModule {
         id: "equipment-models",
         label: "模型预览",
         href: "/equipment-models",

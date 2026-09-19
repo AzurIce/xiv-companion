@@ -3,13 +3,14 @@ use physis::ReadableFile;
 use serde::Deserialize;
 use xiv_companion::{
     AsyncGameResource, BuiltinItemIconProvider, CharaModelLoadRequest, CharacterAssemblyData,
-    CharacterAssemblyLoadRequest, EquipmentModelLoadRequest, FurnitureModelLoadRequest,
-    ItemIconResourceInfo, LocalItemIconImage, ProviderRequest, ResourceBlob, ResourceError,
-    ResourceErrorKind, ResourceFuture, ResourceHub, ResourceMetadata, ResourceOrigin,
-    ResourceProvider, ResourceSource, ResourceStatus, WeaponModelLoadRequest,
-    WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
+    CharacterAssemblyLoadRequest, DressedCharacterData, DressedCharacterLoadRequest,
+    EquipmentModelLoadRequest, FurnitureModelLoadRequest, ItemIconResourceInfo, LocalItemIconImage,
+    ProviderRequest, ResourceBlob, ResourceError, ResourceErrorKind, ResourceFuture, ResourceHub,
+    ResourceMetadata, ResourceOrigin, ResourceProvider, ResourceSource, ResourceStatus,
+    WeaponModelLoadRequest, WeaponStainingTemplates, compare_resource_versions, item_icon_tex_path,
     load_chara_model_with_skeleton_from_async_resource,
     load_character_assembly_with_skeleton_from_async_resource,
+    load_dressed_character_with_skeleton_from_async_resource,
     load_equipment_model_from_async_resource, load_furniture_model_from_async_resource,
     load_weapon_model_from_async_resource, register_chara_catalog_resource,
     register_character_make_resource, register_character_palette_resource,
@@ -1501,16 +1502,17 @@ pub async fn load_character_assembly_with_skeleton_from_local(
         loaded_bytes: 0,
     };
 
-    let result =
-        load_character_assembly_with_skeleton_from_async_resource(&mut resource, &request)
-            .await
-            .map_err(|error| format!("{error:#}"));
+    let result = load_character_assembly_with_skeleton_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
     let result = match result {
         Ok((data, skeleton)) => {
             // 拼接闭合诊断日志（浏览器 console 可见）：骨架缺失时骨变形与拼接
             // 闭合都不会执行；foot_top ≈ calf_bottom + 0.015 表示闭合已生效。
-            let junction =
-                xiv_companion::bare_limb_junction_diagnostics(&data.meshes, request.customize.race_code());
+            let junction = xiv_companion::bare_limb_junction_diagnostics(
+                &data.meshes,
+                request.customize.race_code(),
+            );
             log::info(
                 "character",
                 format!(
@@ -1572,6 +1574,114 @@ pub async fn load_character_assembly_with_skeleton_from_local(
                 data.meshes.len(),
                 data.materials.len(),
                 data.textures.len(),
+                animations
+                    .as_ref()
+                    .map(|set| set.animations.len())
+                    .unwrap_or(0)
+            ),
+        ),
+        Err(error) => ("模型读取失败", error.clone()),
+    };
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id,
+        stain_ids: [0, 0],
+        stage: stage.to_string(),
+        detail,
+        checked_resources: resource.checked_resources,
+        loaded_resources: resource.loaded_resources,
+        loaded_bytes: resource.loaded_bytes,
+        elapsed_ms: log::elapsed_ms(started_at_ms),
+        done: true,
+    }));
+    result
+}
+
+/// 经本地游戏目录加载着装角色（裸装身体 + 装备件合并）：进度上报与角色装配
+/// 共用 WeaponModelLoadProgress 通道（item_id 用 race code 区分角色），动画接
+/// `action.pap`（resident 全套动作）+ 常用 emote 探测，全部缺失返回 `None`，
+/// 不视为加载错误。武器槽位（EquipSlotCategory 1/13/2）加载器不支持，调用方
+/// 需在构建请求前过滤。
+pub async fn load_dressed_character_with_skeleton_from_local(
+    request: DressedCharacterLoadRequest,
+) -> Result<
+    (
+        DressedCharacterData,
+        Option<xiv_companion::ModelSkeleton>,
+        Option<xiv_companion::ModelAnimationSet>,
+    ),
+    String,
+> {
+    let started_at_ms = log::now_ms();
+    let item_id = u32::from(request.customize.race_code());
+    report_weapon_model_progress(Some(WeaponModelLoadProgress {
+        item_id,
+        stain_ids: [0, 0],
+        stage: "连接本地游戏目录".to_string(),
+        detail: request.name.clone(),
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+        elapsed_ms: 0.0,
+        done: false,
+    }));
+    let mut sqpack = match BrowserSqPack::from_window_handle().await {
+        Ok(sqpack) => sqpack,
+        Err(error) => {
+            report_weapon_model_progress(Some(WeaponModelLoadProgress {
+                item_id,
+                stain_ids: [0, 0],
+                stage: "无法读取本地游戏目录".to_string(),
+                detail: error.clone(),
+                checked_resources: 0,
+                loaded_resources: 0,
+                loaded_bytes: 0,
+                elapsed_ms: log::elapsed_ms(started_at_ms),
+                done: true,
+            }));
+            return Err(error);
+        }
+    };
+    let mut resource = BrowserSqPackGameResource {
+        sqpack: &mut sqpack,
+        item_id,
+        stain_ids: [0, 0],
+        started_at_ms,
+        checked_resources: 0,
+        loaded_resources: 0,
+        loaded_bytes: 0,
+    };
+
+    let result = load_dressed_character_with_skeleton_from_async_resource(&mut resource, &request)
+        .await
+        .map_err(|error| format!("{error:#}"));
+    let result = match result {
+        Ok((data, skeleton)) => {
+            let animations = match &skeleton {
+                Some(skeleton) => {
+                    let set = xiv_companion::load_animation_set_from_async_resource(
+                        &mut resource,
+                        xiv_companion::AnimationSourceKind::Character {
+                            race_code: request.customize.race_code(),
+                        },
+                        skeleton,
+                    )
+                    .await;
+                    (!set.is_empty()).then_some(set)
+                }
+                None => None,
+            };
+            Ok((data, skeleton, animations))
+        }
+        Err(error) => Err(error),
+    };
+    let (stage, detail) = match &result {
+        Ok((data, _, animations)) => (
+            "模型资源已就绪",
+            format!(
+                "{} 个网格 · {} 个材质 · {} 张纹理 · {} 个动画",
+                data.model.meshes.len(),
+                data.model.materials.len(),
+                data.model.textures.len(),
                 animations
                     .as_ref()
                     .map(|set| set.animations.len())
