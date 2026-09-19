@@ -54,6 +54,10 @@ Invoke-Checked cargo @(
     "audit_installed_weapon_shader_families", "--", "--ignored", "--exact", "--nocapture"
 )
 Invoke-Checked cargo @(
+    "test", "--jobs", "1", "--features", "game-data", "--test", "weapon_vfx_audit",
+    "audit_installed_weapon_vfx", "--", "--ignored", "--exact", "--nocapture"
+)
+Invoke-Checked cargo @(
     "test", "--jobs", "1", "--features", "game-data,render-test-support", "--test", "native_weapon_snapshot",
     "--", "--ignored", "--nocapture", "--test-threads=1"
 )

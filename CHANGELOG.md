@@ -2,6 +2,7 @@
 
 ## 开发中
 
+- 新增 IMC 解析与武器 VFX 审计，作为武器光效调研的数据基线：数据层新增 `imc` 模块（variant/material-set 表读取，布局对齐 xivModdingFramework：头部 `subset_count + kind`（1=武器 NonSet/31=装备 Set），每条 6 字节 MaterialSet/Decal/Mask/Vfx/Animation，含合成字节单元测试）；新增 `weapon_vfx_audit` 测试——以 IMC 的 VfxId 为唯一判定依据（不按物品名猜系列），枚举武器目录各模型的 `vw*.avfx` 引用、探测文件存在性与数字填充风格、扫描 avfx 顶层块构成（Schd/Emit/Ptcl 等），并统计带特效模型的 mtrl shpk 分布；产物落 `target/weapon-vfx-audit/`，已挂入 `verify-weapon-render.ps1`。
 - 角色页「渲染」区块新增「角膜环强度」滑杆（0–2，默认 1）：渲染侧已消费虹膜色 alpha 作每侧角膜环强度，但 26 字节捏脸与调色板均无此数据，此前恒满强度；现作为外观覆盖随拼装重载生效（会话内调整，不进 ?c= 链接）。
 - bg 域新增逐贴图 UV 缩放：解析 `g_ColorUVScale`/`g_NormalUVScale`/`g_SpecularUVScale`（各含 map0/map1 两组 xy），bg 家族材质的 color/normal/specular 六个采样点按常量缩放，其余家族 uniform 恒 1 渲染不变。
 - 虹膜渲染按 MeddleTools iris.shpk 节点组补全：左右眼分侧（顶点色 G 通道选择右眼色）、眼白 g_WhiteEyeColor 与虹膜色按 mask.B 混合、角膜环带（g_IrisRingUvRadius ± FadeWidth 软环）以环色 × 每侧 limbal 强度 × g_IrisRingEmissiveIntensity 自发光；数据层解析 5 个 iris 材质常量（CRC 与缺省值同 MeddleTools），非 iris 家族 uniform 全零对现有渲染零影响。另将 bgprop/bgcrestchange 材质并入 Bg 家族（此前落 Unknown 走兜底路径）。

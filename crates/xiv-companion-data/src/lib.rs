@@ -8,6 +8,7 @@ pub mod craft_data;
 pub mod furniture;
 #[cfg(feature = "game-data")]
 pub mod game_data;
+pub mod imc;
 #[cfg(feature = "game-data")]
 mod mdl_geometry;
 #[cfg(feature = "game-data")]
@@ -29,6 +30,7 @@ pub use collection::*;
 pub use collection_classification::*;
 pub use craft_data::*;
 pub use furniture::*;
+pub use imc::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;
 pub use model::*;
