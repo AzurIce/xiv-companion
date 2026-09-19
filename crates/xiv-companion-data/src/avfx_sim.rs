@@ -36,6 +36,22 @@ pub struct VfxQuad {
     pub texture_index: i32,
 }
 
+/// 网格粒子实例：一次生成 = 整个 DrawModel 网格按实例变换绘制
+/// （Model/LightModel 粒子的本体渲染路径，龙形火舌等轮廓来源）。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxMeshInstance {
+    /// 网格实例原点（世界单位；网格顶点为武器本地坐标）。
+    pub position: [f32; 3],
+    pub scale: f32,
+    /// HDR 颜色（rgb 可 >1，a 为不透明度）。
+    pub color: [f32; 4],
+    /// 文件级贴图索引（TC1.TxNo；渲染端据此选纹理组）。
+    pub texture_index: i32,
+    /// 内嵌绘制模型序号（文件 `Modl` Draw 半对顺序）。
+    pub model_index: usize,
+}
+
 /// 从解析后的 avfx 构建的采样运行时（拷贝子集，构建后与文件解耦）。
 #[derive(Debug, Clone)]
 pub struct VfxRuntime {
@@ -98,6 +114,133 @@ impl VfxRuntime {
         }
     }
 
+    /// 采样 `time_seconds` 时刻的网格粒子实例（Model/LightModel 且发射器
+    /// 带绘制网格时走此路径；`out` 先清空）。
+    pub fn sample_mesh(&self, time_seconds: f32, out: &mut Vec<VfxMeshInstance>) {
+        out.clear();
+        let frame = time_seconds * AVFX_FPS;
+        for timeline in &self.timelines {
+            let (loop_start, loop_end) = timeline_span(timeline);
+            let local = loop_start + (frame - loop_start).rem_euclid(loop_end - loop_start);
+            for (item_index, item) in timeline.items.iter().enumerate() {
+                if !item.enabled || item.emitter_index < 0 {
+                    continue;
+                }
+                if local < item.start_time as f32 {
+                    continue;
+                }
+                if item.end_time >= 0 && local > item.end_time as f32 {
+                    continue;
+                }
+                let Some(emitter) = self.emitters.get(item.emitter_index as usize) else {
+                    continue;
+                };
+                self.sample_mesh_emitter(item_index, emitter, local - item.start_time as f32, out);
+                if out.len() >= self.max_quads {
+                    out.truncate(self.max_quads);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn sample_mesh_emitter(
+        &self,
+        item_index: usize,
+        emitter: &AvfxEmitter,
+        emitter_frame: f32,
+        out: &mut Vec<VfxMeshInstance>,
+    ) {
+        // 仅 Model 型发射器且引用的绘制网格存在时。
+        let Some(model_index) = emitter.model_index.filter(|index| *index >= 0) else {
+            return;
+        };
+        let Some(geometry) = self.models.get(model_index as usize) else {
+            return;
+        };
+        let Some(draw) = geometry
+            .draw
+            .as_ref()
+            .filter(|draw| !draw.indices.is_empty())
+        else {
+            return;
+        };
+        let emitter_offset = emitter.position.evaluate(emitter_frame);
+        let emitter_cap = out.len() + emitter.child_limit.clamp(1, 48) as usize;
+
+        for particle_item in &emitter.particle_items {
+            if !particle_item.enabled || particle_item.target_index < 0 {
+                continue;
+            }
+            let Some(particle) = self.particles.get(particle_item.target_index as usize) else {
+                continue;
+            };
+            let life_frames = if particle.life.enabled && particle.life.value > 0.0 {
+                particle.life.value
+            } else if emitter.life.enabled && emitter.life.value > 0.0 {
+                emitter.life.value
+            } else {
+                MAX_PARTICLE_LIFE
+            }
+            .clamp(1.0, MAX_PARTICLE_LIFE);
+            let interval = if particle_item.create_time > 0 {
+                particle_item.create_time as f32
+            } else {
+                emitter.create_interval.evaluate(emitter_frame)[2].max(1.0)
+            };
+            let first_event = ((emitter_frame - life_frames) / interval).ceil().max(0.0);
+            let last_event = (emitter_frame / interval).floor();
+            if last_event < first_event {
+                continue;
+            }
+            let per_event = emitter.create_count.evaluate(emitter_frame)[2].round()
+                * particle_item.create_count.max(0) as f32;
+            let per_event = per_event.max(1.0).round().clamp(1.0, 16.0) as u32;
+            for event in (first_event as u64)..=(last_event as u64) {
+                let spawn_frame = event as f32 * interval;
+                if spawn_frame > emitter_frame {
+                    continue;
+                }
+                let age = emitter_frame - spawn_frame;
+                for particle_index in 0..per_event {
+                    if out.len() >= emitter_cap {
+                        return;
+                    }
+                    let mut rng = SplitMix64::seeded(
+                        item_index as u64,
+                        event,
+                        particle_item.target_index as u64,
+                        particle_index as u64,
+                    );
+                    let alpha = (1.0 - age / life_frames) * APPROX_ALPHA_SCALE * 2.0;
+                    let rgb = if particle.color.keys.is_empty() {
+                        [1.0, 1.0, 1.0]
+                    } else {
+                        particle.color.evaluate(age)
+                    };
+                    let position = [
+                        emitter_offset[0] + particle.position.evaluate(age)[0],
+                        emitter_offset[1] + particle.position.evaluate(age)[1],
+                        emitter_offset[2] + particle.position.evaluate(age)[2],
+                    ];
+                    let texture_index = particle
+                        .texture_color1
+                        .as_ref()
+                        .filter(|texture| texture.enabled)
+                        .map(|texture| texture.texture_index)
+                        .unwrap_or(-1);
+                    out.push(VfxMeshInstance {
+                        position,
+                        scale: 1.0,
+                        color: [rgb[0], rgb[1], rgb[2], alpha],
+                        texture_index,
+                        model_index: model_index as usize,
+                    });
+                }
+            }
+        }
+    }
+
     fn sample_emitter(
         &self,
         item_index: usize,
@@ -110,6 +253,11 @@ impl VfxRuntime {
             return;
         }
         let emitter_offset = emitter.position.evaluate(emitter_frame);
+        let has_draw_mesh = emitter
+            .model_index
+            .and_then(|index| self.models.get(index as usize))
+            .and_then(|geometry| geometry.draw.as_ref())
+            .is_some();
         let model_vertices = emitter
             .model_index
             .and_then(|index| self.models.get(index as usize))
@@ -125,6 +273,16 @@ impl VfxRuntime {
             let Some(particle) = self.particles.get(particle_item.target_index as usize) else {
                 continue;
             };
+            // 带绘制网格的 Model/LightModel 粒子走 sample_mesh 路径，四边形流跳过。
+            if has_draw_mesh
+                && matches!(
+                    particle.particle_type,
+                    Some(crate::avfx::ParticleType::Model)
+                        | Some(crate::avfx::ParticleType::LightModel)
+                )
+            {
+                continue;
+            }
             // 生命周期（真实文件里 Life 常写 -1 = 跟随 timeline）：ItPr 的
             // Override 优先，其次 particle Life、emitter Life；无有效值或
             // <=0 视为跟随循环，clamp 到上限防止无穷累积。
@@ -251,11 +409,9 @@ impl VfxRuntime {
         // 尺寸：游戏缺省粒子 scale = 1（1 米级软贴片，灵光/烟雾类特效的
         // 主要观感）；贴图层近似（模型顶点落位）取中尺寸避免顶点间大 overlap。
         let scale = if particle.scale.keys.is_empty() {
-            if uses_raw_scale {
-                [0.6, 0.6, 1.0]
-            } else {
-                [0.35, 0.35, 1.0]
-            }
+            // 点发射的 Quad 在灵光类特效里是小星光；大软贴片由
+            // 有 Scl 曲线的粒子或网格本体承担。
+            [0.08, 0.08, 1.0]
         } else {
             particle.scale.evaluate(age)
         };

@@ -97,3 +97,31 @@ fn fs_main(input: VfxVertexOutput) -> @location(0) vec4<f32> {
     // nothing; the HDR target and bloom downstream pick up >1 values.
     return vec4<f32>(input.color.rgb * tex.rgb * tex.a, input.color.a);
 }
+
+// ===== Mesh particle path (DrawModel) =====
+
+struct VfxMeshVertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+};
+
+struct VfxMeshInstanceInput {
+    @location(3) position: vec3<f32>,
+    @location(4) scale: f32,
+    @location(5) color: vec4<f32>,
+};
+
+@vertex
+fn vs_mesh(
+    vertex: VfxMeshVertexInput,
+    instance: VfxMeshInstanceInput,
+) -> VfxVertexOutput {
+    var output: VfxVertexOutput;
+    let world = instance.position + vertex.position * instance.scale;
+    output.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
+    output.clip_position.z -= 0.002 * output.clip_position.w;
+    output.uv = vertex.uv;
+    output.color = instance.color * vertex.color;
+    return output;
+}

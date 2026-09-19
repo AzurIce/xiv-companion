@@ -72,6 +72,79 @@ pub struct VfxTextureInput {
     pub height: u32,
 }
 
+/// 网格静态顶点（36 字节）：DrawModel 顶点（位置/UV/顶点色）。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuVfxMeshVertex {
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [f32; 4],
+}
+
+impl GpuVfxMeshVertex {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 12,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 20,
+                shader_location: 2,
+            },
+        ],
+    };
+}
+
+/// 网格实例（32 字节）：实例原点 + 缩放 + HDR 颜色。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuVfxMeshInstance {
+    pub position: [f32; 3],
+    pub scale: f32,
+    pub color: [f32; 4],
+}
+
+impl GpuVfxMeshInstance {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 12,
+                shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 16,
+                shader_location: 5,
+            },
+        ],
+    };
+}
+
+/// 单个网格的 GPU 资源（静态顶点/索引缓冲）。
+pub(crate) struct GpuVfxMesh {
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub index_count: u32,
+}
+
 /// 常驻 VFX 粒子批次：由 `ModelRenderContext::create_vfx_particles` 构建，
 /// 每帧 `update` 后随 `render(..., vfx: Some(&batch))` 绘制。粒子按目标
 /// 贴图分组（每组一个 bind group，一次绘制），换贴图即换组。
@@ -82,6 +155,11 @@ pub struct VfxParticles {
     pub(crate) draw_ranges: Vec<(usize, u32, u32)>,
     pub(crate) capacity: usize,
     pub(crate) count: usize,
+    /// 网格粒子：每模型的静态网格资源 + 每帧实例缓冲与绘制段。
+    pub(crate) meshes: Vec<GpuVfxMesh>,
+    pub(crate) mesh_instance_buffer: wgpu::Buffer,
+    pub(crate) mesh_instance_count: usize,
+    pub(crate) mesh_draw_ranges: Vec<(usize, usize, u32, u32)>, // (mesh, group, start, count)
 }
 
 impl VfxParticles {
@@ -108,6 +186,7 @@ impl VfxParticles {
         let mut ordered: Vec<GpuVfxQuad> =
             quads[..self.count].iter().map(GpuVfxQuad::from).collect();
         ordered.sort_by_key(|quad| quad.texture_index as i32);
+        // texture_index 恒为整数，用 i32 排序即可。
         context
             .queue()
             .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&ordered));
@@ -137,6 +216,52 @@ impl VfxParticles {
             return 0;
         }
         (texture_index as usize + 1).min(self.texture_bind_groups.len() - 1)
+    }
+
+    /// 增量上传网格粒子实例并按（网格, 贴图）分组记录绘制段。
+    pub fn update_mesh(
+        &mut self,
+        context: &ModelRenderContext,
+        instances: &[xiv_companion_data::VfxMeshInstance],
+    ) {
+        self.mesh_instance_count = instances.len().min(self.capacity);
+        self.mesh_draw_ranges.clear();
+        if self.mesh_instance_count == 0 {
+            return;
+        }
+        let mut ordered: Vec<(xiv_companion_data::VfxMeshInstance, GpuVfxMeshInstance)> = instances
+            [..self.mesh_instance_count]
+            .iter()
+            .map(|instance| {
+                (
+                    *instance,
+                    GpuVfxMeshInstance {
+                        position: instance.position,
+                        scale: instance.scale,
+                        color: instance.color,
+                    },
+                )
+            })
+            .collect();
+        ordered.sort_by_key(|(instance, _)| (instance.model_index, instance.texture_index));
+        context.queue().write_buffer(
+            &self.mesh_instance_buffer,
+            0,
+            bytemuck::cast_slice(&ordered.iter().map(|(_, gpu)| *gpu).collect::<Vec<_>>()),
+        );
+        for (slot, (instance, _)) in ordered.iter().enumerate() {
+            let group = self.group_index_for(instance.texture_index);
+            match self.mesh_draw_ranges.last_mut() {
+                Some((mesh, last_group, _, count))
+                    if *mesh == instance.model_index && *last_group == group =>
+                {
+                    *count += 1
+                }
+                _ => self
+                    .mesh_draw_ranges
+                    .push((instance.model_index, group, slot as u32, 1)),
+            }
+        }
     }
 }
 

@@ -216,6 +216,47 @@ fn render_weapon_vfx_item(
     .expect("render baseline");
     eprintln!("baseline: {}", baseline.png_path.display());
 
+    let mut mesh_instances = Vec::new();
+    runtime.sample_mesh(sample_seconds, &mut mesh_instances);
+    eprintln!(
+        "[{label}] mesh instances: {} (file draw models: {})",
+        mesh_instances.len(),
+        vfx.file.models.iter().filter(|m| m.draw.is_some()).count()
+    );
+
+    for (mi, model) in vfx.file.models.iter().enumerate() {
+        if let Some(draw) = &model.draw {
+            let mins = draw.vertices.iter().fold([f32::MAX; 3], |a, v| {
+                [
+                    a[0].min(v.position[0]),
+                    a[1].min(v.position[1]),
+                    a[2].min(v.position[2]),
+                ]
+            });
+            let maxs = draw.vertices.iter().fold([f32::MIN; 3], |a, v| {
+                [
+                    a[0].max(v.position[0]),
+                    a[1].max(v.position[1]),
+                    a[2].max(v.position[2]),
+                ]
+            });
+            eprintln!(
+                "[{label}] draw model {mi}: verts={} idx={} bbox min={mins:?} max={maxs:?} uv0={:?} color0={:?}",
+                draw.vertices.len(),
+                draw.indices.len(),
+                draw.vertices.first().map(|v| v.uv),
+                draw.vertices.first().map(|v| v.color)
+            );
+        }
+    }
+    // 保持文件序号对齐（实例 model_index 指文件 Modl 序号）。
+    let meshes: Vec<xiv_companion::VfxDrawModel> = vfx
+        .file
+        .models
+        .iter()
+        .map(|model| model.draw.clone().unwrap_or_default())
+        .collect();
+
     // 增亮诊断：同位置粒子放大提亮，验证粒子几何/遮挡（正式强度走上面采样值）。
     let magnified = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-ring"))
@@ -252,7 +293,9 @@ fn render_weapon_vfx_item(
             .with_output_dir("target/weapon-render-snapshots")
             .with_viewport(1024, 1024)
             .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
-            .with_vfx_quads(quads),
+            .with_vfx_quads(quads)
+            .with_vfx_mesh_instances(mesh_instances)
+            .with_vfx_meshes(meshes),
         &model,
     )
     .unwrap_or_else(|error| panic!("render weapon with vfx {item_id}: {error:#}"));

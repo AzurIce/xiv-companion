@@ -41,6 +41,7 @@ pub struct ModelRenderContext {
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
     vfx_pipeline: wgpu::RenderPipeline,
+    vfx_mesh_pipeline: wgpu::RenderPipeline,
     vfx_bind_group_layout: wgpu::BindGroupLayout,
     vfx_sampler: wgpu::Sampler,
     post_process: Option<PostProcessState>,
@@ -899,6 +900,65 @@ impl ModelRenderContext {
             ..Default::default()
         });
 
+        let vfx_mesh_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("weapon vfx mesh pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&camera_bind_group_layout),
+                    Some(&vfx_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+        let vfx_mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("weapon vfx mesh pipeline"),
+            layout: Some(&vfx_mesh_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vfx_shader,
+                entry_point: Some("vs_mesh"),
+                buffers: &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &vfx_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: POST_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: msaa_samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
         let blur_pipeline = create_post_pipeline(
             &device,
             &post_shader,
@@ -963,6 +1023,7 @@ impl ModelRenderContext {
             blur_bind_group_layout,
             compose_bind_group_layout,
             vfx_pipeline,
+            vfx_mesh_pipeline,
             vfx_bind_group_layout,
             vfx_sampler,
             post_process: None,
@@ -1305,6 +1366,33 @@ impl ModelRenderContext {
                         render_pass.draw(0..6, *start..*start + *count);
                     }
                 }
+                // 网格粒子：Model/LightModel 的本体渲染路径（按网格 + 贴图
+                // 分组 draw_indexed）。
+                if vfx.mesh_instance_count > 0 {
+                    render_pass.set_pipeline(&self.vfx_mesh_pipeline);
+                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    render_pass.set_vertex_buffer(1, vfx.mesh_instance_buffer.slice(..));
+                    for (mesh, group, start, count) in &vfx.mesh_draw_ranges {
+                        let Some(gpu_mesh) = vfx.meshes.get(*mesh) else {
+                            continue;
+                        };
+                        render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            gpu_mesh.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        render_pass.set_bind_group(
+                            1,
+                            &vfx.texture_bind_groups[*group as usize],
+                            &[],
+                        );
+                        render_pass.draw_indexed(
+                            0..gpu_mesh.index_count,
+                            0,
+                            *start..*start + *count,
+                        );
+                    }
+                }
             }
         }
 
@@ -1469,7 +1557,11 @@ impl ModelRenderContext {
 
     /// 创建 VFX 粒子批次：固定容量实例缓冲 + 每贴图一个颜色 bind group
     /// （0 号固定为回退径向光点；其后按调用方顺序对应粒子 TC1 的贴图序号）。
-    pub fn create_vfx_particles(&self, textures: &[Option<VfxTextureInput>]) -> VfxParticles {
+    pub fn create_vfx_particles(
+        &self,
+        textures: &[Option<VfxTextureInput>],
+        meshes: &[xiv_companion_data::VfxDrawModel],
+    ) -> VfxParticles {
         let instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weapon vfx particle instances"),
             size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxQuad>()) as u64,
@@ -1499,12 +1591,63 @@ impl ModelRenderContext {
                 ],
             }));
         }
+        // 保留文件序号对齐（无绘制数据的模型给空缓冲，实例不会引用）。
+        let meshes: Vec<GpuVfxMesh> = meshes
+            .iter()
+            .map(|mesh| {
+                let vertices: Vec<GpuVfxMeshVertex> = mesh
+                    .vertices
+                    .iter()
+                    .map(|vertex| GpuVfxMeshVertex {
+                        position: vertex.position,
+                        uv: vertex.uv,
+                        // 顶点色 RGB 作染色；alpha 在真实文件里普遍为 0
+                        // （不作为不透明度来源），网格透明度由实例颜色提供。
+                        color: [
+                            vertex.color[0] as f32 / 255.0,
+                            vertex.color[1] as f32 / 255.0,
+                            vertex.color[2] as f32 / 255.0,
+                            1.0,
+                        ],
+                    })
+                    .collect();
+                let vertex_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("weapon vfx mesh vertices"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                let index_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("weapon vfx mesh indices"),
+                            contents: bytemuck::cast_slice(&mesh.indices),
+                            usage: wgpu::BufferUsages::INDEX,
+                        });
+                GpuVfxMesh {
+                    vertex_buffer,
+                    index_buffer,
+                    index_count: mesh.indices.len() as u32,
+                }
+            })
+            .collect();
+        let mesh_instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon vfx mesh instances"),
+            size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxMeshInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         VfxParticles {
             instance_buffer,
             texture_bind_groups,
             draw_ranges: Vec::new(),
             capacity: Self::VFX_PARTICLE_CAPACITY,
             count: 0,
+            meshes,
+            mesh_instance_buffer,
+            mesh_instance_count: 0,
+            mesh_draw_ranges: Vec::new(),
         }
     }
 }

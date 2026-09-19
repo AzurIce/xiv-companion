@@ -11,7 +11,9 @@ use web_sys::HtmlCanvasElement;
 use xiv_companion::renderer::{
     ModelInstance, ModelRenderContext, ModelRenderOptions, VfxParticles, VfxTextureInput,
 };
-use xiv_companion::{ModelRenderData, PreparedModelOptions, VfxQuad, WeaponVfxData};
+use xiv_companion::{
+    ModelRenderData, PreparedModelOptions, VfxMeshInstance, VfxQuad, WeaponVfxData,
+};
 
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -24,6 +26,7 @@ pub struct WebModelCanvasRenderer {
     vfx_runtime: Option<xiv_companion::VfxRuntime>,
     vfx_batch: Option<VfxParticles>,
     vfx_scratch: Vec<VfxQuad>,
+    vfx_mesh_scratch: Vec<VfxMeshInstance>,
     orbit: Rc<RefCell<OrbitState>>,
     msaa_samples: u32,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -126,6 +129,7 @@ impl WebModelCanvasRenderer {
             vfx_runtime: None,
             vfx_batch: None,
             vfx_scratch: Vec::new(),
+            vfx_mesh_scratch: Vec::new(),
             orbit,
             msaa_samples,
             _on_mouse_down: on_mouse_down,
@@ -153,7 +157,14 @@ impl WebModelCanvasRenderer {
                 })
             })
             .collect();
-        self.vfx_batch = Some(self.context.create_vfx_particles(&textures));
+        // 每文件各自保持 Modl 序号对齐（无绘制数据的给空网格）。
+        let mut meshes: Vec<xiv_companion::VfxDrawModel> = Vec::new();
+        for data in vfx.iter() {
+            for model in &data.file.models {
+                meshes.push(model.draw.clone().unwrap_or_default());
+            }
+        }
+        self.vfx_batch = Some(self.context.create_vfx_particles(&textures, &meshes));
     }
 
     /// 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与材质 bind group，
@@ -196,6 +207,8 @@ impl WebModelCanvasRenderer {
             if let (Some(runtime), Some(batch)) = (&self.vfx_runtime, &mut self.vfx_batch) {
                 runtime.sample(options.vfx_time, &mut self.vfx_scratch);
                 batch.update(&self.context, &self.vfx_scratch);
+                runtime.sample_mesh(options.vfx_time, &mut self.vfx_mesh_scratch);
+                batch.update_mesh(&self.context, &self.vfx_mesh_scratch);
             }
         }
         let vfx = (options.vfx_enabled)

@@ -8,6 +8,7 @@
 //! 条目不带独立块包装，按固定步长（36/96 字节、312/300/288/276 字节）切分。
 //! 未知块按名计数进 `unknown_blocks`，永不 panic。
 
+use half::f16;
 use std::collections::{BTreeMap, HashMap};
 
 /// 一条曲线关键帧：16 字节 = 时间(i16，帧) + 插值类型(u16) + 三分量(f32)。
@@ -377,12 +378,32 @@ pub struct AvfxBinder {
     pub binder_type: u32,
 }
 
-/// 内嵌发射模型（根级 `Modl` 块的 EmitModel 半对）的顶点位置：
-/// Model/LightModel 粒子的可见几何就是这些点构成的贴片。
+/// 内嵌发射模型（根级 `Modl` 块）：
+/// - `positions` 来自 EmitModel 半对（`VEmt`），是粒子的发射点；
+/// - `draw` 来自 DrawModel 半对（`VDrw`/`VIdx`），是 Model/LightModel
+///   粒子的实际渲染网格（游戏内龙形火舌等轮廓的本体）。
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VfxModelGeometry {
     pub positions: Vec<[f32; 3]>,
+    pub draw: Option<VfxDrawModel>,
+}
+
+/// 绘制网格顶点：位置 + 首组 UV + 顶点色。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxDrawVertex {
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [u8; 4],
+}
+
+/// 三角形索引（u32 化的 i16 三元组）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxDrawModel {
+    pub vertices: Vec<VfxDrawVertex>,
+    pub indices: Vec<u32>,
 }
 
 /// 解析后的 avfx 文件子集；未消费的根级块按名计数进 `unknown_blocks`。
@@ -421,11 +442,7 @@ impl AvfxFile {
                 "Emit" => file.emitters.push(parse_emitter(&node, &mut warnings)),
                 "Ptcl" => file.particles.push(parse_particle(&node, &mut warnings)),
                 "Bind" => file.binders.push(parse_binder(&node)),
-                "Modl" => {
-                    if let Some(geometry) = parse_emit_model(&node) {
-                        file.models.push(geometry);
-                    }
-                }
+                "Modl" => parse_model_pair(&node, &mut file.models),
                 "Tex" => file
                     .texture_paths
                     .push(read_null_terminated(node.payload())),
@@ -984,20 +1001,62 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
     particle
 }
 
-/// EmitModel 半对：VNum（顶点编号）+ VEmt（顶点：位置/法线/颜色）。
-/// VEmt 负载为 28 字节/顶点（3×f32 位置 + 3×f32 法线 + 4×u8 颜色）。
-fn parse_emit_model(node: &AvfxNodeView) -> Option<VfxModelGeometry> {
-    let emit_vertexes = node.child("VEmt")?;
-    let payload = emit_vertexes.payload();
-    let mut positions = Vec::with_capacity(payload.len() / 28);
-    for chunk in payload.chunks_exact(28) {
-        positions.push([
-            f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
-            f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
-            f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
-        ]);
+/// 根级 `Modl` 块成对出现（EmitModel + DrawModel，各 36 字节/顶点的
+/// `VDrw` 或 28 字节/顶点的 `VEmt`）：Emit 半对开新条目，Draw 半对附加
+/// 到最后一个条目（VFXEditor `AvfxModel.Parsed` 顺序）。
+fn parse_model_pair(node: &AvfxNodeView, models: &mut Vec<VfxModelGeometry>) {
+    if let Some(emit_vertexes) = node.child("VEmt") {
+        let payload = emit_vertexes.payload();
+        let mut positions = Vec::with_capacity(payload.len() / 28);
+        for chunk in payload.chunks_exact(28) {
+            positions.push([
+                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+                f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+                f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
+            ]);
+        }
+        models.push(VfxModelGeometry {
+            positions,
+            draw: None,
+        });
+        return;
     }
-    (positions.len() > 0).then_some(VfxModelGeometry { positions })
+    if let Some(draw_vertexes) = node.child("VDrw") {
+        let Some(last) = models.last_mut() else {
+            return;
+        };
+        let mut vertices = Vec::with_capacity(draw_vertexes.payload().len() / 36);
+        for chunk in draw_vertexes.payload().chunks_exact(36) {
+            vertices.push(VfxDrawVertex {
+                position: [
+                    f16_to_f32([chunk[0], chunk[1]]),
+                    f16_to_f32([chunk[2], chunk[3]]),
+                    f16_to_f32([chunk[4], chunk[5]]),
+                ],
+                // 首组 UV（half2），其余三组 v1 不消费。
+                uv: [
+                    f16_to_f32([chunk[20], chunk[21]]),
+                    f16_to_f32([chunk[22], chunk[23]]),
+                ],
+                color: [chunk[16], chunk[17], chunk[18], chunk[19]],
+            });
+        }
+        let mut indices = Vec::new();
+        if let Some(indexes) = node.child("VIdx") {
+            for chunk in indexes.payload().chunks_exact(6) {
+                for i in 0..3 {
+                    let index = i16::from_le_bytes([chunk[i * 2], chunk[i * 2 + 1]]);
+                    indices.push(index.max(0) as u32);
+                }
+            }
+        }
+        last.draw = Some(VfxDrawModel { vertices, indices });
+    }
+}
+
+/// IEEE 754 half（f16）→ f32。
+fn f16_to_f32(bits: [u8; 2]) -> f32 {
+    f16::from_le_bytes(bits).to_f32()
 }
 
 fn parse_binder(node: &AvfxNodeView) -> AvfxBinder {

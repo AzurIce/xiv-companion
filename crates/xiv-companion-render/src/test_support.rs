@@ -26,6 +26,10 @@ pub struct WeaponModelSnapshotOptions {
     pub capture_hdr_scene: bool,
     /// 固定的 VFX 粒子批次（合成特效/确定性快照用）。
     pub vfx_quads: Vec<xiv_companion_data::VfxQuad>,
+    /// 固定的 VFX 网格实例（Model/LightModel 本体路径，确定性快照用）。
+    pub vfx_mesh_instances: Vec<xiv_companion_data::VfxMeshInstance>,
+    /// 网格粒子引用的绘制模型集合（顺序即实例的 model_index）。
+    pub vfx_meshes: Vec<xiv_companion_data::VfxDrawModel>,
 }
 
 impl WeaponModelSnapshotOptions {
@@ -86,6 +90,24 @@ impl WeaponModelSnapshotOptions {
         self.vfx_quads = quads.into_iter().collect();
         self
     }
+
+    /// 固定 VFX 网格实例（时间已由调用方采样，保证快照确定性）。
+    pub fn with_vfx_mesh_instances(
+        mut self,
+        instances: impl IntoIterator<Item = xiv_companion_data::VfxMeshInstance>,
+    ) -> Self {
+        self.vfx_mesh_instances = instances.into_iter().collect();
+        self
+    }
+
+    /// 网格粒子引用的绘制模型集合。
+    pub fn with_vfx_meshes(
+        mut self,
+        meshes: impl IntoIterator<Item = xiv_companion_data::VfxDrawModel>,
+    ) -> Self {
+        self.vfx_meshes = meshes.into_iter().collect();
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -114,6 +136,8 @@ impl Default for WeaponModelSnapshotOptions {
             force_fallback_adapter: false,
             capture_hdr_scene: false,
             vfx_quads: Vec::new(),
+            vfx_mesh_instances: Vec::new(),
+            vfx_meshes: Vec::new(),
         }
     }
 }
@@ -309,11 +333,22 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         let matrices = cache.joint_matrices(skeleton, pose, &joint_names);
         renderer.update_joint_matrices(&matrices);
     }
-    let vfx_particles = (!options.vfx_quads.is_empty()).then(|| {
-        let mut batch = renderer.context().create_vfx_particles(&[]);
-        batch.update(renderer.context(), &options.vfx_quads);
-        batch
-    });
+    let vfx_particles = (!options.vfx_quads.is_empty() || !options.vfx_mesh_instances.is_empty())
+        .then(|| {
+            let mut batch = renderer
+                .context()
+                .create_vfx_particles(&[], &options.vfx_meshes);
+            batch.update(renderer.context(), &options.vfx_quads);
+            batch.update_mesh(renderer.context(), &options.vfx_mesh_instances);
+            eprintln!(
+                "[vfx batch] quads={} mesh_instances={} mesh_draw_ranges={:?} meshes_gpu={}",
+                batch.count,
+                batch.mesh_instance_count,
+                batch.mesh_draw_ranges,
+                batch.meshes.len()
+            );
+            batch
+        });
     renderer.render_to(
         &target_view,
         &depth_view,
