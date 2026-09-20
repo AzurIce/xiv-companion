@@ -59,7 +59,6 @@ fn render_weapon_vfx_item(
     label: &str,
     _tag: &str,
 ) {
-    let sample_seconds = 0.8_f32;
     let item = catalog
         .items
         .iter()
@@ -116,22 +115,24 @@ fn render_weapon_vfx_item(
 
     for (mi, model) in vfx.file.models.iter().enumerate() {
         if let (Some(min), Some(max)) = (
-            model.positions.iter().fold(None::<[f32; 3]>, |acc, p| {
+            model.emit_vertices.iter().fold(None::<[f32; 3]>, |acc, v| {
+                let p = v.position;
                 Some(match acc {
-                    None => *p,
+                    None => p,
                     Some(a) => [a[0].min(p[0]), a[1].min(p[1]), a[2].min(p[2])],
                 })
             }),
-            model.positions.iter().fold(None::<[f32; 3]>, |acc, p| {
+            model.emit_vertices.iter().fold(None::<[f32; 3]>, |acc, v| {
+                let p = v.position;
                 Some(match acc {
-                    None => *p,
+                    None => p,
                     Some(a) => [a[0].max(p[0]), a[1].max(p[1]), a[2].max(p[2])],
                 })
             }),
         ) {
             eprintln!(
-                "[{label}] model {mi}: {} verts bbox min={min:?} max={max:?}",
-                model.positions.len()
+                "[{label}] model {mi}: {} emit verts bbox min={min:?} max={max:?}",
+                model.emit_vertices.len()
             );
         }
     }
@@ -149,9 +150,9 @@ fn render_weapon_vfx_item(
     }
     for (ei, emitter) in vfx.file.emitters.iter().enumerate() {
         eprintln!(
-            "[{label}] emitter {ei}: type={:?} model_index={:?} items={} targets={:?} life={:?}",
+            "[{label}] emitter {ei}: type={:?} data={:?} items={} targets={:?} life={:?}",
             emitter.emitter_type,
-            emitter.model_index,
+            emitter.data,
             emitter.particle_items.len(),
             emitter
                 .particle_items
@@ -256,6 +257,20 @@ fn render_weapon_vfx_item(
         .iter()
         .map(|model| model.draw.clone().unwrap_or_default())
         .collect();
+    // 文件 Tex 序号对齐的贴图输入（解码失败项由渲染端回退）。
+    let textures: Vec<Option<xiv_companion::renderer::VfxTextureInput>> = vfx
+        .textures
+        .iter()
+        .map(|texture| {
+            texture
+                .as_ref()
+                .map(|texture| xiv_companion::renderer::VfxTextureInput {
+                    rgba: texture.rgba.clone(),
+                    width: texture.width,
+                    height: texture.height,
+                })
+        })
+        .collect();
 
     // 增亮诊断：同位置粒子放大提亮，验证粒子几何/遮挡（正式强度走上面采样值）。
     let magnified = render_weapon_model_snapshot_with_options(
@@ -274,7 +289,8 @@ fn render_weapon_vfx_item(
                 boosted.size = [0.2, 0.2];
                 boosted.color = [3.0, 2.0, 1.0, 1.0];
                 boosted
-            })),
+            }))
+            .with_vfx_textures(textures.iter().cloned()),
         &model,
     )
     .unwrap_or_else(|error| panic!("render boosted vfx {item_id}: {error:#}"));
@@ -295,7 +311,8 @@ fn render_weapon_vfx_item(
             .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
             .with_vfx_quads(quads)
             .with_vfx_mesh_instances(mesh_instances)
-            .with_vfx_meshes(meshes),
+            .with_vfx_meshes(meshes)
+            .with_vfx_textures(textures),
         &model,
     )
     .unwrap_or_else(|error| panic!("render weapon with vfx {item_id}: {error:#}"));

@@ -5214,10 +5214,20 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 position: [angle.cos() * 0.7, 0.15, angle.sin() * 0.7],
                 size: [0.14, 0.14],
                 rotation: 0.0,
+                orientation: [0.0, 0.0, 0.0, 1.0],
+                billboard: true,
                 color: [3.0, 1.8, 0.6, 1.0],
                 uv_origin: [0.0, 0.0],
                 uv_scale: [1.0, 1.0],
+                uv2_origin: [0.0, 0.0],
+                uv2_scale: [1.0, 1.0],
                 texture_index: -1,
+                texture2_index: -1,
+                combine_color: 0,
+                combine_alpha: 0,
+                color_to_alpha: false,
+                color_to_alpha2: false,
+                blend_add: true,
             }
         })
         .collect::<Vec<_>>();

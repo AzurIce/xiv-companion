@@ -140,12 +140,11 @@ impl WebModelCanvasRenderer {
         })
     }
 
-    /// 同步替换常驻 VFX（模型/物品切换时调用）。全部解码成功的 atex 进
-    /// 纹理数组（实例 texture_index 指层）；缺失时用内置径向光点回退。
+    /// 同步替换常驻 VFX（模型/物品切换时调用）。解码成功的 atex 进纹理表
+    /// （实例贴图序号 = 文件 `Tex` 顺序；缺失项由渲染端回退到内置光点，
+    /// 保持序号映射不漂移）。
     pub fn set_vfx(&mut self, vfx: Option<&WeaponVfxData>) {
         self.vfx_runtime = vfx.map(|data| data.runtime());
-        // 每文件 Tex 序号对应一个 bind group；解码失败的项传 None →
-        // 回退光点，保持粒子 TC1.TxNo → 贴图组的映射不漂移。
         let textures: Vec<Option<VfxTextureInput>> = vfx
             .iter()
             .flat_map(|data| data.textures.iter())

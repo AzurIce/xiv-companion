@@ -51,15 +51,16 @@ fn scan_shared_vw_files() {
         let file = xiv_companion::AvfxFile::parse(&bytes).expect("parse");
         for (pi, particle) in file.particles.iter().enumerate() {
             println!(
-                "particle {pi} ({:?}) scl_keys={} col_keys={} uvsets={} first_scale_keys={:?}",
+                "particle {pi} ({:?}) scl_x_keys={} col_rgb_keys={} uvsets={} first_scale_keys={:?}",
                 particle.particle_type,
-                particle.scale.keys.len(),
-                particle.color.keys.len(),
+                particle.scale.x.as_ref().map_or(0, |c| c.keys.len()),
+                particle.color.rgb.as_ref().map_or(0, |c| c.keys.len()),
                 particle.uv_sets.len(),
                 particle
                     .scale
-                    .keys
+                    .x
                     .iter()
+                    .flat_map(|c| c.keys.iter())
                     .take(2)
                     .map(|k| (k.time, k.interpolation, k.x, k.y, k.z))
                     .collect::<Vec<_>>()
