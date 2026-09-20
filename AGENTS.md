@@ -21,6 +21,11 @@ each semantic correction.
 
 Additional references:
 
+- VFX（`.avfx`）字段与运行时语义的权威参考是
+  [Dalamud-VFXEditor](https://github.com/0ceal0t/Dalamud-VFXEditor)（格式层：
+  `VFXEditor/Formats/AvfxFormat/`，含曲线容器/发射器/粒子 Data 块布局）与
+  [AVFXTools](https://github.com/0ceal0t/AVFXTools)（旧查看器，含运行时模拟与
+  shader 合成实现：`AVFXTools/Graphics/`）。按需浅克隆到 /tmp 即可，不要签入仓库。
 - `third_party/Meddle` is gitignored, so it must be cloned on first use:
   `git clone --depth 1 https://github.com/PassiveModding/Meddle.git third_party/Meddle`.
   Note that Meddle resolves model paths at runtime
