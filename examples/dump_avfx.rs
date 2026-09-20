@@ -68,19 +68,17 @@ fn main() {
     eprintln!("--- {} quads at t={t} ---", quads.len());
     for (i, q) in quads.iter().enumerate() {
         eprintln!(
-            "q{i}: pos={:?} size={:?} rot={:.2} bb={} color={:?} tex={} tex2={} comb={}/{} c2a={} add={} uv={:?}×{:?} uv2={:?}×{:?}",
+            "q{i}: pos={:?} size={:?} rot={:.2} bb={} color={:?} tex={:?} comb={:?} c2a={:?} add={} uv={:?}×{:?}",
             q.position.map(|v| (v * 100.0).round() / 100.0),
             q.size.map(|v| (v * 1000.0).round() / 1000.0),
             q.rotation,
             q.billboard,
             q.color.map(|v| (v * 100.0).round() / 100.0),
-            q.texture_index,
-            q.texture2_index,
-            q.combine_color,
-            q.combine_alpha,
+            q.texture_indexes,
+            q.combine_modes,
             q.color_to_alpha,
             q.blend_add,
-            q.uv_origin, q.uv_scale, q.uv2_origin, q.uv2_scale,
+            q.uv_origins, q.uv_scales,
         );
     }
     let mut meshes = Vec::new();
@@ -88,16 +86,15 @@ fn main() {
     eprintln!("--- {} mesh instances ---", meshes.len());
     for (i, m) in meshes.iter().enumerate() {
         eprintln!(
-            "m{i}: model={} pos={:?} scale={:?} orient={:?} color={:?} tex={} tex2={} add={} uv={:?}×{:?}",
+            "m{i}: model={} pos={:?} scale={:?} orient={:?} color={:?} tex={:?} add={} uv={:?}×{:?}",
             m.model_index,
             m.position.map(|v| (v * 100.0).round() / 100.0),
             m.scale.map(|v| (v * 100.0).round() / 100.0),
             m.orientation.map(|v| (v * 100.0).round() / 100.0),
             m.color.map(|v| (v * 100.0).round() / 100.0),
-            m.texture_index,
-            m.texture2_index,
+            m.texture_indexes,
             m.blend_add,
-            m.uv_origin, m.uv_scale,
+            m.uv_origins, m.uv_scales,
         );
     }
     let json = serde_json::to_string_pretty(&file).expect("json");

@@ -1,12 +1,13 @@
-//! VFX 粒子批次：实例缓冲 + 按（贴图对 × 合成模式 × 混合）分组的 bind group，
-//! 配合 `vfx.wesl` 管线在 HDR 场景 pass 中绘制四边形（billboard/定向）与
-//! DrawModel 网格粒子。粒子数据来自数据层确定性采样器
-//! （`xiv_companion_data::avfx_sim`）。
+//! VFX 粒子批次：实例缓冲 + 按（贴图组 × 合成模式 × 边界模式 × 混合）分组的
+//! bind group，配合 `vfx.wesl` 管线在 HDR 场景 pass 中绘制四边形
+//! （billboard/定向）与 DrawModel 网格粒子。粒子数据来自数据层确定性采样器
+//! （`xiv_companion_data::avfx_sim`）。着色为四层贴图合成：TC1（可为 TLst
+//! 形状遮罩）+ TC2..TC4 按各自 TCCT/TCAT 合成模式叠加，TD 扭曲贴图先抖动 UV。
 
 use super::*;
 use std::collections::HashMap;
 
-/// GPU 四边形实例（128 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
+/// GPU 四边形实例（160 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxQuad {
@@ -15,69 +16,53 @@ pub struct GpuVfxQuad {
     /// xy 半宽/半高；z flags（bit0 = billboard）；w 预留。
     pub size_flags: [f32; 4],
     pub color: [f32; 4],
-    /// 贴图 1：uv 原点 + 缩放。
-    pub uv1: [f32; 4],
-    /// 贴图 2：uv 原点 + 缩放。
-    pub uv2: [f32; 4],
-    /// 非 billboard 朝向四元数。
-    pub orientation: [f32; 4],
+    /// 四层贴图的 UV（原点 + 缩放）。
+    pub uv: [[f32; 4]; 4],
     /// TD 扭曲贴图采样用 UV。
     pub uvd: [f32; 4],
-    /// x：TD 强度（DPow）；y：扭曲目标位（bit0 uv1 / bit1 uv2）。
+    /// x：TD 强度（DPow）；y：扭曲目标位（bit0..3 = uv1..4）。
     pub distortion: [f32; 4],
+    /// 非 billboard 朝向（四元数 xyzw）。
+    pub orientation: [f32; 4],
 }
 
 impl GpuVfxQuad {
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &[
+    const ATTRIBUTES: [wgpu::VertexAttribute; 10] = {
+        let mut attributes = [
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 16,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 32,
-                shader_location: 2,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 48,
-                shader_location: 3,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 64,
-                shader_location: 4,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 80,
-                shader_location: 5,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 96,
-                shader_location: 6,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 112,
-                shader_location: 7,
-            },
-        ],
+            };
+            10
+        ];
+        let mut index = 0;
+        while index < 10 {
+            attributes[index].offset = (index * 16) as wgpu::BufferAddress;
+            attributes[index].shader_location = index as u32;
+            index += 1;
+        }
+        attributes
+    };
+
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &Self::ATTRIBUTES,
     };
 }
 
 impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
     fn from(quad: &xiv_companion_data::VfxQuad) -> Self {
+        let mut uv = [[0.0; 4]; 4];
+        for (i, slot) in uv.iter_mut().enumerate() {
+            *slot = [
+                quad.uv_origins[i][0],
+                quad.uv_origins[i][1],
+                quad.uv_scales[i][0],
+                quad.uv_scales[i][1],
+            ];
+        }
         Self {
             position_rotation: [
                 quad.position[0],
@@ -92,19 +77,7 @@ impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
                 0.0,
             ],
             color: quad.color,
-            uv1: [
-                quad.uv_origin[0],
-                quad.uv_origin[1],
-                quad.uv_scale[0],
-                quad.uv_scale[1],
-            ],
-            uv2: [
-                quad.uv2_origin[0],
-                quad.uv2_origin[1],
-                quad.uv2_scale[0],
-                quad.uv2_scale[1],
-            ],
-            orientation: quad.orientation,
+            uv,
             uvd: [
                 quad.uvd_origin[0],
                 quad.uvd_origin[1],
@@ -117,6 +90,7 @@ impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
                 0.0,
                 0.0,
             ],
+            orientation: quad.orientation,
         }
     }
 }
@@ -129,7 +103,8 @@ pub struct VfxTextureInput {
     pub height: u32,
 }
 
-/// 网格静态顶点（36 字节）：DrawModel 顶点（位置/UV/顶点色）。
+/// 网格静态顶点（52 字节）：DrawModel 顶点（位置 + 两组 UV + 顶点色）。
+/// 顶点只带首组 UV（模型本身只有一组有意义，UvSet 动画在实例侧）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxMeshVertex {
@@ -162,8 +137,8 @@ impl GpuVfxMeshVertex {
     };
 }
 
-/// 网格实例（128 字节）：位置 + 朝向四元数 + 三轴缩放 + HDR 颜色 +
-/// 双 UV + TD 扭曲参数。
+/// 网格实例（176 字节）：位置 + 朝向四元数 + 三轴缩放 + HDR 颜色 +
+/// 四层 UV + TD 扭曲参数。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxMeshInstance {
@@ -172,64 +147,49 @@ pub struct GpuVfxMeshInstance {
     pub orientation: [f32; 4],
     pub scale: [f32; 4],
     pub color: [f32; 4],
-    pub uv1: [f32; 4],
-    pub uv2: [f32; 4],
+    pub uv: [[f32; 4]; 4],
     pub uvd: [f32; 4],
     /// x：TD 强度；y：扭曲目标位。
     pub distortion: [f32; 4],
 }
 
 impl GpuVfxMeshInstance {
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &[
+    const ATTRIBUTES: [wgpu::VertexAttribute; 10] = {
+        let mut attributes = [
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 3,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 16,
-                shader_location: 4,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 32,
-                shader_location: 5,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 48,
-                shader_location: 6,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 64,
-                shader_location: 7,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 80,
-                shader_location: 8,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 96,
-                shader_location: 9,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 112,
-                shader_location: 10,
-            },
-        ],
+            };
+            10
+        ];
+        let mut index = 0;
+        while index < 10 {
+            attributes[index].offset = (index * 16) as wgpu::BufferAddress;
+            attributes[index].shader_location = (index + 3) as u32;
+            index += 1;
+        }
+        attributes
+    };
+
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &Self::ATTRIBUTES,
     };
 }
 
 impl From<&xiv_companion_data::VfxMeshInstance> for GpuVfxMeshInstance {
     fn from(instance: &xiv_companion_data::VfxMeshInstance) -> Self {
+        let mut uv = [[0.0; 4]; 4];
+        for (i, slot) in uv.iter_mut().enumerate() {
+            *slot = [
+                instance.uv_origins[i][0],
+                instance.uv_origins[i][1],
+                instance.uv_scales[i][0],
+                instance.uv_scales[i][1],
+            ];
+        }
         Self {
             position_flags: [
                 instance.position[0],
@@ -240,18 +200,7 @@ impl From<&xiv_companion_data::VfxMeshInstance> for GpuVfxMeshInstance {
             orientation: instance.orientation,
             scale: [instance.scale[0], instance.scale[1], instance.scale[2], 0.0],
             color: instance.color,
-            uv1: [
-                instance.uv_origin[0],
-                instance.uv_origin[1],
-                instance.uv_scale[0],
-                instance.uv_scale[1],
-            ],
-            uv2: [
-                instance.uv2_origin[0],
-                instance.uv2_origin[1],
-                instance.uv2_scale[0],
-                instance.uv2_scale[1],
-            ],
+            uv,
             uvd: [
                 instance.uvd_origin[0],
                 instance.uvd_origin[1],
@@ -275,61 +224,61 @@ pub(crate) struct GpuVfxMesh {
     pub index_count: u32,
 }
 
-/// 贴图合成组键：TC1/TC2 贴图序号 + TC2 合成模式 + TC1 的 bC2A。
-/// 同组粒子共享一个 bind group（双贴图 + 参数 uniform）。
+/// 贴图合成组键：四层贴图序号 + TD + 各层合成模式/边界/bC2A + TC1 遮罩。
+/// 同组粒子共享一个 bind group（贴图 × 采样器 × 参数 uniform）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct VfxGroupKey {
-    texture1: i32,
-    texture2: i32,
+    textures: [i32; 4],
     texture_d: i32,
-    combine_color: i32,
-    combine_alpha: i32,
-    color_to_alpha: bool,
-    color_to_alpha2: bool,
-    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
-    texture_borders: [i32; 6],
-    /// TC1 为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
+    combine_modes: [[i32; 2]; 3],
+    color_to_alpha: [bool; 4],
+    texture_borders: [[i32; 2]; 4],
+    distortion_borders: [i32; 2],
     texture1_is_shape_mask: bool,
 }
 
 impl VfxGroupKey {
     fn of_quad(quad: &xiv_companion_data::VfxQuad) -> Self {
         Self {
-            texture1: quad.texture_index,
-            texture2: quad.texture2_index,
+            textures: quad.texture_indexes,
             texture_d: quad.texture_distortion_index,
-            combine_color: quad.combine_color,
-            combine_alpha: quad.combine_alpha,
+            combine_modes: quad.combine_modes,
             color_to_alpha: quad.color_to_alpha,
-            color_to_alpha2: quad.color_to_alpha2,
             texture_borders: quad.texture_borders,
+            distortion_borders: quad.distortion_borders,
             texture1_is_shape_mask: quad.texture1_is_shape_mask,
         }
     }
 
     fn of_mesh(instance: &xiv_companion_data::VfxMeshInstance) -> Self {
         Self {
-            texture1: instance.texture_index,
-            texture2: instance.texture2_index,
+            textures: instance.texture_indexes,
             texture_d: instance.texture_distortion_index,
-            combine_color: instance.combine_color,
-            combine_alpha: instance.combine_alpha,
+            combine_modes: instance.combine_modes,
             color_to_alpha: instance.color_to_alpha,
-            color_to_alpha2: instance.color_to_alpha2,
             texture_borders: instance.texture_borders,
+            distortion_borders: instance.distortion_borders,
             texture1_is_shape_mask: instance.texture1_is_shape_mask,
         }
     }
 }
 
-/// 组参数 uniform（与 `vfx.wesl` 的 `VfxGroupParams` 布局一致）。
+/// 组参数 uniform（与 `vfx.wesl` 的 `VfxGroupParams` 布局一致；
+/// WGSL vec3<u32> 按 16 字节对齐，Rust 侧显式补齐到 48 字节）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct VfxGroupParams {
-    combine_color: u32,
-    combine_alpha: u32,
+    /// TC2/TC3/TC4 的颜色合成模式。
+    combine_color: [u32; 3],
+    _pad0: u32,
+    /// TC2/TC3/TC4 的 alpha 合成模式。
+    combine_alpha: [u32; 3],
+    _pad1: u32,
+    /// 各层 bC2A 位掩码。
+    color_to_alpha: u32,
+    /// bit0: TC1 为形状遮罩；bit1..4: 各层有贴图；bit5: 有 TD 贴图。
     flags: u32,
-    _pad: u32,
+    _pad2: [u32; 2],
 }
 
 /// 一条绘制段：同一混合模式 + 同一贴图组的连续实例区间。
@@ -385,11 +334,7 @@ impl VfxParticles {
     }
 
     /// 组键 → bind group 下标（懒创建）。
-    pub(crate) fn group_for(
-        &mut self,
-        context: &ModelRenderContext,
-        key: VfxGroupKey,
-    ) -> usize {
+    pub(crate) fn group_for(&mut self, context: &ModelRenderContext, key: VfxGroupKey) -> usize {
         if let Some(index) = self.group_cache.get(&key) {
             return *index;
         }
@@ -401,19 +346,23 @@ impl VfxParticles {
             };
             &self.texture_views[slot.max(0)]
         };
-        let has_texture1 = key.texture1 >= 0;
-        let has_texture2 = key.texture2 >= 0;
-        let has_texture_d = key.texture_d >= 0;
+        let mut flags = key.texture1_is_shape_mask as u32;
+        for (i, texture) in key.textures.iter().enumerate() {
+            flags |= ((*texture >= 0) as u32) << (i + 1);
+        }
+        flags |= ((key.texture_d >= 0) as u32) << 5;
         let params = VfxGroupParams {
-            combine_color: key.combine_color.max(0) as u32,
-            combine_alpha: key.combine_alpha.max(0) as u32,
-            flags: (key.color_to_alpha as u32)
-                | ((has_texture1 as u32) << 1)
-                | ((has_texture2 as u32) << 2)
-                | ((key.color_to_alpha2 as u32) << 3)
-                | ((has_texture_d as u32) << 4)
-                | ((key.texture1_is_shape_mask as u32) << 5),
-            _pad: 0,
+            combine_color: key.combine_modes.map(|m| m[0].max(0) as u32),
+            _pad0: 0,
+            combine_alpha: key.combine_modes.map(|m| m[1].max(0) as u32),
+            _pad1: 0,
+            color_to_alpha: key
+                .color_to_alpha
+                .iter()
+                .enumerate()
+                .fold(0u32, |acc, (i, c)| acc | ((*c as u32) << i)),
+            flags,
+            _pad2: [0; 2],
         };
         let uniform = context
             .device()
@@ -429,11 +378,11 @@ impl VfxParticles {
             2 => wgpu::AddressMode::MirrorRepeat,
             _ => wgpu::AddressMode::Repeat,
         };
-        let make_sampler = |u: i32, v: i32| {
+        let make_sampler = |modes: [i32; 2]| {
             context.device().create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("weapon vfx group sampler"),
-                address_mode_u: address_mode(u),
-                address_mode_v: address_mode(v),
+                address_mode_u: address_mode(modes[0]),
+                address_mode_v: address_mode(modes[1]),
                 address_mode_w: wgpu::AddressMode::Repeat,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
@@ -441,45 +390,52 @@ impl VfxParticles {
                 ..Default::default()
             })
         };
-        let sampler1 = make_sampler(key.texture_borders[0], key.texture_borders[1]);
-        let sampler2 = make_sampler(key.texture_borders[2], key.texture_borders[3]);
-        let sampler_d = make_sampler(key.texture_borders[4], key.texture_borders[5]);
+        let samplers: Vec<wgpu::Sampler> = key
+            .texture_borders
+            .map(make_sampler)
+            .into_iter()
+            .chain(std::iter::once(make_sampler(key.distortion_borders)))
+            .collect();
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view_for(key.textures[0])),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(view_for(key.textures[1])),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(view_for(key.textures[2])),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(view_for(key.textures[3])),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(view_for(key.texture_d)),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: uniform.as_entire_binding(),
+            },
+        ];
+        for (i, sampler) in samplers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: (6 + i) as u32,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            });
+        }
         let bind_group = context.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("weapon vfx particle bind group"),
             layout: context.vfx_bind_group_layout(),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view_for(key.texture1)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(view_for(key.texture2)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(view_for(key.texture_d)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&sampler2),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&sampler_d),
-                },
-            ],
+            entries: &entries,
         });
         let index = self.bind_groups.len();
         self.bind_groups.push(bind_group);
+        // sampler 生命周期：wgpu 句柄引用计数，bind group 持有即存活。
         self.group_cache.insert(key, index);
         index
     }
@@ -529,7 +485,7 @@ impl VfxParticles {
         }
     }
 
-    /// 增量上传网格粒子实例并按（网格, 混合, 组键）分组记录绘制段。
+    /// 增量上传网格粒子实例并按（网格, 混合, 剔除, 组键）分组记录绘制段。
     pub fn update_mesh(
         &mut self,
         context: &ModelRenderContext,

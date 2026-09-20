@@ -446,6 +446,8 @@ impl StorageBufferLimitsForSkinning for wgpu::Limits {
         self.max_storage_buffers_per_shader_stage =
             self.max_storage_buffers_per_shader_stage.max(1);
         self.max_storage_buffer_binding_size = self.max_storage_buffer_binding_size.max(16_400);
+        // VFX 网格实例布局 176B：补顶点缓冲步长下限（WebGPU 规范保证 ≥2048）。
+        self.max_vertex_buffer_array_stride = self.max_vertex_buffer_array_stride.max(2_048);
         self
     }
 }

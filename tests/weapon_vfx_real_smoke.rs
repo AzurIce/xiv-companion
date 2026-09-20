@@ -190,8 +190,8 @@ fn render_weapon_vfx_item(
     eprintln!("[{label}] quads bbox min={qmin:?} max={qmax:?}");
     for quad in quads.iter().take(4) {
         eprintln!(
-            "[{label}] quad uv_o={:?} uv_s={:?} size={:?} color={:?} tex={}",
-            quad.uv_origin, quad.uv_scale, quad.size, quad.color, quad.texture_index
+            "[{label}] quad uv_o={:?} uv_s={:?} size={:?} color={:?} tex={:?}",
+            quad.uv_origins, quad.uv_scales, quad.size, quad.color, quad.texture_indexes
         );
     }
     eprintln!(

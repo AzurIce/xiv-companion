@@ -317,7 +317,13 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            required_limits: {
+                let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+                // VFX 网格实例布局 176B。
+                limits.max_vertex_buffer_array_stride =
+                    limits.max_vertex_buffer_array_stride.max(2_048);
+                limits
+            },
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         })

@@ -39,39 +39,33 @@ pub struct VfxQuad {
     pub billboard: bool,
     /// HDR 颜色（rgb = Col.RGB × Bri，可 >1；a = Col.A 包络）。
     pub color: [f32; 4],
-    /// 贴图 1（TC1 引用的 UvSet）的 UV 原点 + 缩放。
-    pub uv_origin: [f32; 2],
-    pub uv_scale: [f32; 2],
-    /// 贴图 2（TC2 引用的 UvSet）的 UV 原点 + 缩放。
-    pub uv2_origin: [f32; 2],
-    pub uv2_scale: [f32; 2],
-    /// 文件级贴图序号（TC1：TLst 优先；-1 = 无贴图）。
-    pub texture_index: i32,
-    /// TC2 贴图序号（-1 = 无）。
-    pub texture2_index: i32,
-    /// TC2 颜色/alpha 合成模式（`TCCT`/`TCAT`）。
-    pub combine_color: i32,
-    pub combine_alpha: i32,
-    /// TC1 的 bC2A（颜色转 alpha）。
-    pub color_to_alpha: bool,
-    /// TC2 的 bC2A。
-    pub color_to_alpha2: bool,
+    /// 4 层颜色贴图（TC1..TC4）的文件级贴图序号（TC1：TLst 优先；-1 = 无）。
+    pub texture_indexes: [i32; 4],
+    /// TC2/TC3/TC4 的 (颜色 TCCT, alpha TCAT) 合成模式。
+    pub combine_modes: [[i32; 2]; 3],
+    /// 各层 bC2A（颜色转 alpha）。
+    pub color_to_alpha: [bool; 4],
+    /// 各层 UV 原点 + 缩放（各层引用自己的 UvSet）。
+    pub uv_origins: [[f32; 2]; 4],
+    pub uv_scales: [[f32; 2]; 4],
+    /// 各层 U/V 边界模式（0 Repeat、1 Clamp、2 Mirror；渐变贴图 Clamp
+    /// 防止越界回绕出异色条纹）。
+    pub texture_borders: [[i32; 2]; 4],
+    /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
+    pub texture1_is_shape_mask: bool,
     /// 混合模式：true = 加色（Add 系），false = 普通 alpha 混合。
     pub blend_add: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
     pub texture_distortion_index: i32,
     /// TD 扭曲强度（DPow 按粒子年龄求值）。
     pub distortion_power: f32,
-    /// TD 扭曲目标位（bit0 = uv1，bit1 = uv2）。
+    /// TD 扭曲目标位（bit0..3 = uv1..4）。
     pub distortion_targets: u32,
     /// TD 贴图采样用 UV（TD 引用的 UvSet 变换）。
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
-    /// 各贴图层的 U/V 边界模式（0 Repeat、1 Clamp、2 Mirror）：
-    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v]（渐变贴图 Clamp 防止越界回绕）。
-    pub texture_borders: [i32; 6],
-    /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
-    pub texture1_is_shape_mask: bool,
+    /// TD 边界模式。
+    pub distortion_borders: [i32; 2],
 }
 
 /// 网格粒子实例：Model/LightModel 粒子把粒子 Data 引用的内嵌绘制模型
@@ -84,16 +78,13 @@ pub struct VfxMeshInstance {
     pub scale: [f32; 3],
     /// HDR 颜色（rgb 可 >1，a 为不透明度）。
     pub color: [f32; 4],
-    pub uv_origin: [f32; 2],
-    pub uv_scale: [f32; 2],
-    pub uv2_origin: [f32; 2],
-    pub uv2_scale: [f32; 2],
-    pub texture_index: i32,
-    pub texture2_index: i32,
-    pub combine_color: i32,
-    pub combine_alpha: i32,
-    pub color_to_alpha: bool,
-    pub color_to_alpha2: bool,
+    pub texture_indexes: [i32; 4],
+    pub combine_modes: [[i32; 2]; 3],
+    pub color_to_alpha: [bool; 4],
+    pub uv_origins: [[f32; 2]; 4],
+    pub uv_scales: [[f32; 2]; 4],
+    pub texture_borders: [[i32; 2]; 4],
+    pub texture1_is_shape_mask: bool,
     pub blend_add: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
     pub texture_distortion_index: i32,
@@ -101,10 +92,7 @@ pub struct VfxMeshInstance {
     pub distortion_targets: u32,
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
-    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
-    pub texture_borders: [i32; 6],
-    /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
-    pub texture1_is_shape_mask: bool,
+    pub distortion_borders: [i32; 2],
     /// 剔除模式（CulT：0 双面、1 剔正面、2 剔背面）。
     pub cull_mode: i32,
     /// 内嵌绘制模型序号（文件 `Modl` 顺序）。
@@ -562,24 +550,20 @@ impl VfxRuntime {
             orientation,
             billboard,
             color,
-            uv_origin: tex.uv_origin,
-            uv_scale: tex.uv_scale,
-            uv2_origin: tex.uv2_origin,
-            uv2_scale: tex.uv2_scale,
-            texture_index: tex.texture_index,
-            texture2_index: tex.texture2_index,
-            combine_color: tex.combine_color,
-            combine_alpha: tex.combine_alpha,
+            texture_indexes: tex.texture_indexes,
+            combine_modes: tex.combine_modes,
             color_to_alpha: tex.color_to_alpha,
-            color_to_alpha2: tex.color_to_alpha2,
+            uv_origins: tex.uv_origins,
+            uv_scales: tex.uv_scales,
+            texture_borders: tex.texture_borders,
+            texture1_is_shape_mask: tex.texture1_is_shape_mask,
             blend_add: is_additive_draw(particle.draw_mode),
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
-            texture_borders: tex.texture_borders,
-            texture1_is_shape_mask: tex.texture1_is_shape_mask,
+            distortion_borders: tex.distortion_borders,
         });
         let _ = item;
     }
@@ -654,24 +638,20 @@ impl VfxRuntime {
                 particle_scl[2] * ctx.emitter_scale[2],
             ],
             color,
-            uv_origin: tex.uv_origin,
-            uv_scale: tex.uv_scale,
-            uv2_origin: tex.uv2_origin,
-            uv2_scale: tex.uv2_scale,
-            texture_index: tex.texture_index,
-            texture2_index: tex.texture2_index,
-            combine_color: tex.combine_color,
-            combine_alpha: tex.combine_alpha,
+            texture_indexes: tex.texture_indexes,
+            combine_modes: tex.combine_modes,
             color_to_alpha: tex.color_to_alpha,
-            color_to_alpha2: tex.color_to_alpha2,
+            uv_origins: tex.uv_origins,
+            uv_scales: tex.uv_scales,
+            texture_borders: tex.texture_borders,
+            texture1_is_shape_mask: tex.texture1_is_shape_mask,
             blend_add: is_additive_draw(particle.draw_mode),
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
-            texture_borders: tex.texture_borders,
-            texture1_is_shape_mask: tex.texture1_is_shape_mask,
+            distortion_borders: tex.distortion_borders,
             cull_mode: particle.culling_type,
             model_index: model_index as usize,
         });
@@ -772,7 +752,7 @@ impl VfxRuntime {
                         [1.0 / simple.uv_cell[0] as f32, 1.0 / simple.uv_cell[1] as f32],
                     )
                 } else {
-                    (tex.uv_origin, tex.uv_scale)
+                    (tex.uv_origins[0], tex.uv_scales[0])
                 };
                 out.push(VfxQuad {
                     position: [
@@ -790,49 +770,50 @@ impl VfxRuntime {
                         color[2] * bri,
                         color[3] * scl_a,
                     ],
-                    uv_origin,
-                    uv_scale,
-                    uv2_origin: tex.uv2_origin,
-                    uv2_scale: tex.uv2_scale,
-                    texture_index: tex.texture_index,
-                    texture2_index: tex.texture2_index,
-                    combine_color: tex.combine_color,
-                    combine_alpha: tex.combine_alpha,
+                    texture_indexes: tex.texture_indexes,
+                    combine_modes: tex.combine_modes,
                     color_to_alpha: tex.color_to_alpha,
-                    color_to_alpha2: tex.color_to_alpha2,
+                    uv_origins: {
+                        // 翻页 UV 覆盖 TC1 层。
+                        let mut origins = tex.uv_origins;
+                        origins[0] = uv_origin;
+                        origins
+                    },
+                    uv_scales: {
+                        let mut scales = tex.uv_scales;
+                        scales[0] = uv_scale;
+                        scales
+                    },
+                    texture_borders: tex.texture_borders,
+                    texture1_is_shape_mask: tex.texture1_is_shape_mask,
                     blend_add: is_additive_draw(particle.draw_mode),
                     texture_distortion_index: tex.texture_distortion_index,
                     distortion_power: tex.distortion_power,
                     distortion_targets: tex.distortion_targets,
                     uvd_origin: tex.uvd_origin,
                     uvd_scale: tex.uvd_scale,
-                    texture_borders: tex.texture_borders,
-                    texture1_is_shape_mask: tex.texture1_is_shape_mask,
+                    distortion_borders: tex.distortion_borders,
                 });
             }
         }
     }
 }
 
-/// 粒子的贴图/UV 解析结果（TC1 = 基准层，TC2 = 合成层，TD = 扭曲层）。
+/// 粒子的贴图/UV 解析结果（TC1 基准层 + TC2..TC4 合成层 + TD 扭曲层）。
 struct ResolvedTexture {
-    texture_index: i32,
-    texture2_index: i32,
-    combine_color: i32,
-    combine_alpha: i32,
-    color_to_alpha: bool,
-    color_to_alpha2: bool,
-    uv_origin: [f32; 2],
-    uv_scale: [f32; 2],
-    uv2_origin: [f32; 2],
-    uv2_scale: [f32; 2],
+    texture_indexes: [i32; 4],
+    combine_modes: [[i32; 2]; 3],
+    color_to_alpha: [bool; 4],
+    uv_origins: [[f32; 2]; 4],
+    uv_scales: [[f32; 2]; 4],
+    texture_borders: [[i32; 2]; 4],
+    texture1_is_shape_mask: bool,
     texture_distortion_index: i32,
     distortion_power: f32,
     distortion_targets: u32,
     uvd_origin: [f32; 2],
     uvd_scale: [f32; 2],
-    texture_borders: [i32; 6],
-    texture1_is_shape_mask: bool,
+    distortion_borders: [i32; 2],
 }
 
 impl ResolvedTexture {
@@ -849,70 +830,88 @@ impl ResolvedTexture {
                 })
                 .unwrap_or(([0.0, 0.0], [1.0, 1.0]))
         };
-        let tc1 = particle
-            .texture_color1
-            .as_ref()
-            .filter(|texture| texture.enabled);
-        let tc2 = particle
-            .texture_color2
-            .as_ref()
-            .filter(|texture| texture.enabled && texture.effective_texture() >= 0);
-        let (uv_origin, uv_scale) = uv(tc1.map(|t| t.uv_set_index).unwrap_or(0));
-        let (uv2_origin, uv2_scale) = tc2
-            .map(|t| uv(t.uv_set_index))
-            .unwrap_or((uv_origin, uv_scale));
-        // TD：扭曲贴图用其 UvSN 指向的 UvSet 变换采样；bT1/bT2 按 TC1/TC2
-        // 实际引用的 UvSet 序号映射到 uv1/uv2。
+        let tcs = [
+            particle.texture_color1.as_ref(),
+            particle.texture_color2.as_ref(),
+            particle.texture_color3.as_ref(),
+            particle.texture_color4.as_ref(),
+        ];
+        let mut texture_indexes = [-1; 4];
+        let mut color_to_alpha = [false; 4];
+        let mut uv_origins = [[0.0; 2]; 4];
+        let mut uv_scales = [[1.0; 2]; 4];
+        let mut texture_borders = [[0; 2]; 4];
+        let mut texture1_is_shape_mask = false;
+        for (i, tc) in tcs.iter().enumerate() {
+            let Some(tc) = tc.filter(|t| t.enabled) else {
+                continue;
+            };
+            texture_indexes[i] = tc.effective_texture();
+            if texture_indexes[i] < 0 {
+                continue;
+            }
+            color_to_alpha[i] = tc.color_to_alpha;
+            let (origin, scale) = uv(tc.uv_set_index);
+            uv_origins[i] = origin;
+            uv_scales[i] = scale;
+            texture_borders[i] = [tc.texture_border_u, tc.texture_border_v];
+            if i == 0 {
+                texture1_is_shape_mask = tc.is_shape_mask();
+            }
+        }
+        // TD：扭曲贴图用其 UvSN 指向的 UvSet 变换采样；bT1..bT4 按各层
+        // 实际引用的 UvSet 序号映射到渲染端 uv1..4。
         let td = particle
             .texture_distortion
             .as_ref()
             .filter(|t| t.enabled && t.texture_index >= 0);
-        let (texture_distortion_index, distortion_power, distortion_targets, uvd) =
+        let (texture_distortion_index, distortion_power, distortion_targets, uvd, dborders) =
             match td {
                 Some(td) => {
                     let uvd = uv(td.uv_set_index);
-                    let uv1_idx = tc1.map(|t| t.uv_set_index).unwrap_or(0);
-                    let uv2_idx = tc2.map(|t| t.uv_set_index).unwrap_or(uv1_idx);
-                    // bT1/bT2 = 扭曲 UvSet 0/1；按 TC1/TC2 实际引用的
-                    // UvSet 序号映射到渲染端的 uv1/uv2。
-                    let distort = |uv_idx: i32| {
-                        (td.target_uv[0] && uv_idx == 0) || (td.target_uv[1] && uv_idx == 1)
-                    };
-                    let targets = (distort(uv1_idx) as u32) | ((distort(uv2_idx) as u32) << 1);
+                    let mut targets = 0u32;
+                    for (i, tc) in tcs.iter().enumerate() {
+                        let Some(tc) = tc.filter(|t| t.enabled) else {
+                            continue;
+                        };
+                        // bT(i+1) 扭曲 UvSet i。
+                        let hit = (0..4).any(|u| {
+                            tc.uv_set_index == u as i32 && td.target_uv[u]
+                        });
+                        if hit {
+                            targets |= 1 << i;
+                        }
+                    }
                     (
                         td.texture_index,
                         td.power.value(age, 0.0),
                         targets,
                         uvd,
+                        [td.texture_border_u, td.texture_border_v],
                     )
                 }
-                None => (-1, 0.0, 0, ([0.0, 0.0], [1.0, 1.0])),
+                None => (-1, 0.0, 0, ([0.0, 0.0], [1.0, 1.0]), [0, 0]),
             };
+        let mut combine_modes = [[0; 2]; 3];
+        for (i, tc) in tcs[1..].iter().enumerate() {
+            if let Some(tc) = tc.filter(|t| t.enabled) {
+                combine_modes[i] = [tc.calculate_color, tc.calculate_alpha];
+            }
+        }
         Self {
-            texture_index: tc1.map(|t| t.effective_texture()).unwrap_or(-1),
-            texture2_index: tc2.map(|t| t.effective_texture()).unwrap_or(-1),
-            combine_color: tc2.map(|t| t.calculate_color).unwrap_or(0),
-            combine_alpha: tc2.map(|t| t.calculate_alpha).unwrap_or(0),
-            color_to_alpha: tc1.map(|t| t.color_to_alpha).unwrap_or(false),
-            color_to_alpha2: tc2.map(|t| t.color_to_alpha).unwrap_or(false),
-            uv_origin,
-            uv_scale,
-            uv2_origin,
-            uv2_scale,
+            texture_indexes,
+            combine_modes,
+            color_to_alpha,
+            uv_origins,
+            uv_scales,
+            texture_borders,
+            texture1_is_shape_mask,
             texture_distortion_index,
             distortion_power,
             distortion_targets,
             uvd_origin: uvd.0,
             uvd_scale: uvd.1,
-            texture_borders: [
-                tc1.map(|t| t.texture_border_u).unwrap_or(0),
-                tc1.map(|t| t.texture_border_v).unwrap_or(0),
-                tc2.map(|t| t.texture_border_u).unwrap_or(0),
-                tc2.map(|t| t.texture_border_v).unwrap_or(0),
-                td.map(|t| t.texture_border_u).unwrap_or(0),
-                td.map(|t| t.texture_border_v).unwrap_or(0),
-            ],
-            texture1_is_shape_mask: tc1.map(|t| t.is_shape_mask()).unwrap_or(false),
+            distortion_borders: dborders,
         }
     }
 }
@@ -1218,7 +1217,7 @@ mod tests {
         assert!((quad.color[2] - 0.8).abs() < 1.0e-6);
         assert!((quad.color[3] - 0.9).abs() < 1.0e-6);
         // TC1 TLst 优先。
-        assert_eq!(quad.texture_index, 2);
+        assert_eq!(quad.texture_indexes[0], 2);
         // 尺寸 = 半宽（scale 0.2 → 0.1）。
         assert!((quad.size[0] - 0.1).abs() < 1.0e-6);
         // billboard 四元数为单位。

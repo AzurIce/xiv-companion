@@ -63,24 +63,20 @@ fn render_isolated_flame_mesh() {
         orientation: [0.0, 0.0, 0.0, 1.0],
         scale: [1.0, 1.0, 1.0],
         color: [1.0, 1.0, 1.0, 1.0],
-        uv_origin: [0.0, 0.0],
-        uv_scale: [2.0, 0.4],
-        uv2_origin: [0.2, 0.0],
-        uv2_scale: [1.0, 1.0],
-        texture_index: 5,
-        texture2_index: 8,
-        combine_color: 0,
-        combine_alpha: 0,
-        color_to_alpha: false,
-        color_to_alpha2: false,
+        uv_origins: [[0.0, 0.0], [0.2, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        uv_scales: [[2.0, 0.4], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
+        texture_indexes: [5, 8, -1, -1],
+        combine_modes: [[0, 0]; 3],
+        color_to_alpha: [false; 4],
+        texture_borders: [[0; 2]; 4],
+        texture1_is_shape_mask: true,
         blend_add: true,
         texture_distortion_index: -1,
         distortion_power: 0.0,
         distortion_targets: 0,
         uvd_origin: [0.0, 0.0],
         uvd_scale: [1.0, 1.0],
-        texture_borders: [0; 6],
-        texture1_is_shape_mask: false,
+        distortion_borders: [0; 2],
         cull_mode: 0,
         model_index: 3,
     };
@@ -99,8 +95,7 @@ fn render_isolated_flame_mesh() {
 
     // 对照：无贴图（应落回退光点×实例色）。
     let mut untextured = flame;
-    untextured.texture_index = -1;
-    untextured.texture2_index = -1;
+    untextured.texture_indexes = [-1; 4];
     let flame_plain = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("vfx-probe-flame-plain")
             .with_output_dir("target/weapon-render-snapshots")
@@ -266,9 +261,9 @@ fn render_isolated_flame_mesh() {
             .map(|instance| {
                 let mut instance = *instance;
                 if instance.model_index == 3 {
-                    instance.texture_index = tex1;
-                    instance.texture2_index = tex2;
-                    instance.combine_color = comb;
+                    instance.texture_indexes = [tex1, tex2, -1, -1];
+                    instance.combine_modes = [[comb, 0], [0, 0], [0, 0]];
+                    instance.texture1_is_shape_mask = tex1 == 5;
                 }
                 instance
             })
@@ -285,5 +280,57 @@ fn render_isolated_flame_mesh() {
         )
         .expect("render tongue variant");
         eprintln!("tongue {tag}: {}", shot.png_path.display());
+    }
+
+    // 孤立星点 quad：tex3 遮罩 + flipbook cell (0,0)，看形状。
+    let sparkle = xiv_companion::VfxQuad {
+        position: [0.0, 1.0, 0.0],
+        size: [0.1, 0.1],
+        rotation: 0.0,
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        billboard: true,
+        color: [0.0, 0.7, 2.0, 1.0],
+        texture_indexes: [3, -1, -1, -1],
+        combine_modes: [[0; 2]; 3],
+        color_to_alpha: [false; 4],
+        uv_origins: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        uv_scales: [[0.5, 0.5], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
+        texture_borders: [[0; 2]; 4],
+        texture1_is_shape_mask: true,
+        blend_add: true,
+        texture_distortion_index: -1,
+        distortion_power: 0.0,
+        distortion_targets: 0,
+        uvd_origin: [0.0, 0.0],
+        uvd_scale: [1.0, 1.0],
+        distortion_borders: [0; 2],
+    };
+    let spark = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-probe-sparkle")
+            .with_output_dir("target/weapon-render-snapshots")
+            .with_viewport(512, 512)
+            .with_camera(0.0, 0.0, 1.2, [0.0, 1.0])
+            .with_vfx_quads([xiv_companion::VfxQuad { size: [0.3, 0.3], ..sparkle }])
+            .with_vfx_textures(textures.clone()),
+        &model,
+    )
+    .expect("render sparkle");
+    eprintln!("sparkle: {}", spark.png_path.display());
+    // 对照：无贴图（回退光点）与同贴图但关遮罩。
+    for (tex, mask, tag) in [(-1, false, "fallback"), (3, false, "nomask")] {
+        let mut q = sparkle;
+        q.texture_indexes = [tex, -1, -1, -1];
+        q.texture1_is_shape_mask = mask;
+        let shot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(format!("vfx-probe-sparkle-{tag}"))
+                .with_output_dir("target/weapon-render-snapshots")
+                .with_viewport(512, 512)
+                .with_camera(0.0, 0.0, 1.2, [0.0, 1.0])
+                .with_vfx_quads([q])
+                .with_vfx_textures(textures.clone()),
+            &model,
+        )
+        .expect("render sparkle variant");
+        eprintln!("sparkle {tag}: {}", shot.png_path.display());
     }
 }

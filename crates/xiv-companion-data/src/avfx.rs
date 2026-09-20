@@ -635,8 +635,8 @@ pub struct AvfxParticleSimple {
 #[serde(rename_all = "camelCase")]
 pub struct AvfxParticleDistortion {
     pub enabled: bool,
-    /// `bT1`/`bT2`：扭曲第 1/2 组 UV（UvSet 0/1）。
-    pub target_uv: [bool; 2],
+    /// `bT1`..`bT4`：扭曲第 1..4 组 UV（UvSet 0..3）。
+    pub target_uv: [bool; 4],
     /// 扭曲贴图采样用的 UvSet 序号（`UvSN`）。
     pub uv_set_index: i32,
     pub texture_index: i32,
@@ -1633,6 +1633,8 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
                 target_uv: [
                     fields.boolean("bT1").unwrap_or(false),
                     fields.boolean("bT2").unwrap_or(false),
+                    fields.boolean("bT3").unwrap_or(false),
+                    fields.boolean("bT4").unwrap_or(false),
                 ],
                 uv_set_index: fields.i32("UvSN").unwrap_or(0),
                 texture_index: fields.i32("TxNo").unwrap_or(-1),
