@@ -285,6 +285,65 @@ pub struct MdlBoneBoundingBoxMetadata {
     pub bounding_box: MdlBoundingBoxMetadata,
 }
 
+/// MDL 的 ElementId 条目（32 字节）：武器/配件的特效绑点（avfx Binder 的
+/// `BPID` 引用 `id`，如武器的 3=基部 / 4=中部 / 5=尖部），`translate`/`rotate`
+/// 为模型空间偏移。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdlElementId {
+    pub id: u32,
+    pub parent_bone_name: u32,
+    pub translate: [f32; 3],
+    pub rotate: [f32; 3],
+}
+
+/// 只读取 MDL 的 ElementId 表（紧跟 model header；节区推进与
+/// [`mdl_metadata_from_mdl_bytes`] 保持一致）。
+pub fn mdl_element_ids_from_mdl_bytes(bytes: &[u8]) -> anyhow::Result<Vec<MdlElementId>> {
+    let file_header = parse_file_header(bytes, 0)?;
+    let mut offset = MODEL_FILE_HEADER_SIZE;
+    offset = checked_advance(
+        offset,
+        usize::from(file_header.vertex_declaration_count) * VERTEX_DECLARATION_SIZE,
+        bytes.len(),
+        "vertex declarations",
+    )?;
+    let string_table_size = read_u32_le(bytes, offset + 4, "string table size")?;
+    offset = checked_advance(offset, 8, bytes.len(), "string table header")?;
+    offset = checked_advance(
+        offset,
+        string_table_size as usize,
+        bytes.len(),
+        "string table",
+    )?;
+    let model_header = parse_model_header(bytes, offset)?;
+    offset = checked_advance(offset, MODEL_HEADER_SIZE, bytes.len(), "model header")?;
+    let count = usize::from(model_header.element_id_count);
+    let section = read_bytes(
+        bytes,
+        offset,
+        count * ELEMENT_ID_SIZE,
+        "element ids",
+    )?;
+    Ok(section
+        .chunks_exact(ELEMENT_ID_SIZE)
+        .map(|chunk| MdlElementId {
+            id: u32::from_le_bytes(chunk[0..4].try_into().expect("element id")),
+            parent_bone_name: u32::from_le_bytes(chunk[4..8].try_into().expect("bone")),
+            translate: [
+                f32::from_le_bytes(chunk[8..12].try_into().expect("tx")),
+                f32::from_le_bytes(chunk[12..16].try_into().expect("ty")),
+                f32::from_le_bytes(chunk[16..20].try_into().expect("tz")),
+            ],
+            rotate: [
+                f32::from_le_bytes(chunk[20..24].try_into().expect("rx")),
+                f32::from_le_bytes(chunk[24..28].try_into().expect("ry")),
+                f32::from_le_bytes(chunk[28..32].try_into().expect("rz")),
+            ],
+        })
+        .collect())
+}
+
 pub fn mdl_metadata_from_mdl_bytes(path: &str, bytes: &[u8]) -> anyhow::Result<MdlMetadata> {
     let file_header = parse_file_header(bytes, 0)?;
     let mut offset = MODEL_FILE_HEADER_SIZE;

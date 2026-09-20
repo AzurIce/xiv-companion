@@ -12321,6 +12321,7 @@ pub fn load_weapon_vfx_from_resource<R: physis::resource::Resource>(
             return Some(crate::avfx::WeaponVfxData {
                 avfx_path,
                 vfx_id,
+                bind_points: weapon_vfx_bind_points_sync(resource, model),
                 file,
                 textures,
                 diagnostics,
@@ -12328,6 +12329,28 @@ pub fn load_weapon_vfx_from_resource<R: physis::resource::Resource>(
         }
     }
     None
+}
+
+/// 武器特效绑点表：读取主模型 MDL 的 ElementId 区（首个命中的候选路径）。
+#[cfg(feature = "game-data")]
+fn weapon_vfx_bind_points_sync<R: physis::resource::Resource>(
+    resource: &mut R,
+    model: crate::PackedModelId,
+) -> Vec<crate::avfx::VfxBindPoint> {
+    crate::weapon_model_candidate_paths(model)
+        .iter()
+        .find_map(|path| resource.read(path))
+        .and_then(|bytes| crate::mdl_metadata::mdl_element_ids_from_mdl_bytes(&bytes).ok())
+        .map(|ids| {
+            ids.iter()
+                .map(|id| crate::avfx::VfxBindPoint {
+                    id: id.id,
+                    translate: id.translate,
+                    rotate: id.rotate,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// [`load_weapon_vfx_from_resource`] 的异步版（web 目录句柄等）。
@@ -12380,6 +12403,7 @@ pub async fn load_weapon_vfx_from_async_resource<R: AsyncGameResource>(
             return Some(crate::avfx::WeaponVfxData {
                 avfx_path,
                 vfx_id,
+                bind_points: weapon_vfx_bind_points_async(resource, model).await,
                 file,
                 textures,
                 diagnostics,
@@ -12387,4 +12411,31 @@ pub async fn load_weapon_vfx_from_async_resource<R: AsyncGameResource>(
         }
     }
     None
+}
+
+/// [`weapon_vfx_bind_points_sync`] 的异步版。
+#[cfg(feature = "game-data")]
+async fn weapon_vfx_bind_points_async<R: crate::AsyncGameResource>(
+    resource: &mut R,
+    model: crate::PackedModelId,
+) -> Vec<crate::avfx::VfxBindPoint> {
+    let mut bytes = None;
+    for path in crate::weapon_model_candidate_paths(model) {
+        if let Ok(content) = resource.read(&path).await {
+            bytes = Some(content);
+            break;
+        }
+    }
+    bytes
+        .and_then(|bytes| crate::mdl_metadata::mdl_element_ids_from_mdl_bytes(&bytes).ok())
+        .map(|ids| {
+            ids.iter()
+                .map(|id| crate::avfx::VfxBindPoint {
+                    id: id.id,
+                    translate: id.translate,
+                    rotate: id.rotate,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

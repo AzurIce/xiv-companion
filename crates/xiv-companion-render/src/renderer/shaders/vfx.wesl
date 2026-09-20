@@ -26,9 +26,11 @@ struct VfxGroupParams {
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var vfx_texture1: texture_2d<f32>;
 @group(1) @binding(1) var vfx_texture2: texture_2d<f32>;
-@group(1) @binding(2) var vfx_sampler: sampler;
+@group(1) @binding(2) var vfx_sampler1: sampler;
 @group(1) @binding(3) var<uniform> vfx_params: VfxGroupParams;
 @group(1) @binding(4) var vfx_texture_d: texture_2d<f32>;
+@group(1) @binding(5) var vfx_sampler2: sampler;
+@group(1) @binding(6) var vfx_sampler_d: sampler;
 
 struct VfxInstanceInput {
     // xyz: 位置；w: billboard 面内旋转（弧度）。
@@ -172,7 +174,7 @@ fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
     var uv2 = input.uv2;
     // TD：扭曲贴图 rg − 0.5 乘强度偏移目标 UV（光罩/流光的有机抖动）。
     if (vfx_params.flags & 16u) != 0u {
-        let td = textureSample(vfx_texture_d, vfx_sampler, input.uvd);
+        let td = textureSample(vfx_texture_d, vfx_sampler_d, input.uvd);
         let offset = input.distortion.x * (td.rg - vec2<f32>(0.5, 0.5));
         let targets = bitcast<u32>(input.distortion.y);
         if (targets & 1u) != 0u {
@@ -185,13 +187,13 @@ fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
     let instance_color = input.color;
     var tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     if (vfx_params.flags & 2u) != 0u {
-        tex_color = textureSample(vfx_texture1, vfx_sampler, uv1);
+        tex_color = textureSample(vfx_texture1, vfx_sampler1, uv1);
         if (vfx_params.flags & 1u) != 0u {
             tex_color = vec4<f32>(tex_color.rgb, tex_color.r);
         }
     }
     if (vfx_params.flags & 4u) != 0u {
-        var c2 = textureSample(vfx_texture2, vfx_sampler, uv2);
+        var c2 = textureSample(vfx_texture2, vfx_sampler2, uv2);
         if (vfx_params.flags & 8u) != 0u {
             c2 = vec4<f32>(c2.rgb, c2.r);
         }

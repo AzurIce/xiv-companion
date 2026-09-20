@@ -67,6 +67,9 @@ pub struct VfxQuad {
     /// TD 贴图采样用 UV（TD 引用的 UvSet 变换）。
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
+    /// 各贴图层的 U/V 边界模式（0 Repeat、1 Clamp、2 Mirror）：
+    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v]（渐变贴图 Clamp 防止越界回绕）。
+    pub texture_borders: [i32; 6],
 }
 
 /// 网格粒子实例：Model/LightModel 粒子把粒子 Data 引用的内嵌绘制模型
@@ -96,6 +99,8 @@ pub struct VfxMeshInstance {
     pub distortion_targets: u32,
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
+    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
+    pub texture_borders: [i32; 6],
     /// 剔除模式（CulT：0 双面、1 剔正面、2 剔背面）。
     pub cull_mode: i32,
     /// 内嵌绘制模型序号（文件 `Modl` 顺序）。
@@ -106,6 +111,8 @@ pub struct VfxMeshInstance {
 #[derive(Debug, Clone)]
 pub struct VfxRuntime {
     file: AvfxFile,
+    /// 目标模型的特效绑点表（id → 模型空间偏移；空表 = 全部原点）。
+    bind_points: Vec<crate::avfx::VfxBindPoint>,
     /// 采样硬上限，超出丢弃。
     max_quads: usize,
 }
@@ -127,10 +134,31 @@ struct SpawnContext {
 
 impl VfxRuntime {
     pub fn new(file: &AvfxFile) -> Self {
+        Self::with_bind_points(file, &[])
+    }
+
+    /// 携带武器绑点表构建（avfx Binder 的 `BPID` 经它解析成位置偏移）。
+    pub fn with_bind_points(file: &AvfxFile, bind_points: &[crate::avfx::VfxBindPoint]) -> Self {
         Self {
             file: file.clone(),
+            bind_points: bind_points.to_vec(),
             max_quads: 4096,
         }
+    }
+
+    /// timeline item 的绑点偏移（binder_index → binder.BPID → 武器绑点位置）。
+    fn bind_offset(&self, binder_index: i32) -> [f32; 3] {
+        let Some(binder) = self.file.binders.get(binder_index.max(0) as usize) else {
+            return [0.0; 3];
+        };
+        if binder.bind_point_id < 0 {
+            return [0.0; 3];
+        }
+        self.bind_points
+            .iter()
+            .find(|point| point.id == binder.bind_point_id as u32)
+            .map(|point| point.translate)
+            .unwrap_or([0.0; 3])
     }
 
     pub fn max_quads(&self) -> usize {
@@ -225,7 +253,8 @@ impl VfxRuntime {
             let Some(emitter) = self.file.emitters.get(item.emitter_index as usize) else {
                 continue;
             };
-            self.sample_emitter(emitter, local - item.start_time as f32, sink);
+            let bind_offset = self.bind_offset(item.binder_index);
+            self.sample_emitter(emitter, local - item.start_time as f32, bind_offset, sink);
         }
     }
 
@@ -234,6 +263,7 @@ impl VfxRuntime {
         &self,
         emitter: &AvfxEmitter,
         emitter_frame: f32,
+        bind_offset: [f32; 3],
         sink: &mut dyn FnMut(&SpawnContext, &AvfxEmitterItem, &AvfxParticle),
     ) {
         if emitter.particle_items.is_empty() || emitter_frame < 0.0 {
@@ -306,8 +336,14 @@ impl VfxRuntime {
                             continue;
                         }
                     }
-                    // 出生时刻的发射器变换（曲线按发射器 loop-local 年龄求值）。
+                    // 出生时刻的发射器变换（曲线按发射器 loop-local 年龄求值）；
+                    // 发射器位置挂在 timeline item 的绑点（Binder → 武器绑点）上。
                     let emitter_pos = emitter.position.evaluate(spawn_loop_age, 0.0);
+                    let emitter_pos = [
+                        emitter_pos[0] + bind_offset[0],
+                        emitter_pos[1] + bind_offset[1],
+                        emitter_pos[2] + bind_offset[2],
+                    ];
                     let emitter_rot = emitter.rotation.evaluate(spawn_loop_age, 0.0);
                     let emitter_scl = emitter.scale.evaluate(spawn_loop_age, 1.0);
                     let emitter_quat = quat_from_euler(emitter.rotation_order, emitter_rot);
@@ -538,6 +574,7 @@ impl VfxRuntime {
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
+            texture_borders: tex.texture_borders,
         });
         let _ = item;
     }
@@ -628,6 +665,7 @@ impl VfxRuntime {
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
+            texture_borders: tex.texture_borders,
             cull_mode: particle.culling_type,
             model_index: model_index as usize,
         });
@@ -762,6 +800,7 @@ impl VfxRuntime {
                     distortion_targets: tex.distortion_targets,
                     uvd_origin: tex.uvd_origin,
                     uvd_scale: tex.uvd_scale,
+                    texture_borders: tex.texture_borders,
                 });
             }
         }
@@ -785,6 +824,7 @@ struct ResolvedTexture {
     distortion_targets: u32,
     uvd_origin: [f32; 2],
     uvd_scale: [f32; 2],
+    texture_borders: [i32; 6],
 }
 
 impl ResolvedTexture {
@@ -856,6 +896,14 @@ impl ResolvedTexture {
             distortion_targets,
             uvd_origin: uvd.0,
             uvd_scale: uvd.1,
+            texture_borders: [
+                tc1.map(|t| t.texture_border_u).unwrap_or(0),
+                tc1.map(|t| t.texture_border_v).unwrap_or(0),
+                tc2.map(|t| t.texture_border_u).unwrap_or(0),
+                tc2.map(|t| t.texture_border_v).unwrap_or(0),
+                td.map(|t| t.texture_border_u).unwrap_or(0),
+                td.map(|t| t.texture_border_v).unwrap_or(0),
+            ],
         }
     }
 }

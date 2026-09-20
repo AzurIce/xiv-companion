@@ -549,6 +549,9 @@ pub struct AvfxParticleTexture {
     pub calculate_alpha: i32,
     /// `bC2A`（颜色转 alpha：alpha 取颜色 x 分量）。
     pub color_to_alpha: bool,
+    /// `TBUT`/`TBVT`：U/V 边界模式（0 Repeat、1 Clamp、2 Mirror）。
+    pub texture_border_u: i32,
+    pub texture_border_v: i32,
 }
 
 impl AvfxParticleTexture {
@@ -633,6 +636,9 @@ pub struct AvfxParticleDistortion {
     pub texture_index: i32,
     /// `DPow` 扭曲强度曲线。
     pub power: AvfxCurve,
+    /// `TBUT`/`TBVT`：扭曲贴图边界模式。
+    pub texture_border_u: i32,
+    pub texture_border_v: i32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -816,6 +822,9 @@ impl AvfxParticle {
 pub struct AvfxBinder {
     /// 0 = Point（武器挂点绑定，其余类型原样记录）。
     pub binder_type: u32,
+    /// `PrpS.BPID`：目标模型上的绑点序号（武器 MDL 的 ElementId：
+    /// 3=基部 / 4=中部 / 5=尖部……；-1 = 未指定，保持原点）。
+    pub bind_point_id: i32,
 }
 
 /// 发射模型顶点（`VEmt`，28 字节/顶点）：位置 + 法线（注入方向）+ 颜色。
@@ -1452,6 +1461,8 @@ fn parse_particle_texture(node: &AvfxNodeView) -> AvfxParticleTexture {
         calculate_color: fields.i32("TCCT").unwrap_or(0),
         calculate_alpha: fields.i32("TCAT").unwrap_or(0),
         color_to_alpha: fields.boolean("bC2A").unwrap_or(false),
+        texture_border_u: fields.i32("TBUT").unwrap_or(0),
+        texture_border_v: fields.i32("TBVT").unwrap_or(0),
     }
 }
 
@@ -1623,6 +1634,8 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
                     .child("DPow")
                     .map(|child| parse_curve(&child))
                     .unwrap_or_default(),
+                texture_border_u: fields.i32("TBUT").unwrap_or(0),
+                texture_border_v: fields.i32("TBVT").unwrap_or(0),
             }
         }),
         uv_sets: node
@@ -1731,8 +1744,13 @@ fn f16_to_f32(bits: [u8; 2]) -> f32 {
 }
 
 fn parse_binder(node: &AvfxNodeView) -> AvfxBinder {
+    let bind_point_id = node
+        .child("PrpS")
+        .and_then(|props| props.scalar_i32("BPID"))
+        .unwrap_or(-1);
     AvfxBinder {
         binder_type: node.scalar("BnVr").unwrap_or(0),
+        bind_point_id,
     }
 }
 
@@ -2300,6 +2318,16 @@ mod tests {
     }
 }
 
+/// 武器/配件 MDL 的特效绑点（ElementId 表项）：avfx Binder 的 `BPID`
+/// 引用 `id`（如武器的 3=基部 / 4=中部 / 5=尖部）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfxBindPoint {
+    pub id: u32,
+    pub translate: [f32; 3],
+    pub rotate: [f32; 3],
+}
+
 /// 武器挂载的常驻 VFX 数据：解析后的 avfx 子集 + 解码好的颜色贴图。
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2308,6 +2336,9 @@ pub struct WeaponVfxData {
     pub avfx_path: String,
     /// IMC 里的 VfxId。
     pub vfx_id: u8,
+    /// 目标武器 MDL 的绑点表（ElementId id → 模型空间偏移）。
+    /// avfx Binder 的 `BPID` 经它解析成位置；空表时全部按原点。
+    pub bind_points: Vec<VfxBindPoint>,
     pub file: AvfxFile,
     /// 按文件 `Tex` 块顺序解码的贴图（RGBA8，取首层）；解码失败的项以
     /// `diagnostics` 记录、此处缺位（渲染端按索引回退程序化贴图）。
@@ -2316,9 +2347,9 @@ pub struct WeaponVfxData {
 }
 
 impl WeaponVfxData {
-    /// 构建常驻采样运行时。
+    /// 构建常驻采样运行时（携带武器绑点表）。
     pub fn runtime(&self) -> crate::avfx_sim::VfxRuntime {
-        crate::avfx_sim::VfxRuntime::new(&self.file)
+        crate::avfx_sim::VfxRuntime::with_bind_points(&self.file, &self.bind_points)
     }
 }
 

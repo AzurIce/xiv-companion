@@ -286,6 +286,8 @@ pub(crate) struct VfxGroupKey {
     combine_alpha: i32,
     color_to_alpha: bool,
     color_to_alpha2: bool,
+    /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
+    texture_borders: [i32; 6],
 }
 
 impl VfxGroupKey {
@@ -298,6 +300,7 @@ impl VfxGroupKey {
             combine_alpha: quad.combine_alpha,
             color_to_alpha: quad.color_to_alpha,
             color_to_alpha2: quad.color_to_alpha2,
+            texture_borders: quad.texture_borders,
         }
     }
 
@@ -310,6 +313,7 @@ impl VfxGroupKey {
             combine_alpha: instance.combine_alpha,
             color_to_alpha: instance.color_to_alpha,
             color_to_alpha2: instance.color_to_alpha2,
+            texture_borders: instance.texture_borders,
         }
     }
 }
@@ -413,6 +417,28 @@ impl VfxParticles {
                 contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
+        // 每层贴图各自的边界模式 sampler（渐变贴图 Clamp 防越界回绕出
+        // 异色条纹，UVSet 滚动贴图 Repeat）。
+        let address_mode = |mode: i32| match mode {
+            1 => wgpu::AddressMode::ClampToEdge,
+            2 => wgpu::AddressMode::MirrorRepeat,
+            _ => wgpu::AddressMode::Repeat,
+        };
+        let make_sampler = |u: i32, v: i32| {
+            context.device().create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("weapon vfx group sampler"),
+                address_mode_u: address_mode(u),
+                address_mode_v: address_mode(v),
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            })
+        };
+        let sampler1 = make_sampler(key.texture_borders[0], key.texture_borders[1]);
+        let sampler2 = make_sampler(key.texture_borders[2], key.texture_borders[3]);
+        let sampler_d = make_sampler(key.texture_borders[4], key.texture_borders[5]);
         let bind_group = context.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("weapon vfx particle bind group"),
             layout: context.vfx_bind_group_layout(),
@@ -427,7 +453,7 @@ impl VfxParticles {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(context.vfx_sampler()),
+                    resource: wgpu::BindingResource::Sampler(&sampler1),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -436,6 +462,14 @@ impl VfxParticles {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(view_for(key.texture_d)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&sampler2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&sampler_d),
                 },
             ],
         });

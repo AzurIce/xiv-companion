@@ -79,6 +79,7 @@ fn render_isolated_flame_mesh() {
         distortion_targets: 0,
         uvd_origin: [0.0, 0.0],
         uvd_scale: [1.0, 1.0],
+        texture_borders: [0; 6],
         cull_mode: 0,
         model_index: 3,
     };
@@ -163,5 +164,55 @@ fn render_isolated_flame_mesh() {
         )
         .expect("render single model");
         eprintln!("model{model_index} {tag}: {}", shot.png_path.display());
+    }
+
+    // 朝向对照：火舌网格 4 种 (翻转 × 原点) 变体并排（固定缩放 1、无旋转），
+    // 对照游戏内火舌轮廓判定 avfx 模型空间朝向。
+    let flip_mesh = |mesh: &xiv_companion::VfxDrawModel, flip: bool| {
+        let mut mesh = mesh.clone();
+        if flip {
+            for vertex in &mut mesh.vertices {
+                vertex.position[1] = -vertex.position[1];
+            }
+        }
+        mesh
+    };
+    // 全特效对照：保持全部粒子，只改火舌（model 3）的朝向/位置。
+    let runtime3 = vfx.runtime();
+    let mut full_quads = Vec::new();
+    runtime3.sample(4.0, &mut full_quads);
+    let mut full_meshes = Vec::new();
+    runtime3.sample_mesh(4.0, &mut full_meshes);
+    for (flip, origin_y, tag) in [
+        (false, 0.0_f32, "noflip-keep"),
+        (true, 0.0, "flip-keep"),
+        (false, 0.5, "noflip-up05"),
+        (true, -0.5, "flip-down05"),
+    ] {
+        let mut variant_meshes: Vec<xiv_companion::VfxDrawModel> = meshes.clone();
+        variant_meshes[3] = flip_mesh(&meshes[3], flip);
+        let instances: Vec<_> = full_meshes
+            .iter()
+            .map(|instance| {
+                let mut instance = *instance;
+                if instance.model_index == 3 {
+                    instance.position[1] += origin_y;
+                }
+                instance
+            })
+            .collect();
+        let shot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(format!("vfx-probe-full-{tag}"))
+                .with_output_dir("target/weapon-render-snapshots")
+                .with_viewport(1024, 1024)
+                .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                .with_vfx_quads(full_quads.clone())
+                .with_vfx_mesh_instances(instances)
+                .with_vfx_meshes(variant_meshes)
+                .with_vfx_textures(textures.clone()),
+            &model,
+        )
+        .expect("render full variant");
+        eprintln!("full {tag}: {}", shot.png_path.display());
     }
 }
