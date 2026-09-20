@@ -18,7 +18,8 @@ struct VfxGroupParams {
     combine_color: u32,
     // TC2 alpha 合成（TCAT：0 乘、1 max、2 min、3 不合成）。
     combine_alpha: u32,
-    // bit0: TC1 bC2A；bit1: 有 TC1 贴图；bit2: 有 TC2 贴图；bit3: TC2 bC2A。
+    // bit0: TC1 bC2A；bit1: 有 TC1 贴图；bit2: 有 TC2 贴图；bit3: TC2 bC2A；
+    // bit4: 有 TD 贴图；bit5: TC1 为形状遮罩（亮度→alpha，rgb 不乘）。
     flags: u32,
     _pad: u32,
 };
@@ -188,7 +189,11 @@ fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
     var tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     if (vfx_params.flags & 2u) != 0u {
         tex_color = textureSample(vfx_texture1, vfx_sampler1, uv1);
-        if (vfx_params.flags & 1u) != 0u {
+        if (vfx_params.flags & 32u) != 0u {
+            // 形状遮罩（TLst）：亮度→alpha，rgb 不改（颜色交给 Col/TC2）。
+            let lum = 0.3 * tex_color.r + 0.59 * tex_color.g + 0.11 * tex_color.b;
+            tex_color = vec4<f32>(1.0, 1.0, 1.0, lum);
+        } else if (vfx_params.flags & 1u) != 0u {
             tex_color = vec4<f32>(tex_color.rgb, tex_color.r);
         }
     }

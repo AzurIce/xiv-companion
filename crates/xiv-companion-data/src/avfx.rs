@@ -564,6 +564,12 @@ impl AvfxParticleTexture {
             self.texture_index
         }
     }
+
+    /// TLst 来源的贴图是形状遮罩（白形黑底）：只把亮度写进 alpha、不改
+    /// rgb——颜色由 Col/TC2 承担（火舌的亮青白 = tone 渐变，纹路 = 遮罩）。
+    pub fn is_shape_mask(&self) -> bool {
+        self.mask_texture_index >= 0
+    }
 }
 
 /// 粒子 `Data` 块（按粒子类型解析的子集）。

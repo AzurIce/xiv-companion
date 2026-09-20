@@ -70,6 +70,8 @@ pub struct VfxQuad {
     /// 各贴图层的 U/V 边界模式（0 Repeat、1 Clamp、2 Mirror）：
     /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v]（渐变贴图 Clamp 防止越界回绕）。
     pub texture_borders: [i32; 6],
+    /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
+    pub texture1_is_shape_mask: bool,
 }
 
 /// 网格粒子实例：Model/LightModel 粒子把粒子 Data 引用的内嵌绘制模型
@@ -101,6 +103,8 @@ pub struct VfxMeshInstance {
     pub uvd_scale: [f32; 2],
     /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
     pub texture_borders: [i32; 6],
+    /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
+    pub texture1_is_shape_mask: bool,
     /// 剔除模式（CulT：0 双面、1 剔正面、2 剔背面）。
     pub cull_mode: i32,
     /// 内嵌绘制模型序号（文件 `Modl` 顺序）。
@@ -575,6 +579,7 @@ impl VfxRuntime {
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
             texture_borders: tex.texture_borders,
+            texture1_is_shape_mask: tex.texture1_is_shape_mask,
         });
         let _ = item;
     }
@@ -666,6 +671,7 @@ impl VfxRuntime {
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
             texture_borders: tex.texture_borders,
+            texture1_is_shape_mask: tex.texture1_is_shape_mask,
             cull_mode: particle.culling_type,
             model_index: model_index as usize,
         });
@@ -801,6 +807,7 @@ impl VfxRuntime {
                     uvd_origin: tex.uvd_origin,
                     uvd_scale: tex.uvd_scale,
                     texture_borders: tex.texture_borders,
+                    texture1_is_shape_mask: tex.texture1_is_shape_mask,
                 });
             }
         }
@@ -825,6 +832,7 @@ struct ResolvedTexture {
     uvd_origin: [f32; 2],
     uvd_scale: [f32; 2],
     texture_borders: [i32; 6],
+    texture1_is_shape_mask: bool,
 }
 
 impl ResolvedTexture {
@@ -904,6 +912,7 @@ impl ResolvedTexture {
                 td.map(|t| t.texture_border_u).unwrap_or(0),
                 td.map(|t| t.texture_border_v).unwrap_or(0),
             ],
+            texture1_is_shape_mask: tc1.map(|t| t.is_shape_mask()).unwrap_or(false),
         }
     }
 }

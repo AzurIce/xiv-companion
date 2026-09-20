@@ -5234,6 +5234,7 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 uvd_origin: [0.0, 0.0],
                 uvd_scale: [1.0, 1.0],
                 texture_borders: [0; 6],
+        texture1_is_shape_mask: false,
             }
         })
         .collect::<Vec<_>>();

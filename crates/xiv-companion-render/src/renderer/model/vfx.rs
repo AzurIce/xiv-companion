@@ -288,6 +288,8 @@ pub(crate) struct VfxGroupKey {
     color_to_alpha2: bool,
     /// [TC1.u, TC1.v, TC2.u, TC2.v, TD.u, TD.v] 边界模式。
     texture_borders: [i32; 6],
+    /// TC1 为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
+    texture1_is_shape_mask: bool,
 }
 
 impl VfxGroupKey {
@@ -301,6 +303,7 @@ impl VfxGroupKey {
             color_to_alpha: quad.color_to_alpha,
             color_to_alpha2: quad.color_to_alpha2,
             texture_borders: quad.texture_borders,
+            texture1_is_shape_mask: quad.texture1_is_shape_mask,
         }
     }
 
@@ -314,6 +317,7 @@ impl VfxGroupKey {
             color_to_alpha: instance.color_to_alpha,
             color_to_alpha2: instance.color_to_alpha2,
             texture_borders: instance.texture_borders,
+            texture1_is_shape_mask: instance.texture1_is_shape_mask,
         }
     }
 }
@@ -407,7 +411,8 @@ impl VfxParticles {
                 | ((has_texture1 as u32) << 1)
                 | ((has_texture2 as u32) << 2)
                 | ((key.color_to_alpha2 as u32) << 3)
-                | ((has_texture_d as u32) << 4),
+                | ((has_texture_d as u32) << 4)
+                | ((key.texture1_is_shape_mask as u32) << 5),
             _pad: 0,
         };
         let uniform = context

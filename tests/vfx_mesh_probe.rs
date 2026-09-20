@@ -80,6 +80,7 @@ fn render_isolated_flame_mesh() {
         uvd_origin: [0.0, 0.0],
         uvd_scale: [1.0, 1.0],
         texture_borders: [0; 6],
+        texture1_is_shape_mask: false,
         cull_mode: 0,
         model_index: 3,
     };
@@ -214,5 +215,75 @@ fn render_isolated_flame_mesh() {
         )
         .expect("render full variant");
         eprintln!("full {tag}: {}", shot.png_path.display());
+    }
+
+    // 曝光实验：bloom 拉满 + HDR 场景读回（量化焰心亮度）。
+    let runtime4 = vfx.runtime();
+    let mut q4 = Vec::new();
+    runtime4.sample(4.0, &mut q4);
+    let mut m4 = Vec::new();
+    runtime4.sample_mesh(4.0, &mut m4);
+    let mut options = xiv_companion::renderer::ModelRenderOptions::default();
+    options.bloom_strength = 2.0;
+    let bright = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-probe-full-bloom2")
+            .with_output_dir("target/weapon-render-snapshots")
+            .with_viewport(1024, 1024)
+            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+            .with_render_options(options)
+            .with_vfx_quads(q4)
+            .with_vfx_mesh_instances(m4)
+            .with_vfx_meshes(meshes.clone())
+            .with_vfx_textures(textures.clone())
+            .with_hdr_scene_capture(),
+        &model,
+    )
+    .expect("render bloom2");
+    eprintln!("bloom2: {}", bright.png_path.display());
+    // HDR 场景里刃头区域（画面中部偏上）的最大亮度
+    if let Some(hdr) = &bright.hdr_scene_rgba {
+        let (w, h) = (bright.width as usize, bright.height as usize);
+        let mut max_v = 0.0_f32;
+        for y in (h / 4)..(h / 2) {
+            for x in (w / 4)..(w * 3 / 4) {
+                let px = hdr[y * w + x];
+                max_v = max_v.max(px[0]).max(px[1]).max(px[2]);
+            }
+        }
+        eprintln!("hdr max in blade region: {max_v}");
+    }
+
+    // 贴图角色对照：火舌 A) 只用 tex8 渐变（不吃 tex5 暗纹） B) tex8+tex5 相加。
+    let runtime5 = vfx.runtime();
+    let mut m5 = Vec::new();
+    runtime5.sample_mesh(4.0, &mut m5);
+    for (tex1, tex2, comb, tag) in [
+        (-1, 8, 0, "tex8only"),
+        (8, 5, 1, "tex8-add-tex5"),
+    ] {
+        let instances: Vec<_> = m5
+            .iter()
+            .map(|instance| {
+                let mut instance = *instance;
+                if instance.model_index == 3 {
+                    instance.texture_index = tex1;
+                    instance.texture2_index = tex2;
+                    instance.combine_color = comb;
+                }
+                instance
+            })
+            .collect();
+        let shot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(format!("vfx-probe-tongue-{tag}"))
+                .with_output_dir("target/weapon-render-snapshots")
+                .with_viewport(1024, 1024)
+                .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                .with_vfx_mesh_instances(instances)
+                .with_vfx_meshes(meshes.clone())
+                .with_vfx_textures(textures.clone()),
+            &model,
+        )
+        .expect("render tongue variant");
+        eprintln!("tongue {tag}: {}", shot.png_path.display());
     }
 }
