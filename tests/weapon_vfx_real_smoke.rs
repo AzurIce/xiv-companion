@@ -311,10 +311,29 @@ fn render_weapon_vfx_item(
             .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
             .with_vfx_quads(quads)
             .with_vfx_mesh_instances(mesh_instances)
-            .with_vfx_meshes(meshes)
-            .with_vfx_textures(textures),
+            .with_vfx_meshes(meshes.clone())
+            .with_vfx_textures(textures.iter().cloned()),
         &model,
     )
     .unwrap_or_else(|error| panic!("render weapon with vfx {item_id}: {error:#}"));
     eprintln!("snapshot: {}", snapshot.png_path.display());
+
+    // 稳态对照：burst 结束后（t=4s）的常驻特效形态。
+    let mut late_quads = Vec::new();
+    let mut late_meshes = Vec::new();
+    runtime.sample(4.0, &mut late_quads);
+    runtime.sample_mesh(4.0, &mut late_meshes);
+    let steady = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-steady"))
+            .with_output_dir("target/weapon-render-snapshots")
+            .with_viewport(1024, 1024)
+            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+            .with_vfx_quads(late_quads)
+            .with_vfx_mesh_instances(late_meshes)
+            .with_vfx_meshes(meshes)
+            .with_vfx_textures(textures),
+        &model,
+    )
+    .unwrap_or_else(|error| panic!("render steady vfx {item_id}: {error:#}"));
+    eprintln!("steady: {}", steady.png_path.display());
 }

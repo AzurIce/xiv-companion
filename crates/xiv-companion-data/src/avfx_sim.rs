@@ -58,6 +58,15 @@ pub struct VfxQuad {
     pub color_to_alpha2: bool,
     /// 混合模式：true = 加色（Add 系），false = 普通 alpha 混合。
     pub blend_add: bool,
+    /// TD 扭曲贴图序号（-1 = 无扭曲）。
+    pub texture_distortion_index: i32,
+    /// TD 扭曲强度（DPow 按粒子年龄求值）。
+    pub distortion_power: f32,
+    /// TD 扭曲目标位（bit0 = uv1，bit1 = uv2）。
+    pub distortion_targets: u32,
+    /// TD 贴图采样用 UV（TD 引用的 UvSet 变换）。
+    pub uvd_origin: [f32; 2],
+    pub uvd_scale: [f32; 2],
 }
 
 /// 网格粒子实例：Model/LightModel 粒子把粒子 Data 引用的内嵌绘制模型
@@ -81,6 +90,14 @@ pub struct VfxMeshInstance {
     pub color_to_alpha: bool,
     pub color_to_alpha2: bool,
     pub blend_add: bool,
+    /// TD 扭曲贴图序号（-1 = 无扭曲）。
+    pub texture_distortion_index: i32,
+    pub distortion_power: f32,
+    pub distortion_targets: u32,
+    pub uvd_origin: [f32; 2],
+    pub uvd_scale: [f32; 2],
+    /// 剔除模式（CulT：0 双面、1 剔正面、2 剔背面）。
+    pub cull_mode: i32,
     /// 内嵌绘制模型序号（文件 `Modl` 顺序）。
     pub model_index: usize,
 }
@@ -458,7 +475,10 @@ impl VfxRuntime {
         }
         let age = Self::particle_age(particle, ctx.age);
         let tex = ResolvedTexture::of(particle, age);
-        let color = particle.color.rgba(age);
+        let add = is_additive_draw(particle.draw_mode);
+        let mut color = particle.color.rgba_with_brightness(age, add);
+        // Col.SclA：贴图 alpha 缩放（乘进总 alpha；加色模式下即强度倍率）。
+        color[3] *= particle.color.texture_alpha_scale(age);
         let particle_scale = particle.scale.evaluate(age, 1.0);
         let scale = [
             particle_scale[0] * ctx.emitter_scale[0],
@@ -513,6 +533,11 @@ impl VfxRuntime {
             color_to_alpha: tex.color_to_alpha,
             color_to_alpha2: tex.color_to_alpha2,
             blend_add: is_additive_draw(particle.draw_mode),
+            texture_distortion_index: tex.texture_distortion_index,
+            distortion_power: tex.distortion_power,
+            distortion_targets: tex.distortion_targets,
+            uvd_origin: tex.uvd_origin,
+            uvd_scale: tex.uvd_scale,
         });
         let _ = item;
     }
@@ -563,8 +588,10 @@ impl VfxRuntime {
                     a[3] + (b[3] - a[3]) * t,
                 ]
             }
-            _ => particle.color.rgba(age),
+            _ => particle.color.rgba_with_brightness(age, is_additive_draw(particle.draw_mode)),
         };
+        let mut color = color;
+        color[3] *= particle.color.texture_alpha_scale(age);
         let particle_pos = particle.position.evaluate(age, 0.0);
         let position = [
             ctx.position[0] + quat_rotate(ctx.emitter_orientation, particle_pos)[0],
@@ -596,6 +623,12 @@ impl VfxRuntime {
             color_to_alpha: tex.color_to_alpha,
             color_to_alpha2: tex.color_to_alpha2,
             blend_add: is_additive_draw(particle.draw_mode),
+            texture_distortion_index: tex.texture_distortion_index,
+            distortion_power: tex.distortion_power,
+            distortion_targets: tex.distortion_targets,
+            uvd_origin: tex.uvd_origin,
+            uvd_scale: tex.uvd_scale,
+            cull_mode: particle.culling_type,
             model_index: model_index as usize,
         });
     }
@@ -624,6 +657,7 @@ impl VfxRuntime {
             .brightness
             .as_ref()
             .map_or(1.0, |c| c.value(spawner_age, 1.0));
+        let scl_a = particle.color.texture_alpha_scale(spawner_age);
         let tex = ResolvedTexture::of(particle, spawner_age);
         for event in first_sub..=last_sub {
             for c in 0..simple.create_interval_count.max(1) as u64 {
@@ -710,7 +744,7 @@ impl VfxRuntime {
                         color[0] * bri,
                         color[1] * bri,
                         color[2] * bri,
-                        color[3],
+                        color[3] * scl_a,
                     ],
                     uv_origin,
                     uv_scale,
@@ -723,13 +757,18 @@ impl VfxRuntime {
                     color_to_alpha: tex.color_to_alpha,
                     color_to_alpha2: tex.color_to_alpha2,
                     blend_add: is_additive_draw(particle.draw_mode),
+                    texture_distortion_index: tex.texture_distortion_index,
+                    distortion_power: tex.distortion_power,
+                    distortion_targets: tex.distortion_targets,
+                    uvd_origin: tex.uvd_origin,
+                    uvd_scale: tex.uvd_scale,
                 });
             }
         }
     }
 }
 
-/// 粒子的贴图/UV 解析结果（TC1 = 基准层，TC2 = 合成层）。
+/// 粒子的贴图/UV 解析结果（TC1 = 基准层，TC2 = 合成层，TD = 扭曲层）。
 struct ResolvedTexture {
     texture_index: i32,
     texture2_index: i32,
@@ -741,6 +780,11 @@ struct ResolvedTexture {
     uv_scale: [f32; 2],
     uv2_origin: [f32; 2],
     uv2_scale: [f32; 2],
+    texture_distortion_index: i32,
+    distortion_power: f32,
+    distortion_targets: u32,
+    uvd_origin: [f32; 2],
+    uvd_scale: [f32; 2],
 }
 
 impl ResolvedTexture {
@@ -769,6 +813,33 @@ impl ResolvedTexture {
         let (uv2_origin, uv2_scale) = tc2
             .map(|t| uv(t.uv_set_index))
             .unwrap_or((uv_origin, uv_scale));
+        // TD：扭曲贴图用其 UvSN 指向的 UvSet 变换采样；bT1/bT2 按 TC1/TC2
+        // 实际引用的 UvSet 序号映射到 uv1/uv2。
+        let td = particle
+            .texture_distortion
+            .as_ref()
+            .filter(|t| t.enabled && t.texture_index >= 0);
+        let (texture_distortion_index, distortion_power, distortion_targets, uvd) =
+            match td {
+                Some(td) => {
+                    let uvd = uv(td.uv_set_index);
+                    let uv1_idx = tc1.map(|t| t.uv_set_index).unwrap_or(0);
+                    let uv2_idx = tc2.map(|t| t.uv_set_index).unwrap_or(uv1_idx);
+                    // bT1/bT2 = 扭曲 UvSet 0/1；按 TC1/TC2 实际引用的
+                    // UvSet 序号映射到渲染端的 uv1/uv2。
+                    let distort = |uv_idx: i32| {
+                        (td.target_uv[0] && uv_idx == 0) || (td.target_uv[1] && uv_idx == 1)
+                    };
+                    let targets = (distort(uv1_idx) as u32) | ((distort(uv2_idx) as u32) << 1);
+                    (
+                        td.texture_index,
+                        td.power.value(age, 0.0),
+                        targets,
+                        uvd,
+                    )
+                }
+                None => (-1, 0.0, 0, ([0.0, 0.0], [1.0, 1.0])),
+            };
         Self {
             texture_index: tc1.map(|t| t.effective_texture()).unwrap_or(-1),
             texture2_index: tc2.map(|t| t.effective_texture()).unwrap_or(-1),
@@ -780,6 +851,11 @@ impl ResolvedTexture {
             uv_scale,
             uv2_origin,
             uv2_scale,
+            texture_distortion_index,
+            distortion_power,
+            distortion_targets,
+            uvd_origin: uvd.0,
+            uvd_scale: uvd.1,
         }
     }
 }

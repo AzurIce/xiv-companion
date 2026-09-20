@@ -5228,6 +5228,11 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 color_to_alpha: false,
                 color_to_alpha2: false,
                 blend_add: true,
+                texture_distortion_index: -1,
+                distortion_power: 0.0,
+                distortion_targets: 0,
+                uvd_origin: [0.0, 0.0],
+                uvd_scale: [1.0, 1.0],
             }
         })
         .collect::<Vec<_>>();

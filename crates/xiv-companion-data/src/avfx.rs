@@ -323,9 +323,19 @@ pub struct AvfxColorCurve {
 impl AvfxColorCurve {
     /// `time` 处的 (r, g, b, a)：rgb 已乘 `Bri`（HDR，可 >1）。
     pub fn rgba(&self, time: f32) -> [f32; 4] {
+        self.rgba_with_brightness(time, true)
+    }
+
+    /// `Bri` 亮度倍率可选关闭：Blend（非加色）粒子不是发光体，Bri 不参与
+    /// 乘算（AVFXTools 合成里 Bri 恒未生效；加色 HDR 粒子照旧）。
+    pub fn rgba_with_brightness(&self, time: f32, apply_brightness: bool) -> [f32; 4] {
         let rgb = self.rgb.as_ref().map_or([1.0; 3], |c| c.color_at(time));
         let alpha = self.alpha.as_ref().map_or(1.0, |c| c.value(time, 1.0));
-        let bri = self.brightness.as_ref().map_or(1.0, |c| c.value(time, 1.0));
+        let bri = if apply_brightness {
+            self.brightness.as_ref().map_or(1.0, |c| c.value(time, 1.0))
+        } else {
+            1.0
+        };
         [rgb[0] * bri, rgb[1] * bri, rgb[2] * bri, alpha]
     }
 
@@ -610,6 +620,21 @@ pub struct AvfxParticleSimple {
     pub frames: [i16; 4],
 }
 
+/// 粒子扭曲贴图（`TD`）：采样扭曲贴图，把 (rg − 0.5) × `DPow` 加到目标
+/// UV 坐标上（光罩/流光贴图的有机抖动来源）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxParticleDistortion {
+    pub enabled: bool,
+    /// `bT1`/`bT2`：扭曲第 1/2 组 UV（UvSet 0/1）。
+    pub target_uv: [bool; 2],
+    /// 扭曲贴图采样用的 UvSet 序号（`UvSN`）。
+    pub uv_set_index: i32,
+    pub texture_index: i32,
+    /// `DPow` 扭曲强度曲线。
+    pub power: AvfxCurve,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvfxScheduler {
@@ -731,6 +756,10 @@ pub struct AvfxParticle {
     pub loop_end: i32,
     /// 绘制模式（`RMT`：0 Blend，2 Add……）。
     pub draw_mode: i32,
+    /// 剔除模式（`CulT`：VFXEditor `CullingType` 0 双面、1 剔正面、2 剔背面、
+    /// 3 Double；壳体膜（如屠龙戟灵光的光罩）靠剔正面实现「透过正面看内侧」
+    /// 的薄纱观感）。
+    pub culling_type: i32,
     pub depth_test: bool,
     pub depth_write: bool,
     /// `RBDT`：朝向基准（billboard 与否由它决定）。
@@ -749,6 +778,7 @@ pub struct AvfxParticle {
     pub texture_color2: Option<AvfxParticleTexture>,
     pub texture_color3: Option<AvfxParticleTexture>,
     pub texture_color4: Option<AvfxParticleTexture>,
+    pub texture_distortion: Option<AvfxParticleDistortion>,
     pub uv_sets: Vec<AvfxUvSet>,
     /// `Data` 块（按粒子类型）。
     pub data: AvfxParticleData,
@@ -1534,6 +1564,7 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
         loop_start: node.scalar_i32("LpSt").unwrap_or(0),
         loop_end: node.scalar_i32("LpEd").unwrap_or(0),
         draw_mode: node.scalar_i32("RMT").unwrap_or(0),
+        culling_type: node.scalar_i32("CulT").unwrap_or(0),
         depth_test: node.scalar("DsDt").map(|value| value != 0).unwrap_or(true),
         depth_write: node.scalar("DsDw").map(|value| value != 0).unwrap_or(false),
         rotation_direction_base: node.scalar_i32("RBDT").unwrap_or(0),
@@ -1578,6 +1609,22 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
         texture_color2: node.child("TC2").map(|tc| parse_particle_texture(&tc)),
         texture_color3: node.child("TC3").map(|tc| parse_particle_texture(&tc)),
         texture_color4: node.child("TC4").map(|tc| parse_particle_texture(&tc)),
+        texture_distortion: node.child("TD").map(|td| {
+            let fields = Fields::walk(td.payload());
+            AvfxParticleDistortion {
+                enabled: fields.boolean("bEna").unwrap_or(false),
+                target_uv: [
+                    fields.boolean("bT1").unwrap_or(false),
+                    fields.boolean("bT2").unwrap_or(false),
+                ],
+                uv_set_index: fields.i32("UvSN").unwrap_or(0),
+                texture_index: fields.i32("TxNo").unwrap_or(-1),
+                power: td
+                    .child("DPow")
+                    .map(|child| parse_curve(&child))
+                    .unwrap_or_default(),
+            }
+        }),
         uv_sets: node
             .children_named("UvSt")
             .map(|uv_set| AvfxUvSet {

@@ -28,6 +28,7 @@ struct VfxGroupParams {
 @group(1) @binding(1) var vfx_texture2: texture_2d<f32>;
 @group(1) @binding(2) var vfx_sampler: sampler;
 @group(1) @binding(3) var<uniform> vfx_params: VfxGroupParams;
+@group(1) @binding(4) var vfx_texture_d: texture_2d<f32>;
 
 struct VfxInstanceInput {
     // xyz: 位置；w: billboard 面内旋转（弧度）。
@@ -42,6 +43,10 @@ struct VfxInstanceInput {
     @location(4) uv2: vec4<f32>,
     // 非 billboard 朝向（四元数 xyzw）。
     @location(5) orientation: vec4<f32>,
+    // TD 扭曲贴图采样 UV。
+    @location(6) uvd: vec4<f32>,
+    // x：TD 强度；y：扭曲目标位（bit0 uv1 / bit1 uv2）。
+    @location(7) distortion: vec4<f32>,
 };
 
 struct VfxVertexOutput {
@@ -49,6 +54,9 @@ struct VfxVertexOutput {
     @location(0) uv1: vec2<f32>,
     @location(1) uv2: vec2<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) uvd: vec2<f32>,
+    // xy：TD 强度与扭曲目标位。
+    @location(4) distortion: vec2<f32>,
 };
 
 const CORNERS: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
@@ -65,13 +73,6 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + q.w * t + cross(q.xyz, t);
 }
 
-// 贴附武器表面的粒子深度与表面几乎相等：把 NDC 深度向近处拉一个小量
-// （标准贴花手法，远小于场景深度差，不影响遮挡关系）。
-fn vfx_depth_bias(clip: vec4<f32>) -> vec4<f32> {
-    var out = clip;
-    out.z -= 0.002 * out.w;
-    return out;
-}
 
 @vertex
 fn vs_main(
@@ -113,10 +114,12 @@ fn vs_main(
 
     let world = position + right * (in_plane.x * size.x) + up * (in_plane.y * size.y);
     var output: VfxVertexOutput;
-    output.clip_position = vfx_depth_bias(camera.view_proj * vec4<f32>(world, 1.0));
+    output.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
     let uv_corner = corner * 0.5 + vec2<f32>(0.5, 0.5);
     output.uv1 = instance.uv1.xy + uv_corner * instance.uv1.zw;
     output.uv2 = instance.uv2.xy + uv_corner * instance.uv2.zw;
+    output.uvd = instance.uvd.xy + uv_corner * instance.uvd.zw;
+    output.distortion = instance.distortion.xy;
     output.color = instance.color;
     return output;
 }
@@ -138,6 +141,8 @@ struct VfxMeshInstanceInput {
     @location(6) color: vec4<f32>,
     @location(7) uv1: vec4<f32>,
     @location(8) uv2: vec4<f32>,
+    @location(9) uvd: vec4<f32>,
+    @location(10) distortion: vec4<f32>,
 };
 
 @vertex
@@ -149,9 +154,11 @@ fn vs_mesh(
     var output: VfxVertexOutput;
     let scaled = vertex.position * instance.scale.xyz;
     let world = instance.position_flags.xyz + quat_rotate(instance.orientation, scaled);
-    output.clip_position = vfx_depth_bias(camera.view_proj * vec4<f32>(world, 1.0));
+    output.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
     output.uv1 = instance.uv1.xy + vertex.uv * instance.uv1.zw;
     output.uv2 = instance.uv2.xy + vertex.uv * instance.uv2.zw;
+    output.uvd = instance.uvd.xy + vertex.uv * instance.uvd.zw;
+    output.distortion = instance.distortion.xy;
     // 顶点色全通道参与：rgb 染色，alpha 为羽化遮罩（火舌翼缘 alpha=0
     // 消隐；实心壳体模型 alpha 恒 255 不受影响）。
     output.color = instance.color * vertex.color;
@@ -160,7 +167,22 @@ fn vs_mesh(
 
 // ===== 片元：双贴图合成 =====
 
-fn compose_color(uv1: vec2<f32>, uv2: vec2<f32>, instance_color: vec4<f32>) -> vec4<f32> {
+fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
+    var uv1 = input.uv1;
+    var uv2 = input.uv2;
+    // TD：扭曲贴图 rg − 0.5 乘强度偏移目标 UV（光罩/流光的有机抖动）。
+    if (vfx_params.flags & 16u) != 0u {
+        let td = textureSample(vfx_texture_d, vfx_sampler, input.uvd);
+        let offset = input.distortion.x * (td.rg - vec2<f32>(0.5, 0.5));
+        let targets = bitcast<u32>(input.distortion.y);
+        if (targets & 1u) != 0u {
+            uv1 += offset;
+        }
+        if (targets & 2u) != 0u {
+            uv2 += offset;
+        }
+    }
+    let instance_color = input.color;
     var tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     if (vfx_params.flags & 2u) != 0u {
         tex_color = textureSample(vfx_texture1, vfx_sampler, uv1);
@@ -198,12 +220,12 @@ fn compose_color(uv1: vec2<f32>, uv2: vec2<f32>, instance_color: vec4<f32>) -> v
 // 加色（RMT=Add 系）：alpha 作为强度折进 rgb，One/One 混合由管线给出。
 @fragment
 fn fs_add(input: VfxVertexOutput) -> @location(0) vec4<f32> {
-    let color = compose_color(input.uv1, input.uv2, input.color);
+    let color = compose_color(input);
     return vec4<f32>(color.rgb * color.a, 0.0);
 }
 
 // 普通 alpha 混合（RMT=Blend 系）：SrcAlpha/InvSrcAlpha 由管线给出。
 @fragment
 fn fs_blend(input: VfxVertexOutput) -> @location(0) vec4<f32> {
-    return compose_color(input.uv1, input.uv2, input.color);
+    return compose_color(input);
 }

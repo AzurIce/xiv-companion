@@ -42,8 +42,8 @@ pub struct ModelRenderContext {
     compose_bind_group_layout: wgpu::BindGroupLayout,
     vfx_pipeline_add: wgpu::RenderPipeline,
     vfx_pipeline_blend: wgpu::RenderPipeline,
-    vfx_mesh_pipeline_add: wgpu::RenderPipeline,
-    vfx_mesh_pipeline_blend: wgpu::RenderPipeline,
+    /// [blend_add][cull: none/front/back]。
+    vfx_mesh_pipelines: [[wgpu::RenderPipeline; 3]; 2],
     vfx_bind_group_layout: wgpu::BindGroupLayout,
     vfx_sampler: wgpu::Sampler,
     post_process: Option<PostProcessState>,
@@ -853,6 +853,16 @@ impl ModelRenderContext {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let vfx_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -897,7 +907,8 @@ impl ModelRenderContext {
                                    vertex_entry: &str,
                                    fragment_entry: &str,
                                    buffers: &[wgpu::VertexBufferLayout<'static>],
-                                   blend_add: bool|
+                                   blend_add: bool,
+                                   cull_mode: Option<wgpu::Face>|
          -> wgpu::RenderPipeline {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -920,7 +931,7 @@ impl ModelRenderContext {
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
+                    cull_mode,
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -944,6 +955,7 @@ impl ModelRenderContext {
             "fs_add",
             &[GpuVfxQuad::LAYOUT],
             true,
+            None,
         );
         let vfx_pipeline_blend = create_vfx_pipeline(
             "weapon vfx particle pipeline (blend)",
@@ -951,21 +963,26 @@ impl ModelRenderContext {
             "fs_blend",
             &[GpuVfxQuad::LAYOUT],
             false,
+            None,
         );
-        let vfx_mesh_pipeline_add = create_vfx_pipeline(
-            "weapon vfx mesh pipeline (add)",
-            "vs_mesh",
-            "fs_add",
-            &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
-            true,
-        );
-        let vfx_mesh_pipeline_blend = create_vfx_pipeline(
-            "weapon vfx mesh pipeline (blend)",
-            "vs_mesh",
-            "fs_blend",
-            &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
-            false,
-        );
+        // 网格粒子按（混合 × 剔除）六条管线：壳体膜常用剔正面（只画内侧）
+        // 来实现透过正面看内侧的薄纱观感。
+        let vfx_mesh_pipelines: [[wgpu::RenderPipeline; 3]; 2] = [true, false].map(|add| {
+            [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
+                create_vfx_pipeline(
+                    &format!(
+                        "weapon vfx mesh pipeline ({}/{:?})",
+                        if add { "add" } else { "blend" },
+                        cull
+                    ),
+                    "vs_mesh",
+                    if add { "fs_add" } else { "fs_blend" },
+                    &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+                    add,
+                    cull,
+                )
+            })
+        });
         let vfx_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("weapon vfx particle sampler"),
             // UVSet scroll 环绕采样。
@@ -1043,8 +1060,7 @@ impl ModelRenderContext {
             compose_bind_group_layout,
             vfx_pipeline_add,
             vfx_pipeline_blend,
-            vfx_mesh_pipeline_add,
-            vfx_mesh_pipeline_blend,
+            vfx_mesh_pipelines,
             vfx_bind_group_layout,
             vfx_sampler,
             post_process: None,
@@ -1400,11 +1416,15 @@ impl ModelRenderContext {
                         let Some(gpu_mesh) = vfx.meshes.get(range.mesh) else {
                             continue;
                         };
-                        render_pass.set_pipeline(if range.blend_add {
-                            &self.vfx_mesh_pipeline_add
-                        } else {
-                            &self.vfx_mesh_pipeline_blend
-                        });
+                        // 剔除模式归一：1=剔正面、2=剔背面、其余双面。
+                        let cull_index = match range.cull_mode {
+                            1 => 1,
+                            2 => 2,
+                            _ => 0,
+                        };
+                        render_pass.set_pipeline(
+                            &self.vfx_mesh_pipelines[usize::from(range.blend_add)][cull_index],
+                        );
                         render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
                         render_pass.set_index_buffer(
                             gpu_mesh.index_buffer.slice(..),

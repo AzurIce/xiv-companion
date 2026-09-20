@@ -6,7 +6,7 @@
 use super::*;
 use std::collections::HashMap;
 
-/// GPU 四边形实例（96 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
+/// GPU 四边形实例（128 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxQuad {
@@ -21,6 +21,10 @@ pub struct GpuVfxQuad {
     pub uv2: [f32; 4],
     /// 非 billboard 朝向四元数。
     pub orientation: [f32; 4],
+    /// TD 扭曲贴图采样用 UV。
+    pub uvd: [f32; 4],
+    /// x：TD 强度（DPow）；y：扭曲目标位（bit0 uv1 / bit1 uv2）。
+    pub distortion: [f32; 4],
 }
 
 impl GpuVfxQuad {
@@ -58,6 +62,16 @@ impl GpuVfxQuad {
                 offset: 80,
                 shader_location: 5,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 96,
+                shader_location: 6,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 112,
+                shader_location: 7,
+            },
         ],
     };
 }
@@ -91,6 +105,18 @@ impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
                 quad.uv2_scale[1],
             ],
             orientation: quad.orientation,
+            uvd: [
+                quad.uvd_origin[0],
+                quad.uvd_origin[1],
+                quad.uvd_scale[0],
+                quad.uvd_scale[1],
+            ],
+            distortion: [
+                quad.distortion_power,
+                f32::from_bits(quad.distortion_targets),
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -136,7 +162,8 @@ impl GpuVfxMeshVertex {
     };
 }
 
-/// 网格实例（112 字节）：位置 + 朝向四元数 + 三轴缩放 + HDR 颜色 + 双 UV。
+/// 网格实例（128 字节）：位置 + 朝向四元数 + 三轴缩放 + HDR 颜色 +
+/// 双 UV + TD 扭曲参数。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxMeshInstance {
@@ -147,6 +174,9 @@ pub struct GpuVfxMeshInstance {
     pub color: [f32; 4],
     pub uv1: [f32; 4],
     pub uv2: [f32; 4],
+    pub uvd: [f32; 4],
+    /// x：TD 强度；y：扭曲目标位。
+    pub distortion: [f32; 4],
 }
 
 impl GpuVfxMeshInstance {
@@ -184,6 +214,16 @@ impl GpuVfxMeshInstance {
                 offset: 80,
                 shader_location: 8,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 96,
+                shader_location: 9,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 112,
+                shader_location: 10,
+            },
         ],
     };
 }
@@ -212,6 +252,18 @@ impl From<&xiv_companion_data::VfxMeshInstance> for GpuVfxMeshInstance {
                 instance.uv2_scale[0],
                 instance.uv2_scale[1],
             ],
+            uvd: [
+                instance.uvd_origin[0],
+                instance.uvd_origin[1],
+                instance.uvd_scale[0],
+                instance.uvd_scale[1],
+            ],
+            distortion: [
+                instance.distortion_power,
+                f32::from_bits(instance.distortion_targets),
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -229,6 +281,7 @@ pub(crate) struct GpuVfxMesh {
 pub(crate) struct VfxGroupKey {
     texture1: i32,
     texture2: i32,
+    texture_d: i32,
     combine_color: i32,
     combine_alpha: i32,
     color_to_alpha: bool,
@@ -240,6 +293,7 @@ impl VfxGroupKey {
         Self {
             texture1: quad.texture_index,
             texture2: quad.texture2_index,
+            texture_d: quad.texture_distortion_index,
             combine_color: quad.combine_color,
             combine_alpha: quad.combine_alpha,
             color_to_alpha: quad.color_to_alpha,
@@ -251,6 +305,7 @@ impl VfxGroupKey {
         Self {
             texture1: instance.texture_index,
             texture2: instance.texture2_index,
+            texture_d: instance.texture_distortion_index,
             combine_color: instance.combine_color,
             combine_alpha: instance.combine_alpha,
             color_to_alpha: instance.color_to_alpha,
@@ -278,11 +333,12 @@ pub(crate) struct VfxDrawRange {
     pub count: u32,
 }
 
-/// 网格绘制段：额外携带网格序号。
+/// 网格绘制段：额外携带网格序号与剔除模式（0/3 双面、1 剔正面、2 剔背面）。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VfxMeshDrawRange {
     pub mesh: usize,
     pub blend_add: bool,
+    pub cull_mode: i32,
     pub group: usize,
     pub start: u32,
     pub count: u32,
@@ -339,13 +395,15 @@ impl VfxParticles {
         };
         let has_texture1 = key.texture1 >= 0;
         let has_texture2 = key.texture2 >= 0;
+        let has_texture_d = key.texture_d >= 0;
         let params = VfxGroupParams {
             combine_color: key.combine_color.max(0) as u32,
             combine_alpha: key.combine_alpha.max(0) as u32,
             flags: (key.color_to_alpha as u32)
                 | ((has_texture1 as u32) << 1)
                 | ((has_texture2 as u32) << 2)
-                | ((key.color_to_alpha2 as u32) << 3),
+                | ((key.color_to_alpha2 as u32) << 3)
+                | ((has_texture_d as u32) << 4),
             _pad: 0,
         };
         let uniform = context
@@ -374,6 +432,10 @@ impl VfxParticles {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(view_for(key.texture_d)),
                 },
             ],
         });
@@ -439,36 +501,38 @@ impl VfxParticles {
         if self.mesh_instance_count == 0 {
             return;
         }
-        let mut ordered: Vec<(usize, bool, VfxGroupKey, GpuVfxMeshInstance)> = instances
+        let mut ordered: Vec<(usize, bool, i32, VfxGroupKey, GpuVfxMeshInstance)> = instances
             [..self.mesh_instance_count]
             .iter()
             .map(|instance| {
                 (
                     instance.model_index,
                     instance.blend_add,
+                    instance.cull_mode,
                     VfxGroupKey::of_mesh(instance),
                     GpuVfxMeshInstance::from(instance),
                 )
             })
             .collect();
-        ordered.sort_by_key(|(mesh, blend_add, key, _)| (*mesh, *blend_add, *key));
+        ordered.sort_by_key(|(mesh, blend_add, cull, key, _)| (*mesh, *blend_add, *cull, *key));
         context.queue().write_buffer(
             &self.mesh_instance_buffer,
             0,
             bytemuck::cast_slice(
                 &ordered
                     .iter()
-                    .map(|(_, _, _, gpu)| *gpu)
+                    .map(|(_, _, _, _, gpu)| *gpu)
                     .collect::<Vec<_>>(),
             ),
         );
         let mut start = 0_u32;
-        for (mesh, blend_add, key, _) in &ordered {
+        for (mesh, blend_add, cull_mode, key, _) in &ordered {
             let group = self.group_for(context, *key);
             match self.mesh_draw_ranges.last_mut() {
                 Some(range)
                     if range.mesh == *mesh
                         && range.blend_add == *blend_add
+                        && range.cull_mode == *cull_mode
                         && range.group == group
                         && range.start + range.count == start =>
                 {
@@ -477,6 +541,7 @@ impl VfxParticles {
                 _ => self.mesh_draw_ranges.push(VfxMeshDrawRange {
                     mesh: *mesh,
                     blend_add: *blend_add,
+                    cull_mode: *cull_mode,
                     group,
                     start,
                     count: 1,
@@ -504,7 +569,9 @@ pub(crate) fn create_vfx_texture_view(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        // VFX 贴图按线性数据处理（atex 是特效数据贴图，不走 sRGB 解码——
+        // sRGB 会把暗部压近零，光罩纹理图案与火舌流光全部消失）。
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
