@@ -30,6 +30,8 @@ pub struct WeaponModelSnapshotOptions {
     pub vfx_mesh_instances: Vec<xiv_companion_data::VfxMeshInstance>,
     /// 网格粒子引用的绘制模型集合（顺序即实例的 model_index）。
     pub vfx_meshes: Vec<xiv_companion_data::VfxDrawModel>,
+    /// VFX 贴图（文件 `Tex` 顺序；None = 解码失败用回退贴图）。
+    pub vfx_textures: Vec<Option<crate::renderer::VfxTextureInput>>,
 }
 
 impl WeaponModelSnapshotOptions {
@@ -108,6 +110,15 @@ impl WeaponModelSnapshotOptions {
         self.vfx_meshes = meshes.into_iter().collect();
         self
     }
+
+    /// VFX 贴图（文件 `Tex` 顺序）。
+    pub fn with_vfx_textures(
+        mut self,
+        textures: impl IntoIterator<Item = Option<crate::renderer::VfxTextureInput>>,
+    ) -> Self {
+        self.vfx_textures = textures.into_iter().collect();
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -138,6 +149,7 @@ impl Default for WeaponModelSnapshotOptions {
             vfx_quads: Vec::new(),
             vfx_mesh_instances: Vec::new(),
             vfx_meshes: Vec::new(),
+            vfx_textures: Vec::new(),
         }
     }
 }
@@ -337,7 +349,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         .then(|| {
             let mut batch = renderer
                 .context()
-                .create_vfx_particles(&[], &options.vfx_meshes);
+                .create_vfx_particles(&options.vfx_textures, &options.vfx_meshes);
             batch.update(renderer.context(), &options.vfx_quads);
             batch.update_mesh(renderer.context(), &options.vfx_mesh_instances);
             eprintln!(

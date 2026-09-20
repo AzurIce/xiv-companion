@@ -1,23 +1,26 @@
-//! VFX 粒子批次：实例缓冲 + 贴图 bind group，配合 `vfx.wesl` 管线在 HDR
-//! 场景 pass 中绘制相机朝向的加色四边形。粒子数据来自数据层确定性采样器
+//! VFX 粒子批次：实例缓冲 + 按（贴图对 × 合成模式 × 混合）分组的 bind group，
+//! 配合 `vfx.wesl` 管线在 HDR 场景 pass 中绘制四边形（billboard/定向）与
+//! DrawModel 网格粒子。粒子数据来自数据层确定性采样器
 //! （`xiv_companion_data::avfx_sim`）。
 
 use super::*;
+use std::collections::HashMap;
 
-/// GPU 实例（64 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
-/// 60 字节实例布局（wgpu 顶点属性末位偏移 ≤ stride-4，故 texture_index
-/// 以 f32 装入 location 1 的 w 空槽，索引值 < 2^24 在 f32 中精确）。
+/// GPU 四边形实例（96 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxQuad {
-    pub position: [f32; 3],
-    pub size_x: f32,
-    pub size_y: f32,
-    pub rotation: f32,
-    pub texture_index: f32,
+    /// xyz 位置；w billboard 面内旋转。
+    pub position_rotation: [f32; 4],
+    /// xy 半宽/半高；z flags（bit0 = billboard）；w 预留。
+    pub size_flags: [f32; 4],
     pub color: [f32; 4],
-    pub uv_origin: [f32; 2],
-    pub uv_scale: [f32; 2],
+    /// 贴图 1：uv 原点 + 缩放。
+    pub uv1: [f32; 4],
+    /// 贴图 2：uv 原点 + 缩放。
+    pub uv2: [f32; 4],
+    /// 非 billboard 朝向四元数。
+    pub orientation: [f32; 4],
 }
 
 impl GpuVfxQuad {
@@ -26,24 +29,34 @@ impl GpuVfxQuad {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &[
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 0,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
-                offset: 12,
+                offset: 16,
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
-                offset: 28,
+                offset: 32,
                 shader_location: 2,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
-                offset: 44,
+                offset: 48,
                 shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 64,
+                shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 80,
+                shader_location: 5,
             },
         ],
     };
@@ -52,14 +65,32 @@ impl GpuVfxQuad {
 impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
     fn from(quad: &xiv_companion_data::VfxQuad) -> Self {
         Self {
-            position: quad.position,
-            size_x: quad.size[0],
-            size_y: quad.size[1],
-            rotation: quad.rotation,
-            texture_index: quad.texture_index as f32,
+            position_rotation: [
+                quad.position[0],
+                quad.position[1],
+                quad.position[2],
+                quad.rotation,
+            ],
+            size_flags: [
+                quad.size[0],
+                quad.size[1],
+                f32::from_bits(quad.billboard as u32),
+                0.0,
+            ],
             color: quad.color,
-            uv_origin: quad.uv_origin,
-            uv_scale: quad.uv_scale,
+            uv1: [
+                quad.uv_origin[0],
+                quad.uv_origin[1],
+                quad.uv_scale[0],
+                quad.uv_scale[1],
+            ],
+            uv2: [
+                quad.uv2_origin[0],
+                quad.uv2_origin[1],
+                quad.uv2_scale[0],
+                quad.uv2_scale[1],
+            ],
+            orientation: quad.orientation,
         }
     }
 }
@@ -105,13 +136,17 @@ impl GpuVfxMeshVertex {
     };
 }
 
-/// 网格实例（32 字节）：实例原点 + 缩放 + HDR 颜色。
+/// 网格实例（112 字节）：位置 + 朝向四元数 + 三轴缩放 + HDR 颜色 + 双 UV。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxMeshInstance {
-    pub position: [f32; 3],
-    pub scale: f32,
+    /// xyz 位置；w flags（预留）。
+    pub position_flags: [f32; 4],
+    pub orientation: [f32; 4],
+    pub scale: [f32; 4],
     pub color: [f32; 4],
+    pub uv1: [f32; 4],
+    pub uv2: [f32; 4],
 }
 
 impl GpuVfxMeshInstance {
@@ -120,22 +155,65 @@ impl GpuVfxMeshInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &[
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 3,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32,
-                offset: 12,
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 16,
                 shader_location: 4,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
-                offset: 16,
+                offset: 32,
                 shader_location: 5,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 48,
+                shader_location: 6,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 64,
+                shader_location: 7,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 80,
+                shader_location: 8,
             },
         ],
     };
+}
+
+impl From<&xiv_companion_data::VfxMeshInstance> for GpuVfxMeshInstance {
+    fn from(instance: &xiv_companion_data::VfxMeshInstance) -> Self {
+        Self {
+            position_flags: [
+                instance.position[0],
+                instance.position[1],
+                instance.position[2],
+                0.0,
+            ],
+            orientation: instance.orientation,
+            scale: [instance.scale[0], instance.scale[1], instance.scale[2], 0.0],
+            color: instance.color,
+            uv1: [
+                instance.uv_origin[0],
+                instance.uv_origin[1],
+                instance.uv_scale[0],
+                instance.uv_scale[1],
+            ],
+            uv2: [
+                instance.uv2_origin[0],
+                instance.uv2_origin[1],
+                instance.uv2_scale[0],
+                instance.uv2_scale[1],
+            ],
+        }
+    }
 }
 
 /// 单个网格的 GPU 资源（静态顶点/索引缓冲）。
@@ -145,21 +223,88 @@ pub(crate) struct GpuVfxMesh {
     pub index_count: u32,
 }
 
+/// 贴图合成组键：TC1/TC2 贴图序号 + TC2 合成模式 + TC1 的 bC2A。
+/// 同组粒子共享一个 bind group（双贴图 + 参数 uniform）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct VfxGroupKey {
+    texture1: i32,
+    texture2: i32,
+    combine_color: i32,
+    combine_alpha: i32,
+    color_to_alpha: bool,
+    color_to_alpha2: bool,
+}
+
+impl VfxGroupKey {
+    fn of_quad(quad: &xiv_companion_data::VfxQuad) -> Self {
+        Self {
+            texture1: quad.texture_index,
+            texture2: quad.texture2_index,
+            combine_color: quad.combine_color,
+            combine_alpha: quad.combine_alpha,
+            color_to_alpha: quad.color_to_alpha,
+            color_to_alpha2: quad.color_to_alpha2,
+        }
+    }
+
+    fn of_mesh(instance: &xiv_companion_data::VfxMeshInstance) -> Self {
+        Self {
+            texture1: instance.texture_index,
+            texture2: instance.texture2_index,
+            combine_color: instance.combine_color,
+            combine_alpha: instance.combine_alpha,
+            color_to_alpha: instance.color_to_alpha,
+            color_to_alpha2: instance.color_to_alpha2,
+        }
+    }
+}
+
+/// 组参数 uniform（与 `vfx.wesl` 的 `VfxGroupParams` 布局一致）。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct VfxGroupParams {
+    combine_color: u32,
+    combine_alpha: u32,
+    flags: u32,
+    _pad: u32,
+}
+
+/// 一条绘制段：同一混合模式 + 同一贴图组的连续实例区间。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VfxDrawRange {
+    pub blend_add: bool,
+    pub group: usize,
+    pub start: u32,
+    pub count: u32,
+}
+
+/// 网格绘制段：额外携带网格序号。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VfxMeshDrawRange {
+    pub mesh: usize,
+    pub blend_add: bool,
+    pub group: usize,
+    pub start: u32,
+    pub count: u32,
+}
+
 /// 常驻 VFX 粒子批次：由 `ModelRenderContext::create_vfx_particles` 构建，
-/// 每帧 `update` 后随 `render(..., vfx: Some(&batch))` 绘制。粒子按目标
-/// 贴图分组（每组一个 bind group，一次绘制），换贴图即换组。
+/// 每帧 `update`/`update_mesh` 后随 `render(..., vfx: Some(&batch))` 绘制。
+/// bind group 按组键懒创建并缓存。
 pub struct VfxParticles {
     pub(crate) instance_buffer: wgpu::Buffer,
-    pub(crate) texture_bind_groups: Vec<wgpu::BindGroup>,
-    /// 稳定排序后的绘制段：(bind group 下标, 实例起点, 实例数)。
-    pub(crate) draw_ranges: Vec<(usize, u32, u32)>,
+    /// 贴图视图表：0 号为内置回退光点，其后按文件 `Tex` 顺序（序号+1）。
+    pub(crate) texture_views: Vec<wgpu::TextureView>,
+    pub(crate) group_cache: HashMap<VfxGroupKey, usize>,
+    pub(crate) bind_groups: Vec<wgpu::BindGroup>,
+    pub(crate) draw_ranges: Vec<VfxDrawRange>,
     pub(crate) capacity: usize,
     pub(crate) count: usize,
     /// 网格粒子：每模型的静态网格资源 + 每帧实例缓冲与绘制段。
     pub(crate) meshes: Vec<GpuVfxMesh>,
     pub(crate) mesh_instance_buffer: wgpu::Buffer,
     pub(crate) mesh_instance_count: usize,
-    pub(crate) mesh_draw_ranges: Vec<(usize, usize, u32, u32)>, // (mesh, group, start, count)
+    pub(crate) mesh_draw_ranges: Vec<VfxMeshDrawRange>,
 }
 
 impl VfxParticles {
@@ -175,50 +320,115 @@ impl VfxParticles {
         self.instance_buffer.slice(..)
     }
 
-    /// 增量上传实例数据（每帧调用；超过容量截断）。按 `texture_index`
-    /// 稳定排序分组成绘制段；未命中任何贴图的粒子落入回退组（0 号）。
+    /// 组键 → bind group 下标（懒创建）。
+    pub(crate) fn group_for(
+        &mut self,
+        context: &ModelRenderContext,
+        key: VfxGroupKey,
+    ) -> usize {
+        if let Some(index) = self.group_cache.get(&key) {
+            return *index;
+        }
+        let view_for = |index: i32| -> &wgpu::TextureView {
+            let slot = if index < 0 {
+                0usize
+            } else {
+                (index as usize + 1).min(self.texture_views.len().saturating_sub(1))
+            };
+            &self.texture_views[slot.max(0)]
+        };
+        let has_texture1 = key.texture1 >= 0;
+        let has_texture2 = key.texture2 >= 0;
+        let params = VfxGroupParams {
+            combine_color: key.combine_color.max(0) as u32,
+            combine_alpha: key.combine_alpha.max(0) as u32,
+            flags: (key.color_to_alpha as u32)
+                | ((has_texture1 as u32) << 1)
+                | ((has_texture2 as u32) << 2)
+                | ((key.color_to_alpha2 as u32) << 3),
+            _pad: 0,
+        };
+        let uniform = context
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("weapon vfx group params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let bind_group = context.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("weapon vfx particle bind group"),
+            layout: context.vfx_bind_group_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view_for(key.texture1)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view_for(key.texture2)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(context.vfx_sampler()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        let index = self.bind_groups.len();
+        self.bind_groups.push(bind_group);
+        self.group_cache.insert(key, index);
+        index
+    }
+
+    /// 增量上传实例数据（每帧调用；超过容量截断）。按（混合, 组键）稳定
+    /// 排序分组成绘制段。
     pub fn update(&mut self, context: &ModelRenderContext, quads: &[xiv_companion_data::VfxQuad]) {
         self.count = quads.len().min(self.capacity);
         self.draw_ranges.clear();
         if self.count == 0 {
             return;
         }
-        let mut ordered: Vec<GpuVfxQuad> =
-            quads[..self.count].iter().map(GpuVfxQuad::from).collect();
-        ordered.sort_by_key(|quad| quad.texture_index as i32);
-        // texture_index 恒为整数，用 i32 排序即可。
-        context
-            .queue()
-            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&ordered));
-
-        let mut ranges: Vec<(i32, u32, u32)> = Vec::new();
-        for quad in &ordered {
-            match ranges.last_mut() {
-                Some((index, _, count)) if *index == quad.texture_index as i32 => *count += 1,
-                _ => ranges.push((quad.texture_index as i32, 0, 1)),
-            }
-        }
-        let mut start = 0_u32;
-        self.draw_ranges = ranges
-            .into_iter()
-            .map(|(texture_index, _, count)| {
-                let group = self.group_index_for(texture_index);
-                let range = (group, start, count);
-                start += count;
-                range
-            })
+        let mut ordered: Vec<(bool, VfxGroupKey, GpuVfxQuad)> = quads[..self.count]
+            .iter()
+            .map(|quad| (quad.blend_add, VfxGroupKey::of_quad(quad), GpuVfxQuad::from(quad)))
             .collect();
-    }
-
-    /// 贴图序号 → bind group 下标（0 号固定为回退贴图）。
-    fn group_index_for(&self, texture_index: i32) -> usize {
-        if texture_index < 0 {
-            return 0;
+        ordered.sort_by_key(|(blend_add, key, _)| (*blend_add, *key));
+        context.queue().write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(
+                &ordered
+                    .iter()
+                    .map(|(_, _, gpu)| *gpu)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        let mut start = 0_u32;
+        for (blend_add, key, _) in &ordered {
+            let group = self.group_for(context, *key);
+            match self.draw_ranges.last_mut() {
+                Some(range)
+                    if range.blend_add == *blend_add
+                        && range.group == group
+                        && range.start + range.count == start =>
+                {
+                    range.count += 1;
+                }
+                _ => self.draw_ranges.push(VfxDrawRange {
+                    blend_add: *blend_add,
+                    group,
+                    start,
+                    count: 1,
+                }),
+            }
+            start += 1;
         }
-        (texture_index as usize + 1).min(self.texture_bind_groups.len() - 1)
     }
 
-    /// 增量上传网格粒子实例并按（网格, 贴图）分组记录绘制段。
+    /// 增量上传网格粒子实例并按（网格, 混合, 组键）分组记录绘制段。
     pub fn update_mesh(
         &mut self,
         context: &ModelRenderContext,
@@ -229,38 +439,50 @@ impl VfxParticles {
         if self.mesh_instance_count == 0 {
             return;
         }
-        let mut ordered: Vec<(xiv_companion_data::VfxMeshInstance, GpuVfxMeshInstance)> = instances
+        let mut ordered: Vec<(usize, bool, VfxGroupKey, GpuVfxMeshInstance)> = instances
             [..self.mesh_instance_count]
             .iter()
             .map(|instance| {
                 (
-                    *instance,
-                    GpuVfxMeshInstance {
-                        position: instance.position,
-                        scale: instance.scale,
-                        color: instance.color,
-                    },
+                    instance.model_index,
+                    instance.blend_add,
+                    VfxGroupKey::of_mesh(instance),
+                    GpuVfxMeshInstance::from(instance),
                 )
             })
             .collect();
-        ordered.sort_by_key(|(instance, _)| (instance.model_index, instance.texture_index));
+        ordered.sort_by_key(|(mesh, blend_add, key, _)| (*mesh, *blend_add, *key));
         context.queue().write_buffer(
             &self.mesh_instance_buffer,
             0,
-            bytemuck::cast_slice(&ordered.iter().map(|(_, gpu)| *gpu).collect::<Vec<_>>()),
+            bytemuck::cast_slice(
+                &ordered
+                    .iter()
+                    .map(|(_, _, _, gpu)| *gpu)
+                    .collect::<Vec<_>>(),
+            ),
         );
-        for (slot, (instance, _)) in ordered.iter().enumerate() {
-            let group = self.group_index_for(instance.texture_index);
+        let mut start = 0_u32;
+        for (mesh, blend_add, key, _) in &ordered {
+            let group = self.group_for(context, *key);
             match self.mesh_draw_ranges.last_mut() {
-                Some((mesh, last_group, _, count))
-                    if *mesh == instance.model_index && *last_group == group =>
+                Some(range)
+                    if range.mesh == *mesh
+                        && range.blend_add == *blend_add
+                        && range.group == group
+                        && range.start + range.count == start =>
                 {
-                    *count += 1
+                    range.count += 1;
                 }
-                _ => self
-                    .mesh_draw_ranges
-                    .push((instance.model_index, group, slot as u32, 1)),
+                _ => self.mesh_draw_ranges.push(VfxMeshDrawRange {
+                    mesh: *mesh,
+                    blend_add: *blend_add,
+                    group,
+                    start,
+                    count: 1,
+                }),
             }
+            start += 1;
         }
     }
 }
@@ -304,7 +526,7 @@ pub(crate) fn create_vfx_texture_view(
     gpu_texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// 内置回退贴图：64×64 白色径向光点（无 atex 时的兜底形状）。
+/// 内置回退贴图：64×64 白色径向光点（无贴图时的兜底形状）。
 pub(crate) fn fallback_vfx_texture_rgba() -> VfxTextureInput {
     let size = 64_u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);

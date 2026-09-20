@@ -40,8 +40,10 @@ pub struct ModelRenderContext {
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
-    vfx_pipeline: wgpu::RenderPipeline,
-    vfx_mesh_pipeline: wgpu::RenderPipeline,
+    vfx_pipeline_add: wgpu::RenderPipeline,
+    vfx_pipeline_blend: wgpu::RenderPipeline,
+    vfx_mesh_pipeline_add: wgpu::RenderPipeline,
+    vfx_mesh_pipeline_blend: wgpu::RenderPipeline,
     vfx_bind_group_layout: wgpu::BindGroupLayout,
     vfx_sampler: wgpu::Sampler,
     post_process: Option<PostProcessState>,
@@ -809,6 +811,8 @@ impl ModelRenderContext {
                 include_str!(concat!(env!("OUT_DIR"), "/vfx.wgsl")).into(),
             ),
         });
+        // 每组粒子（TC1×TC2 贴图对 + 合成模式）一个 bind group：双贴图 +
+        // 共享 sampler + 组参数 uniform。
         let vfx_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("weapon vfx particle bind group layout"),
@@ -826,7 +830,27 @@ impl ModelRenderContext {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
                         count: None,
                     },
                 ],
@@ -839,55 +863,109 @@ impl ModelRenderContext {
             ],
             immediate_size: 0,
         });
-        let vfx_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("weapon vfx particle pipeline"),
-            layout: Some(&vfx_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vfx_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[GpuVfxQuad::LAYOUT],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &vfx_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: msaa_samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
+        /// 加色（One/One，alpha 不写入）与 alpha 混合（SrcAlpha/InvSrcAlpha）。
+        fn vfx_blend_state(blend_add: bool) -> wgpu::BlendState {
+            if blend_add {
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }
+            } else {
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }
+            }
+        }
+        let create_vfx_pipeline = |label: &str,
+                                   vertex_entry: &str,
+                                   fragment_entry: &str,
+                                   buffers: &[wgpu::VertexBufferLayout<'static>],
+                                   blend_add: bool|
+         -> wgpu::RenderPipeline {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&vfx_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &vfx_shader,
+                    entry_point: Some(vertex_entry),
+                    buffers,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &vfx_shader,
+                    entry_point: Some(fragment_entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: POST_FORMAT,
+                        blend: Some(vfx_blend_state(blend_add)),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24Plus,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: msaa_samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let vfx_pipeline_add = create_vfx_pipeline(
+            "weapon vfx particle pipeline (add)",
+            "vs_main",
+            "fs_add",
+            &[GpuVfxQuad::LAYOUT],
+            true,
+        );
+        let vfx_pipeline_blend = create_vfx_pipeline(
+            "weapon vfx particle pipeline (blend)",
+            "vs_main",
+            "fs_blend",
+            &[GpuVfxQuad::LAYOUT],
+            false,
+        );
+        let vfx_mesh_pipeline_add = create_vfx_pipeline(
+            "weapon vfx mesh pipeline (add)",
+            "vs_mesh",
+            "fs_add",
+            &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+            true,
+        );
+        let vfx_mesh_pipeline_blend = create_vfx_pipeline(
+            "weapon vfx mesh pipeline (blend)",
+            "vs_mesh",
+            "fs_blend",
+            &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+            false,
+        );
         let vfx_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("weapon vfx particle sampler"),
             // UVSet scroll 环绕采样。
@@ -898,65 +976,6 @@ impl ModelRenderContext {
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
-        });
-
-        let vfx_mesh_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("weapon vfx mesh pipeline layout"),
-                bind_group_layouts: &[
-                    Some(&camera_bind_group_layout),
-                    Some(&vfx_bind_group_layout),
-                ],
-                immediate_size: 0,
-            });
-        let vfx_mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("weapon vfx mesh pipeline"),
-            layout: Some(&vfx_mesh_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vfx_shader,
-                entry_point: Some("vs_mesh"),
-                buffers: &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &vfx_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: POST_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: msaa_samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
         });
 
         let blur_pipeline = create_post_pipeline(
@@ -1022,8 +1041,10 @@ impl ModelRenderContext {
             compose_uniform_buffer,
             blur_bind_group_layout,
             compose_bind_group_layout,
-            vfx_pipeline,
-            vfx_mesh_pipeline,
+            vfx_pipeline_add,
+            vfx_pipeline_blend,
+            vfx_mesh_pipeline_add,
+            vfx_mesh_pipeline_blend,
             vfx_bind_group_layout,
             vfx_sampler,
             post_process: None,
@@ -1354,42 +1375,46 @@ impl ModelRenderContext {
                 draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
             }
 
-            // VFX 粒子最后画：加色进 HDR 目标（bloom 拾取），深度只测不写
+            // VFX 粒子最后画：按绘制段选加色/混合管线，深度只测不写
             // （武器遮挡身后的粒子，粒子不遮挡后续无）。
             if let Some(vfx) = vfx {
                 if vfx.count() > 0 {
-                    render_pass.set_pipeline(&self.vfx_pipeline);
                     render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, vfx.instance_slice());
-                    for (group, start, count) in &vfx.draw_ranges {
-                        render_pass.set_bind_group(1, &vfx.texture_bind_groups[*group], &[]);
-                        render_pass.draw(0..6, *start..*start + *count);
+                    for range in &vfx.draw_ranges {
+                        render_pass.set_pipeline(if range.blend_add {
+                            &self.vfx_pipeline_add
+                        } else {
+                            &self.vfx_pipeline_blend
+                        });
+                        render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
+                        render_pass.draw(0..6, range.start..range.start + range.count);
                     }
                 }
-                // 网格粒子：Model/LightModel 的本体渲染路径（按网格 + 贴图
-                // 分组 draw_indexed）。
+                // 网格粒子：Model/LightModel 的本体渲染路径（按网格 + 混合 +
+                // 贴图组分段 draw_indexed）。
                 if vfx.mesh_instance_count > 0 {
-                    render_pass.set_pipeline(&self.vfx_mesh_pipeline);
                     render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     render_pass.set_vertex_buffer(1, vfx.mesh_instance_buffer.slice(..));
-                    for (mesh, group, start, count) in &vfx.mesh_draw_ranges {
-                        let Some(gpu_mesh) = vfx.meshes.get(*mesh) else {
+                    for range in &vfx.mesh_draw_ranges {
+                        let Some(gpu_mesh) = vfx.meshes.get(range.mesh) else {
                             continue;
                         };
+                        render_pass.set_pipeline(if range.blend_add {
+                            &self.vfx_mesh_pipeline_add
+                        } else {
+                            &self.vfx_mesh_pipeline_blend
+                        });
                         render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
                         render_pass.set_index_buffer(
                             gpu_mesh.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint32,
                         );
-                        render_pass.set_bind_group(
-                            1,
-                            &vfx.texture_bind_groups[*group as usize],
-                            &[],
-                        );
+                        render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
                         render_pass.draw_indexed(
                             0..gpu_mesh.index_count,
                             0,
-                            *start..*start + *count,
+                            range.start..range.start + range.count,
                         );
                     }
                 }
@@ -1555,8 +1580,17 @@ impl ModelRenderContext {
     /// 粒子批次容量上限（超过由采样器截断）。
     pub const VFX_PARTICLE_CAPACITY: usize = 4096;
 
-    /// 创建 VFX 粒子批次：固定容量实例缓冲 + 每贴图一个颜色 bind group
-    /// （0 号固定为回退径向光点；其后按调用方顺序对应粒子 TC1 的贴图序号）。
+    pub(crate) fn vfx_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.vfx_bind_group_layout
+    }
+
+    pub(crate) fn vfx_sampler(&self) -> &wgpu::Sampler {
+        &self.vfx_sampler
+    }
+
+    /// 创建 VFX 粒子批次：固定容量实例缓冲 + 贴图视图表（0 号固定为内置
+    /// 径向光点回退，其后按文件 `Tex` 顺序对应贴图序号+1；bind group 按
+    /// 粒子实际使用的贴图对/合成模式在 update 时懒创建）。
     pub fn create_vfx_particles(
         &self,
         textures: &[Option<VfxTextureInput>],
@@ -1568,29 +1602,17 @@ impl ModelRenderContext {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut texture_bind_groups = Vec::with_capacity(textures.len() + 1);
         let fallback = fallback_vfx_texture_rgba();
-        for texture in std::iter::once(&None).chain(textures.iter()) {
-            let view = create_vfx_texture_view(
-                &self.device,
-                &self.queue,
-                texture.as_ref().unwrap_or(&fallback),
-            );
-            texture_bind_groups.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("weapon vfx particle bind group"),
-                layout: &self.vfx_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.vfx_sampler),
-                    },
-                ],
-            }));
-        }
+        let texture_views: Vec<wgpu::TextureView> = std::iter::once(&None)
+            .chain(textures.iter())
+            .map(|texture| {
+                create_vfx_texture_view(
+                    &self.device,
+                    &self.queue,
+                    texture.as_ref().unwrap_or(&fallback),
+                )
+            })
+            .collect();
         // 保留文件序号对齐（无绘制数据的模型给空缓冲，实例不会引用）。
         let meshes: Vec<GpuVfxMesh> = meshes
             .iter()
@@ -1601,13 +1623,13 @@ impl ModelRenderContext {
                     .map(|vertex| GpuVfxMeshVertex {
                         position: vertex.position,
                         uv: vertex.uv,
-                        // 顶点色 RGB 作染色；alpha 在真实文件里普遍为 0
-                        // （不作为不透明度来源），网格透明度由实例颜色提供。
+                        // 顶点色：rgb 染色 + alpha 作为羽化遮罩（火舌翼缘
+                        // 等 alpha=0 区域消隐；实心壳体模型 alpha 恒 255）。
                         color: [
                             vertex.color[0] as f32 / 255.0,
                             vertex.color[1] as f32 / 255.0,
                             vertex.color[2] as f32 / 255.0,
-                            1.0,
+                            vertex.color[3] as f32 / 255.0,
                         ],
                     })
                     .collect();
@@ -1640,7 +1662,9 @@ impl ModelRenderContext {
         });
         VfxParticles {
             instance_buffer,
-            texture_bind_groups,
+            texture_views,
+            group_cache: HashMap::new(),
+            bind_groups: Vec::new(),
             draw_ranges: Vec::new(),
             capacity: Self::VFX_PARTICLE_CAPACITY,
             count: 0,

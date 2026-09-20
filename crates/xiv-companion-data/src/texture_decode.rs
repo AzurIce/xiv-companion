@@ -24,8 +24,28 @@ pub fn decode_texture_rgba(texture: &physis::tex::Texture) -> Option<Vec<u8>> {
             texture.height as usize,
             texture.depth as usize,
         ),
+        // 单通道 A8（VFX 光点贴图常见）：灰度复制到四通道。
+        physis::tex::TextureFormat::A8_UNORM => decode_a8_rgba(
+            &texture.data,
+            texture.width as usize,
+            texture.height as usize,
+            texture.depth as usize,
+        ),
         _ => texture.to_rgba(),
     }
+}
+
+fn decode_a8_rgba(data: &[u8], width: usize, height: usize, depth: usize) -> Option<Vec<u8>> {
+    let height = height.checked_mul(depth.max(1))?;
+    let pixel_count = width.checked_mul(height)?;
+    if data.len() < pixel_count {
+        return None;
+    }
+    let mut rgba = vec![0_u8; pixel_count.checked_mul(4)?];
+    for (index, value) in data[..pixel_count].iter().enumerate() {
+        rgba[index * 4..index * 4 + 4].copy_from_slice(&[*value, *value, *value, *value]);
+    }
+    Some(rgba)
 }
 
 fn decode_bc4_rgba(data: &[u8], width: usize, height: usize, depth: usize) -> Option<Vec<u8>> {
