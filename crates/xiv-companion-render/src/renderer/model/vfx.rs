@@ -340,10 +340,11 @@ pub(crate) struct VfxGroupParams {
     _pad3: [u32; 6],
 }
 
-/// 一条绘制段：同一混合模式 + 同一贴图组的连续实例区间。
+/// 一条绘制段：同一混合模式 + 同一贴图组 + 同一深度模式的连续实例区间。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VfxDrawRange {
     pub blend_add: bool,
+    pub depth_mode: usize,
     pub group: usize,
     pub start: u32,
     pub count: u32,
@@ -354,10 +355,22 @@ pub(crate) struct VfxDrawRange {
 pub(crate) struct VfxMeshDrawRange {
     pub mesh: usize,
     pub blend_add: bool,
+    pub depth_mode: usize,
     pub cull_mode: i32,
     pub group: usize,
     pub start: u32,
     pub count: u32,
+}
+
+/// `DsDt`/`DsDw` → 深度模式：0 测不写、1 测且写、2 不测不写。
+pub(crate) fn vfx_depth_mode(depth_test: bool, depth_write: bool) -> usize {
+    if !depth_test {
+        2
+    } else if depth_write {
+        1
+    } else {
+        0
+    }
 }
 
 /// 常驻 VFX 粒子批次：由 `ModelRenderContext::create_vfx_particles` 构建，
@@ -522,34 +535,36 @@ impl VfxParticles {
         if self.count == 0 {
             return;
         }
-        let mut ordered: Vec<(bool, i32, VfxGroupKey, GpuVfxQuad)> = quads[..self.count]
+        let mut ordered: Vec<(bool, i32, usize, VfxGroupKey, GpuVfxQuad)> = quads[..self.count]
             .iter()
             .map(|quad| {
                 (
                     quad.blend_add,
                     quad.draw_priority,
+                    vfx_depth_mode(quad.depth_test, quad.depth_write),
                     VfxGroupKey::of_quad(quad),
                     GpuVfxQuad::from(quad),
                 )
             })
             .collect();
-        ordered.sort_by_key(|(blend_add, priority, key, _)| (*blend_add, *priority, *key));
+        ordered.sort_by_key(|(blend_add, priority, _, key, _)| (*blend_add, *priority, *key));
         context.queue().write_buffer(
             &self.instance_buffer,
             0,
             bytemuck::cast_slice(
                 &ordered
                     .iter()
-                    .map(|(_, _, _, gpu)| *gpu)
+                    .map(|(_, _, _, _, gpu)| *gpu)
                     .collect::<Vec<_>>(),
             ),
         );
         let mut start = 0_u32;
-        for (blend_add, _, key, _) in &ordered {
+        for (blend_add, _, depth_mode, key, _) in &ordered {
             let group = self.group_for(context, *key);
             match self.draw_ranges.last_mut() {
                 Some(range)
                     if range.blend_add == *blend_add
+                        && range.depth_mode == *depth_mode
                         && range.group == group
                         && range.start + range.count == start =>
                 {
@@ -557,6 +572,7 @@ impl VfxParticles {
                 }
                 _ => self.draw_ranges.push(VfxDrawRange {
                     blend_add: *blend_add,
+                    depth_mode: *depth_mode,
                     group,
                     start,
                     count: 1,
@@ -578,21 +594,22 @@ impl VfxParticles {
         if self.mesh_instance_count == 0 {
             return;
         }
-        let mut ordered: Vec<(bool, i32, i32, usize, VfxGroupKey, GpuVfxMeshInstance)> = instances
-            [..self.mesh_instance_count]
-            .iter()
-            .map(|instance| {
-                (
-                    instance.blend_add,
-                    instance.draw_priority,
-                    instance.cull_mode,
-                    instance.model_index,
-                    VfxGroupKey::of_mesh(instance),
-                    GpuVfxMeshInstance::from(instance),
-                )
-            })
-            .collect();
-        ordered.sort_by_key(|(blend_add, priority, cull, mesh, key, _)| {
+        let mut ordered: Vec<(bool, i32, usize, i32, usize, VfxGroupKey, GpuVfxMeshInstance)> =
+            instances[..self.mesh_instance_count]
+                .iter()
+                .map(|instance| {
+                    (
+                        instance.blend_add,
+                        instance.draw_priority,
+                        vfx_depth_mode(instance.depth_test, instance.depth_write),
+                        instance.cull_mode,
+                        instance.model_index,
+                        VfxGroupKey::of_mesh(instance),
+                        GpuVfxMeshInstance::from(instance),
+                    )
+                })
+                .collect();
+        ordered.sort_by_key(|(blend_add, priority, _, cull, mesh, key, _)| {
             (*blend_add, *priority, *cull, *mesh, *key)
         });
         context.queue().write_buffer(
@@ -601,17 +618,18 @@ impl VfxParticles {
             bytemuck::cast_slice(
                 &ordered
                     .iter()
-                    .map(|(_, _, _, _, _, gpu)| *gpu)
+                    .map(|(_, _, _, _, _, _, gpu)| *gpu)
                     .collect::<Vec<_>>(),
             ),
         );
         let mut start = 0_u32;
-        for (blend_add, _, cull_mode, mesh, key, _) in &ordered {
+        for (blend_add, _, depth_mode, cull_mode, mesh, key, _) in &ordered {
             let group = self.group_for(context, *key);
             match self.mesh_draw_ranges.last_mut() {
                 Some(range)
                     if range.mesh == *mesh
                         && range.blend_add == *blend_add
+                        && range.depth_mode == *depth_mode
                         && range.cull_mode == *cull_mode
                         && range.group == group
                         && range.start + range.count == start =>
@@ -621,6 +639,7 @@ impl VfxParticles {
                 _ => self.mesh_draw_ranges.push(VfxMeshDrawRange {
                     mesh: *mesh,
                     blend_add: *blend_add,
+                    depth_mode: *depth_mode,
                     cull_mode: *cull_mode,
                     group,
                     start,

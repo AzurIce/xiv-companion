@@ -9,6 +9,7 @@ fn main() {
     let mut resource = SqPackResource::from_existing(game_dir.to_str().expect("utf8"));
     let path = std::env::args().nth(1).expect("mdl path");
     let bytes = resource.read(&path).expect("read mdl");
+    std::fs::write("/tmp/w0501b0060.mdl", &bytes).expect("write raw mdl");
     let model = physis::model::MDL::from_existing(physis::Platform::Win32, &bytes)
         .expect("parse mdl");
     let debug = format!("{model:#?}");

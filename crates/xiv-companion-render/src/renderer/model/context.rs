@@ -40,10 +40,9 @@ pub struct ModelRenderContext {
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
-    vfx_pipeline_add: wgpu::RenderPipeline,
-    vfx_pipeline_blend: wgpu::RenderPipeline,
+    vfx_quad_pipelines: [[wgpu::RenderPipeline; 3]; 2],
     /// [blend_add][cull: none/front/back]。
-    vfx_mesh_pipelines: [[wgpu::RenderPipeline; 3]; 2],
+    vfx_mesh_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; 2],
     vfx_bind_group_layout: wgpu::BindGroupLayout,
     vfx_sampler: wgpu::Sampler,
     post_process: Option<PostProcessState>,
@@ -952,7 +951,8 @@ impl ModelRenderContext {
                                    fragment_entry: &str,
                                    buffers: &[wgpu::VertexBufferLayout<'static>],
                                    blend_add: bool,
-                                   cull_mode: Option<wgpu::Face>|
+                                   cull_mode: Option<wgpu::Face>,
+                                   depth_mode: usize|
          -> wgpu::RenderPipeline {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -980,8 +980,14 @@ impl ModelRenderContext {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth24Plus,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    // 深度模式（粒子 DsDt/DsDw）：0 测不写、1 测且写
+                    // （爪笼壳等实心体写深度遮挡身后）、2 不测不写。
+                    depth_write_enabled: Some(depth_mode == 1),
+                    depth_compare: Some(if depth_mode == 2 {
+                        wgpu::CompareFunction::Always
+                    } else {
+                        wgpu::CompareFunction::LessEqual
+                    }),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
@@ -993,38 +999,41 @@ impl ModelRenderContext {
                 cache: None,
             })
         };
-        let vfx_pipeline_add = create_vfx_pipeline(
-            "weapon vfx particle pipeline (add)",
-            "vs_main",
-            "fs_add",
-            &[GpuVfxQuad::LAYOUT],
-            true,
-            None,
-        );
-        let vfx_pipeline_blend = create_vfx_pipeline(
-            "weapon vfx particle pipeline (blend)",
-            "vs_main",
-            "fs_blend",
-            &[GpuVfxQuad::LAYOUT],
-            false,
-            None,
-        );
-        // 网格粒子按（混合 × 剔除）六条管线：壳体膜常用剔正面（只画内侧）
-        // 来实现透过正面看内侧的薄纱观感。
-        let vfx_mesh_pipelines: [[wgpu::RenderPipeline; 3]; 2] = [true, false].map(|add| {
-            [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
+        // 四边形管线：[blend_add][depth_mode]。
+        let vfx_quad_pipelines: [[wgpu::RenderPipeline; 3]; 2] = [true, false].map(|add| {
+            [0_usize, 1, 2].map(|depth_mode| {
                 create_vfx_pipeline(
                     &format!(
-                        "weapon vfx mesh pipeline ({}/{:?})",
+                        "weapon vfx particle pipeline ({}/{depth_mode})",
                         if add { "add" } else { "blend" },
-                        cull
                     ),
-                    "vs_mesh",
+                    "vs_main",
                     if add { "fs_add" } else { "fs_blend" },
-                    &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+                    &[GpuVfxQuad::LAYOUT],
                     add,
-                    cull,
+                    None,
+                    depth_mode,
                 )
+            })
+        });
+        // 网格粒子管线：[blend_add][cull][depth_mode]（壳体膜常用剔正面）。
+        let vfx_mesh_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; 2] = [true, false].map(|add| {
+            [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
+                [0_usize, 1, 2].map(|depth_mode| {
+                    create_vfx_pipeline(
+                        &format!(
+                            "weapon vfx mesh pipeline ({}/{:?}/{depth_mode})",
+                            if add { "add" } else { "blend" },
+                            cull,
+                        ),
+                        "vs_mesh",
+                        if add { "fs_add" } else { "fs_blend" },
+                        &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
+                        add,
+                        cull,
+                        depth_mode,
+                    )
+                })
             })
         });
         let vfx_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1102,8 +1111,7 @@ impl ModelRenderContext {
             compose_uniform_buffer,
             blur_bind_group_layout,
             compose_bind_group_layout,
-            vfx_pipeline_add,
-            vfx_pipeline_blend,
+            vfx_quad_pipelines,
             vfx_mesh_pipelines,
             vfx_bind_group_layout,
             vfx_sampler,
@@ -1442,11 +1450,10 @@ impl ModelRenderContext {
                     render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, vfx.instance_slice());
                     for range in &vfx.draw_ranges {
-                        render_pass.set_pipeline(if range.blend_add {
-                            &self.vfx_pipeline_add
-                        } else {
-                            &self.vfx_pipeline_blend
-                        });
+                        render_pass.set_pipeline(
+                            &self.vfx_quad_pipelines[usize::from(range.blend_add)]
+                                [range.depth_mode],
+                        );
                         render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
                         render_pass.draw(0..6, range.start..range.start + range.count);
                     }
@@ -1467,7 +1474,8 @@ impl ModelRenderContext {
                             _ => 0,
                         };
                         render_pass.set_pipeline(
-                            &self.vfx_mesh_pipelines[usize::from(range.blend_add)][cull_index],
+                            &self.vfx_mesh_pipelines[usize::from(range.blend_add)][cull_index]
+                                [range.depth_mode],
                         );
                         render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
                         render_pass.set_index_buffer(

@@ -5231,6 +5231,8 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 texture1_is_shape_mask: false,
                 texture1_enabled: false,
                 blend_add: true,
+                depth_test: true,
+                depth_write: false,
                 texture_distortion_index: -1,
                 distortion_power: 0.0,
                 distortion_targets: 0,

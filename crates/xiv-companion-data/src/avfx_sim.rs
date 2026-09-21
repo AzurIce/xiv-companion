@@ -82,6 +82,9 @@ pub struct VfxQuad {
     pub texture1_enabled: bool,
     /// 混合模式：true = 加色（Add 系），false = 普通 alpha 混合。
     pub blend_add: bool,
+    /// `DsDt`/`DsDw`：深度测试/写入（如爪笼壳写深度遮挡身后几何）。
+    pub depth_test: bool,
+    pub depth_write: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
     pub texture_distortion_index: i32,
     /// TD 扭曲强度（DPow 按粒子年龄求值）。
@@ -125,6 +128,9 @@ pub struct VfxMeshInstance {
     /// TC1 块存在且启用。
     pub texture1_enabled: bool,
     pub blend_add: bool,
+    /// `DsDt`/`DsDw`：深度测试/写入。
+    pub depth_test: bool,
+    pub depth_write: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
     pub texture_distortion_index: i32,
     pub distortion_power: f32,
@@ -914,6 +920,8 @@ impl VfxRuntime {
             texture1_is_shape_mask: tex.texture1_is_shape_mask,
             texture1_enabled: tex.texture1_enabled,
             blend_add: is_additive_draw(particle.draw_mode),
+            depth_test: particle.depth_test,
+            depth_write: particle.depth_write,
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
@@ -1021,6 +1029,8 @@ impl VfxRuntime {
             texture1_is_shape_mask: tex.texture1_is_shape_mask,
             texture1_enabled: tex.texture1_enabled,
             blend_add: is_additive_draw(particle.draw_mode),
+            depth_test: particle.depth_test,
+            depth_write: particle.depth_write,
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
@@ -1298,6 +1308,8 @@ impl VfxRuntime {
                     texture1_is_shape_mask: tex.texture1_is_shape_mask,
                     texture1_enabled: tex.texture1_enabled,
                     blend_add: is_additive_draw(particle.draw_mode),
+                    depth_test: particle.depth_test,
+                    depth_write: particle.depth_write,
                     texture_distortion_index: tex.texture_distortion_index,
                     distortion_power: tex.distortion_power,
                     distortion_targets: tex.distortion_targets,
