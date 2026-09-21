@@ -309,8 +309,9 @@ fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
         }
     }
     // TC1 基准层：四边形为覆盖写（贴图/遮罩即粒子形状；无贴图时绑定内置
-    // 回退光点）；网格粒子的形状由网格与顶点色提供，TC1 只按 TCCT/TCAT
-    // 参与合成（遮罩亮度/条纹颜色叠加到白底）。
+    // 回退光点）；网格粒子的形状由网格与顶点色提供，但 TC1 遮罩仍决定
+    // 覆盖度（alpha 取遮罩层自身——黑底区透明，火舌恢复半透明虹彩条带
+    // 而非实心白块），rgb 按 TCCT 与底色合成。
     var tex_color: vec4<f32>;
     if (vfx_params.flags & 128u) != 0u {
         if (vfx_params.flags & 64u) != 0u {
@@ -326,7 +327,7 @@ fn compose_color(input: VfxVertexOutput) -> vec4<f32> {
             );
             tex_color = vec4<f32>(
                 combine_color(vec3<f32>(1.0, 1.0, 1.0), layer.rgb, vfx_params.tc1_combine.x),
-                combine_alpha(1.0, layer.a, vfx_params.tc1_combine.y),
+                layer.a,
             );
         } else {
             tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
