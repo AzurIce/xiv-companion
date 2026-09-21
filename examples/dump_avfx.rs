@@ -24,6 +24,20 @@ fn main() {
             eprintln!("tex {index}: MISSING {texture_path}");
             continue;
         };
+        // 格式诊断：atex 头后的 tex 头里含 format 枚举。
+        let stripped = tex_bytes
+            .strip_prefix(b"atex")
+            .map(|rest| &rest[4..])
+            .unwrap_or(&tex_bytes);
+        if let Some(tex) = <physis::tex::Texture as physis::ReadableFile>::from_existing(
+            physis::Platform::Win32,
+            stripped,
+        ) {
+            eprintln!(
+                "tex {index}: {:?} {}x{} {texture_path}",
+                tex.format, tex.width, tex.height
+            );
+        }
         match xiv_companion::decode_atex_rgba(&tex_bytes) {
             Some(tex) => {
                 let out = format!("/tmp/avfx-tex-{index}.png");

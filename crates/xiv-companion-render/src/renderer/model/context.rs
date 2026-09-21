@@ -869,7 +869,7 @@ impl ModelRenderContext {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -1685,8 +1685,13 @@ impl ModelRenderContext {
                     .vertices
                     .iter()
                     .map(|vertex| GpuVfxMeshVertex {
-                        position: vertex.position,
-                        uv: vertex.uv,
+                        position: [
+                            vertex.position[0],
+                            vertex.position[1],
+                            vertex.position[2],
+                            0.0,
+                        ],
+                        uvs: vertex.uvs,
                         // 顶点色：rgb 染色 + alpha 作为羽化遮罩（火舌翼缘
                         // 等 alpha=0 区域消隐；实心壳体模型 alpha 恒 255）。
                         color: [

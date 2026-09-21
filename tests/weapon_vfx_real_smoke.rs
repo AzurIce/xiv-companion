@@ -245,7 +245,7 @@ fn render_weapon_vfx_item(
                 "[{label}] draw model {mi}: verts={} idx={} bbox min={mins:?} max={maxs:?} uv0={:?} color0={:?}",
                 draw.vertices.len(),
                 draw.indices.len(),
-                draw.vertices.first().map(|v| v.uv),
+                draw.vertices.first().map(|v| v.uvs[0]),
                 draw.vertices.first().map(|v| v.color)
             );
         }

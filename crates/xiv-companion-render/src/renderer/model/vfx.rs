@@ -89,13 +89,22 @@ impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
             distortion: [
                 quad.distortion_power,
                 f32::from_bits(quad.distortion_targets),
-                0.0,
-                0.0,
+                f32::from_bits(pack_uv_rot(quad.uv_rotations[0], quad.uv_rotations[1])),
+                f32::from_bits(pack_uv_rot(quad.uv_rotations[2], quad.uv_rotations[3])),
             ],
             orientation: quad.orientation,
             pivot: [quad.pivot[0], quad.pivot[1], 0.0, 0.0],
         }
     }
+}
+
+/// 两个 UV 旋转角（弧度）按 2π 周期量化到 u16×2 打包（UvSet `Rot`/`RotR`）。
+pub(crate) fn pack_uv_rot(a: f32, b: f32) -> u32 {
+    let q = |v: f32| {
+        let wrapped = v.rem_euclid(std::f32::consts::TAU);
+        (wrapped / std::f32::consts::TAU * 65535.0).round() as u32
+    };
+    q(a) | (q(b) << 16)
 }
 
 /// 一次待上传的 VFX 贴图（RGBA8）；`None` 时使用内置径向光点回退贴图。
@@ -106,13 +115,15 @@ pub struct VfxTextureInput {
     pub height: u32,
 }
 
-/// 网格静态顶点（52 字节）：DrawModel 顶点（位置 + 两组 UV + 顶点色）。
-/// 顶点只带首组 UV（模型本身只有一组有意义，UvSet 动画在实例侧）。
+/// 网格静态顶点（64 字节）：DrawModel 顶点（位置 + 四组 UV + 顶点色）。
+/// 各贴图层按 TCn 的 `UvSN` 选用对应组基底 UV（UvSet 动画在实例侧）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxMeshVertex {
-    pub position: [f32; 3],
-    pub uv: [f32; 2],
+    /// xyz 位置；w 对齐填充。
+    pub position: [f32; 4],
+    /// 四组 UV。
+    pub uvs: [[f32; 2]; 4],
     pub color: [f32; 4],
 }
 
@@ -122,19 +133,34 @@ impl GpuVfxMeshVertex {
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 0,
             },
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x2,
-                offset: 12,
+                offset: 16,
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 20,
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 24,
                 shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 32,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 40,
+                shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 48,
+                shader_location: 5,
             },
         ],
     };
@@ -162,14 +188,14 @@ impl GpuVfxMeshInstance {
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
-                shader_location: 3,
+                shader_location: 6,
             };
             10
         ];
         let mut index = 0;
         while index < 10 {
             attributes[index].offset = (index * 16) as wgpu::BufferAddress;
-            attributes[index].shader_location = (index + 3) as u32;
+            attributes[index].shader_location = (index + 6) as u32;
             index += 1;
         }
         attributes
@@ -213,8 +239,14 @@ impl From<&xiv_companion_data::VfxMeshInstance> for GpuVfxMeshInstance {
             distortion: [
                 instance.distortion_power,
                 f32::from_bits(instance.distortion_targets),
-                0.0,
-                0.0,
+                f32::from_bits(pack_uv_rot(
+                    instance.uv_rotations[0],
+                    instance.uv_rotations[1],
+                )),
+                f32::from_bits(pack_uv_rot(
+                    instance.uv_rotations[2],
+                    instance.uv_rotations[3],
+                )),
             ],
         }
     }
@@ -227,17 +259,25 @@ pub(crate) struct GpuVfxMesh {
     pub index_count: u32,
 }
 
-/// 贴图合成组键：四层贴图序号 + TD + 各层合成模式/边界/bC2A + TC1 遮罩。
-/// 同组粒子共享一个 bind group（贴图 × 采样器 × 参数 uniform）。
+/// 贴图合成组键：四层贴图序号 + TD + 各层合成模式/边界/bC2A + TC1 遮罩 +
+/// 各层 UvSet 序号（网格粒子基底 UV 选择）+ TC1 启用/合成模式 + 网格/四边形
+/// 管线语义位。同组粒子共享一个 bind group（贴图 × 采样器 × 参数 uniform）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct VfxGroupKey {
     textures: [i32; 4],
     texture_d: i32,
+    combine_mode_tc1: [i32; 2],
     combine_modes: [[i32; 2]; 3],
     color_to_alpha: [bool; 4],
     texture_borders: [[i32; 2]; 4],
     distortion_borders: [i32; 2],
+    texture_uv_sets: [i32; 4],
+    distortion_uv_set: i32,
     texture1_is_shape_mask: bool,
+    texture1_enabled: bool,
+    /// true = 网格粒子（TC1 参与合成、基底 UV 逐顶点）；false = 四边形
+    /// （TC1 覆盖写、基底 UV 恒为角点）。
+    mesh_mode: bool,
 }
 
 impl VfxGroupKey {
@@ -245,11 +285,16 @@ impl VfxGroupKey {
         Self {
             textures: quad.texture_indexes,
             texture_d: quad.texture_distortion_index,
+            combine_mode_tc1: quad.combine_mode_tc1,
             combine_modes: quad.combine_modes,
             color_to_alpha: quad.color_to_alpha,
             texture_borders: quad.texture_borders,
             distortion_borders: quad.distortion_borders,
+            texture_uv_sets: quad.texture_uv_sets,
+            distortion_uv_set: quad.distortion_uv_set,
             texture1_is_shape_mask: quad.texture1_is_shape_mask,
+            texture1_enabled: quad.texture1_enabled,
+            mesh_mode: false,
         }
     }
 
@@ -257,17 +302,22 @@ impl VfxGroupKey {
         Self {
             textures: instance.texture_indexes,
             texture_d: instance.texture_distortion_index,
+            combine_mode_tc1: instance.combine_mode_tc1,
             combine_modes: instance.combine_modes,
             color_to_alpha: instance.color_to_alpha,
             texture_borders: instance.texture_borders,
             distortion_borders: instance.distortion_borders,
+            texture_uv_sets: instance.texture_uv_sets,
+            distortion_uv_set: instance.distortion_uv_set,
             texture1_is_shape_mask: instance.texture1_is_shape_mask,
+            texture1_enabled: instance.texture1_enabled,
+            mesh_mode: true,
         }
     }
 }
 
 /// 组参数 uniform（与 `vfx.wesl` 的 `VfxGroupParams` 布局一致；
-/// WGSL vec3<u32> 按 16 字节对齐，Rust 侧显式补齐到 48 字节）。
+/// WGSL vec3<u32>/vec4<u32> 按 16 字节对齐，Rust 侧显式补齐到 80 字节）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct VfxGroupParams {
@@ -277,11 +327,17 @@ pub(crate) struct VfxGroupParams {
     /// TC2/TC3/TC4 的 alpha 合成模式。
     combine_alpha: [u32; 3],
     _pad1: u32,
+    /// TC1 的 (TCCT, TCAT)。
+    tc1_combine: [u32; 2],
     /// 各层 bC2A 位掩码。
     color_to_alpha: u32,
-    /// bit0: TC1 为形状遮罩；bit1..4: 各层有贴图；bit5: 有 TD 贴图。
+    /// bit0: TC1 为形状遮罩；bit1..4: 各层有贴图；bit5: 有 TD 贴图；
+    /// bit6: TC1 启用；bit7: 网格粒子模式。
     flags: u32,
-    _pad2: [u32; 2],
+    /// 各层 UvSet 序号（2bit × TC1..TC4）+ TD（2bit，bit8-9）。
+    uv_set_sel: u32,
+    _pad2: u32,
+    _pad3: [u32; 6],
 }
 
 /// 一条绘制段：同一混合模式 + 同一贴图组的连续实例区间。
@@ -354,6 +410,14 @@ impl VfxParticles {
             flags |= ((*texture >= 0) as u32) << (i + 1);
         }
         flags |= ((key.texture_d >= 0) as u32) << 5;
+        flags |= (key.texture1_enabled as u32) << 6;
+        flags |= (key.mesh_mode as u32) << 7;
+        // 每层 2bit 的 UvSet 序号（钳到 0..3）；TD 在 bit8-9。
+        let mut uv_set_sel = 0u32;
+        for (i, set) in key.texture_uv_sets.iter().enumerate() {
+            uv_set_sel |= ((*set).clamp(0, 3) as u32) << (i * 2);
+        }
+        uv_set_sel |= (key.distortion_uv_set.clamp(0, 3) as u32) << 8;
         let params = VfxGroupParams {
             combine_color: key.combine_modes.map(|m| m[0].max(0) as u32),
             _pad0: 0,
@@ -365,7 +429,13 @@ impl VfxParticles {
                 .enumerate()
                 .fold(0u32, |acc, (i, c)| acc | ((*c as u32) << i)),
             flags,
-            _pad2: [0; 2],
+            tc1_combine: [
+                key.combine_mode_tc1[0].max(0) as u32,
+                key.combine_mode_tc1[1].max(0) as u32,
+            ],
+            uv_set_sel,
+            _pad2: 0,
+            _pad3: [0; 6],
         };
         let uniform = context
             .device()

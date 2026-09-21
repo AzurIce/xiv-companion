@@ -57,6 +57,12 @@ pub struct VfxQuad {
     pub pivot: [f32; 2],
     /// 4 层颜色贴图（TC1..TC4）的文件级贴图序号（TC1：TLst 优先；-1 = 无）。
     pub texture_indexes: [i32; 4],
+    /// 各层引用的 UvSet 序号（网格粒子按它选逐顶点 UV 组；四边形基底
+    /// 恒为角点，此字段不参与）。
+    pub texture_uv_sets: [i32; 4],
+    /// TC1 的 (颜色 TCCT, alpha TCAT) 合成模式（网格粒子 TC1 参与合成；
+    /// 四边形 TC1 为覆盖写）。
+    pub combine_mode_tc1: [i32; 2],
     /// TC2/TC3/TC4 的 (颜色 TCCT, alpha TCAT) 合成模式。
     pub combine_modes: [[i32; 2]; 3],
     /// 各层 bC2A（颜色转 alpha）。
@@ -64,11 +70,16 @@ pub struct VfxQuad {
     /// 各层 UV 原点 + 缩放（各层引用自己的 UvSet）。
     pub uv_origins: [[f32; 2]; 4],
     pub uv_scales: [[f32; 2]; 4],
+    /// 各层基底 UV 绕 (0.5, 0.5) 的旋转（UvSet `Rot`+`RotR`，弧度）。
+    pub uv_rotations: [f32; 4],
     /// 各层 U/V 边界模式（0 Repeat、1 Clamp、2 Mirror；渐变贴图 Clamp
     /// 防止越界回绕出异色条纹）。
     pub texture_borders: [[i32; 2]; 4],
     /// TC1 贴图为 TLst 形状遮罩（亮度→alpha，rgb 不乘）。
     pub texture1_is_shape_mask: bool,
+    /// TC1 块存在且启用（网格路径据此决定 TC1 是否参与合成；四边形路径
+    /// 恒采样 TC1/回退光点保形状）。
+    pub texture1_enabled: bool,
     /// 混合模式：true = 加色（Add 系），false = 普通 alpha 混合。
     pub blend_add: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
@@ -80,6 +91,8 @@ pub struct VfxQuad {
     /// TD 贴图采样用 UV（TD 引用的 UvSet 变换）。
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
+    /// TD 引用的 UvSet 序号（网格粒子的基底 UV 选择）。
+    pub distortion_uv_set: i32,
     /// TD 边界模式。
     pub distortion_borders: [i32; 2],
 }
@@ -97,12 +110,20 @@ pub struct VfxMeshInstance {
     /// 粒子 `DwPr` 绘制优先级。
     pub draw_priority: i32,
     pub texture_indexes: [i32; 4],
+    /// 各层引用的 UvSet 序号（按它选逐顶点 UV 组）。
+    pub texture_uv_sets: [i32; 4],
+    /// TC1 的 (颜色 TCCT, alpha TCAT) 合成模式。
+    pub combine_mode_tc1: [i32; 2],
     pub combine_modes: [[i32; 2]; 3],
     pub color_to_alpha: [bool; 4],
     pub uv_origins: [[f32; 2]; 4],
     pub uv_scales: [[f32; 2]; 4],
+    /// 各层基底 UV 绕 (0.5, 0.5) 的旋转（弧度）。
+    pub uv_rotations: [f32; 4],
     pub texture_borders: [[i32; 2]; 4],
     pub texture1_is_shape_mask: bool,
+    /// TC1 块存在且启用。
+    pub texture1_enabled: bool,
     pub blend_add: bool,
     /// TD 扭曲贴图序号（-1 = 无扭曲）。
     pub texture_distortion_index: i32,
@@ -110,6 +131,8 @@ pub struct VfxMeshInstance {
     pub distortion_targets: u32,
     pub uvd_origin: [f32; 2],
     pub uvd_scale: [f32; 2],
+    /// TD 引用的 UvSet 序号。
+    pub distortion_uv_set: i32,
     pub distortion_borders: [i32; 2],
     /// 剔除模式（CulT：0 双面、1 剔正面、2 剔背面）。
     pub cull_mode: i32,
@@ -880,18 +903,23 @@ impl VfxRuntime {
             draw_priority: particle.draw_priority,
             pivot: [0.0; 2],
             texture_indexes: tex.texture_indexes,
+            texture_uv_sets: tex.texture_uv_sets,
+            combine_mode_tc1: tex.combine_mode_tc1,
             combine_modes: tex.combine_modes,
             color_to_alpha: tex.color_to_alpha,
             uv_origins: tex.uv_origins,
             uv_scales: tex.uv_scales,
+            uv_rotations: tex.uv_rotations,
             texture_borders: tex.texture_borders,
             texture1_is_shape_mask: tex.texture1_is_shape_mask,
+            texture1_enabled: tex.texture1_enabled,
             blend_add: is_additive_draw(particle.draw_mode),
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
+            distortion_uv_set: tex.distortion_uv_set,
             distortion_borders: tex.distortion_borders,
         });
     }
@@ -926,8 +954,9 @@ impl VfxRuntime {
         let age = Self::particle_age(particle, ctx.age);
         let seed = ctx.seed;
         let tex = ResolvedTexture::of(particle, age, seed);
-        // Model 粒子用 Data 的 ColB/ColE（随年龄插值）；LightModel 用粒子 Col。
-        let mut color = match &particle.data {
+        // Model 粒子用 Data 的 ColB/ColE（随年龄插值）；LightModel 用粒子 Col
+        // （particle_color 已含 SclA；ColB/ColE 分支在此补乘）。
+        let color = match &particle.data {
             AvfxParticleData::Model {
                 color_begin,
                 color_end,
@@ -937,16 +966,17 @@ impl VfxRuntime {
                 let t = (ctx.age / life).clamp(0.0, 1.0);
                 let a = color_begin.rgba(age);
                 let b = color_end.rgba(age);
-                [
+                let mut color = [
                     a[0] + (b[0] - a[0]) * t,
                     a[1] + (b[1] - a[1]) * t,
                     a[2] + (b[2] - a[2]) * t,
                     a[3] + (b[3] - a[3]) * t,
-                ]
+                ];
+                color[3] *= particle.color.texture_alpha_scale(age);
+                color
             }
             _ => particle_color(particle, age, is_additive_draw(particle.draw_mode), seed),
         };
-        color[3] *= particle.color.texture_alpha_scale(age);
         let (emitter_quat, emitter_scale, pos_drift) = influence_transform(item, ctx);
         let particle_pos = eval3_seeded(&particle.position, age, 0.0, seed ^ 0x9051);
         let rotated_pos = quat_rotate(emitter_quat, particle_pos);
@@ -980,18 +1010,23 @@ impl VfxRuntime {
             color,
             draw_priority: particle.draw_priority,
             texture_indexes: tex.texture_indexes,
+            texture_uv_sets: tex.texture_uv_sets,
+            combine_mode_tc1: tex.combine_mode_tc1,
             combine_modes: tex.combine_modes,
             color_to_alpha: tex.color_to_alpha,
             uv_origins: tex.uv_origins,
             uv_scales: tex.uv_scales,
+            uv_rotations: tex.uv_rotations,
             texture_borders: tex.texture_borders,
             texture1_is_shape_mask: tex.texture1_is_shape_mask,
+            texture1_enabled: tex.texture1_enabled,
             blend_add: is_additive_draw(particle.draw_mode),
             texture_distortion_index: tex.texture_distortion_index,
             distortion_power: tex.distortion_power,
             distortion_targets: tex.distortion_targets,
             uvd_origin: tex.uvd_origin,
             uvd_scale: tex.uvd_scale,
+            distortion_uv_set: tex.distortion_uv_set,
             distortion_borders: tex.distortion_borders,
             cull_mode: particle.culling_type,
             model_index: model_index as usize,
@@ -1234,13 +1269,20 @@ impl VfxRuntime {
                     draw_priority: particle.draw_priority,
                     pivot: simple.pivot,
                     texture_indexes: tex.texture_indexes,
+                    texture_uv_sets: tex.texture_uv_sets,
+                    combine_mode_tc1: tex.combine_mode_tc1,
                     combine_modes: tex.combine_modes,
                     color_to_alpha: tex.color_to_alpha,
                     uv_origins: {
-                        // 翻页 UV 覆盖 TC1 层。
+                        // 翻页 UV 覆盖 TC1 层：片元公式为
+                        // `scroll + 0.5 + scale·(base−0.5)`，整格采样需
+                        // scroll′ = cell + 0.5·(scale−1)。
                         let mut origins = tex.uv_origins;
                         if flipbook {
-                            origins[0] = uv_origin;
+                            origins[0] = [
+                                uv_origin[0] + 0.5 * (uv_scale[0] - 1.0),
+                                uv_origin[1] + 0.5 * (uv_scale[1] - 1.0),
+                            ];
                         }
                         origins
                     },
@@ -1251,14 +1293,17 @@ impl VfxRuntime {
                         }
                         scales
                     },
+                    uv_rotations: tex.uv_rotations,
                     texture_borders: tex.texture_borders,
                     texture1_is_shape_mask: tex.texture1_is_shape_mask,
+                    texture1_enabled: tex.texture1_enabled,
                     blend_add: is_additive_draw(particle.draw_mode),
                     texture_distortion_index: tex.texture_distortion_index,
                     distortion_power: tex.distortion_power,
                     distortion_targets: tex.distortion_targets,
                     uvd_origin: tex.uvd_origin,
                     uvd_scale: tex.uvd_scale,
+                    distortion_uv_set: tex.distortion_uv_set,
                     distortion_borders: tex.distortion_borders,
                 });
             }
@@ -1269,15 +1314,21 @@ impl VfxRuntime {
 /// 粒子的贴图/UV 解析结果（TC1 基准层 + TC2..TC4 合成层 + TD 扭曲层）。
 struct ResolvedTexture {
     texture_indexes: [i32; 4],
+    texture_uv_sets: [i32; 4],
+    combine_mode_tc1: [i32; 2],
     combine_modes: [[i32; 2]; 3],
     color_to_alpha: [bool; 4],
     uv_origins: [[f32; 2]; 4],
     uv_scales: [[f32; 2]; 4],
+    /// 各层基底 UV 绕 (0.5, 0.5) 的旋转（UvSet `Rot` + `RotR` 随机，弧度）。
+    uv_rotations: [f32; 4],
     texture_borders: [[i32; 2]; 4],
     texture1_is_shape_mask: bool,
+    texture1_enabled: bool,
     texture_distortion_index: i32,
     distortion_power: f32,
     distortion_targets: u32,
+    distortion_uv_set: i32,
     uvd_origin: [f32; 2],
     uvd_scale: [f32; 2],
     distortion_borders: [i32; 2],
@@ -1285,7 +1336,7 @@ struct ResolvedTexture {
 
 impl ResolvedTexture {
     fn of(particle: &AvfxParticle, age: f32, seed: u64) -> Self {
-        let uv = |index: i32| -> ([f32; 2], [f32; 2]) {
+        let uv = |index: i32| -> ([f32; 2], [f32; 2], f32) {
             particle
                 .uv_sets
                 .get(index.max(0) as usize)
@@ -1293,9 +1344,17 @@ impl ResolvedTexture {
                     (
                         eval2_seeded(&set.scroll, age, 0.0, seed ^ 0x5C01),
                         eval2_seeded(&set.scale, age, 1.0, seed ^ 0x5C1E),
+                        // UvSet Rot + RotR 随机（弧度，绕 0.5 中心）。
+                        curve_value_seeded(
+                            &set.rotation,
+                            &set.rotation_random,
+                            age,
+                            0.0,
+                            seed ^ 0xA07,
+                        ),
                     )
                 })
-                .unwrap_or(([0.0, 0.0], [1.0, 1.0]))
+                .unwrap_or(([0.0, 0.0], [1.0, 1.0], 0.0))
         };
         let tcs = [
             particle.texture_color1.as_ref(),
@@ -1304,23 +1363,28 @@ impl ResolvedTexture {
             particle.texture_color4.as_ref(),
         ];
         let mut texture_indexes = [-1; 4];
+        let mut texture_uv_sets = [0; 4];
         let mut color_to_alpha = [false; 4];
         let mut uv_origins = [[0.0; 2]; 4];
         let mut uv_scales = [[1.0; 2]; 4];
+        let mut uv_rotations = [0.0; 4];
         let mut texture_borders = [[0; 2]; 4];
         let mut texture1_is_shape_mask = false;
         for (i, tc) in tcs.iter().enumerate() {
             let Some(tc) = tc.filter(|t| t.enabled) else {
                 continue;
             };
+            texture_uv_sets[i] = tc.uv_set_index;
             texture_indexes[i] = tc.effective_texture();
+            // UvSet 动画对无贴图层也保留（翻页覆盖以它为基底）。
+            let (origin, scale, rot) = uv(tc.uv_set_index);
+            uv_origins[i] = origin;
+            uv_scales[i] = scale;
+            uv_rotations[i] = rot;
             if texture_indexes[i] < 0 {
                 continue;
             }
             color_to_alpha[i] = tc.color_to_alpha;
-            let (origin, scale) = uv(tc.uv_set_index);
-            uv_origins[i] = origin;
-            uv_scales[i] = scale;
             texture_borders[i] = [tc.texture_border_u, tc.texture_border_v];
             if i == 0 {
                 texture1_is_shape_mask = tc.is_shape_mask();
@@ -1332,7 +1396,7 @@ impl ResolvedTexture {
             .texture_distortion
             .as_ref()
             .filter(|t| t.enabled && t.texture_index >= 0);
-        let (texture_distortion_index, distortion_power, distortion_targets, uvd, dborders) =
+        let (texture_distortion_index, distortion_power, distortion_targets, uvd, dborders, duv_set) =
             match td {
                 Some(td) => {
                     let uvd = uv(td.uv_set_index);
@@ -1355,9 +1419,10 @@ impl ResolvedTexture {
                         targets,
                         uvd,
                         [td.texture_border_u, td.texture_border_v],
+                        td.uv_set_index,
                     )
                 }
-                None => (-1, 0.0, 0, ([0.0, 0.0], [1.0, 1.0]), [0, 0]),
+                None => (-1, 0.0, 0, ([0.0, 0.0], [1.0, 1.0], 0.0), [0, 0], 0),
             };
         let mut combine_modes = [[0; 2]; 3];
         for (i, tc) in tcs[1..].iter().enumerate() {
@@ -1365,17 +1430,28 @@ impl ResolvedTexture {
                 combine_modes[i] = [tc.calculate_color, tc.calculate_alpha];
             }
         }
+        let combine_mode_tc1 = particle
+            .texture_color1
+            .as_ref()
+            .filter(|t| t.enabled)
+            .map(|tc| [tc.calculate_color, tc.calculate_alpha])
+            .unwrap_or([0, 3]);
         Self {
             texture_indexes,
+            texture_uv_sets,
+            combine_mode_tc1,
             combine_modes,
             color_to_alpha,
             uv_origins,
             uv_scales,
+            uv_rotations,
             texture_borders,
             texture1_is_shape_mask,
+            texture1_enabled: tcs[0].is_some_and(|tc| tc.enabled),
             texture_distortion_index,
             distortion_power,
             distortion_targets,
+            distortion_uv_set: duv_set,
             uvd_origin: uvd.0,
             uvd_scale: uvd.1,
             distortion_borders: dborders,

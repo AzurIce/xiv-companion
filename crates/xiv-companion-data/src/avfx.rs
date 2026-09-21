@@ -1199,7 +1199,8 @@ pub struct VfxModelGeometry {
 #[serde(rename_all = "camelCase")]
 pub struct VfxDrawVertex {
     pub position: [f32; 3],
-    pub uv: [f32; 2],
+    /// 四组 UV（half2 ×4；各贴图层按 TCn 的 `UvSN` 选用其中一组作基底）。
+    pub uvs: [[f32; 2]; 4],
     pub color: [u8; 4],
 }
 
@@ -2488,10 +2489,24 @@ fn parse_model(node: &AvfxNodeView) -> VfxModelGeometry {
                     f16_to_f32([chunk[2], chunk[3]]),
                     f16_to_f32([chunk[4], chunk[5]]),
                 ],
-                // 首组 UV（half2），其余三组不消费。
-                uv: [
-                    f16_to_f32([chunk[20], chunk[21]]),
-                    f16_to_f32([chunk[22], chunk[23]]),
+                // 四组 UV（half2 ×4，偏移 20/24/28/32；VFXEditor `AvfxVertex`）。
+                uvs: [
+                    [
+                        f16_to_f32([chunk[20], chunk[21]]),
+                        f16_to_f32([chunk[22], chunk[23]]),
+                    ],
+                    [
+                        f16_to_f32([chunk[24], chunk[25]]),
+                        f16_to_f32([chunk[26], chunk[27]]),
+                    ],
+                    [
+                        f16_to_f32([chunk[28], chunk[29]]),
+                        f16_to_f32([chunk[30], chunk[31]]),
+                    ],
+                    [
+                        f16_to_f32([chunk[32], chunk[33]]),
+                        f16_to_f32([chunk[34], chunk[35]]),
+                    ],
                 ],
                 color: [chunk[16], chunk[17], chunk[18], chunk[19]],
             });
@@ -3046,7 +3061,7 @@ mod tests {
         let draw = model.draw.as_ref().expect("draw model");
         assert_eq!(draw.vertices.len(), 1);
         assert!((draw.vertices[0].position[0] - 0.5).abs() < 1.0e-3);
-        assert!((draw.vertices[0].uv[0] - 0.25).abs() < 1.0e-3);
+        assert!((draw.vertices[0].uvs[0][0] - 0.25).abs() < 1.0e-3);
         assert_eq!(draw.indices, vec![0, 1, 2]);
 
         assert!(file.warnings.is_empty(), "{:?}", file.warnings);
