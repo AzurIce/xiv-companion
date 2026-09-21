@@ -56,6 +56,8 @@ struct VfxInstanceInput {
     @location(8) distortion: vec4<f32>,
     // 非 billboard 朝向（四元数 xyzw）。
     @location(9) orientation: vec4<f32>,
+    // xy: 面内旋转枢轴（半尺寸单位，Smpl PvtX/PvtY）；zw 预留。
+    @location(10) pivot: vec4<f32>,
 };
 
 struct VfxVertexOutput {
@@ -119,13 +121,14 @@ fn vs_main(
     var up: vec3<f32>;
     var in_plane = corner;
     if is_billboard {
-        // 面向相机的基向量 + 面内旋转。
+        // 面向相机的基向量 + 面内旋转（绕枢轴：corner′ = pivot + R·(corner−pivot)）。
         let cos_rotation = cos(rotation);
         let sin_rotation = sin(rotation);
+        let rel = corner - instance.pivot.xy;
         in_plane = vec2<f32>(
-            corner.x * cos_rotation - corner.y * sin_rotation,
-            corner.x * sin_rotation + corner.y * cos_rotation,
-        );
+            rel.x * cos_rotation - rel.y * sin_rotation,
+            rel.x * sin_rotation + rel.y * cos_rotation,
+        ) + instance.pivot.xy;
         let to_particle = position - camera.camera_position.xyz;
         var forward = vec3<f32>(0.0, 0.0, -1.0);
         if dot(to_particle, to_particle) > 1.0e-8 {

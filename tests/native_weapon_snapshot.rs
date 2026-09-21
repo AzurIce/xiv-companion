@@ -5217,6 +5217,8 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 orientation: [0.0, 0.0, 0.0, 1.0],
                 billboard: true,
                 color: [3.0, 1.8, 0.6, 1.0],
+                draw_priority: 0,
+                pivot: [0.0, 0.0],
                 texture_indexes: [-1; 4],
                 combine_modes: [[0; 2]; 3],
                 color_to_alpha: [false; 4],

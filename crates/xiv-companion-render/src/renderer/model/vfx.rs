@@ -7,7 +7,7 @@
 use super::*;
 use std::collections::HashMap;
 
-/// GPU 四边形实例（160 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
+/// GPU 四边形实例（176 字节，与 `vfx.wesl` 的 `VfxInstanceInput` 布局一致）。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVfxQuad {
@@ -24,20 +24,22 @@ pub struct GpuVfxQuad {
     pub distortion: [f32; 4],
     /// 非 billboard 朝向（四元数 xyzw）。
     pub orientation: [f32; 4],
+    /// xy：面内旋转枢轴（半尺寸单位，Smpl `PvtX`/`PvtY`）；zw 预留。
+    pub pivot: [f32; 4],
 }
 
 impl GpuVfxQuad {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 10] = {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 11] = {
         let mut attributes = [
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: 0,
                 shader_location: 0,
             };
-            10
+            11
         ];
         let mut index = 0;
-        while index < 10 {
+        while index < 11 {
             attributes[index].offset = (index * 16) as wgpu::BufferAddress;
             attributes[index].shader_location = index as u32;
             index += 1;
@@ -91,6 +93,7 @@ impl From<&xiv_companion_data::VfxQuad> for GpuVfxQuad {
                 0.0,
             ],
             orientation: quad.orientation,
+            pivot: [quad.pivot[0], quad.pivot[1], 0.0, 0.0],
         }
     }
 }
@@ -440,31 +443,39 @@ impl VfxParticles {
         index
     }
 
-    /// 增量上传实例数据（每帧调用；超过容量截断）。按（混合, 组键）稳定
-    /// 排序分组成绘制段。
+    /// 增量上传实例数据（每帧调用；超过容量截断）。按（混合, 绘制优先级,
+    /// 组键）稳定排序分组成绘制段——DwPr 主导 alpha 混合的先后，同优先级内
+    /// 保持创建序（游戏内同级按创建顺序绘制）。
     pub fn update(&mut self, context: &ModelRenderContext, quads: &[xiv_companion_data::VfxQuad]) {
         self.count = quads.len().min(self.capacity);
         self.draw_ranges.clear();
         if self.count == 0 {
             return;
         }
-        let mut ordered: Vec<(bool, VfxGroupKey, GpuVfxQuad)> = quads[..self.count]
+        let mut ordered: Vec<(bool, i32, VfxGroupKey, GpuVfxQuad)> = quads[..self.count]
             .iter()
-            .map(|quad| (quad.blend_add, VfxGroupKey::of_quad(quad), GpuVfxQuad::from(quad)))
+            .map(|quad| {
+                (
+                    quad.blend_add,
+                    quad.draw_priority,
+                    VfxGroupKey::of_quad(quad),
+                    GpuVfxQuad::from(quad),
+                )
+            })
             .collect();
-        ordered.sort_by_key(|(blend_add, key, _)| (*blend_add, *key));
+        ordered.sort_by_key(|(blend_add, priority, key, _)| (*blend_add, *priority, *key));
         context.queue().write_buffer(
             &self.instance_buffer,
             0,
             bytemuck::cast_slice(
                 &ordered
                     .iter()
-                    .map(|(_, _, gpu)| *gpu)
+                    .map(|(_, _, _, gpu)| *gpu)
                     .collect::<Vec<_>>(),
             ),
         );
         let mut start = 0_u32;
-        for (blend_add, key, _) in &ordered {
+        for (blend_add, _, key, _) in &ordered {
             let group = self.group_for(context, *key);
             match self.draw_ranges.last_mut() {
                 Some(range)
@@ -485,7 +496,8 @@ impl VfxParticles {
         }
     }
 
-    /// 增量上传网格粒子实例并按（网格, 混合, 剔除, 组键）分组记录绘制段。
+    /// 增量上传网格粒子实例并按（混合, 绘制优先级, 剔除, 网格, 组键）
+    /// 稳定排序分组记录绘制段。
     pub fn update_mesh(
         &mut self,
         context: &ModelRenderContext,
@@ -496,32 +508,35 @@ impl VfxParticles {
         if self.mesh_instance_count == 0 {
             return;
         }
-        let mut ordered: Vec<(usize, bool, i32, VfxGroupKey, GpuVfxMeshInstance)> = instances
+        let mut ordered: Vec<(bool, i32, i32, usize, VfxGroupKey, GpuVfxMeshInstance)> = instances
             [..self.mesh_instance_count]
             .iter()
             .map(|instance| {
                 (
-                    instance.model_index,
                     instance.blend_add,
+                    instance.draw_priority,
                     instance.cull_mode,
+                    instance.model_index,
                     VfxGroupKey::of_mesh(instance),
                     GpuVfxMeshInstance::from(instance),
                 )
             })
             .collect();
-        ordered.sort_by_key(|(mesh, blend_add, cull, key, _)| (*mesh, *blend_add, *cull, *key));
+        ordered.sort_by_key(|(blend_add, priority, cull, mesh, key, _)| {
+            (*blend_add, *priority, *cull, *mesh, *key)
+        });
         context.queue().write_buffer(
             &self.mesh_instance_buffer,
             0,
             bytemuck::cast_slice(
                 &ordered
                     .iter()
-                    .map(|(_, _, _, _, gpu)| *gpu)
+                    .map(|(_, _, _, _, _, gpu)| *gpu)
                     .collect::<Vec<_>>(),
             ),
         );
         let mut start = 0_u32;
-        for (mesh, blend_add, cull_mode, key, _) in &ordered {
+        for (blend_add, _, cull_mode, mesh, key, _) in &ordered {
             let group = self.group_for(context, *key);
             match self.mesh_draw_ranges.last_mut() {
                 Some(range)

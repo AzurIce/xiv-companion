@@ -203,9 +203,14 @@ fn cubic(a: f32, b: f32, c: f32, d: f32, s: f32) -> f32 {
 #[serde(rename_all = "camelCase")]
 pub struct AvfxCurve3Axis {
     pub axis_connect: u32,
+    pub axis_connect_random: u32,
     pub x: Option<AvfxCurve>,
     pub y: Option<AvfxCurve>,
     pub z: Option<AvfxCurve>,
+    /// 随机轴曲线（`XR`/`YR`/`ZR`）：随机上下幅度，按粒子播种叠加。
+    pub random_x: Option<AvfxCurve>,
+    pub random_y: Option<AvfxCurve>,
+    pub random_z: Option<AvfxCurve>,
 }
 
 impl AvfxCurve3Axis {
@@ -283,8 +288,11 @@ impl AvfxCurve3Axis {
 #[serde(rename_all = "camelCase")]
 pub struct AvfxCurve2Axis {
     pub axis_connect: u32,
+    pub axis_connect_random: u32,
     pub x: Option<AvfxCurve>,
     pub y: Option<AvfxCurve>,
+    pub random_x: Option<AvfxCurve>,
+    pub random_y: Option<AvfxCurve>,
 }
 
 impl AvfxCurve2Axis {
@@ -318,6 +326,18 @@ pub struct AvfxColorCurve {
     pub alpha: Option<AvfxCurve>,
     pub brightness: Option<AvfxCurve>,
     pub scale_alpha: Option<AvfxCurve>,
+    pub scale_rgb: Option<AvfxColorScaleRgb>,
+    /// 随机通道曲线（`RanR`/`RanG`/`RanB`/`RanA`/`RBri`）。
+    pub random: [Option<AvfxCurve>; 5],
+}
+
+/// `SclR`/`SclG`/`SclB`：贴图 rgb 缩放曲线。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxColorScaleRgb {
+    pub r: Option<AvfxCurve>,
+    pub g: Option<AvfxCurve>,
+    pub b: Option<AvfxCurve>,
 }
 
 impl AvfxColorCurve {
@@ -396,19 +416,43 @@ pub struct AvfxTimelineItem {
 }
 
 /// Emitter 内的粒子/子发射器创建项（`ItPr`/`ItEm` 容器，累积式）。
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+/// 字段对齐 VFXEditor `AvfxEmitterItem`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvfxEmitterItem {
     pub enabled: bool,
     pub target_index: i32,
+    /// `LoDr`：局部方向模式。
+    pub local_direction: i32,
     pub create_time: i32,
     pub create_count: i32,
     pub create_probability: i32,
-    pub start_frame: i32,
-    pub generate_delay: i32,
-    /// ItPr 覆盖粒子寿命（`bOvr`/`OvrV`）。
+    /// `PICd`：父级坐标影响方式。
+    pub parent_influence_coord: i32,
+    /// `PICo`：父级颜色影响方式。
+    pub parent_influence_color: i32,
+    /// `ICbS`/`ICbR`/`ICbP`/`ICbB`：发射器缩放/旋转/位置/绑点位置是否传给子粒子。
+    pub influence_coord_scale: bool,
+    pub influence_coord_rot: bool,
+    pub influence_coord_pos: bool,
+    pub influence_coord_binder: bool,
+    /// `ICSK`：位置影响的黏着系数。
+    pub influence_coord_unstickiness: f32,
+    /// `IPbV`/`IPbL`：继承父级速度/寿命。
+    pub inherit_parent_velocity: bool,
+    pub inherit_parent_life: bool,
+    /// ItPr 覆盖粒子寿命（`bOvr`/`OvrV`/`OvrR`）。
     pub override_life: bool,
     pub override_life_value: i32,
+    pub override_life_random: i32,
+    /// `PrLk`：参数链接。
+    pub parameter_link: i32,
+    pub start_frame: i32,
+    pub start_frame_null_update: bool,
+    /// `BIAX`/`BIAY`/`BIAZ`：按注入角逐粒子分布的旋转（弧度）。
+    pub by_injection_angle: [f32; 3],
+    pub generate_delay: i32,
+    pub generate_delay_by_one: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -549,9 +593,21 @@ pub struct AvfxParticleTexture {
     pub calculate_alpha: i32,
     /// `bC2A`（颜色转 alpha：alpha 取颜色 x 分量）。
     pub color_to_alpha: bool,
+    /// `bUSC`/`bPFC`：屏幕拷贝/上一帧拷贝来源（渲染端不支持时按普通贴图处理）。
+    pub use_screen_copy: bool,
+    pub previous_frame_copy: bool,
+    /// `bUOS`：角色肖像贴图（UI 场景）。
+    pub use_chara_portrait: bool,
+    /// `TFT`：过滤模式（0 近邻、1 线性……）。
+    pub texture_filter: i32,
     /// `TBUT`/`TBVT`：U/V 边界模式（0 Repeat、1 Clamp、2 Mirror）。
     pub texture_border_u: i32,
     pub texture_border_v: i32,
+    /// `TxN`/`TxNR`：TC1 的贴图序号曲线及其随机项（按寿命选 TLst 里的贴图）。
+    pub tex_n: Option<AvfxCurve>,
+    pub tex_n_random: Option<AvfxCurve>,
+    /// `TLst` 完整列表（`mask_texture_index` 是首项；TxN 曲线索引整个池）。
+    pub texture_list: Vec<i32>,
 }
 
 impl AvfxParticleTexture {
@@ -572,39 +628,127 @@ impl AvfxParticleTexture {
     }
 }
 
-/// 粒子 `Data` 块（按粒子类型解析的子集）。
+/// `TN` 法线贴图（需场景光照模型；渲染端暂未消费）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxParticleTextureNormal {
+    pub enabled: bool,
+    pub uv_set_index: i32,
+    pub texture_filter: i32,
+    pub texture_border_u: i32,
+    pub texture_border_v: i32,
+    pub texture_index: i32,
+    /// `NPow`：法线强度曲线。
+    pub power: AvfxCurve,
+}
+
+/// `TR` 反射贴图（需场景反射模型；渲染端暂未消费）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxParticleTextureReflection {
+    pub enabled: bool,
+    pub use_screen_copy: bool,
+    pub texture_filter: i32,
+    pub calculate_color: i32,
+    pub texture_index: i32,
+    /// `Rate`：反射混入比例曲线。
+    pub rate: AvfxCurve,
+    /// `RPow`：反射强度曲线。
+    pub power: AvfxCurve,
+}
+
+/// `TP` 调色板贴图（按 `POff` 在调色板内取色；渲染端暂未消费）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxParticleTexturePalette {
+    pub enabled: bool,
+    pub texture_filter: i32,
+    pub texture_border: i32,
+    pub texture_index: i32,
+    /// `POff`/`POfR`：调色板偏移曲线及其随机项。
+    pub offset: AvfxCurve,
+    pub offset_random: AvfxCurve,
+}
+
+/// 通用字段容器：Data 块里的叶子字段原样保留，保证类型未建模时数据也不丢。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxGenericData {
+    /// 标量叶子（i32 读值）。
+    pub scalars: BTreeMap<String, i32>,
+    /// 单轴曲线容器（含 Keys 子块）。
+    pub curves: BTreeMap<String, AvfxCurve>,
+    /// 多轴曲线容器（含 X/Y/Z 子块）。
+    pub curve3s: BTreeMap<String, AvfxCurve3Axis>,
+    /// 颜色曲线容器（含 RGB 子块）。
+    pub color_curves: BTreeMap<String, AvfxColorCurve>,
+}
+
+/// 粒子 `Data` 块（按粒子类型解析）。
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AvfxParticleData {
-    /// 未写 Data 块或类型未建模。
+    /// 未写 Data 块。
     #[default]
     None,
-    /// Model 粒子：`MdNo` 模型序号字节列表（随机池，取首个）+
-    /// `ColB`/`ColE` 起止颜色曲线。
+    /// Model 粒子（字段对齐 VFXEditor `AvfxParticleDataModel`）。
     Model {
+        /// `MNRv`/`MNRt`/`MNRi`：模型序号随机池参数。
+        model_number_random_value: i32,
+        model_number_random_type: i32,
+        model_number_random_interval: i32,
+        fresnel_type: i32,
+        directional_light_type: i32,
+        point_light_type: i32,
+        is_lightning: bool,
+        is_morph: bool,
+        /// `MdNo` 模型序号字节列表（随机池，取首个）。
         model_indexes: Vec<i32>,
+        /// `NoAn` 动画序号曲线。
+        animation_number: Option<AvfxCurve>,
+        /// `Moph` 形变曲线。
+        morph: Option<AvfxCurve>,
+        /// `FrC`/`FrCR`/`FrRt`：菲涅尔曲线、其随机项与旋转。
+        fresnel_curve: Option<AvfxCurve>,
+        fresnel_curve_random: Option<AvfxCurve>,
+        fresnel_rotation: Option<AvfxCurve3Axis>,
         color_begin: AvfxColorCurve,
         color_end: AvfxColorCurve,
     },
     /// LightModel 粒子：`MNO` 模型序号。
     LightModel { model_index: i32 },
-    /// Powder 粒子（子粒子发射器）：`CnOf` 中心偏移。
-    Powder { center_offset: f32 },
-    /// Quad 粒子：`SS`。
-    Quad { scaling_scale: i32 },
+    /// Powder 粒子（子粒子发射器）：`bMV`/`bLoc`/`bLgt`/`LgtT`/`CnOf`。
+    Powder {
+        use_character_movement: bool,
+        use_character_location: bool,
+        is_lightning: bool,
+        directional_light_type: i32,
+        center_offset: f32,
+    },
+    /// Quad 粒子：`SS`/`bMP`。
+    Quad { scaling_scale: i32, is_movement_particle: bool },
+    /// 其余类型（Disc/Polygon/Line/Polyline/Laser/Windmill/Decal/…）：
+    /// 全字段原样保留在通用容器里。
+    Other(AvfxGenericData),
 }
 
-/// Powder 粒子的 `Smpl`（简单动画/子粒子发射参数）子集。
+/// Powder 粒子的 `Smpl`（简单动画/子粒子发射参数），字段对齐
+/// VFXEditor `AvfxParticleSimple`。
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvfxParticleSimple {
+    /// `SIPT`/`SIDT`/`SBDT`：出生位置、出生方向、基础方向类型。
+    pub injection_position_type: i32,
+    pub injection_direction_type: i32,
+    pub base_direction_type: i32,
     /// `CCnt`：单 spawner 生命周期内子粒子总数上限。
     pub create_count: i32,
     /// `CrAX`/`CrAY`/`CrAZ`：出生点随机散布半径。
     pub create_area: [f32; 3],
-    /// `VMin`/`VMax`：子粒子初速度区间（单位/帧）。
-    pub velocity_min: f32,
-    pub velocity_max: f32,
+    /// `CAX`/`CAY`/`CAZ`：出生点坐标精度。
+    pub coord_accuracy: [f32; 3],
+    /// `CGX`/`CGY`/`CGZ`：子粒子重力。
+    pub coord_gravity: [f32; 3],
     /// `SBX`/`SBY` 与 `SEX`/`SEY`：出生/消亡尺寸。
     pub scale_start: [f32; 2],
     pub scale_end: [f32; 2],
@@ -613,17 +757,64 @@ pub struct AvfxParticleSimple {
     /// `SRX0`/`SRX1`、`SRY0`/`SRY1`：尺寸随机倍率区间。
     pub scale_rand_x: [f32; 2],
     pub scale_rand_y: [f32; 2],
+    /// `RIX`/`RIY`/`RIZ`：出生旋转（度）。
+    pub rotation_start: [f32; 3],
+    /// `RAX`/`RAY`/`RAZ`：每帧旋转增量。
+    pub rotation_add: [f32; 3],
+    /// `RBX`/`RBY`/`RBZ`：旋转基准。
+    pub rotation_base: [f32; 3],
+    /// `RVX`/`RVY`/`RVZ`：旋转速度。
+    pub rotation_velocity: [f32; 3],
+    /// `VMin`/`VMax`：子粒子初速度区间（单位/帧）。
+    pub velocity_min: f32,
+    pub velocity_max: f32,
+    /// `FltR`/`FltS`：速度衰减率与目标速度。
+    pub velocity_flattery_rate: f32,
+    pub velocity_flattery_speed: f32,
+    /// `UvCU`/`UvCV`/`UvIv`：UV 翻页贴图的格子数与翻页间隔（帧）。
+    pub uv_cell: [i32; 2],
+    pub uv_interval: i32,
+    /// `UvNR`：UV 起始格随机个数；`UvLC`：翻页循环次数。
+    pub uv_no_random: i32,
+    pub uv_loop_count: i32,
+    /// `IJMN`：出生点引用的发射模型序号（-1 = 发射器原点）。
+    pub injection_model_index: i32,
+    /// `VBMN`：出生点绑定顶点的模型序号（-1 = 不绑定）。
+    pub injection_vertex_bind_model_index: i32,
+    /// `IRD0`/`IRD1`：径向出生方向区间。
+    pub injection_radial_dir: [f32; 2],
+    /// `PvtX`/`PvtY`：旋转枢轴。
+    pub pivot: [f32; 2],
+    /// `BlkN`：block 编号。
+    pub block_num: i32,
+    /// `LLin`/`LLax`：线长区间（Polyline 子粒子）。
+    pub line_length_min: f32,
+    pub line_length_max: f32,
     /// `CrI`：子粒子创建间隔（帧）。
     pub create_interval: i32,
+    /// `CIM`/`CIMR`：移动创建间隔与其随机项。
+    pub create_interval_on_movement: f32,
+    pub create_interval_on_movement_random: f32,
+    /// `CrIR`：创建间隔随机项。
+    pub create_interval_random: i32,
     /// `CrIC`：每次创建个数。
     pub create_interval_count: i32,
     /// `CrIL`：子粒子寿命（帧）。
     pub create_interval_life: i32,
-    /// `IJMN`：出生点引用的发射模型序号（-1 = 发射器原点）。
-    pub injection_model_index: i32,
-    /// `UvCU`/`UvCV`/`UvIv`：UV 翻页贴图的格子数与翻页间隔（帧）。
-    pub uv_cell: [i32; 2],
-    pub uv_interval: i32,
+    /// `CrLR`：寿命随机项。
+    pub create_life_random: i32,
+    /// `bCrN`：子粒子死亡后重建。
+    pub create_new_after_delete: bool,
+    /// `bRUV`：UV 翻页反向。
+    pub uv_reverse: bool,
+    /// `bSRL`：X/Y 尺寸随机联动。
+    pub scale_random_link: bool,
+    /// `bBnP`：子粒子绑定父粒子位置。
+    pub bind_parent: bool,
+    /// `bSnP`：子粒子尺寸随父粒子缩放。
+    pub scale_by_parent: bool,
+    /// `PolT`：polyline 标签。
+    pub polyline_tag: i32,
     /// `Cols`：4 段颜色（RGBA 字节），`Frms`：对应的 4 个帧号。
     pub colors: [[u8; 4]; 4],
     pub frames: [i16; 4],
@@ -642,6 +833,8 @@ pub struct AvfxParticleDistortion {
     pub texture_index: i32,
     /// `DPow` 扭曲强度曲线。
     pub power: AvfxCurve,
+    /// `TFT`：过滤模式。
+    pub texture_filter: i32,
     /// `TBUT`/`TBVT`：扭曲贴图边界模式。
     pub texture_border_u: i32,
     pub texture_border_v: i32,
@@ -677,13 +870,34 @@ pub struct AvfxEmitter {
     pub emitter_count: i32,
     /// `ROT`：旋转顺序（VFXEditor `RotationOrder`：0 XYZ、1 YZX、2 ZXY…）。
     pub rotation_order: i32,
+    /// `RBDT`：发射器朝向基准。
+    pub rotation_direction_base: i32,
+    /// `CCOT`：坐标计算顺序（0 Scale_Rot_Translate、1 Translate_Scale_Rot）。
+    pub coord_compute_order: i32,
+    /// `bAD`：任意方向发射。
+    pub any_direction: bool,
+    /// `EfNo`：效果器序号（-1 无）。
+    pub effector_index: i32,
     pub life: AvfxLife,
     pub create_count: AvfxCurve,
+    pub create_count_random: AvfxCurve,
     pub create_interval: AvfxCurve,
+    pub create_interval_random: AvfxCurve,
+    /// `Gra`/`GraR`：发射器重力（传子粒子）。
+    pub gravity: AvfxCurve,
+    pub gravity_random: AvfxCurve,
+    /// `ARs`/`ARsR`：空气阻力。
+    pub air_resistance: AvfxCurve,
+    pub air_resistance_random: AvfxCurve,
     pub color: AvfxColorCurve,
     pub position: AvfxCurve3Axis,
     pub rotation: AvfxCurve3Axis,
     pub scale: AvfxCurve3Axis,
+    /// `IAX`/`IAY`/`IAZ`（+`R` 随机）：注入角（弧度）。
+    pub injection_angle: [AvfxCurve; 3],
+    pub injection_angle_random: [AvfxCurve; 3],
+    /// `VRX`/`VRY`/`VRZ`：初速度随机幅度。
+    pub velocity_random: [AvfxCurve; 3],
     pub particle_items: Vec<AvfxEmitterItem>,
     pub emitter_items: Vec<AvfxEmitterItem>,
     /// 形状/模型发射数据（按 `EVT` 解析 `Data` 块）。
@@ -778,18 +992,71 @@ pub struct AvfxParticle {
     pub rotation_direction_base: i32,
     /// `RoOT`：旋转顺序。
     pub rotation_order: i32,
+    /// `CCOT`：坐标计算顺序。
+    pub coord_compute_order: i32,
+    /// `EnvT`/`DirT`：环境光/平行光类型。
+    pub env_light_type: i32,
+    pub dir_light_type: i32,
+    /// `UVPT`：UV 精度。
+    pub uv_precision: i32,
+    /// `DwPr`：绘制优先级（同发射器内排序，越小先画）。
+    pub draw_priority: i32,
+    /// `DsSp`：软粒子（深度衰减；需场景深度，渲染端暂未消费）。
+    pub is_soft_particle: bool,
+    /// `Coll`：碰撞类型。
+    pub collision_type: i32,
+    /// `bS11`/`ShUT`/`ShR`/`ShT`/`UniV`/`HybV`/`bE24`：阴影与 Dawntrail 新增参数。
+    pub s11_enabled: bool,
+    pub sh_u_t: i32,
+    pub sh_r: i32,
+    pub sh_t: i32,
+    pub uni_v: i32,
+    pub hyb_v: i32,
+    pub e24_enabled: bool,
+    /// `bATM`/`bAFg`：是否参与 tone map / 雾。
+    pub is_apply_tone_map: bool,
+    pub is_apply_fog: bool,
+    /// `bNea`/`bFar` 与 `NeSt`/`NeEd`/`FaSt`/`FaEd`/`FaBP`：近/远距离裁剪。
+    pub clip_near_enable: bool,
+    pub clip_far_enable: bool,
+    pub clip_near_start: f32,
+    pub clip_near_end: f32,
+    pub clip_far_start: f32,
+    pub clip_far_end: f32,
+    pub clip_base_point: i32,
+    /// `EvAR`/`DlAR`/`LBAR`：环境光/平行光/光缓冲应用率。
+    pub apply_rate_environment: i32,
+    pub apply_rate_directional: i32,
+    pub apply_rate_light_buffer: i32,
+    /// `DOTy`/`DpOf`：深度偏移类型与值。
+    pub depth_offset_type: i32,
+    pub depth_offset: f32,
+    /// `bSCt`：启用 Smpl 简单动画。
+    pub simple_anim_enable: bool,
     pub life: AvfxLife,
     pub gravity: AvfxCurve,
+    /// `GraR`：重力随机曲线。
+    pub gravity_random: AvfxCurve,
     pub air_resistance: AvfxCurve,
+    /// `ARsR`：空气阻力随机曲线。
+    pub air_resistance_random: AvfxCurve,
     pub scale: AvfxCurve3Axis,
     pub rotation: AvfxCurve3Axis,
     pub position: AvfxCurve3Axis,
     pub color: AvfxColorCurve,
     pub rotation_velocity: [AvfxCurve; 3],
+    /// `VRXR`/`VRYR`/`VRZR`：旋转速度随机曲线。
+    pub rotation_velocity_random: [AvfxCurve; 3],
     pub texture_color1: Option<AvfxParticleTexture>,
     pub texture_color2: Option<AvfxParticleTexture>,
     pub texture_color3: Option<AvfxParticleTexture>,
     pub texture_color4: Option<AvfxParticleTexture>,
+    /// `TN` 法线贴图。
+    pub texture_normal: Option<AvfxParticleTextureNormal>,
+    /// `TR` 反射贴图。
+    pub texture_reflection: Option<AvfxParticleTextureReflection>,
+    /// `TP` 调色板贴图。
+    pub texture_palette: Option<AvfxParticleTexturePalette>,
     pub texture_distortion: Option<AvfxParticleDistortion>,
     pub uv_sets: Vec<AvfxUvSet>,
     /// `Data` 块（按粒子类型）。
@@ -823,14 +1090,86 @@ impl AvfxParticle {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+/// Binder 属性组（`PrpS`/`Prp1`/`Prp2`/`PrpG`，字段对齐 VFXEditor
+/// `AvfxBinderProperties`）。S=起始、1/2=插值、G=目标，引擎在它们之间渐变。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AvfxBinder {
-    /// 0 = Point（武器挂点绑定，其余类型原样记录）。
-    pub binder_type: u32,
-    /// `PrpS.BPID`：目标模型上的绑点序号（武器 MDL 的 ElementId：
+pub struct AvfxBinderProperties {
+    /// `BPT`：绑点类型（0 自由、1 按 ID……）。
+    pub bind_point_type: i32,
+    /// `BPTP`：绑定目标点类型（默认 0 = 按名）。
+    pub bind_target_point_type: i32,
+    /// `Name`：按名绑定目标（角色骨骼名等）。
+    pub binder_name: String,
+    /// `BPID`：目标模型上的绑点序号（武器 MDL 的 ElementId：
     /// 3=基部 / 4=中部 / 5=尖部……；-1 = 未指定，保持原点）。
     pub bind_point_id: i32,
+    /// `GenD`：生成延迟（帧）。
+    pub generate_delay: i32,
+    /// `CoUF`：坐标更新帧。
+    pub coord_update_frame: i32,
+    /// `bRng` 与 `RnPT`/`RnPX`-`RnPZ`/`RnRd`：环形绑点参数。
+    pub ring_enabled: bool,
+    pub ring_progress_time: i32,
+    pub ring_position: [f32; 3],
+    pub ring_radius: f32,
+    pub bct: i32,
+    /// `Pos`：绑点位置曲线。
+    pub position: AvfxCurve3Axis,
+}
+
+/// `Bind` 绑点块（字段对齐 VFXEditor `AvfxBinder`）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxBinder {
+    /// `BnVr`：0 = Point（武器挂点绑定，其余类型原样记录）。
+    pub binder_type: u32,
+    /// `properties_start.bind_point_id` 的便捷镜像（渲染主路径消费）。
+    pub bind_point_id: i32,
+    /// `bStG`：起始即全局方向。
+    pub start_to_global_direction: bool,
+    /// `bVSc`/`bVSb`/`bVSd`/`bVSi`：VFX 缩放开关、偏置、深度偏移、插值。
+    pub vfx_scale_enabled: bool,
+    pub vfx_scale_bias: f32,
+    pub vfx_scale_depth_offset: bool,
+    pub vfx_scale_interpolation: bool,
+    /// `bTSc`/`bTSd`/`bTSi`：变换缩放及其深度偏移/插值。
+    pub transform_scale: i32,
+    pub transform_scale_depth_offset: bool,
+    pub transform_scale_interpolation: bool,
+    /// `bFTO`：跟随目标朝向。
+    pub following_target_orientation: bool,
+    /// `bDSE`/`bATS`/`bIFY`/`bBET`。
+    pub document_scale_enabled: bool,
+    pub adjust_to_screen_enabled: bool,
+    pub ify: bool,
+    pub bet: bool,
+    /// `Life`：binder 寿命（帧）。
+    pub life: i32,
+    /// `RoTp`：binder 旋转类型。
+    pub rotation_type: i32,
+    pub properties_start: Option<AvfxBinderProperties>,
+    pub properties_1: Option<AvfxBinderProperties>,
+    pub properties_2: Option<AvfxBinderProperties>,
+    pub properties_goal: Option<AvfxBinderProperties>,
+}
+
+/// `Efct` 效果器（相机震动/画面扭曲等；武器特效几乎不用，保留参数与
+/// 原始 `Data` 负载）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxEffector {
+    /// `EfVT`：效果器类型。
+    pub raw_effector_type: u32,
+    pub rotation_order: i32,
+    pub coord_compute_order: i32,
+    /// `bAOV`/`bAGm`：作用于其他 VFX / 游戏本体。
+    pub affect_other_vfx: bool,
+    pub affect_game: bool,
+    pub loop_start: i32,
+    pub loop_end: i32,
+    /// `Data` 块原始负载（类型相关，未建模）。
+    pub data_payload: Vec<u8>,
 }
 
 /// 发射模型顶点（`VEmt`，28 字节/顶点）：位置 + 法线（注入方向）+ 颜色。
@@ -873,15 +1212,83 @@ pub struct VfxDrawModel {
 }
 
 /// 解析后的 avfx 文件子集；未消费的根级块按名计数进 `unknown_blocks`。
+/// 根级全局参数（VFXEditor `AvfxMain`）：绘制层、裁剪盒、距离淡出、
+/// 修正值（位置/旋转/缩放/颜色）等。大多数对武器常驻特效无影响，全量保留。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvfxGlobalParameters {
+    /// `bDFP`/`bFG`/`bTS`/`bASH`：延迟快速粒子、贴地、变换跳过、隐藏即停。
+    pub is_delay_fast_particle: bool,
+    pub is_fit_ground: bool,
+    pub is_transform_skip: bool,
+    pub is_all_stop_on_hide: bool,
+    /// `bCBC`/`bCul` 与 `CBPx-CBPz`/`CBSx-CBSz`：裁剪盒。
+    pub can_be_clipped_out: bool,
+    pub clip_box_enabled: bool,
+    pub clip_box: [f32; 3],
+    pub clip_box_size: [f32; 3],
+    /// `ZBMs`/`ZBMd`：Z 偏置。
+    pub bias_z_max_scale: f32,
+    pub bias_z_max_distance: f32,
+    /// `bCmS`/`bFEL`/`bOSE`/`bOSt`。
+    pub is_camera_space: bool,
+    pub is_full_env_light: bool,
+    pub ose: bool,
+    pub is_clip_own_setting: bool,
+    /// `NCB`/`NCE`/`FCB`/`FCE`：近/远裁剪。
+    pub near_clip_begin: f32,
+    pub near_clip_end: f32,
+    pub far_clip_begin: f32,
+    pub far_clip_end: f32,
+    /// `SPFR`/`SKO`：软粒子淡出范围、排序键偏移。
+    pub soft_particle_fade_range: f32,
+    pub soft_key_offset: f32,
+    /// `DwLy`/`DwOT`：绘制层与绘制序。
+    pub draw_layer: i32,
+    pub draw_order: i32,
+    /// `DLST`/`PL1S`/`PL2S`：平行光源/点光源 1/2。
+    pub directional_light_source: i32,
+    pub point_light_1: i32,
+    pub point_light_2: i32,
+    /// `RvPx-RvPz`/`RvRx-RvRz`/`RvSx-RvSz`/`RvR/G/B`：修正值。
+    pub revised_position: [f32; 3],
+    pub revised_rotation: [f32; 3],
+    pub revised_scale: [f32; 3],
+    pub revised_color: [f32; 3],
+    /// `AFXe`/`AFXi`/`AFXo`（X/Y/Z 三条）：各轴距离淡出。
+    pub fade_enabled: [bool; 3],
+    pub fade_inner: [f32; 3],
+    pub fade_outer: [f32; 3],
+    /// `bGFE`/`GFIM`：全局雾。
+    pub global_fog_enabled: bool,
+    pub global_fog_influence: f32,
+    /// `bLTS`/`bAGS`。
+    pub lts_enabled: bool,
+    pub ags_enabled: bool,
+    /// `APri`/`DPri`/`bSAB`/`bSBV`/`SBVa`/`bSSV`/`SSVa`/`SPHP`。
+    pub a_pri: i32,
+    pub d_pri: i32,
+    pub sab_enabled: bool,
+    pub sbv_enabled: bool,
+    pub sbv_a: f32,
+    pub ssv_enabled: bool,
+    pub ssv_a: f32,
+    pub sphp: i32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvfxFile {
     pub version: u32,
+    /// 根级全局参数（`AvfxMain`）。
+    pub global: AvfxGlobalParameters,
     pub schedulers: Vec<AvfxScheduler>,
     pub timelines: Vec<AvfxTimeline>,
     pub emitters: Vec<AvfxEmitter>,
     pub particles: Vec<AvfxParticle>,
     pub binders: Vec<AvfxBinder>,
+    /// 文件级 `Efct` 效果器。
+    pub effectors: Vec<AvfxEffector>,
     /// 文件级 `Tex` 块的贴图路径（通常指向 .atex）。
     pub texture_paths: Vec<String>,
     /// 根级 `Modl` 模型（按文件顺序；发射顶点与绘制网格共存于同一块）。
@@ -908,16 +1315,84 @@ impl AvfxFile {
                 "Emit" => file.emitters.push(parse_emitter(&node, &mut warnings)),
                 "Ptcl" => file.particles.push(parse_particle(&node, &mut warnings)),
                 "Bind" => file.binders.push(parse_binder(&node)),
+                "Efct" => file.effectors.push(parse_effector(&node)),
                 "Modl" => file.models.push(parse_model(&node)),
                 "Tex" => file
                     .texture_paths
                     .push(read_null_terminated(node.payload())),
-                _ => *unknown_blocks.entry(node.name().to_string()).or_default() += 1,
+                name => {
+                    if !GLOBAL_BLOCK_NAMES.contains(&name) {
+                        *unknown_blocks.entry(name.to_string()).or_default() += 1;
+                    }
+                }
             }
         }
+        file.global = parse_global_parameters(&root);
         file.warnings = warnings;
         file.unknown_blocks = unknown_blocks;
         Ok(file)
+    }
+}
+
+/// 根级全局参数块名（VFXEditor `AvfxMain` 的全部叶子）。
+const GLOBAL_BLOCK_NAMES: &[&str] = &[
+    "bDFP", "bFG", "bTS", "bASH", "bCBC", "bCul", "CBPx", "CBPy", "CBPz", "CBSx", "CBSy",
+    "CBSz", "ZBMs", "ZBMd", "bCmS", "bFEL", "bOSE", "bOSt", "NCB", "NCE", "FCB", "FCE",
+    "SPFR", "SKO", "DwLy", "DwOT", "DLST", "PL1S", "PL2S", "RvPx", "RvPy", "RvPz", "RvRx",
+    "RvRy", "RvRz", "RvSx", "RvSy", "RvSz", "RvR", "RvG", "RvB", "AFXe", "AFXi", "AFXo",
+    "AFYe", "AFYi", "AFYo", "AFZe", "AFZi", "AFZo", "bGFE", "GFIM", "bLTS", "bAGS", "APri",
+    "DPri", "bSAB", "bSBV", "SBVa", "bSSV", "SSVa", "SPHP",
+];
+
+fn parse_global_parameters(root: &AvfxNodeView) -> AvfxGlobalParameters {
+    let bool_at = |name: &str| root.scalar(name).map(|value| value != 0).unwrap_or(false);
+    let f32_at = |name: &str| root.f32(name).unwrap_or(0.0);
+    let i32_at = |name: &str| root.scalar_i32(name).unwrap_or(0);
+    AvfxGlobalParameters {
+        is_delay_fast_particle: bool_at("bDFP"),
+        is_fit_ground: bool_at("bFG"),
+        is_transform_skip: bool_at("bTS"),
+        is_all_stop_on_hide: bool_at("bASH"),
+        can_be_clipped_out: bool_at("bCBC"),
+        clip_box_enabled: bool_at("bCul"),
+        clip_box: [f32_at("CBPx"), f32_at("CBPy"), f32_at("CBPz")],
+        clip_box_size: [f32_at("CBSx"), f32_at("CBSy"), f32_at("CBSz")],
+        bias_z_max_scale: f32_at("ZBMs"),
+        bias_z_max_distance: f32_at("ZBMd"),
+        is_camera_space: bool_at("bCmS"),
+        is_full_env_light: bool_at("bFEL"),
+        ose: bool_at("bOSE"),
+        is_clip_own_setting: bool_at("bOSt"),
+        near_clip_begin: f32_at("NCB"),
+        near_clip_end: f32_at("NCE"),
+        far_clip_begin: f32_at("FCB"),
+        far_clip_end: f32_at("FCE"),
+        soft_particle_fade_range: f32_at("SPFR"),
+        soft_key_offset: f32_at("SKO"),
+        draw_layer: i32_at("DwLy"),
+        draw_order: i32_at("DwOT"),
+        directional_light_source: i32_at("DLST"),
+        point_light_1: i32_at("PL1S"),
+        point_light_2: i32_at("PL2S"),
+        revised_position: [f32_at("RvPx"), f32_at("RvPy"), f32_at("RvPz")],
+        revised_rotation: [f32_at("RvRx"), f32_at("RvRy"), f32_at("RvRz")],
+        revised_scale: [f32_at("RvSx"), f32_at("RvSy"), f32_at("RvSz")],
+        revised_color: [f32_at("RvR"), f32_at("RvG"), f32_at("RvB")],
+        fade_enabled: [bool_at("AFXe"), bool_at("AFYe"), bool_at("AFZe")],
+        fade_inner: [f32_at("AFXi"), f32_at("AFYi"), f32_at("AFZi")],
+        fade_outer: [f32_at("AFXo"), f32_at("AFYo"), f32_at("AFZo")],
+        global_fog_enabled: bool_at("bGFE"),
+        global_fog_influence: f32_at("GFIM"),
+        lts_enabled: bool_at("bLTS"),
+        ags_enabled: bool_at("bAGS"),
+        a_pri: i32_at("APri"),
+        d_pri: i32_at("DPri"),
+        sab_enabled: bool_at("bSAB"),
+        sbv_enabled: bool_at("bSBV"),
+        sbv_a: f32_at("SBVa"),
+        ssv_enabled: bool_at("bSSV"),
+        ssv_a: f32_at("SSVa"),
+        sphp: i32_at("SPHP"),
     }
 }
 
@@ -998,6 +1473,11 @@ impl<'a> AvfxNodeView<'a> {
 
     pub fn scalar_i32(&self, name: &str) -> Option<i32> {
         self.scalar(name).map(|value| value as i32)
+    }
+
+    /// f32 叶子查找（名为 `name` 的子块负载按 f32 位模式读）。
+    pub fn f32(&self, name: &str) -> Option<f32> {
+        self.scalar(name).map(f32::from_bits)
     }
 
     /// 名为 `name` 的第一个子块（容器或叶子）。
@@ -1157,9 +1637,13 @@ fn parse_curve(node: &AvfxNodeView) -> AvfxCurve {
 fn parse_curve3(node: &AvfxNodeView) -> AvfxCurve3Axis {
     AvfxCurve3Axis {
         axis_connect: node.scalar("ACT").unwrap_or(0),
+        axis_connect_random: node.scalar("ACTR").unwrap_or(0),
         x: node.child("X").map(|child| parse_curve(&child)),
         y: node.child("Y").map(|child| parse_curve(&child)),
         z: node.child("Z").map(|child| parse_curve(&child)),
+        random_x: node.child("XR").map(|child| parse_curve(&child)),
+        random_y: node.child("YR").map(|child| parse_curve(&child)),
+        random_z: node.child("ZR").map(|child| parse_curve(&child)),
     }
 }
 
@@ -1167,8 +1651,11 @@ fn parse_curve3(node: &AvfxNodeView) -> AvfxCurve3Axis {
 fn parse_curve2(node: &AvfxNodeView) -> AvfxCurve2Axis {
     AvfxCurve2Axis {
         axis_connect: node.scalar("ACT").unwrap_or(0),
+        axis_connect_random: node.scalar("ACTR").unwrap_or(0),
         x: node.child("X").map(|child| parse_curve(&child)),
         y: node.child("Y").map(|child| parse_curve(&child)),
+        random_x: node.child("XR").map(|child| parse_curve(&child)),
+        random_y: node.child("YR").map(|child| parse_curve(&child)),
     }
 }
 
@@ -1179,6 +1666,23 @@ fn parse_color_curve(node: &AvfxNodeView) -> AvfxColorCurve {
         alpha: node.child("A").map(|child| parse_curve(&child)),
         brightness: node.child("Bri").map(|child| parse_curve(&child)),
         scale_alpha: node.child("SclA").map(|child| parse_curve(&child)),
+        scale_rgb: {
+            let r = node.child("SclR").map(|child| parse_curve(&child));
+            let g = node.child("SclG").map(|child| parse_curve(&child));
+            let b = node.child("SclB").map(|child| parse_curve(&child));
+            if r.is_some() || g.is_some() || b.is_some() {
+                Some(AvfxColorScaleRgb { r, g, b })
+            } else {
+                None
+            }
+        },
+        random: [
+            node.child("RanR").map(|child| parse_curve(&child)),
+            node.child("RanG").map(|child| parse_curve(&child)),
+            node.child("RanB").map(|child| parse_curve(&child)),
+            node.child("RanA").map(|child| parse_curve(&child)),
+            node.child("RBri").map(|child| parse_curve(&child)),
+        ],
     }
 }
 
@@ -1300,13 +1804,32 @@ fn parse_emitter_items(node: &AvfxNodeView, name: &str) -> Vec<AvfxEmitterItem> 
             AvfxEmitterItem {
                 enabled: fields.boolean("bEnb").unwrap_or(false),
                 target_index: fields.i32("TgtB").unwrap_or(-1),
+                local_direction: fields.i32("LoDr").unwrap_or(0),
                 create_time: fields.i32("CrTm").unwrap_or(1),
                 create_count: fields.i32("CrCn").unwrap_or(1),
                 create_probability: fields.i32("CrPr").unwrap_or(100),
-                start_frame: fields.i32("StFr").unwrap_or(0),
-                generate_delay: fields.i32("GenD").unwrap_or(0),
+                parent_influence_coord: fields.i32("PICd").unwrap_or(0),
+                parent_influence_color: fields.i32("PICo").unwrap_or(0),
+                influence_coord_scale: fields.boolean("ICbS").unwrap_or(false),
+                influence_coord_rot: fields.boolean("ICbR").unwrap_or(false),
+                influence_coord_pos: fields.boolean("ICbP").unwrap_or(true),
+                influence_coord_binder: fields.boolean("ICbB").unwrap_or(false),
+                influence_coord_unstickiness: fields.f32("ICSK").unwrap_or(0.0),
+                inherit_parent_velocity: fields.boolean("IPbV").unwrap_or(false),
+                inherit_parent_life: fields.boolean("IPbL").unwrap_or(false),
                 override_life: fields.boolean("bOvr").unwrap_or(false),
                 override_life_value: fields.i32("OvrV").unwrap_or(60),
+                override_life_random: fields.i32("OvrR").unwrap_or(0),
+                parameter_link: fields.i32("PrLk").unwrap_or(-1),
+                start_frame: fields.i32("StFr").unwrap_or(0),
+                start_frame_null_update: fields.boolean("bStN").unwrap_or(false),
+                by_injection_angle: [
+                    fields.f32("BIAX").unwrap_or(0.0),
+                    fields.f32("BIAY").unwrap_or(0.0),
+                    fields.f32("BIAZ").unwrap_or(0.0),
+                ],
+                generate_delay: fields.i32("GenD").unwrap_or(0),
+                generate_delay_by_one: fields.boolean("bGD").unwrap_or(false),
             }
         })
         .collect()
@@ -1321,13 +1844,44 @@ fn parse_emitter(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxEmitter
         particle_count: node.scalar_i32("PrCn").unwrap_or(0),
         emitter_count: node.scalar_i32("EmCn").unwrap_or(0),
         rotation_order: node.scalar_i32("ROT").unwrap_or(0),
+        rotation_direction_base: node.scalar_i32("RBDT").unwrap_or(0),
+        coord_compute_order: node.scalar_i32("CCOT").unwrap_or(0),
+        any_direction: node
+            .child("bAD")
+            .and_then(|child| read_bool(child.payload()))
+            .unwrap_or(false),
+        effector_index: node.scalar_i32("EfNo").unwrap_or(-1),
         life: parse_optional_life(node),
         create_count: node
             .child("CrC")
             .map(|child| parse_curve(&child))
             .unwrap_or_default(),
+        create_count_random: node
+            .child("CrCR")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
         create_interval: node
             .child("CrI")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        create_interval_random: node
+            .child("CrIR")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        gravity: node
+            .child("Gra")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        gravity_random: node
+            .child("GraR")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        air_resistance: node
+            .child("ARs")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        air_resistance_random: node
+            .child("ARsR")
             .map(|child| parse_curve(&child))
             .unwrap_or_default(),
         color: node
@@ -1346,6 +1900,39 @@ fn parse_emitter(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxEmitter
             .child("Scl")
             .map(|child| parse_curve3(&child))
             .unwrap_or_default(),
+        injection_angle: [
+            node.child("IAX")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("IAY")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("IAZ")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+        ],
+        injection_angle_random: [
+            node.child("IAXR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("IAYR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("IAZR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+        ],
+        velocity_random: [
+            node.child("VRX")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("VRY")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("VRZ")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+        ],
         ..Default::default()
     };
     emitter.emitter_type = Some(EmitterType::from_raw(emitter.raw_emitter_type));
@@ -1456,19 +2043,83 @@ fn read_int_list(payload: &[u8]) -> Vec<i32> {
 
 fn parse_particle_texture(node: &AvfxNodeView) -> AvfxParticleTexture {
     let fields = Fields::walk(node.payload());
+    let texture_list = fields
+        .bytes("TLst")
+        .map(read_int_list)
+        .unwrap_or_default();
     AvfxParticleTexture {
         enabled: fields.boolean("bEna").unwrap_or(false),
         uv_set_index: fields.i32("UvSN").unwrap_or(0),
         texture_index: fields.i32("TxNo").unwrap_or(-1),
-        mask_texture_index: fields
-            .bytes("TLst")
-            .and_then(|bytes| read_int_list(bytes).first().copied())
-            .unwrap_or(-1),
+        mask_texture_index: texture_list.first().copied().unwrap_or(-1),
         calculate_color: fields.i32("TCCT").unwrap_or(0),
         calculate_alpha: fields.i32("TCAT").unwrap_or(0),
         color_to_alpha: fields.boolean("bC2A").unwrap_or(false),
+        use_screen_copy: fields.boolean("bUSC").unwrap_or(false),
+        previous_frame_copy: fields.boolean("bPFC").unwrap_or(false),
+        use_chara_portrait: fields.boolean("bUOS").unwrap_or(false),
+        texture_filter: fields.i32("TFT").unwrap_or(1),
         texture_border_u: fields.i32("TBUT").unwrap_or(0),
         texture_border_v: fields.i32("TBVT").unwrap_or(0),
+        tex_n: node.child("TxN").map(|child| parse_curve(&child)),
+        tex_n_random: node.child("TxNR").map(|child| parse_curve(&child)),
+        texture_list,
+    }
+}
+
+/// `TN` 法线贴图块。
+fn parse_particle_texture_normal(node: &AvfxNodeView) -> AvfxParticleTextureNormal {
+    let fields = Fields::walk(node.payload());
+    AvfxParticleTextureNormal {
+        enabled: fields.boolean("bEna").unwrap_or(false),
+        uv_set_index: fields.i32("UvSN").unwrap_or(0),
+        texture_filter: fields.i32("TFT").unwrap_or(1),
+        texture_border_u: fields.i32("TBUT").unwrap_or(0),
+        texture_border_v: fields.i32("TBVT").unwrap_or(0),
+        texture_index: fields.i32("TxNo").unwrap_or(-1),
+        power: node
+            .child("NPow")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+    }
+}
+
+/// `TR` 反射贴图块。
+fn parse_particle_texture_reflection(node: &AvfxNodeView) -> AvfxParticleTextureReflection {
+    let fields = Fields::walk(node.payload());
+    AvfxParticleTextureReflection {
+        enabled: fields.boolean("bEna").unwrap_or(false),
+        use_screen_copy: fields.boolean("bUSC").unwrap_or(false),
+        texture_filter: fields.i32("TFT").unwrap_or(1),
+        calculate_color: fields.i32("TCCT").unwrap_or(0),
+        texture_index: fields.i32("TxNo").unwrap_or(-1),
+        rate: node
+            .child("Rate")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        power: node
+            .child("RPow")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+    }
+}
+
+/// `TP` 调色板贴图块。
+fn parse_particle_texture_palette(node: &AvfxNodeView) -> AvfxParticleTexturePalette {
+    let fields = Fields::walk(node.payload());
+    AvfxParticleTexturePalette {
+        enabled: fields.boolean("bEna").unwrap_or(false),
+        texture_filter: fields.i32("TFT").unwrap_or(1),
+        texture_border: fields.i32("TBT").unwrap_or(0),
+        texture_index: fields.i32("TxNo").unwrap_or(-1),
+        offset: node
+            .child("POff")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        offset_random: node
+            .child("POfR")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
     }
 }
 
@@ -1484,8 +2135,23 @@ fn parse_particle_data(
     match particle_type {
         Some(ParticleType::Model) => {
             let fields = Fields::walk(data.payload());
+            let curve = |name: &str| data.child(name).map(|child| parse_curve(&child));
+            let curve3 = |name: &str| data.child(name).map(|child| parse_curve3(&child));
             AvfxParticleData::Model {
+                model_number_random_value: fields.i32("MNRv").unwrap_or(0),
+                model_number_random_type: fields.i32("MNRt").unwrap_or(0),
+                model_number_random_interval: fields.i32("MNRi").unwrap_or(0),
+                fresnel_type: fields.i32("FrsT").unwrap_or(0),
+                directional_light_type: fields.i32("DLT").unwrap_or(0),
+                point_light_type: fields.i32("PLT").unwrap_or(0),
+                is_lightning: fields.boolean("bLgt").unwrap_or(false),
+                is_morph: fields.boolean("bShp").unwrap_or(false),
                 model_indexes: fields.bytes("MdNo").map(read_int_list).unwrap_or_default(),
+                animation_number: curve("NoAn"),
+                morph: curve("Moph"),
+                fresnel_curve: curve("FrC"),
+                fresnel_curve_random: curve("FrCR"),
+                fresnel_rotation: curve3("FrRt"),
                 color_begin: data
                     .child("ColB")
                     .map(|child| parse_color_curve(&child))
@@ -1502,12 +2168,20 @@ fn parse_particle_data(
         Some(ParticleType::Powder) => {
             let fields = Fields::walk(data.payload());
             AvfxParticleData::Powder {
+                use_character_movement: fields.boolean("bMV").unwrap_or(false),
+                use_character_location: fields.boolean("bLoc").unwrap_or(false),
+                is_lightning: fields.boolean("bLgt").unwrap_or(false),
+                directional_light_type: fields.i32("LgtT").unwrap_or(0),
                 center_offset: fields.f32("CnOf").unwrap_or(0.0),
             }
         }
-        Some(ParticleType::Quad) => AvfxParticleData::Quad {
-            scaling_scale: data.scalar_i32("SS").unwrap_or(1),
-        },
+        Some(ParticleType::Quad) => {
+            let fields = Fields::walk(data.payload());
+            AvfxParticleData::Quad {
+                scaling_scale: fields.i32("SS").unwrap_or(1),
+                is_movement_particle: fields.boolean("bMP").unwrap_or(false),
+            }
+        }
         _ => AvfxParticleData::None,
     }
 }
@@ -1544,29 +2218,61 @@ fn parse_particle_simple(node: &AvfxNodeView) -> Option<AvfxParticleSimple> {
             frames
         })
         .unwrap_or_default();
+    let f32_triplet = |a: &str, b: &str, c: &str| {
+        [
+            fields.f32(a).unwrap_or(0.0),
+            fields.f32(b).unwrap_or(0.0),
+            fields.f32(c).unwrap_or(0.0),
+        ]
+    };
     Some(AvfxParticleSimple {
+        injection_position_type: fields.i32("SIPT").unwrap_or(0),
+        injection_direction_type: fields.i32("SIDT").unwrap_or(0),
+        base_direction_type: fields.i32("SBDT").unwrap_or(0),
         create_count: fields.i32("CCnt").unwrap_or(0),
-        create_area: [
-            fields.f32("CrAX").unwrap_or(0.0),
-            fields.f32("CrAY").unwrap_or(0.0),
-            fields.f32("CrAZ").unwrap_or(0.0),
-        ],
-        velocity_min: fields.f32("VMin").unwrap_or(0.0),
-        velocity_max: fields.f32("VMax").unwrap_or(0.0),
+        create_area: f32_triplet("CrAX", "CrAY", "CrAZ"),
+        coord_accuracy: f32_triplet("CAX", "CAY", "CAZ"),
+        coord_gravity: f32_triplet("CGX", "CGY", "CGZ"),
         scale_start: f32_pair("SBX", "SBY"),
         scale_end: f32_pair("SEX", "SEY"),
         scale_curve: fields.f32("SC").unwrap_or(1.0),
         scale_rand_x: f32_pair("SRX0", "SRX1"),
         scale_rand_y: f32_pair("SRY0", "SRY1"),
-        create_interval: fields.i32("CrI").unwrap_or(0),
-        create_interval_count: fields.i32("CrIC").unwrap_or(1),
-        create_interval_life: fields.i32("CrIL").unwrap_or(30),
-        injection_model_index: fields.i32("IJMN").unwrap_or(-1),
+        rotation_start: f32_triplet("RIX", "RIY", "RIZ"),
+        rotation_add: f32_triplet("RAX", "RAY", "RAZ"),
+        rotation_base: f32_triplet("RBX", "RBY", "RBZ"),
+        rotation_velocity: f32_triplet("RVX", "RVY", "RVZ"),
+        velocity_min: fields.f32("VMin").unwrap_or(0.0),
+        velocity_max: fields.f32("VMax").unwrap_or(0.0),
+        velocity_flattery_rate: fields.f32("FltR").unwrap_or(0.0),
+        velocity_flattery_speed: fields.f32("FltS").unwrap_or(0.0),
         uv_cell: [
             fields.i32("UvCU").unwrap_or(1).max(1),
             fields.i32("UvCV").unwrap_or(1).max(1),
         ],
         uv_interval: fields.i32("UvIv").unwrap_or(1).max(1),
+        uv_no_random: fields.i32("UvNR").unwrap_or(0),
+        uv_loop_count: fields.i32("UvLC").unwrap_or(0),
+        injection_model_index: fields.i32("IJMN").unwrap_or(-1),
+        injection_vertex_bind_model_index: fields.i32("VBMN").unwrap_or(-1),
+        injection_radial_dir: f32_pair("IRD0", "IRD1"),
+        pivot: f32_pair("PvtX", "PvtY"),
+        block_num: fields.i32("BlkN").unwrap_or(0),
+        line_length_min: fields.f32("LLin").unwrap_or(0.0),
+        line_length_max: fields.f32("LLax").unwrap_or(0.0),
+        create_interval: fields.i32("CrI").unwrap_or(0),
+        create_interval_on_movement: fields.f32("CIM").unwrap_or(0.0),
+        create_interval_on_movement_random: fields.f32("CIMR").unwrap_or(0.0),
+        create_interval_random: fields.i32("CrIR").unwrap_or(0),
+        create_interval_count: fields.i32("CrIC").unwrap_or(1),
+        create_interval_life: fields.i32("CrIL").unwrap_or(30),
+        create_life_random: fields.i32("CrLR").unwrap_or(0),
+        create_new_after_delete: fields.boolean("bCrN").unwrap_or(false),
+        uv_reverse: fields.boolean("bRUV").unwrap_or(false),
+        scale_random_link: fields.boolean("bSRL").unwrap_or(false),
+        bind_parent: fields.boolean("bBnP").unwrap_or(false),
+        scale_by_parent: fields.boolean("bSnP").unwrap_or(false),
+        polyline_tag: fields.i32("PolT").unwrap_or(0),
         colors,
         frames,
     })
@@ -1586,13 +2292,50 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
         depth_write: node.scalar("DsDw").map(|value| value != 0).unwrap_or(false),
         rotation_direction_base: node.scalar_i32("RBDT").unwrap_or(0),
         rotation_order: node.scalar_i32("RoOT").unwrap_or(0),
+        coord_compute_order: node.scalar_i32("CCOT").unwrap_or(0),
+        env_light_type: node.scalar_i32("EnvT").unwrap_or(0),
+        dir_light_type: node.scalar_i32("DirT").unwrap_or(0),
+        uv_precision: node.scalar_i32("UVPT").unwrap_or(0),
+        draw_priority: node.scalar_i32("DwPr").unwrap_or(0),
+        is_soft_particle: node.scalar("DsSp").map(|value| value != 0).unwrap_or(false),
+        collision_type: node.scalar_i32("Coll").unwrap_or(0),
+        s11_enabled: node.scalar("bS11").map(|value| value != 0).unwrap_or(false),
+        sh_u_t: node.scalar_i32("ShUT").unwrap_or(0),
+        sh_r: node.scalar_i32("ShR").unwrap_or(0),
+        sh_t: node.scalar_i32("ShT").unwrap_or(0),
+        uni_v: node.scalar_i32("UniV").unwrap_or(0),
+        hyb_v: node.scalar_i32("HybV").unwrap_or(0),
+        e24_enabled: node.scalar("bE24").map(|value| value != 0).unwrap_or(false),
+        is_apply_tone_map: node.scalar("bATM").map(|value| value != 0).unwrap_or(false),
+        is_apply_fog: node.scalar("bAFg").map(|value| value != 0).unwrap_or(false),
+        clip_near_enable: node.scalar("bNea").map(|value| value != 0).unwrap_or(false),
+        clip_far_enable: node.scalar("bFar").map(|value| value != 0).unwrap_or(false),
+        clip_near_start: node.f32("NeSt").unwrap_or(0.0),
+        clip_near_end: node.f32("NeEd").unwrap_or(0.0),
+        clip_far_start: node.f32("FaSt").unwrap_or(0.0),
+        clip_far_end: node.f32("FaEd").unwrap_or(0.0),
+        clip_base_point: node.scalar_i32("FaBP").unwrap_or(0),
+        apply_rate_environment: node.scalar_i32("EvAR").unwrap_or(0),
+        apply_rate_directional: node.scalar_i32("DlAR").unwrap_or(0),
+        apply_rate_light_buffer: node.scalar_i32("LBAR").unwrap_or(0),
+        depth_offset_type: node.scalar_i32("DOTy").unwrap_or(0),
+        depth_offset: node.f32("DpOf").unwrap_or(0.0),
+        simple_anim_enable: node.scalar("bSCt").map(|value| value != 0).unwrap_or(false),
         life: parse_optional_life(node),
         gravity: node
             .child("Gra")
             .map(|child| parse_curve(&child))
             .unwrap_or_default(),
+        gravity_random: node
+            .child("GraR")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
         air_resistance: node
             .child("ARs")
+            .map(|child| parse_curve(&child))
+            .unwrap_or_default(),
+        air_resistance_random: node
+            .child("ARsR")
             .map(|child| parse_curve(&child))
             .unwrap_or_default(),
         scale: node
@@ -1622,10 +2365,30 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
                 .map(|child| parse_curve(&child))
                 .unwrap_or_default(),
         ],
+        rotation_velocity_random: [
+            node.child("VRXR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("VRYR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+            node.child("VRZR")
+                .map(|child| parse_curve(&child))
+                .unwrap_or_default(),
+        ],
         texture_color1: node.child("TC1").map(|tc| parse_particle_texture(&tc)),
         texture_color2: node.child("TC2").map(|tc| parse_particle_texture(&tc)),
         texture_color3: node.child("TC3").map(|tc| parse_particle_texture(&tc)),
         texture_color4: node.child("TC4").map(|tc| parse_particle_texture(&tc)),
+        texture_normal: node
+            .child("TN")
+            .map(|tn| parse_particle_texture_normal(&tn)),
+        texture_reflection: node
+            .child("TR")
+            .map(|tr| parse_particle_texture_reflection(&tr)),
+        texture_palette: node
+            .child("TP")
+            .map(|tp| parse_particle_texture_palette(&tp)),
         texture_distortion: node.child("TD").map(|td| {
             let fields = Fields::walk(td.payload());
             AvfxParticleDistortion {
@@ -1642,6 +2405,7 @@ fn parse_particle(node: &AvfxNodeView, warnings: &mut Vec<String>) -> AvfxPartic
                     .child("DPow")
                     .map(|child| parse_curve(&child))
                     .unwrap_or_default(),
+                texture_filter: fields.i32("TFT").unwrap_or(1),
                 texture_border_u: fields.i32("TBUT").unwrap_or(0),
                 texture_border_v: fields.i32("TBVT").unwrap_or(0),
             }
@@ -1751,14 +2515,86 @@ fn f16_to_f32(bits: [u8; 2]) -> f32 {
     f16::from_le_bytes(bits).to_f32()
 }
 
+/// `Name` 叶子：字符串 + 3 字节尾 + 4 字节对齐填充（VFXEditor
+/// `AvfxBinderPropertiesName`），按 NUL 截断。
+fn read_binder_name(payload: &[u8]) -> String {
+    let end = payload
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(payload.len());
+    String::from_utf8_lossy(&payload[..end]).into_owned()
+}
+
+fn parse_binder_properties(node: &AvfxNodeView) -> AvfxBinderProperties {
+    let fields = Fields::walk(node.payload());
+    AvfxBinderProperties {
+        bind_point_type: fields.i32("BPT").unwrap_or(0),
+        bind_target_point_type: fields.i32("BPTP").unwrap_or(0),
+        binder_name: fields.bytes("Name").map(read_binder_name).unwrap_or_default(),
+        bind_point_id: fields.i32("BPID").unwrap_or(-1),
+        generate_delay: fields.i32("GenD").unwrap_or(0),
+        coord_update_frame: fields.i32("CoUF").unwrap_or(-1),
+        ring_enabled: fields.boolean("bRng").unwrap_or(false),
+        ring_progress_time: fields.i32("RnPT").unwrap_or(1),
+        ring_position: [
+            fields.f32("RnPX").unwrap_or(0.0),
+            fields.f32("RnPY").unwrap_or(0.0),
+            fields.f32("RnPZ").unwrap_or(0.0),
+        ],
+        ring_radius: fields.f32("RnRd").unwrap_or(0.0),
+        bct: fields.i32("BCT").unwrap_or(0),
+        position: node
+            .child("Pos")
+            .map(|child| parse_curve3(&child))
+            .unwrap_or_default(),
+    }
+}
+
 fn parse_binder(node: &AvfxNodeView) -> AvfxBinder {
-    let bind_point_id = node
-        .child("PrpS")
-        .and_then(|props| props.scalar_i32("BPID"))
+    let properties_start = node.child("PrpS").map(|props| parse_binder_properties(&props));
+    let bind_point_id = properties_start
+        .as_ref()
+        .map(|props| props.bind_point_id)
         .unwrap_or(-1);
     AvfxBinder {
         binder_type: node.scalar("BnVr").unwrap_or(0),
         bind_point_id,
+        start_to_global_direction: node.scalar("bStG").map(|value| value != 0).unwrap_or(false),
+        vfx_scale_enabled: node.scalar("bVSc").map(|value| value != 0).unwrap_or(false),
+        vfx_scale_bias: node.f32("bVSb").unwrap_or(0.0),
+        vfx_scale_depth_offset: node.scalar("bVSd").map(|value| value != 0).unwrap_or(false),
+        vfx_scale_interpolation: node.scalar("bVSi").map(|value| value != 0).unwrap_or(false),
+        transform_scale: node.scalar_i32("bTSc").unwrap_or(0),
+        transform_scale_depth_offset: node.scalar("bTSd").map(|value| value != 0).unwrap_or(false),
+        transform_scale_interpolation: node.scalar("bTSi").map(|value| value != 0).unwrap_or(false),
+        following_target_orientation: node.scalar("bFTO").map(|value| value != 0).unwrap_or(false),
+        document_scale_enabled: node.scalar("bDSE").map(|value| value != 0).unwrap_or(false),
+        adjust_to_screen_enabled: node.scalar("bATS").map(|value| value != 0).unwrap_or(false),
+        ify: node.scalar("bIFY").map(|value| value != 0).unwrap_or(false),
+        bet: node.scalar("bBET").map(|value| value != 0).unwrap_or(false),
+        life: node.scalar_i32("Life").unwrap_or(0),
+        rotation_type: node.scalar_i32("RoTp").unwrap_or(0),
+        properties_start,
+        properties_1: node.child("Prp1").map(|props| parse_binder_properties(&props)),
+        properties_2: node.child("Prp2").map(|props| parse_binder_properties(&props)),
+        properties_goal: node.child("PrpG").map(|props| parse_binder_properties(&props)),
+    }
+}
+
+/// `Efct` 效果器最小解析：参数 + `Data` 原始负载。
+fn parse_effector(node: &AvfxNodeView) -> AvfxEffector {
+    AvfxEffector {
+        raw_effector_type: node.scalar("EfVT").unwrap_or(u32::MAX),
+        rotation_order: node.scalar_i32("RoOT").unwrap_or(0),
+        coord_compute_order: node.scalar_i32("CCOT").unwrap_or(0),
+        affect_other_vfx: node.scalar("bAOV").map(|value| value != 0).unwrap_or(false),
+        affect_game: node.scalar("bAGm").map(|value| value != 0).unwrap_or(false),
+        loop_start: node.scalar_i32("LpSt").unwrap_or(0),
+        loop_end: node.scalar_i32("LpEd").unwrap_or(0),
+        data_payload: node
+            .child("Data")
+            .map(|data| data.payload().to_vec())
+            .unwrap_or_default(),
     }
 }
 
@@ -2195,7 +3031,10 @@ mod tests {
         // Quad Data。
         assert_eq!(
             particle.data,
-            AvfxParticleData::Quad { scaling_scale: 1 }
+            AvfxParticleData::Quad {
+                scaling_scale: 1,
+                is_movement_particle: false,
+            }
         );
         // 单 Modl 共存的发射顶点与绘制网格。
         assert_eq!(file.models.len(), 1);
