@@ -9,8 +9,7 @@ use physis::resource::{Resource, SqPackResource};
 fn main() {
     let path = std::env::args().nth(1).expect("avfx sqpack path");
     let out = std::env::args().nth(2);
-    let raw_dir =
-        std::path::PathBuf::from(std::env::var("XIV_GAME_DIR").expect("XIV_GAME_DIR"));
+    let raw_dir = std::path::PathBuf::from(std::env::var("XIV_GAME_DIR").expect("XIV_GAME_DIR"));
     let game_dir = xiv_companion::game_data::normalize_game_dir(&raw_dir).expect("normalize");
     let mut resource = SqPackResource::from_existing(game_dir.to_str().expect("utf8"));
     let bytes = resource.read(&path).expect("read avfx");
@@ -25,10 +24,11 @@ fn main() {
             continue;
         };
         // 格式诊断：atex 头后的 tex 头里含 format 枚举。
-        let stripped = tex_bytes
-            .strip_prefix(b"atex")
-            .map(|rest| &rest[4..])
-            .unwrap_or(&tex_bytes);
+        let stripped = if tex_bytes.starts_with(b"atex") {
+            tex_bytes.get(8..).unwrap_or_default()
+        } else {
+            &tex_bytes
+        };
         if let Some(tex) = <physis::tex::Texture as physis::ReadableFile>::from_existing(
             physis::Platform::Win32,
             stripped,
@@ -49,7 +49,10 @@ fn main() {
                     image::ColorType::Rgba8,
                 )
                 .expect("write png");
-                eprintln!("tex {index}: {}x{} {texture_path} -> {out}", tex.width, tex.height);
+                eprintln!(
+                    "tex {index}: {}x{} {texture_path} -> {out}",
+                    tex.width, tex.height
+                );
             }
             None => eprintln!("tex {index}: DECODE FAIL {texture_path}"),
         }
@@ -82,17 +85,19 @@ fn main() {
     eprintln!("--- {} quads at t={t} ---", quads.len());
     for (i, q) in quads.iter().enumerate() {
         eprintln!(
-            "q{i}: pos={:?} size={:?} rot={:.2} bb={} color={:?} tex={:?} comb={:?} c2a={:?} add={} uv={:?}×{:?}",
+            "q{i}: pos={:?} size={:?} orient={:?} parent={:?} RBDT={} color={:?} tex={:?} comb={:?} c2a={:?} RMT={} uv={:?}×{:?}",
             q.position.map(|v| (v * 100.0).round() / 100.0),
             q.size.map(|v| (v * 1000.0).round() / 1000.0),
-            q.rotation,
-            q.billboard,
+            q.orientation,
+            q.parent_basis,
+            q.rotation_direction_base,
             q.color.map(|v| (v * 100.0).round() / 100.0),
             q.texture_indexes,
             q.combine_modes,
             q.color_to_alpha,
-            q.blend_add,
-            q.uv_origins, q.uv_scales,
+            q.draw_mode,
+            q.uv_origins,
+            q.uv_scales,
         );
     }
     let mut meshes = Vec::new();
@@ -100,15 +105,17 @@ fn main() {
     eprintln!("--- {} mesh instances ---", meshes.len());
     for (i, m) in meshes.iter().enumerate() {
         eprintln!(
-            "m{i}: model={} pos={:?} scale={:?} orient={:?} color={:?} tex={:?} add={} uv={:?}×{:?}",
+            "m{i}: model={} pos={:?} scale={:?} orient={:?} parent={:?} color={:?} tex={:?} RMT={} uv={:?}×{:?}",
             m.model_index,
             m.position.map(|v| (v * 100.0).round() / 100.0),
             m.scale.map(|v| (v * 100.0).round() / 100.0),
             m.orientation.map(|v| (v * 100.0).round() / 100.0),
+            m.parent_basis,
             m.color.map(|v| (v * 100.0).round() / 100.0),
             m.texture_indexes,
-            m.blend_add,
-            m.uv_origins, m.uv_scales,
+            m.draw_mode,
+            m.uv_origins,
+            m.uv_scales,
         );
     }
     let json = serde_json::to_string_pretty(&file).expect("json");
@@ -126,13 +133,20 @@ fn walk(bytes: &[u8], depth: usize, max_depth: usize) {
         return;
     }
     // 根：前 8 字节为 AVFX 头。
-    let (mut offset, end) = if depth == 0 { (8usize, bytes.len()) } else { (0, bytes.len()) };
+    let (mut offset, end) = if depth == 0 {
+        (8usize, bytes.len())
+    } else {
+        (0, bytes.len())
+    };
     while offset + 8 <= end {
         let mut raw = [0u8; 4];
         raw.copy_from_slice(&bytes[offset..offset + 4]);
-        let size =
-            u32::from_le_bytes([bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]])
-                as usize;
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
         if offset + 8 + size > end {
             eprintln!("{:indent$}<truncated size={size}>", "", indent = depth * 2);
             return;
@@ -141,13 +155,31 @@ fn walk(bytes: &[u8], depth: usize, max_depth: usize) {
         for (i, b) in raw.iter().rev().take(4).enumerate() {
             name[i] = *b;
         }
-        let name = String::from_utf8_lossy(&name).trim_matches(['\0', ' ']).to_string();
+        let name = String::from_utf8_lossy(&name)
+            .trim_matches(['\0', ' '])
+            .to_string();
         eprintln!("{:indent$}{name} size={size}", "", indent = depth * 2);
         // 容器块递归。
         if matches!(
             name.as_str(),
-            "Schd" | "TmLn" | "Emit" | "Ptcl" | "Bind" | "Efct" | "Modl" | "Data" | "TC1" | "TC2"
-                | "TC3" | "TC4" | "TN" | "TR" | "TD" | "TP" | "Life" | "Clip"
+            "Schd"
+                | "TmLn"
+                | "Emit"
+                | "Ptcl"
+                | "Bind"
+                | "Efct"
+                | "Modl"
+                | "Data"
+                | "TC1"
+                | "TC2"
+                | "TC3"
+                | "TC4"
+                | "TN"
+                | "TR"
+                | "TD"
+                | "TP"
+                | "Life"
+                | "Clip"
         ) {
             walk(&bytes[offset + 8..offset + 8 + size], depth + 1, max_depth);
         }

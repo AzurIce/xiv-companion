@@ -12,9 +12,15 @@ pub(crate) const BLOOM_THRESHOLD: f32 = 1.0;
 pub(crate) struct PostProcessState {
     pub(crate) width: u32,
     pub(crate) height: u32,
-    #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
     pub(crate) scene_texture: wgpu::Texture,
     pub(crate) scene_view: wgpu::TextureView,
+    pub(crate) screen_copy_texture: wgpu::Texture,
+    pub(crate) screen_copy_view: wgpu::TextureView,
+    pub(crate) previous_scene_texture: wgpu::Texture,
+    pub(crate) previous_scene_view: wgpu::TextureView,
+    /// Created on first soft draw; the scene depth is copied here before the
+    /// soft pass attaches the original depth for testing and writes.
+    pub(crate) soft_depth_view: Option<wgpu::TextureView>,
     /// MSAA > 1 时的多重采样场景目标：场景 pass 渲到它并 resolve 进
     /// `scene_view`（bloom/compose 仍读单采样 `scene_view`）。
     pub(crate) msaa_scene_view: Option<wgpu::TextureView>,
@@ -44,6 +50,24 @@ impl PostProcessState {
             wgpu::TextureUsages::COPY_SRC,
         );
         let scene_view = scene_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let screen_copy_texture = create_post_texture(
+            device,
+            "weapon VFX screen-copy texture",
+            width,
+            height,
+            wgpu::TextureUsages::COPY_DST,
+        );
+        let screen_copy_view =
+            screen_copy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let previous_scene_texture = create_post_texture(
+            device,
+            "weapon VFX previous-scene texture",
+            width,
+            height,
+            wgpu::TextureUsages::COPY_DST,
+        );
+        let previous_scene_view =
+            previous_scene_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let msaa_scene_view = (msaa_samples > 1).then(|| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -111,9 +135,13 @@ impl PostProcessState {
         Self {
             width,
             height,
-            #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
             scene_texture,
             scene_view,
+            screen_copy_texture,
+            screen_copy_view,
+            previous_scene_texture,
+            previous_scene_view,
+            soft_depth_view: None,
             msaa_scene_view,
             blur_a_view,
             blur_b_view,
@@ -130,6 +158,27 @@ impl PostProcessState {
             Some(msaa_view) => (msaa_view, Some(&self.scene_view)),
             None => (&self.scene_view, None),
         }
+    }
+
+    pub(crate) fn ensure_soft_depth_target(&mut self, device: &wgpu::Device, samples: u32) {
+        if self.soft_depth_view.is_some() {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("weapon VFX soft-particle depth snapshot"),
+            size: wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.soft_depth_view = Some(texture.create_view(&wgpu::TextureViewDescriptor::default()));
     }
 }
 

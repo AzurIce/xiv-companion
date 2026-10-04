@@ -100,9 +100,10 @@ pub(crate) fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
+    overlay_layout: &wgpu::BindGroupLayout,
     model: &M,
     draw_batches: &[DrawBatch],
-) -> Vec<wgpu::BindGroup> {
+) -> (Vec<wgpu::BindGroup>, Vec<wgpu::BindGroup>) {
     // Pair related atlases horizontally to stay below common WebGPU per-stage texture limits.
     let tile_array_pair_texture = create_array_pair_texture(
         device,
@@ -141,6 +142,13 @@ pub(crate) fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
     // the whole batch loop so each distinct source/semantic combination is
     // created (and uploaded) only once per model.
     let mut texture_cache = MaterialTextureCache::new();
+    let overlay_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("weapon default surface overlay uniform"),
+        contents: bytemuck::bytes_of(&SurfaceOverlayUniform {
+            aura_params: [[0.0; 4]; 16],
+        }),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
 
     draw_batches
         .iter()
@@ -154,6 +162,8 @@ pub(crate) fn create_material_bind_groups<M: ModelRenderData + ?Sized>(
                 device,
                 queue,
                 layout,
+                overlay_layout,
+                &overlay_uniform,
                 material,
                 model,
                 batch.prepared_material,
@@ -170,6 +180,8 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
+    overlay_layout: &wgpu::BindGroupLayout,
+    overlay_uniform: &wgpu::Buffer,
     material: &ModelMaterial,
     model: &M,
     prepared_material: PreparedMaterial,
@@ -177,7 +189,7 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
     tile_array_pair_view: &wgpu::TextureView,
     detail_array_pair_view: &wgpu::TextureView,
     texture_cache: &mut MaterialTextureCache,
-) -> wgpu::BindGroup {
+) -> (wgpu::BindGroup, wgpu::BindGroup) {
     let effective_mask_texture = effective_mask_texture(material);
     let effective_normal_texture = effective_normal_texture(material, prepared_material);
     let uv_sources = material_uv_source_params(prepared_material);
@@ -962,7 +974,11 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         decal_key,
         &decal_label,
     )
-    .create_view(&wgpu::TextureViewDescriptor::default());
+    // One-layer face decals share this array-compatible slot with target Aura textures.
+    .create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
     let decal_sampler = create_sampler_for_sampling(
         device,
         "weapon face decal sampler",
@@ -973,7 +989,7 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
         },
     );
 
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("weapon material bind group"),
         layout,
         entries: &[
@@ -1097,16 +1113,27 @@ pub(crate) fn create_material_bind_group<M: ModelRenderData + ?Sized>(
                 binding: 30,
                 resource: wgpu::BindingResource::Sampler(&detail_array_sampler),
             },
+        ],
+    });
+    let overlay_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("weapon surface overlay bind group"),
+        layout: overlay_layout,
+        entries: &[
             wgpu::BindGroupEntry {
-                binding: 31,
+                binding: 0,
+                resource: overlay_uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
                 resource: wgpu::BindingResource::TextureView(&decal_texture_view),
             },
             wgpu::BindGroupEntry {
-                binding: 32,
+                binding: 2,
                 resource: wgpu::BindingResource::Sampler(&decal_sampler),
             },
         ],
-    })
+    });
+    (material_bind_group, overlay_bind_group)
 }
 
 pub(crate) fn create_sampler_for_sampling(
@@ -1214,7 +1241,7 @@ pub(crate) struct MaterialUniform {
     pub(crate) unsupported_color: [f32; 4],
     // 角色颜色通道（尾部 16 字节对齐区）：RGB 为 squared RGB 线性色，W 为
     // 激活/强度标记；无 character_colors 的材质全零，WGSL 分支不激活，
-    // 对武器/装备渲染零影响。面妆 decal 贴图绑在 binding 31/32。
+    // 对武器/装备渲染零影响。面妆贴图在 group(3) 与 Aura 共用采样槽。
     pub(crate) character_skin: [f32; 4],
     pub(crate) character_lip: [f32; 4],
     pub(crate) character_main: [f32; 4],

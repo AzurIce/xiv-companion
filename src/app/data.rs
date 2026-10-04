@@ -22,7 +22,7 @@ use xiv_companion::{
     FurnitureCatalogResource, FurnitureModelId, ItemIconId, ItemIconResource, ItemIconResourceInfo,
     ItemSource, MaterialSummary, ResourceMetadata, ResourceSource, SourceChoice, WeaponCatalogId,
     WeaponCatalogPackage, WeaponCatalogResource, WeaponModelData, WeaponModelId,
-    WeaponStainingTemplates, WeaponVfxData, apply_weapon_model_stains, build_craft_tree,
+    WeaponStainingTemplates, WeaponVfxAttachments, apply_weapon_model_stains, build_craft_tree,
     craftable_recipes as planner_craftable_recipes, create_craft_data_index,
     default_source_index as planner_default_source_index, get_item as planner_get_item,
     get_item_name as planner_get_item_name, resolve_source as planner_resolve_source,
@@ -117,17 +117,12 @@ pub async fn load_weapon_model(item: &CollectionItem) -> Result<Rc<WeaponModelDa
     Ok(Rc::new(data))
 }
 
-/// 武器常驻 VFX（无特效或资源缺失为 None）。
-pub async fn load_weapon_vfx(item: &CollectionItem) -> Option<Rc<WeaponVfxData>> {
-    let data = load_weapon_vfx_from_local(WeaponModelId {
-        item_id: item.id,
-        item_name: item.name.clone(),
-        model_main: item.model_main,
-        model_sub: item.model_sub,
-        stain_ids: [0, 0],
-    })
-    .await?;
-    Some(Rc::new(data))
+/// 武器常驻 VFX；无特效与加载失败分别返回 `Ok(None)` 和 `Err`。
+pub async fn load_weapon_vfx(
+    model: &WeaponModelData,
+) -> Result<Option<Rc<WeaponVfxAttachments>>, String> {
+    let data = load_weapon_vfx_from_local(model).await?;
+    Ok(data.map(Rc::new))
 }
 
 pub async fn load_equipment_model(

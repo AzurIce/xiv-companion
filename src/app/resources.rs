@@ -11,7 +11,7 @@ use xiv_companion::{
     load_chara_model_with_skeleton_from_async_resource,
     load_character_assembly_with_skeleton_from_async_resource,
     load_equipment_model_from_async_resource, load_furniture_model_from_async_resource,
-    load_weapon_model_from_async_resource, load_weapon_vfx_from_async_resource,
+    load_weapon_model_from_async_resource, load_weapon_vfx_attachments_from_async_resource,
     register_chara_catalog_resource, register_character_make_resource,
     register_character_palette_resource, register_collection_catalog_resource,
     register_craft_data_resource, register_furniture_catalog_resource, register_item_icon_resource,
@@ -1103,29 +1103,14 @@ mod local_release_tests {
     }
 }
 
-/// 加载武器常驻 VFX（imc → vw.avfx → 解析 + atex 解码）。无特效/文件缺失
-/// 返回 `None`（静默降级）；与模型加载并行调用，不报告加载进度。
+/// 加载武器常驻 VFX，独立返回错误且不更新模型加载进度。
 pub async fn load_weapon_vfx_from_local(
-    id: xiv_companion::WeaponModelId,
-) -> Option<xiv_companion::WeaponVfxData> {
-    let mut sqpack = BrowserSqPack::from_window_handle().await.ok()?;
-    let mut resource = BrowserSqPackGameResource {
-        sqpack: &mut sqpack,
-        item_id: id.item_id,
-        stain_ids: id.stain_ids,
-        started_at_ms: log::now_ms(),
-        checked_resources: 0,
-        loaded_resources: 0,
-        loaded_bytes: 0,
-    };
-    let request = WeaponModelLoadRequest {
-        item_id: id.item_id,
-        item_name: id.item_name,
-        model_main: id.model_main,
-        model_sub: id.model_sub,
-        stain_ids: id.stain_ids,
-    };
-    load_weapon_vfx_from_async_resource(&mut resource, &request).await
+    model: &xiv_companion::WeaponModelData,
+) -> Result<Option<xiv_companion::WeaponVfxAttachments>, String> {
+    let mut sqpack = BrowserSqPack::from_window_handle().await?;
+    load_weapon_vfx_attachments_from_async_resource(&mut sqpack, model)
+        .await
+        .map_err(|error| format!("{error:#}"))
 }
 
 pub async fn load_weapon_model_from_local(
@@ -1632,6 +1617,28 @@ pub async fn load_weapon_staining_templates_from_local() -> Result<WeaponStainin
     Ok(WeaponStainingTemplates::from_load_results(
         legacy, dawntrail,
     ))
+}
+
+impl AsyncGameResource for BrowserSqPack {
+    type Error = String;
+    type ReadFuture<'a> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + 'a>>;
+
+    fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
+        Box::pin(self.try_read_game_file(path))
+    }
+
+    fn read_optional<'a>(
+        &'a mut self,
+        path: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Vec<u8>>, String>> + 'a>>
+    {
+        Box::pin(self.try_read_optional_game_file(path))
+    }
+
+    fn platform(&self) -> physis::Platform {
+        physis::Platform::Win32
+    }
 }
 
 struct BrowserSqPackGameResource<'a> {

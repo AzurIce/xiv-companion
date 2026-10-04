@@ -9,11 +9,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::HtmlCanvasElement;
 use xiv_companion::renderer::{
-    ModelInstance, ModelRenderContext, ModelRenderOptions, VfxParticles, VfxTextureInput,
+    ModelInstance, ModelRenderContext, ModelRenderOptions, WeaponVfxParticles,
 };
-use xiv_companion::{
-    ModelRenderData, PreparedModelOptions, VfxMeshInstance, VfxQuad, WeaponVfxData,
-};
+use xiv_companion::{ModelRenderData, PreparedModelOptions, WeaponVfxAttachments};
 
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
@@ -23,10 +21,7 @@ pub struct WebModelCanvasRenderer {
     context: ModelRenderContext,
     instance: Option<ModelInstance>,
     /// 常驻 VFX 运行时与 GPU 批次（模型切换时经 `set_vfx` 整体替换）。
-    vfx_runtime: Option<xiv_companion::VfxRuntime>,
-    vfx_batch: Option<VfxParticles>,
-    vfx_scratch: Vec<VfxQuad>,
-    vfx_mesh_scratch: Vec<VfxMeshInstance>,
+    vfx: Option<WeaponVfxParticles>,
     orbit: Rc<RefCell<OrbitState>>,
     msaa_samples: u32,
     _on_mouse_down: Closure<dyn FnMut(web_sys::MouseEvent)>,
@@ -78,13 +73,7 @@ impl WebModelCanvasRenderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
-                // downlevel_webgl2_defaults 把 storage buffer 相关 limits 全设 0，
-                // 蒙皮 joint storage buffer 需要至少 1 个 binding 位与 16400B
-                // 绑定尺寸；在分辨率对齐 adapter 的基础上补这两个下限（WebGPU
-                // 后端实际能力均远超此值）。
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits())
-                    .with_storage_buffer_limits_for_skinning(),
+                required_limits: ModelRenderContext::required_limits(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             })
@@ -114,7 +103,11 @@ impl WebModelCanvasRenderer {
         };
         surface.configure(&device, &config);
         let depth_texture = create_depth_texture(&device, width, height, msaa_samples);
+        let initialization = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let context = ModelRenderContext::new_with_msaa(device, queue, config.format, msaa_samples);
+        if let Some(error) = initialization.pop().await {
+            return Err(format!("初始化渲染管线失败：{error}"));
+        }
         let orbit = Rc::new(RefCell::new(OrbitState::default()));
         let (on_mouse_down, on_mouse_move, on_mouse_up, on_wheel, on_context_menu) =
             install_orbit_handlers(&canvas, orbit.clone())?;
@@ -126,10 +119,7 @@ impl WebModelCanvasRenderer {
             depth_texture,
             context,
             instance: None,
-            vfx_runtime: None,
-            vfx_batch: None,
-            vfx_scratch: Vec::new(),
-            vfx_mesh_scratch: Vec::new(),
+            vfx: None,
             orbit,
             msaa_samples,
             _on_mouse_down: on_mouse_down,
@@ -140,30 +130,44 @@ impl WebModelCanvasRenderer {
         })
     }
 
-    /// 同步替换常驻 VFX（模型/物品切换时调用）。解码成功的 atex 进纹理表
-    /// （实例贴图序号 = 文件 `Tex` 顺序；缺失项由渲染端回退到内置光点，
-    /// 保持序号映射不漂移）。
-    pub fn set_vfx(&mut self, vfx: Option<&WeaponVfxData>) {
-        self.vfx_runtime = vfx.map(|data| data.runtime());
-        let textures: Vec<Option<VfxTextureInput>> = vfx
-            .iter()
-            .flat_map(|data| data.textures.iter())
-            .map(|texture| {
-                texture.as_ref().map(|texture| VfxTextureInput {
-                    rgba: texture.rgba.clone(),
-                    width: texture.width,
-                    height: texture.height,
-                })
-            })
-            .collect();
-        // 每文件各自保持 Modl 序号对齐（无绘制数据的给空网格）。
-        let mut meshes: Vec<xiv_companion::VfxDrawModel> = Vec::new();
-        for data in vfx.iter() {
-            for model in &data.file.models {
-                meshes.push(model.draw.clone().unwrap_or_default());
+    /// Replace all mounted effects and their shared GPU resources.
+    pub fn set_vfx(&mut self, vfx: Option<&WeaponVfxAttachments>, options: ModelRenderOptions) {
+        let orbit = self.orbit.borrow();
+        self.vfx = self.instance.as_ref().and_then(|model| {
+            let data = vfx?;
+            let camera = self.context.vfx_camera_view_snapshot(
+                model,
+                [self.config.width, self.config.height],
+                orbit.yaw,
+                orbit.pitch,
+                orbit.zoom,
+                [orbit.pan_x, orbit.pan_y],
+                options,
+            );
+            match self
+                .context
+                .create_weapon_vfx_particles_with_camera_view(model, data, camera)
+            {
+                Ok(vfx) => Some(vfx),
+                Err(error) => {
+                    web_sys::console::warn_1(&format!("VFX camera: {error}").into());
+                    None
+                }
             }
-        }
-        self.vfx_batch = Some(self.context.create_vfx_particles(&textures, &meshes));
+        });
+    }
+
+    /// Forward an owning weapon's sampled local pose before rendering this
+    /// frame. VFX targets are bone world matrices, independent of skinning.
+    pub fn update_vfx_pose(
+        &mut self,
+        model_path: &str,
+        pose: &xiv_companion_data::SkeletonPose,
+    ) -> Result<(), String> {
+        self.vfx
+            .as_mut()
+            .ok_or("VFX attachments unavailable")?
+            .set_attachment_pose(model_path, pose)
     }
 
     /// 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与材质 bind group，
@@ -186,6 +190,25 @@ impl WebModelCanvasRenderer {
         let Some(instance) = &self.instance else {
             return;
         };
+        let orbit = self.orbit.borrow();
+        let mut vfx_ready = true;
+        if let Some(vfx) = &mut self.vfx {
+            let camera = self.context.vfx_camera_view_snapshot(
+                instance,
+                [self.config.width, self.config.height],
+                orbit.yaw,
+                orbit.pitch,
+                orbit.zoom,
+                [orbit.pan_x, orbit.pan_y],
+                options,
+            );
+            if let Err(error) = vfx.set_camera_view(instance, camera) {
+                web_sys::console::warn_1(&format!("VFX camera: {error}").into());
+                vfx_ready = false;
+            } else {
+                vfx.advance_to(options.vfx_time);
+            }
+        }
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -200,21 +223,21 @@ impl WebModelCanvasRenderer {
         let depth_view = self
             .depth_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        // VFX 粒子按渲染时钟采样并上传；时间由页面循环写入
-        // `options.vfx_time`（快照路径传固定值保持确定性）。
-        if options.vfx_enabled {
-            if let (Some(runtime), Some(batch)) = (&self.vfx_runtime, &mut self.vfx_batch) {
-                runtime.sample(options.vfx_time, &mut self.vfx_scratch);
-                batch.update(&self.context, &self.vfx_scratch);
-                runtime.sample_mesh(options.vfx_time, &mut self.vfx_mesh_scratch);
-                batch.update_mesh(&self.context, &self.vfx_mesh_scratch);
+        // Read the already advanced VFX state; equal timestamps do not update twice.
+        if options.vfx_enabled && vfx_ready {
+            if let Some(vfx) = &mut self.vfx {
+                vfx.update(&self.context, instance, options.vfx_time);
             }
         }
-        let vfx = (options.vfx_enabled)
-            .then_some(self.vfx_batch.as_ref())
-            .flatten();
-        let orbit = self.orbit.borrow();
-        self.context.render(
+        let vfx = (options.vfx_enabled && vfx_ready)
+            .then_some(self.vfx.as_ref())
+            .flatten()
+            .map(WeaponVfxParticles::particles);
+        let auras = (options.vfx_enabled && vfx_ready)
+            .then_some(self.vfx.as_ref())
+            .flatten()
+            .map_or_else(Vec::new, |vfx| vfx.unambiguous_active_aura_resources());
+        self.context.render_with_auras(
             instance,
             &view,
             &depth_view,
@@ -225,6 +248,7 @@ impl WebModelCanvasRenderer {
             [orbit.pan_x, orbit.pan_y],
             options,
             vfx,
+            &auras,
         );
         output.present();
     }
@@ -422,7 +446,7 @@ fn create_depth_texture(
         sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24Plus,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -433,21 +457,4 @@ fn format_js_error(error: wasm_bindgen::JsValue) -> String {
         .and_then(|value| value.as_string())
         .or_else(|| error.as_string())
         .unwrap_or_else(|| "browser event call failed".to_string())
-}
-
-/// 蒙皮 joint storage buffer 的 device limits 下限：group(2) 每 stage 至少 1
-/// 个 storage buffer、绑定尺寸至少容纳 storage 头 + 256×64B joint 矩阵。
-trait StorageBufferLimitsForSkinning {
-    fn with_storage_buffer_limits_for_skinning(self) -> Self;
-}
-
-impl StorageBufferLimitsForSkinning for wgpu::Limits {
-    fn with_storage_buffer_limits_for_skinning(mut self) -> Self {
-        self.max_storage_buffers_per_shader_stage =
-            self.max_storage_buffers_per_shader_stage.max(1);
-        self.max_storage_buffer_binding_size = self.max_storage_buffer_binding_size.max(16_400);
-        // VFX 网格实例布局 176B：补顶点缓冲步长下限（WebGPU 规范保证 ≥2048）。
-        self.max_vertex_buffer_array_stride = self.max_vertex_buffer_array_stride.max(2_048);
-        self
-    }
 }

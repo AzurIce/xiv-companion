@@ -37,6 +37,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.bitangent1 = input.bitangent1;
     out.color1 = input.color1;
     out.world_position = position.xyz;
+    out.model_position = input.position;
     return out;
 }
 
@@ -71,6 +72,7 @@ fn vs_outline(input: VertexInput) -> VertexOutput {
     out.bitangent1 = input.bitangent1;
     out.color1 = input.color1;
     out.world_position = position.xyz + normalize(normal) * width;
+    out.model_position = input.position;
     return out;
 }
 

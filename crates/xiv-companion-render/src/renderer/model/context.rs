@@ -8,6 +8,446 @@ pub(crate) const JOINT_STORAGE_HEADER_SIZE: wgpu::BufferAddress = 16;
 /// joint storage buffer 总大小：头 + 256 个 mat4。
 pub(crate) const JOINT_STORAGE_BUFFER_SIZE: wgpu::BufferAddress = 16 + (MAX_JOINTS as u64) * 64;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum VfxSoftGeometry {
+    Quad,
+    Line,
+    Polyline,
+    Mesh,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct VfxSoftPipelineKey {
+    geometry: VfxSoftGeometry,
+    blend_mode: VfxBlendMode,
+    cull_index: usize,
+    depth_mode: usize,
+}
+
+#[derive(Clone, Copy)]
+enum VfxDrawItem {
+    Quad(VfxDrawRange),
+    Polyline(VfxPolylineDrawRange),
+    Mesh(VfxMeshDrawRange),
+    Decal(VfxDecalDrawRange),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VfxDrawSegment {
+    Regular,
+    Soft,
+    Decal,
+}
+
+// Client 3910b0: Context pass and TLS local-key base for each root group.
+// These are ordering stages, not SHPK slot indexes or render-target identities.
+fn ordinary_vfx_scene_stage(authored_layer: i32) -> Option<(u8, u32)> {
+    const STAGES: [(u8, u32); 12] = [
+        (13, 0x800000),
+        (11, 0x808000),
+        (11, 0x804000),
+        (11, 0x800000),
+        (6, 0xffbfff),
+        (7, 0x40001),
+        (7, 0x3c000),
+        (7, 4),
+        (15, 0),
+        (8, 3),
+        (9, 0xffbfff),
+        (10, 0xffbffe),
+    ];
+    STAGES
+        .get(usize::from(xiv_companion_data::avfx_sim::draw_layer_group(
+            authored_layer,
+        )))
+        .copied()
+}
+
+// The preview scene has no pass-10 water receiver marked with stencil 0x40.
+// Client DDTT 0/1/2 select forward pass masks 1/2/3 respectively, so only
+// DDTT 0 and 2 have a draw in this scene's ordinary forward pass.
+fn preview_decal_uses_forward_scene(depth_type: i32) -> bool {
+    matches!(depth_type, 0 | 2)
+}
+
+impl VfxDrawItem {
+    fn scene_stage(self) -> Option<(u8, u32)> {
+        let layer = match self {
+            Self::Quad(range) => range.draw_layer,
+            Self::Polyline(range) => range.draw_layer,
+            Self::Mesh(range) => range.draw_layer,
+            Self::Decal(range) if preview_decal_uses_forward_scene(range.depth_type) => {
+                return Some((6, 0x1fffff));
+            }
+            Self::Decal(_) => return None,
+        };
+        ordinary_vfx_scene_stage(layer)
+    }
+
+    fn priority(self) -> i32 {
+        match self {
+            Self::Quad(range) => range.priority,
+            Self::Polyline(range) => range.priority,
+            Self::Mesh(range) => range.priority,
+            Self::Decal(range) => range.priority,
+        }
+    }
+
+    fn draw_order(self) -> Option<u64> {
+        match self {
+            Self::Quad(range) => range.draw_order,
+            Self::Polyline(range) => range.draw_order,
+            Self::Mesh(range) => range.draw_order,
+            Self::Decal(range) => range.draw_order,
+        }
+    }
+
+    fn segment(self) -> VfxDrawSegment {
+        match self {
+            Self::Quad(range) => {
+                if range.soft_particle {
+                    VfxDrawSegment::Soft
+                } else {
+                    VfxDrawSegment::Regular
+                }
+            }
+            Self::Polyline(range) => {
+                if range.soft_particle {
+                    VfxDrawSegment::Soft
+                } else {
+                    VfxDrawSegment::Regular
+                }
+            }
+            Self::Mesh(range) => {
+                if range.soft_particle {
+                    VfxDrawSegment::Soft
+                } else {
+                    VfxDrawSegment::Regular
+                }
+            }
+            Self::Decal(_) => VfxDrawSegment::Decal,
+        }
+    }
+}
+
+fn preview_camera_depth_row(uniform: &CameraUniform) -> [f32; 4] {
+    // camera_uniform builds a right-handed look-at view: its Z row is the
+    // eye-to-target outward direction and the negative eye-space dot product.
+    [
+        uniform.view_dir[0],
+        uniform.view_dir[1],
+        uniform.view_dir[2],
+        -(uniform.view_dir[0] * uniform.camera_position[0]
+            + uniform.view_dir[1] * uniform.camera_position[1]
+            + uniform.view_dir[2] * uniform.camera_position[2]),
+    ]
+}
+
+fn document_sort_ranks(
+    ranges: &[VfxDocumentSortRange],
+    camera_depth_row: [f32; 4],
+) -> Option<Vec<usize>> {
+    let keys = ranges
+        .iter()
+        .map(|range| {
+            xiv_companion_data::avfx_sim::document_sort_key(
+                range.position,
+                camera_depth_row,
+                range.soft_key_offset,
+                range.registration_serial,
+            )
+        })
+        .collect::<Vec<_>>();
+    // The client's unordered-float tie behavior is not established. Avoid
+    // inventing a total order for malformed/nonfinite source values.
+    if keys.iter().any(|key| !key.is_finite()) {
+        return None;
+    }
+    let mut indexes = (0..ranges.len()).collect::<Vec<_>>();
+    indexes.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap());
+    let mut ranks = vec![0; ranges.len()];
+    for (rank, index) in indexes.into_iter().enumerate() {
+        ranks[index] = rank;
+    }
+    Some(ranks)
+}
+
+fn document_rank_for_order(
+    order: Option<u64>,
+    ranges: &[VfxDocumentSortRange],
+    ranks: &[usize],
+) -> Option<usize> {
+    let order = order?;
+    ranges
+        .iter()
+        .position(|range| (range.order_start..range.order_end).contains(&order))
+        .map(|index| ranks[index])
+}
+
+fn ordered_vfx_draws(vfx: &VfxParticles, camera_depth_row: [f32; 4]) -> Vec<VfxDrawItem> {
+    let mut draws = Vec::with_capacity(
+        vfx.draw_ranges.len()
+            + vfx.polyline_draw_ranges.len()
+            + vfx.mesh_draw_ranges.len()
+            + vfx.decal_draw_ranges.len(),
+    );
+    draws.extend(vfx.draw_ranges.iter().copied().map(VfxDrawItem::Quad));
+    draws.extend(
+        vfx.polyline_draw_ranges
+            .iter()
+            .copied()
+            .map(VfxDrawItem::Polyline),
+    );
+    draws.extend(vfx.mesh_draw_ranges.iter().copied().map(VfxDrawItem::Mesh));
+    draws.extend(
+        vfx.decal_draw_ranges
+            .iter()
+            .copied()
+            .filter(|range| preview_decal_uses_forward_scene(range.depth_type))
+            .map(VfxDrawItem::Decal),
+    );
+    sort_vfx_draw_items(&mut draws, &vfx.document_sort_ranges, camera_depth_row);
+    draws
+}
+
+fn sort_vfx_draw_items(
+    draws: &mut [VfxDrawItem],
+    document_ranges: &[VfxDocumentSortRange],
+    camera_depth_row: [f32; 4],
+) {
+    if draws.iter().all(|item| item.scene_stage().is_some()) {
+        let ranks = document_sort_ranks(document_ranges, camera_depth_row);
+        if let Some(ranks) = ranks.filter(|ranks| {
+            !ranks.is_empty()
+                && draws.iter().all(|item| {
+                    document_rank_for_order(item.draw_order(), document_ranges, ranks).is_some()
+                })
+        }) {
+            draws.sort_by_key(|item| {
+                (
+                    item.scene_stage(),
+                    document_rank_for_order(item.draw_order(), document_ranges, &ranks),
+                    if matches!(item, VfxDrawItem::Decal(_)) {
+                        0
+                    } else {
+                        item.priority()
+                    },
+                    item.draw_order(),
+                )
+            });
+        } else {
+            draws.sort_by_key(|item| {
+                (
+                    item.scene_stage(),
+                    if matches!(item, VfxDrawItem::Decal(_)) {
+                        0
+                    } else {
+                        item.priority()
+                    },
+                    item.draw_order(),
+                )
+            });
+        }
+    } else {
+        // Unknown ordinary scene layers have no verified stage mapping.
+        draws.sort_by_key(|item| (item.priority(), item.draw_order()));
+    }
+}
+
+#[cfg(test)]
+mod document_sort_tests {
+    use super::*;
+
+    fn quad(order: u64, priority: i32) -> VfxDrawItem {
+        VfxDrawItem::Quad(VfxDrawRange {
+            draw_layer: 2,
+            priority,
+            draw_order: Some(order),
+            last_draw_order: Some(order),
+            blend_mode: VfxBlendMode::Blend,
+            depth_mode: 0,
+            cull_mode: 1,
+            double_group: None,
+            line_list: false,
+            soft_particle: false,
+            screen_copy: false,
+            vertex_count: 6,
+            group: 0,
+            start: 0,
+            count: 1,
+        })
+    }
+
+    fn mesh(order: u64, priority: i32) -> VfxDrawItem {
+        VfxDrawItem::Mesh(VfxMeshDrawRange {
+            draw_layer: 2,
+            priority,
+            draw_order: Some(order),
+            last_draw_order: Some(order),
+            mesh: 0,
+            blend_mode: VfxBlendMode::Blend,
+            depth_mode: 0,
+            cull_mode: 1,
+            soft_particle: false,
+            screen_copy: false,
+            group: 0,
+            start: 0,
+            count: 1,
+        })
+    }
+
+    #[test]
+    fn camera_and_sko_order_documents_before_intra_document_priority() {
+        let mut documents = [
+            VfxDocumentSortRange {
+                order_start: 0,
+                order_end: 2,
+                position: [0.0, 0.0, 1.0],
+                soft_key_offset: 0.0,
+                registration_serial: 1,
+            },
+            VfxDocumentSortRange {
+                order_start: 3,
+                order_end: 5,
+                position: [0.0, 0.0, -1.0],
+                soft_key_offset: 0.0,
+                registration_serial: 2,
+            },
+        ];
+        let input = [quad(0, -10), mesh(3, 10), mesh(1, 5), quad(4, -5)];
+        let sorted = |row, documents: &[VfxDocumentSortRange]| {
+            let mut draws = input;
+            sort_vfx_draw_items(&mut draws, documents, row);
+            draws.map(|item| item.draw_order().unwrap())
+        };
+        assert_eq!(sorted([0.0, 0.0, 1.0, 0.0], &documents), [4, 3, 0, 1]);
+        assert_eq!(sorted([0.0, 0.0, -1.0, 0.0], &documents), [0, 1, 4, 3]);
+        documents[1].soft_key_offset = 3.0;
+        assert_eq!(sorted([0.0, 0.0, 1.0, 0.0], &documents), [0, 1, 4, 3]);
+    }
+
+    #[test]
+    fn preview_camera_depth_row_reverses_document_order_with_yaw() {
+        let front = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            0.0,
+            0.0,
+            3.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let back = camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 128],
+            std::f32::consts::PI,
+            0.0,
+            3.0,
+            [0.0; 2],
+            ModelRenderOptions::default(),
+        );
+        let documents = [
+            VfxDocumentSortRange {
+                order_start: 0,
+                order_end: 1,
+                position: [0.0, 0.0, -1.0],
+                soft_key_offset: 0.0,
+                registration_serial: 1,
+            },
+            VfxDocumentSortRange {
+                order_start: 2,
+                order_end: 3,
+                position: [0.0, 0.0, 1.0],
+                soft_key_offset: 0.0,
+                registration_serial: 2,
+            },
+        ];
+        assert_eq!(
+            document_sort_ranks(&documents, preview_camera_depth_row(&front)),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            document_sort_ranks(&documents, preview_camera_depth_row(&back)),
+            Some(vec![1, 0])
+        );
+    }
+}
+
+fn vfx_depth_state(depth_mode: usize) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24Plus,
+        // DsDt=false suppresses writes even when DsDw=true.
+        depth_write_enabled: Some(depth_mode == 1),
+        depth_compare: Some(if depth_mode == 2 {
+            wgpu::CompareFunction::Always
+        } else {
+            wgpu::CompareFunction::LessEqual
+        }),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+#[cfg(test)]
+mod depth_state_tests {
+    use super::*;
+
+    #[test]
+    fn normal_and_soft_particles_share_all_depth_modes() {
+        let tested = vfx_depth_state(0);
+        assert_eq!(tested.depth_compare, Some(wgpu::CompareFunction::LessEqual));
+        assert_eq!(tested.depth_write_enabled, Some(false));
+
+        let written = vfx_depth_state(1);
+        assert_eq!(
+            written.depth_compare,
+            Some(wgpu::CompareFunction::LessEqual)
+        );
+        assert_eq!(written.depth_write_enabled, Some(true));
+
+        let disabled = vfx_depth_state(2);
+        assert_eq!(disabled.depth_compare, Some(wgpu::CompareFunction::Always));
+        assert_eq!(disabled.depth_write_enabled, Some(false));
+    }
+}
+
+fn vfx_scene_texture_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn vfx_scene_cube_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::Cube,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn vfx_scene_sampler_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
 /// 模型无关的 GPU 渲染上下文：device/queue、全部渲染管线、shader module、
 /// bind group layout、相机 uniform 与后处理状态。创建代价集中在管线编译，
 /// 应在同一渲染目标上跨模型复用；模型相关状态由 [`ModelRenderContext::create_model`]
@@ -35,16 +475,37 @@ pub struct ModelRenderContext {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     material_bind_group_layout: wgpu::BindGroupLayout,
+    surface_overlay_bind_group_layout: wgpu::BindGroupLayout,
     joint_bind_group_layout: wgpu::BindGroupLayout,
     post_sampler: wgpu::Sampler,
     compose_uniform_buffer: wgpu::Buffer,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     compose_bind_group_layout: wgpu::BindGroupLayout,
-    vfx_quad_pipelines: [[wgpu::RenderPipeline; 3]; 2],
-    /// [blend_add][cull: none/front/back]。
-    vfx_mesh_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; 2],
+    /// [blend_mode][cull: none/front/back][depth_mode]。
+    vfx_quad_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; VfxBlendMode::ALL.len()],
+    vfx_depth_copy_pipeline: wgpu::RenderPipeline,
+    vfx_shader: wgpu::ShaderModule,
+    vfx_soft_pipeline_layout: wgpu::PipelineLayout,
+    vfx_soft_pipelines: HashMap<VfxSoftPipelineKey, wgpu::RenderPipeline>,
+    /// Non-Smpl Line uses the client's two-vertex line-list submission.
+    vfx_line_pipelines: [[wgpu::RenderPipeline; 3]; VfxBlendMode::ALL.len()],
+    /// Camera-facing no-Binder edge Polyline triangle stream.
+    vfx_polyline_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; VfxBlendMode::ALL.len()],
+    /// [blend_mode][cull: none/front/back][depth_mode]。
+    vfx_mesh_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; VfxBlendMode::ALL.len()],
+    vfx_decal_pipelines: [wgpu::RenderPipeline; VfxBlendMode::ALL.len()],
     vfx_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_scene_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_soft_depth_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_decal_bind_group_layout: wgpu::BindGroupLayout,
+    vfx_decal_vertex_buffer: wgpu::Buffer,
+    vfx_decal_index_buffer: wgpu::Buffer,
     vfx_sampler: wgpu::Sampler,
+    vfx_reflection_cube_view: wgpu::TextureView,
+    vfx_reflection_sampler: wgpu::Sampler,
+    vfx_portrait_view: wgpu::TextureView,
+    vfx_portrait_sampler: wgpu::Sampler,
+    vfx_portrait_available: bool,
     post_process: Option<PostProcessState>,
     format: wgpu::TextureFormat,
     msaa_samples: u32,
@@ -61,12 +522,14 @@ pub struct ModelInstance {
     transparent_index_buffer: wgpu::Buffer,
     draw_batches: Vec<DrawBatch>,
     material_bind_groups: Vec<wgpu::BindGroup>,
+    surface_overlay_bind_groups: Vec<wgpu::BindGroup>,
     bounds_center: [f32; 3],
     bounds_radius: f32,
     joint_buffer: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
     joint_count: usize,
     joint_names: Vec<String>,
+    mdl_preview_offsets: HashMap<String, [f32; 3]>,
 }
 
 pub struct ModelRenderer {
@@ -140,6 +603,28 @@ impl ModelRenderer {
         &self.context
     }
 
+    /// Set the reflection fallback for TR draws without a valid file cube.
+    /// The view must be a filterable cube texture.
+    pub fn set_vfx_reflection_provider(
+        &mut self,
+        cube_view: wgpu::TextureView,
+        sampler: wgpu::Sampler,
+    ) {
+        self.context.set_vfx_reflection_provider(cube_view, sampler);
+    }
+
+    /// Provide the character portrait selected by TC1 `bUOS` (`-5`). Set this
+    /// before creating the VFX particle batch so its group flags can enable
+    /// the source.
+    pub fn set_vfx_portrait_provider(
+        &mut self,
+        portrait_view: wgpu::TextureView,
+        sampler: wgpu::Sampler,
+    ) {
+        self.context
+            .set_vfx_portrait_provider(portrait_view, sampler);
+    }
+
     /// 复用 context 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与
     /// 材质 bind group，不触碰设备、管线与后处理状态。
     pub fn set_model<M: ModelRenderData + ?Sized>(
@@ -177,6 +662,95 @@ impl ModelRenderer {
         self.instance.update_joint_matrices(&self.context, matrices);
     }
 
+    /// Advance and sample all VFX mounts against the preview offsets of this
+    /// renderer's current model instance.
+    pub fn update_weapon_vfx_particles(&self, particles: &mut WeaponVfxParticles, time: f32) {
+        particles.advance_to(time);
+        particles.update(&self.context, &self.instance, time);
+    }
+
+    pub fn create_weapon_vfx_particles(
+        &self,
+        data: &xiv_companion_data::WeaponVfxAttachments,
+    ) -> WeaponVfxParticles {
+        self.context
+            .create_weapon_vfx_particles(&self.instance, data)
+    }
+
+    pub fn binder_camera_snapshot(
+        &self,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+    ) -> xiv_companion_data::VfxBinderCameraSnapshot {
+        self.context.binder_camera_snapshot(
+            &self.instance,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        )
+    }
+
+    pub fn vfx_camera_view_snapshot(
+        &self,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+    ) -> xiv_companion_data::VfxCameraViewSnapshot {
+        self.context.vfx_camera_view_snapshot(
+            &self.instance,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        )
+    }
+
+    pub fn create_weapon_vfx_particles_with_camera(
+        &self,
+        data: &xiv_companion_data::WeaponVfxAttachments,
+        camera: xiv_companion_data::VfxBinderCameraSnapshot,
+    ) -> Result<WeaponVfxParticles, String> {
+        self.context
+            .create_weapon_vfx_particles_with_camera(&self.instance, data, camera)
+    }
+
+    pub fn set_weapon_vfx_camera(
+        &self,
+        particles: &mut WeaponVfxParticles,
+        camera: xiv_companion_data::VfxBinderCameraSnapshot,
+    ) -> Result<(), String> {
+        particles.set_camera(&self.instance, camera)
+    }
+
+    pub fn create_weapon_vfx_particles_with_camera_view(
+        &self,
+        data: &xiv_companion_data::WeaponVfxAttachments,
+        camera: xiv_companion_data::VfxCameraViewSnapshot,
+    ) -> Result<WeaponVfxParticles, String> {
+        self.context
+            .create_weapon_vfx_particles_with_camera_view(&self.instance, data, camera)
+    }
+
+    pub fn set_weapon_vfx_camera_view(
+        &self,
+        particles: &mut WeaponVfxParticles,
+        camera: xiv_companion_data::VfxCameraViewSnapshot,
+    ) -> Result<(), String> {
+        particles.set_camera_view(&self.instance, camera)
+    }
+
     pub fn render_to(
         &mut self,
         target_view: &wgpu::TextureView,
@@ -189,7 +763,63 @@ impl ModelRenderer {
         options: ModelRenderOptions,
         vfx: Option<&VfxParticles>,
     ) {
-        self.context.render(
+        self.render_to_with_aura(
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+            vfx,
+            None,
+        );
+    }
+
+    /// Shade a prepared Aura on compatible batches of its target model.
+    pub fn render_to_with_aura(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
+        aura: Option<&WeaponVfxAuraResource>,
+    ) {
+        let auras = aura.into_iter().collect::<Vec<_>>();
+        self.render_to_with_auras(
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+            vfx,
+            &auras,
+        );
+    }
+
+    pub fn render_to_with_auras(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
+        auras: &[&WeaponVfxAuraResource],
+    ) {
+        self.context.render_with_auras(
             &self.instance,
             target_view,
             depth_view,
@@ -200,6 +830,7 @@ impl ModelRenderer {
             pan,
             options,
             vfx,
+            auras,
         );
     }
 
@@ -222,6 +853,54 @@ impl ModelRenderer {
 }
 
 impl ModelRenderContext {
+    /// Minimum device limits for all model and VFX pipelines and their fixed
+    /// capacity buffers. WebGPU devices expose requested limits, rather than
+    /// every limit supported by the adapter.
+    pub fn required_limits(adapter_limits: wgpu::Limits) -> wgpu::Limits {
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits);
+        // The decal layout also includes the mesh and Polyline bindings:
+        // two storage bindings in VFX group 1, plus decal instances in group 2.
+        limits.max_storage_buffers_per_shader_stage = 3;
+        let largest_binding = JOINT_STORAGE_BUFFER_SIZE
+            .max((Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxMeshInstance>()) as u64)
+            .max(
+                (Self::VFX_POLYLINE_VERTEX_CAPACITY * std::mem::size_of::<GpuVfxPolylineVertex>())
+                    as u64,
+            )
+            .max((Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxDecalInstance>()) as u64);
+        limits.max_storage_buffer_binding_size = largest_binding;
+        limits.max_vertex_buffer_array_stride = 2_048;
+        limits
+    }
+
+    /// Replace the fallback reflection cube used when TR has no file cube.
+    pub fn set_vfx_reflection_provider(
+        &mut self,
+        cube_view: wgpu::TextureView,
+        sampler: wgpu::Sampler,
+    ) {
+        self.vfx_reflection_cube_view = cube_view;
+        self.vfx_reflection_sampler = sampler;
+    }
+
+    pub(crate) fn vfx_reflection_cube_view(&self) -> &wgpu::TextureView {
+        &self.vfx_reflection_cube_view
+    }
+
+    pub fn set_vfx_portrait_provider(
+        &mut self,
+        portrait_view: wgpu::TextureView,
+        sampler: wgpu::Sampler,
+    ) {
+        self.vfx_portrait_view = portrait_view;
+        self.vfx_portrait_sampler = sampler;
+        self.vfx_portrait_available = true;
+    }
+
+    pub(crate) fn vfx_portrait_available(&self) -> bool {
+        self.vfx_portrait_available
+    }
+
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         Self::new_with_msaa(device, queue, format, 1)
     }
@@ -527,22 +1206,6 @@ impl ModelRenderContext {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 31,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 32,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
                 ],
             });
 
@@ -561,12 +1224,46 @@ impl ModelRenderContext {
                 }],
             });
 
+        let surface_overlay_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("model surface overlay bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("weapon pipeline layout"),
             bind_group_layouts: &[
                 Some(&camera_bind_group_layout),
                 Some(&material_bind_group_layout),
                 Some(&joint_bind_group_layout),
+                Some(&surface_overlay_bind_group_layout),
             ],
             immediate_size: 0,
         });
@@ -810,8 +1507,8 @@ impl ModelRenderContext {
                 include_str!(concat!(env!("OUT_DIR"), "/vfx.wgsl")).into(),
             ),
         });
-        // 每组粒子（四层贴图 + TD + 合成模式）一个 bind group：
-// 0..4 贴图（TC1..TC4、TD）、5 参数 uniform、6..10 各层 sampler。
+        // 每组粒子一个 bind group：0..4 TC1..TC4/TD，5 参数，6..10 sampler，
+        // 11 网格实例 storage，12/13 TP，14 Polyline storage，15/16 TN。
         let vfx_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("weapon vfx particle bind group layout"),
@@ -906,6 +1603,72 @@ impl ModelRenderContext {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    vfx_scene_cube_layout_entry(17),
+                    vfx_scene_sampler_layout_entry(18),
+                ],
+            });
+        let vfx_scene_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon vfx scene-copy bind group layout"),
+                entries: &[
+                    vfx_scene_texture_layout_entry(2),
+                    vfx_scene_texture_layout_entry(3),
+                    vfx_scene_cube_layout_entry(4),
+                    vfx_scene_sampler_layout_entry(5),
+                    vfx_scene_texture_layout_entry(6),
+                    vfx_scene_sampler_layout_entry(7),
                 ],
             });
         let vfx_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -913,46 +1676,17 @@ impl ModelRenderContext {
             bind_group_layouts: &[
                 Some(&camera_bind_group_layout),
                 Some(&vfx_bind_group_layout),
+                Some(&vfx_scene_bind_group_layout),
             ],
             immediate_size: 0,
         });
-        /// 加色（One/One，alpha 不写入）与 alpha 混合（SrcAlpha/InvSrcAlpha）。
-        fn vfx_blend_state(blend_add: bool) -> wgpu::BlendState {
-            if blend_add {
-                wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Zero,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }
-            } else {
-                wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }
-            }
-        }
         let create_vfx_pipeline = |label: &str,
                                    vertex_entry: &str,
-                                   fragment_entry: &str,
                                    buffers: &[wgpu::VertexBufferLayout<'static>],
-                                   blend_add: bool,
+                                   blend_mode: VfxBlendMode,
                                    cull_mode: Option<wgpu::Face>,
-                                   depth_mode: usize|
+                                   depth_mode: usize,
+                                   topology: wgpu::PrimitiveTopology|
          -> wgpu::RenderPipeline {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -965,29 +1699,85 @@ impl ModelRenderContext {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &vfx_shader,
-                    entry_point: Some(fragment_entry),
+                    entry_point: Some(blend_mode.fragment_entry()),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: POST_FORMAT,
-                        blend: Some(vfx_blend_state(blend_add)),
+                        blend: blend_mode.blend_state(),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    topology,
                     cull_mode,
                     ..Default::default()
                 },
+                depth_stencil: Some(vfx_depth_state(depth_mode)),
+                multisample: wgpu::MultisampleState {
+                    count: msaa_samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let vfx_soft_depth_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon vfx soft-particle depth bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: if msaa_samples > 1 { 1 } else { 0 },
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: msaa_samples > 1,
+                        },
+                        count: None,
+                    },
+                    vfx_scene_texture_layout_entry(2),
+                    vfx_scene_texture_layout_entry(3),
+                    vfx_scene_cube_layout_entry(4),
+                    vfx_scene_sampler_layout_entry(5),
+                    vfx_scene_texture_layout_entry(6),
+                    vfx_scene_sampler_layout_entry(7),
+                ],
+            });
+        let vfx_soft_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("weapon vfx soft-particle pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&camera_bind_group_layout),
+                    Some(&vfx_bind_group_layout),
+                    Some(&vfx_soft_depth_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+        let vfx_depth_copy_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("weapon VFX soft depth snapshot pipeline"),
+                layout: Some(&vfx_soft_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &vfx_shader,
+                    entry_point: Some("vs_depth_copy"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &vfx_shader,
+                    entry_point: Some(if msaa_samples > 1 {
+                        "fs_depth_copy_4x"
+                    } else {
+                        "fs_depth_copy_1x"
+                    }),
+                    targets: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth24Plus,
-                    // 深度模式（粒子 DsDt/DsDw）：0 测不写、1 测且写
-                    // （爪笼壳等实心体写深度遮挡身后）、2 不测不写。
-                    depth_write_enabled: Some(depth_mode == 1),
-                    depth_compare: Some(if depth_mode == 2 {
-                        wgpu::CompareFunction::Always
-                    } else {
-                        wgpu::CompareFunction::LessEqual
-                    }),
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
@@ -997,44 +1787,166 @@ impl ModelRenderContext {
                 },
                 multiview_mask: None,
                 cache: None,
-            })
-        };
-        // 四边形管线：[blend_add][depth_mode]。
-        let vfx_quad_pipelines: [[wgpu::RenderPipeline; 3]; 2] = [true, false].map(|add| {
-            [0_usize, 1, 2].map(|depth_mode| {
-                create_vfx_pipeline(
-                    &format!(
-                        "weapon vfx particle pipeline ({}/{depth_mode})",
-                        if add { "add" } else { "blend" },
-                    ),
-                    "vs_main",
-                    if add { "fs_add" } else { "fs_blend" },
-                    &[GpuVfxQuad::LAYOUT],
-                    add,
-                    None,
-                    depth_mode,
-                )
-            })
-        });
-        // 网格粒子管线：[blend_add][cull][depth_mode]（壳体膜常用剔正面）。
-        let vfx_mesh_pipelines: [[[wgpu::RenderPipeline; 3]; 3]; 2] = [true, false].map(|add| {
+            });
+        // 四边形管线：[blend_mode][cull][depth_mode]。
+        let vfx_quad_pipelines = VfxBlendMode::ALL.map(|blend_mode| {
             [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
                 [0_usize, 1, 2].map(|depth_mode| {
                     create_vfx_pipeline(
                         &format!(
-                            "weapon vfx mesh pipeline ({}/{:?}/{depth_mode})",
-                            if add { "add" } else { "blend" },
-                            cull,
+                            "weapon vfx particle pipeline ({blend_mode:?}/{cull:?}/{depth_mode})"
                         ),
-                        "vs_mesh",
-                        if add { "fs_add" } else { "fs_blend" },
-                        &[GpuVfxMeshVertex::LAYOUT, GpuVfxMeshInstance::LAYOUT],
-                        add,
+                        "vs_main",
+                        &[GpuVfxQuad::LAYOUT],
+                        blend_mode,
                         cull,
                         depth_mode,
+                        wgpu::PrimitiveTopology::TriangleList,
                     )
                 })
             })
+        });
+        let vfx_line_pipelines = VfxBlendMode::ALL.map(|blend_mode| {
+            [0_usize, 1, 2].map(|depth_mode| {
+                create_vfx_pipeline(
+                    &format!("weapon vfx line pipeline ({blend_mode:?}/{depth_mode})"),
+                    "vs_main",
+                    &[GpuVfxQuad::LAYOUT],
+                    blend_mode,
+                    None,
+                    depth_mode,
+                    wgpu::PrimitiveTopology::LineList,
+                )
+            })
+        });
+        let vfx_polyline_pipelines = VfxBlendMode::ALL.map(|blend_mode| {
+            [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
+                [0_usize, 1, 2].map(|depth_mode| {
+                    create_vfx_pipeline(
+                        &format!(
+                            "weapon vfx polyline pipeline ({blend_mode:?}/{cull:?}/{depth_mode})"
+                        ),
+                        "vs_polyline",
+                        &[],
+                        blend_mode,
+                        cull,
+                        depth_mode,
+                        wgpu::PrimitiveTopology::TriangleList,
+                    )
+                })
+            })
+        });
+        // 网格粒子管线：[blend_mode][cull][depth_mode]（壳体膜常用剔正面）。
+        let vfx_mesh_pipelines = VfxBlendMode::ALL.map(|blend_mode| {
+            [None, Some(wgpu::Face::Front), Some(wgpu::Face::Back)].map(|cull| {
+                [0_usize, 1, 2].map(|depth_mode| {
+                    create_vfx_pipeline(
+                        &format!("weapon vfx mesh pipeline ({blend_mode:?}/{cull:?}/{depth_mode})"),
+                        "vs_mesh",
+                        &[GpuVfxMeshVertex::LAYOUT],
+                        blend_mode,
+                        cull,
+                        depth_mode,
+                        wgpu::PrimitiveTopology::TriangleList,
+                    )
+                })
+            })
+        });
+        let vfx_decal_shader_source = if msaa_samples > 1 {
+            include_str!(concat!(env!("OUT_DIR"), "/vfx_decal_4x.wgsl"))
+        } else {
+            include_str!(concat!(env!("OUT_DIR"), "/vfx_decal_1x.wgsl"))
+        };
+        let vfx_decal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("weapon vfx decal shader"),
+            source: wgpu::ShaderSource::Wgsl(vfx_decal_shader_source.into()),
+        });
+        let vfx_decal_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("weapon vfx decal projection bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: msaa_samples > 1,
+                        },
+                        count: None,
+                    },
+                    vfx_scene_texture_layout_entry(2),
+                    vfx_scene_texture_layout_entry(3),
+                    vfx_scene_cube_layout_entry(4),
+                    vfx_scene_sampler_layout_entry(5),
+                    vfx_scene_texture_layout_entry(6),
+                    vfx_scene_sampler_layout_entry(7),
+                ],
+            });
+        let vfx_decal_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("weapon vfx decal pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&camera_bind_group_layout),
+                    Some(&vfx_bind_group_layout),
+                    Some(&vfx_decal_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+        let vfx_decal_pipelines = VfxBlendMode::ALL.map(|blend_mode| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("weapon vfx decal pipeline ({blend_mode:?})")),
+                layout: Some(&vfx_decal_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &vfx_decal_shader,
+                    entry_point: Some("vs_decal"),
+                    buffers: &[GpuVfxDecalVertex::LAYOUT],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &vfx_decal_shader,
+                    entry_point: Some(blend_mode.decal_fragment_entry()),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: POST_FORMAT,
+                        blend: blend_mode.blend_state(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: msaa_samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+        let vfx_decal_vertex_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("weapon vfx decal cube vertices"),
+                contents: bytemuck::cast_slice(&VFX_DECAL_CUBE_VERTICES),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let vfx_decal_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon vfx decal cube indices"),
+            contents: bytemuck::cast_slice(&VFX_DECAL_CUBE_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
         });
         let vfx_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("weapon vfx particle sampler"),
@@ -1045,6 +1957,114 @@ impl ModelRenderContext {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        // Keep a deterministic cube for TR draws without a valid file cube or
+        // an application-supplied scene reflection provider.
+        let reflection_cube_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("weapon vfx preview reflection cube"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let reflection_faces: [[u8; 4]; 6] = [
+            [180, 120, 96, 255],
+            [72, 104, 160, 255],
+            [112, 156, 208, 255],
+            [28, 36, 56, 255],
+            [128, 144, 176, 255],
+            [52, 68, 92, 255],
+        ];
+        for (layer, face) in reflection_faces.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &reflection_cube_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                face,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let vfx_reflection_cube_view =
+            reflection_cube_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("weapon vfx preview reflection cube view"),
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            });
+        let vfx_reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("weapon vfx reflection cube sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let portrait_fallback = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("weapon vfx portrait fallback"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &portrait_fallback,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let vfx_portrait_view = portrait_fallback.create_view(&Default::default());
+        let vfx_portrait_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("weapon vfx portrait sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -1106,15 +2126,33 @@ impl ModelRenderContext {
             camera_buffer,
             camera_bind_group,
             material_bind_group_layout,
+            surface_overlay_bind_group_layout,
             joint_bind_group_layout,
             post_sampler,
             compose_uniform_buffer,
             blur_bind_group_layout,
             compose_bind_group_layout,
             vfx_quad_pipelines,
+            vfx_depth_copy_pipeline,
+            vfx_shader,
+            vfx_soft_pipeline_layout,
+            vfx_soft_pipelines: HashMap::new(),
+            vfx_line_pipelines,
+            vfx_polyline_pipelines,
             vfx_mesh_pipelines,
+            vfx_decal_pipelines,
             vfx_bind_group_layout,
+            vfx_scene_bind_group_layout,
+            vfx_soft_depth_bind_group_layout,
+            vfx_decal_bind_group_layout,
+            vfx_decal_vertex_buffer,
+            vfx_decal_index_buffer,
             vfx_sampler,
+            vfx_reflection_cube_view,
+            vfx_reflection_sampler,
+            vfx_portrait_view,
+            vfx_portrait_sampler,
+            vfx_portrait_available: false,
             post_process: None,
             format,
             msaa_samples,
@@ -1146,8 +2184,13 @@ impl ModelRenderContext {
         prepared_options: PreparedModelOptions,
         skeleton: Option<&xiv_companion_data::ModelSkeleton>,
     ) -> ModelInstance {
-        let (vertices, indices, draw_batches, joint_names) =
-            flatten_model_with_options_and_skeleton(model, prepared_options, skeleton);
+        let FlattenedModel {
+            vertices,
+            indices,
+            draw_batches,
+            joint_names,
+            mdl_preview_offsets,
+        } = flatten_model_with_options_and_skeleton(model, prepared_options, skeleton);
         let (bounds_center, bounds_radius) = gpu_vertices_bounds(&vertices)
             .unwrap_or((model.bounds().center, model.bounds().radius));
         let vertex_buffer = self
@@ -1175,10 +2218,11 @@ impl ModelRenderContext {
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let material_bind_groups = create_material_bind_groups(
+        let (material_bind_groups, surface_overlay_bind_groups) = create_material_bind_groups(
             &self.device,
             &self.queue,
             &self.material_bind_group_layout,
+            &self.surface_overlay_bind_group_layout,
             model,
             &draw_batches,
         );
@@ -1190,12 +2234,14 @@ impl ModelRenderContext {
             transparent_index_buffer,
             draw_batches,
             material_bind_groups,
+            surface_overlay_bind_groups,
             bounds_center,
             bounds_radius,
             joint_buffer,
             joint_bind_group,
             joint_count,
             joint_names,
+            mdl_preview_offsets,
         }
     }
 
@@ -1254,6 +2300,279 @@ impl ModelRenderContext {
         (joint_buffer, joint_bind_group, joint_count)
     }
 
+    fn prepare_soft_vfx_pipelines(&mut self, vfx: &VfxParticles) {
+        let mut required = Vec::new();
+        for range in vfx.draw_ranges.iter().filter(|range| range.soft_particle) {
+            let geometry = if range.line_list {
+                VfxSoftGeometry::Line
+            } else {
+                VfxSoftGeometry::Quad
+            };
+            let single_cull = if range.line_list {
+                0
+            } else {
+                vfx_cull_index(range.cull_mode)
+            };
+            let culls: &[usize] = if range.double_group.is_some() {
+                &[1, 2]
+            } else {
+                std::slice::from_ref(&single_cull)
+            };
+            for &cull_index in culls {
+                required.push(VfxSoftPipelineKey {
+                    geometry,
+                    blend_mode: range.blend_mode,
+                    cull_index,
+                    depth_mode: range.depth_mode,
+                });
+            }
+        }
+        for range in vfx
+            .polyline_draw_ranges
+            .iter()
+            .filter(|range| range.soft_particle)
+        {
+            required.push(VfxSoftPipelineKey {
+                geometry: VfxSoftGeometry::Polyline,
+                blend_mode: range.blend_mode,
+                cull_index: vfx_cull_index(range.cull_mode),
+                depth_mode: range.depth_mode,
+            });
+        }
+        for range in vfx
+            .mesh_draw_ranges
+            .iter()
+            .filter(|range| range.soft_particle)
+        {
+            let single_cull = vfx_cull_index(range.cull_mode);
+            let culls: &[usize] = if range.cull_mode == 3 {
+                &[1, 2]
+            } else {
+                std::slice::from_ref(&single_cull)
+            };
+            for &cull_index in culls {
+                required.push(VfxSoftPipelineKey {
+                    geometry: VfxSoftGeometry::Mesh,
+                    blend_mode: range.blend_mode,
+                    cull_index,
+                    depth_mode: range.depth_mode,
+                });
+            }
+        }
+        for key in required {
+            if !self.vfx_soft_pipelines.contains_key(&key) {
+                let pipeline = self.create_soft_vfx_pipeline(key);
+                self.vfx_soft_pipelines.insert(key, pipeline);
+            }
+        }
+    }
+
+    fn create_soft_vfx_pipeline(&self, key: VfxSoftPipelineKey) -> wgpu::RenderPipeline {
+        let quad_buffers = [GpuVfxQuad::LAYOUT];
+        let mesh_buffers = [GpuVfxMeshVertex::LAYOUT];
+        let (vertex_entry, buffers, topology) = match key.geometry {
+            VfxSoftGeometry::Quad => (
+                "vs_main",
+                &quad_buffers[..],
+                wgpu::PrimitiveTopology::TriangleList,
+            ),
+            VfxSoftGeometry::Line => (
+                "vs_main",
+                &quad_buffers[..],
+                wgpu::PrimitiveTopology::LineList,
+            ),
+            VfxSoftGeometry::Polyline => (
+                "vs_polyline",
+                &[][..],
+                wgpu::PrimitiveTopology::TriangleList,
+            ),
+            VfxSoftGeometry::Mesh => (
+                "vs_mesh",
+                &mesh_buffers[..],
+                wgpu::PrimitiveTopology::TriangleList,
+            ),
+        };
+        let cull_mode = match key.cull_index {
+            1 => Some(wgpu::Face::Front),
+            2 => Some(wgpu::Face::Back),
+            _ => None,
+        };
+        self.device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("weapon VFX soft pipeline {key:?}")),
+                layout: Some(&self.vfx_soft_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.vfx_shader,
+                    entry_point: Some(vertex_entry),
+                    buffers,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.vfx_shader,
+                    entry_point: Some(key.blend_mode.soft_fragment_entry(self.msaa_samples > 1)),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: POST_FORMAT,
+                        blend: key.blend_mode.blend_state(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology,
+                    cull_mode,
+                    ..Default::default()
+                },
+                depth_stencil: Some(vfx_depth_state(key.depth_mode)),
+                multisample: wgpu::MultisampleState {
+                    count: self.msaa_samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+    }
+
+    fn soft_vfx_pipeline(&self, key: VfxSoftPipelineKey) -> &wgpu::RenderPipeline {
+        self.vfx_soft_pipelines
+            .get(&key)
+            .expect("soft VFX pipelines are prepared before rendering")
+    }
+
+    fn draw_vfx_item<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        vfx: &'pass VfxParticles,
+        item: VfxDrawItem,
+    ) {
+        match item {
+            VfxDrawItem::Quad(range) => {
+                render_pass.set_vertex_buffer(0, vfx.instance_slice());
+                render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
+                if range.line_list {
+                    let pipeline = if range.soft_particle {
+                        self.soft_vfx_pipeline(VfxSoftPipelineKey {
+                            geometry: VfxSoftGeometry::Line,
+                            blend_mode: range.blend_mode,
+                            cull_index: 0,
+                            depth_mode: range.depth_mode,
+                        })
+                    } else {
+                        &self.vfx_line_pipelines[range.blend_mode as usize][range.depth_mode]
+                    };
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.draw(
+                        0..range.vertex_count,
+                        range.start..range.start + range.count,
+                    );
+                } else {
+                    let pipeline = |cull_index| {
+                        if range.soft_particle {
+                            self.soft_vfx_pipeline(VfxSoftPipelineKey {
+                                geometry: VfxSoftGeometry::Quad,
+                                blend_mode: range.blend_mode,
+                                cull_index,
+                                depth_mode: range.depth_mode,
+                            })
+                        } else {
+                            &self.vfx_quad_pipelines[range.blend_mode as usize][cull_index]
+                                [range.depth_mode]
+                        }
+                    };
+                    if range.double_group.is_some() {
+                        for cull_index in [1, 2] {
+                            render_pass.set_pipeline(pipeline(cull_index));
+                            render_pass.draw(
+                                0..range.vertex_count,
+                                range.start..range.start + range.count,
+                            );
+                        }
+                    } else {
+                        render_pass.set_pipeline(pipeline(vfx_cull_index(range.cull_mode)));
+                        render_pass.draw(
+                            0..range.vertex_count,
+                            range.start..range.start + range.count,
+                        );
+                    }
+                }
+            }
+            VfxDrawItem::Polyline(range) => {
+                let pipeline = if range.soft_particle {
+                    self.soft_vfx_pipeline(VfxSoftPipelineKey {
+                        geometry: VfxSoftGeometry::Polyline,
+                        blend_mode: range.blend_mode,
+                        cull_index: vfx_cull_index(range.cull_mode),
+                        depth_mode: range.depth_mode,
+                    })
+                } else {
+                    &self.vfx_polyline_pipelines[range.blend_mode as usize]
+                        [vfx_cull_index(range.cull_mode)][range.depth_mode]
+                };
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
+                render_pass.draw(range.start..range.start + range.count, 0..1);
+            }
+            VfxDrawItem::Mesh(range) => {
+                let Some(gpu_mesh) = vfx.meshes.get(range.mesh) else {
+                    return;
+                };
+                if gpu_mesh.index_count == 0 {
+                    return;
+                }
+                render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
+                let pipeline = |cull_index| {
+                    if range.soft_particle {
+                        self.soft_vfx_pipeline(VfxSoftPipelineKey {
+                            geometry: VfxSoftGeometry::Mesh,
+                            blend_mode: range.blend_mode,
+                            cull_index,
+                            depth_mode: range.depth_mode,
+                        })
+                    } else {
+                        &self.vfx_mesh_pipelines[range.blend_mode as usize][cull_index]
+                            [range.depth_mode]
+                    }
+                };
+                if range.cull_mode == 3 {
+                    for instance in range.start..range.start + range.count {
+                        for cull_index in [1, 2] {
+                            render_pass.set_pipeline(pipeline(cull_index));
+                            render_pass.draw_indexed(
+                                0..gpu_mesh.index_count,
+                                0,
+                                instance..instance + 1,
+                            );
+                        }
+                    }
+                } else {
+                    render_pass.set_pipeline(pipeline(vfx_cull_index(range.cull_mode)));
+                    render_pass.draw_indexed(
+                        0..gpu_mesh.index_count,
+                        0,
+                        range.start..range.start + range.count,
+                    );
+                }
+            }
+            VfxDrawItem::Decal(_) => unreachable!("decal requires a depth-sampling pass"),
+        }
+    }
+
+    fn draw_nonsoft_vfx<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        vfx: &'pass VfxParticles,
+        camera_depth_row: [f32; 4],
+    ) {
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        for item in ordered_vfx_draws(vfx, camera_depth_row) {
+            if item.segment() == VfxDrawSegment::Regular {
+                self.draw_vfx_item(render_pass, vfx, item);
+            }
+        }
+    }
+
     pub fn render(
         &mut self,
         model: &ModelInstance,
@@ -1267,6 +2586,68 @@ impl ModelRenderContext {
         options: ModelRenderOptions,
         vfx: Option<&VfxParticles>,
     ) {
+        self.render_with_aura(
+            model,
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+            vfx,
+            None,
+        );
+    }
+
+    /// Shade a prepared Aura on compatible batches of its target model.
+    pub fn render_with_aura(
+        &mut self,
+        model: &ModelInstance,
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
+        aura: Option<&WeaponVfxAuraResource>,
+    ) {
+        let auras = aura.into_iter().collect::<Vec<_>>();
+        self.render_with_auras(
+            model,
+            target_view,
+            depth_view,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+            vfx,
+            &auras,
+        );
+    }
+
+    /// Shade independent Aura targets without resolving competing instances
+    /// on the same model.
+    pub fn render_with_auras(
+        &mut self,
+        model: &ModelInstance,
+        target_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: ModelRenderOptions,
+        vfx: Option<&VfxParticles>,
+        auras: &[&WeaponVfxAuraResource],
+    ) {
         let uniform = camera_uniform(
             model.bounds_center,
             model.bounds_radius,
@@ -1277,8 +2658,27 @@ impl ModelRenderContext {
             pan,
             options,
         );
+        let camera_depth_row = preview_camera_depth_row(&uniform);
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        for aura in auras {
+            if let Some(aura_uniform) = aura.uniform_with_camera_up(
+                [
+                    uniform.camera_position[0],
+                    uniform.camera_position[1],
+                    uniform.camera_position[2],
+                ],
+                [
+                    uniform.view_dir[0],
+                    uniform.view_dir[1],
+                    uniform.view_dir[2],
+                ],
+                Some(uniform.up()),
+            ) {
+                self.queue
+                    .write_buffer(&aura.uniform_buffer, 0, bytemuck::bytes_of(&aura_uniform));
+            }
+        }
         self.queue.write_buffer(
             &self.compose_uniform_buffer,
             0,
@@ -1296,10 +2696,106 @@ impl ModelRenderContext {
         }
         let viewport = [viewport[0].max(1), viewport[1].max(1)];
         self.ensure_post_process_targets(viewport);
+        let has_soft_vfx = vfx.is_some_and(|vfx| {
+            vfx.draw_ranges.iter().any(|range| range.soft_particle)
+                || vfx
+                    .polyline_draw_ranges
+                    .iter()
+                    .any(|range| range.soft_particle)
+                || vfx.mesh_draw_ranges.iter().any(|range| range.soft_particle)
+        });
+        if has_soft_vfx {
+            self.prepare_soft_vfx_pipelines(vfx.expect("soft ranges require a VFX batch"));
+            self.post_process
+                .as_mut()
+                .expect("post process targets are initialized")
+                .ensure_soft_depth_target(&self.device, self.msaa_samples);
+        }
         let post = self
             .post_process
             .as_ref()
             .expect("post process targets are initialized");
+        let has_screen_copy = vfx.is_some_and(VfxParticles::uses_screen_copy);
+        let scene_copy_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("weapon vfx scene-copy bind group"),
+            layout: &self.vfx_scene_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&post.screen_copy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&post.previous_scene_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.vfx_reflection_cube_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.vfx_reflection_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.vfx_portrait_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&self.vfx_portrait_sampler),
+                },
+            ],
+        });
+        let has_decals = vfx.is_some_and(|particles| {
+            particles
+                .decal_draw_ranges
+                .iter()
+                .any(|range| preview_decal_uses_forward_scene(range.depth_type))
+        });
+        let has_segmented_vfx = has_soft_vfx || has_decals;
+        let decal_bind_group = has_decals.then(|| {
+            let particles = vfx.expect("decal instances require a VFX batch");
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("weapon vfx decal projection bind group"),
+                layout: &self.vfx_decal_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: particles.decal_instance_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&post.screen_copy_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&post.previous_scene_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.vfx_reflection_cube_view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::Sampler(&self.vfx_reflection_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&self.vfx_portrait_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&self.vfx_portrait_sampler),
+                    },
+                ],
+            })
+        });
 
         let mut encoder = self
             .device
@@ -1313,7 +2809,11 @@ impl ModelRenderContext {
                 label: Some("weapon scene render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: scene_target,
-                    resolve_target: scene_resolve_target,
+                    resolve_target: if has_segmented_vfx && !has_screen_copy {
+                        None
+                    } else {
+                        scene_resolve_target
+                    },
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1353,7 +2853,13 @@ impl ModelRenderContext {
                 } else {
                     &self.culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                draw_model_batch(
+                    &mut render_pass,
+                    &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
+                    batch,
+                );
             }
 
             for batch in model
@@ -1366,7 +2872,13 @@ impl ModelRenderContext {
                 } else {
                     &self.cutout_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                draw_model_batch(
+                    &mut render_pass,
+                    &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
+                    batch,
+                );
             }
 
             for batch in model
@@ -1379,7 +2891,13 @@ impl ModelRenderContext {
                 } else {
                     &self.dither_depth_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                draw_model_batch(
+                    &mut render_pass,
+                    &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
+                    batch,
+                );
             }
 
             render_pass.set_pipeline(&self.outline_pipeline);
@@ -1388,7 +2906,13 @@ impl ModelRenderContext {
                 .iter()
                 .filter(|batch| batch.uses_outline_pass())
             {
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                draw_model_batch(
+                    &mut render_pass,
+                    &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
+                    batch,
+                );
             }
 
             render_pass.set_index_buffer(
@@ -1418,6 +2942,8 @@ impl ModelRenderContext {
                 draw_model_batch_range(
                     &mut render_pass,
                     &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
                     batch,
                     draw.index_start,
                     draw.index_count,
@@ -1440,58 +2966,299 @@ impl ModelRenderContext {
                 } else {
                     &self.additive_culled_pipeline
                 });
-                draw_model_batch(&mut render_pass, &model.material_bind_groups, batch);
+                draw_model_batch(
+                    &mut render_pass,
+                    &model.material_bind_groups,
+                    &model.surface_overlay_bind_groups,
+                    auras,
+                    batch,
+                );
             }
 
-            // VFX 粒子最后画：按绘制段选加色/混合管线，深度只测不写
-            // （武器遮挡身后的粒子，粒子不遮挡后续无）。
-            if let Some(vfx) = vfx {
-                if vfx.count() > 0 {
-                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, vfx.instance_slice());
-                    for range in &vfx.draw_ranges {
-                        render_pass.set_pipeline(
-                            &self.vfx_quad_pipelines[usize::from(range.blend_add)]
-                                [range.depth_mode],
-                        );
-                        render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
-                        render_pass.draw(0..6, range.start..range.start + range.count);
+            if let Some(vfx) = vfx.filter(|_| !has_screen_copy && !has_segmented_vfx) {
+                render_pass.set_bind_group(2, &scene_copy_bind_group, &[]);
+                self.draw_nonsoft_vfx(&mut render_pass, vfx, camera_depth_row);
+            }
+        }
+
+        if has_screen_copy {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &post.scene_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &post.screen_copy_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: post.width,
+                    height: post.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        if has_screen_copy && !has_segmented_vfx {
+            let (scene_target, scene_resolve_target) = post.scene_color_target();
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("weapon VFX screen-copy scene pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: scene_target,
+                    resolve_target: if has_decals {
+                        None
+                    } else {
+                        scene_resolve_target
+                    },
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            render_pass.set_bind_group(2, &scene_copy_bind_group, &[]);
+            self.draw_nonsoft_vfx(
+                &mut render_pass,
+                vfx.expect("screen-copy ranges require a VFX batch"),
+                camera_depth_row,
+            );
+        }
+
+        // Decal samples the scene depth without attaching it; regular and soft
+        // segments attach it for DsDt/DsDw. Soft needs a fresh snapshot before
+        // each segment because the original depth may have changed.
+        if let Some(vfx) = vfx {
+            if has_segmented_vfx {
+                let create_depth_bind_group = |sampled_depth: &wgpu::TextureView, label| {
+                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(label),
+                        layout: &self.vfx_soft_depth_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: if self.msaa_samples > 1 { 1 } else { 0 },
+                                resource: wgpu::BindingResource::TextureView(sampled_depth),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &post.screen_copy_view,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &post.previous_scene_view,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &self.vfx_reflection_cube_view,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: wgpu::BindingResource::Sampler(
+                                    &self.vfx_reflection_sampler,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 6,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &self.vfx_portrait_view,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 7,
+                                resource: wgpu::BindingResource::Sampler(
+                                    &self.vfx_portrait_sampler,
+                                ),
+                            },
+                        ],
+                    })
+                };
+                let soft_depth_view = has_soft_vfx.then(|| {
+                    post.soft_depth_view
+                        .as_ref()
+                        .expect("soft depth target is initialized")
+                });
+                let source_depth_bind_group = soft_depth_view.map(|_| {
+                    create_depth_bind_group(depth_view, "weapon VFX source depth bind group")
+                });
+                let soft_depth_bind_group = soft_depth_view.map(|view| {
+                    create_depth_bind_group(view, "weapon VFX soft-particle depth bind group")
+                });
+                let draws = ordered_vfx_draws(vfx, camera_depth_row);
+
+                let mut start = 0;
+                while start < draws.len() {
+                    let segment = draws[start].segment();
+                    let mut end = start + 1;
+                    while end < draws.len() && draws[end].segment() == segment {
+                        end += 1;
                     }
-                }
-                // 网格粒子：Model/LightModel 的本体渲染路径（按网格 + 混合 +
-                // 贴图组分段 draw_indexed）。
-                if vfx.mesh_instance_count > 0 {
-                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    render_pass.set_vertex_buffer(1, vfx.mesh_instance_buffer.slice(..));
-                    for range in &vfx.mesh_draw_ranges {
-                        let Some(gpu_mesh) = vfx.meshes.get(range.mesh) else {
-                            continue;
-                        };
-                        // 剔除模式归一：1=剔正面、2=剔背面、其余双面。
-                        let cull_index = match range.cull_mode {
-                            1 => 1,
-                            2 => 2,
-                            _ => 0,
-                        };
-                        render_pass.set_pipeline(
-                            &self.vfx_mesh_pipelines[usize::from(range.blend_add)][cull_index]
-                                [range.depth_mode],
+                    if segment == VfxDrawSegment::Soft {
+                        let mut depth_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("weapon VFX soft depth snapshot pass"),
+                                color_attachments: &[],
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: soft_depth_view
+                                            .expect("soft segment requires a depth snapshot"),
+                                        depth_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(1.0),
+                                            store: wgpu::StoreOp::Store,
+                                        }),
+                                        stencil_ops: None,
+                                    },
+                                ),
+                                occlusion_query_set: None,
+                                timestamp_writes: None,
+                                multiview_mask: None,
+                            });
+                        depth_pass.set_pipeline(&self.vfx_depth_copy_pipeline);
+                        depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                        depth_pass.set_bind_group(1, &vfx.bind_groups[0], &[]);
+                        depth_pass.set_bind_group(
+                            2,
+                            source_depth_bind_group
+                                .as_ref()
+                                .expect("soft segment requires source depth binding"),
+                            &[],
                         );
-                        render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                        depth_pass.draw(0..3, 0..1);
+                    }
+                    let (scene_target, scene_resolve_target) = post.scene_color_target();
+                    let scene_resolve_target = if end == draws.len() {
+                        scene_resolve_target
+                    } else {
+                        None
+                    };
+                    if segment == VfxDrawSegment::Decal {
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("weapon VFX decal scene-stage pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: scene_target,
+                                    resolve_target: scene_resolve_target,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                occlusion_query_set: None,
+                                timestamp_writes: None,
+                                multiview_mask: None,
+                            });
+                        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                        render_pass.set_bind_group(
+                            2,
+                            decal_bind_group
+                                .as_ref()
+                                .expect("decal segment requires a depth-sampling binding"),
+                            &[],
+                        );
+                        render_pass.set_vertex_buffer(0, self.vfx_decal_vertex_buffer.slice(..));
                         render_pass.set_index_buffer(
-                            gpu_mesh.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint32,
+                            self.vfx_decal_index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
                         );
-                        render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
-                        render_pass.draw_indexed(
-                            0..gpu_mesh.index_count,
-                            0,
-                            range.start..range.start + range.count,
-                        );
+                        for &item in &draws[start..end] {
+                            let VfxDrawItem::Decal(range) = item else {
+                                unreachable!("decal segment contains ordinary geometry");
+                            };
+                            render_pass
+                                .set_pipeline(&self.vfx_decal_pipelines[range.blend_mode as usize]);
+                            render_pass.set_bind_group(1, &vfx.bind_groups[range.group], &[]);
+                            render_pass.draw_indexed(
+                                0..VFX_DECAL_CUBE_INDICES.len() as u32,
+                                0,
+                                range.start..range.start + range.count,
+                            );
+                        }
+                        start = end;
+                        continue;
                     }
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("weapon VFX priority segment pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: scene_target,
+                            resolve_target: scene_resolve_target,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        occlusion_query_set: None,
+                        timestamp_writes: None,
+                        multiview_mask: None,
+                    });
+                    render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    render_pass.set_bind_group(
+                        2,
+                        if segment == VfxDrawSegment::Soft {
+                            soft_depth_bind_group
+                                .as_ref()
+                                .expect("soft segment requires a depth-sampling binding")
+                        } else {
+                            &scene_copy_bind_group
+                        },
+                        &[],
+                    );
+                    for &item in &draws[start..end] {
+                        self.draw_vfx_item(&mut render_pass, vfx, item);
+                    }
+                    start = end;
                 }
             }
         }
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &post.scene_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &post.previous_scene_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: post.width,
+                height: post.height,
+                depth_or_array_layers: 1,
+            },
+        );
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1597,6 +3364,10 @@ impl ModelRenderContext {
         self.format
     }
 
+    pub(crate) fn surface_overlay_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.surface_overlay_bind_group_layout
+    }
+
     #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
     pub(crate) fn hdr_scene_texture(&self) -> Option<&wgpu::Texture> {
         self.post_process.as_ref().map(|post| &post.scene_texture)
@@ -1604,6 +3375,18 @@ impl ModelRenderContext {
 }
 
 impl ModelInstance {
+    /// The exact layout translation applied to this MDL's preview vertices.
+    /// Missing paths identify attachments belonging to a different model.
+    pub fn mdl_preview_offset(&self, path: &str) -> Option<[f32; 3]> {
+        self.mdl_preview_offsets.get(path).copied()
+    }
+
+    pub(crate) fn accepts_aura_target(&self, path: &str) -> bool {
+        self.draw_batches
+            .iter()
+            .any(|batch| batch.accepts_aura_target(path))
+    }
+
     /// 按当前模型数据重建材质 bind group（染色等材质增量更新路径）。
     /// 纹理去重缓存随本次重建重新填充，批次共享语义与创建时一致。
     /// joint 绑定在 group(2)，本操作不触碰。
@@ -1612,10 +3395,17 @@ impl ModelInstance {
         context: &ModelRenderContext,
         model: &M,
     ) {
-        self.material_bind_groups = create_material_bind_groups(
+        for batch in &mut self.draw_batches {
+            batch.aura_surface_compatible = model
+                .materials()
+                .get(batch.material_slot)
+                .is_some_and(material_accepts_aura);
+        }
+        (self.material_bind_groups, self.surface_overlay_bind_groups) = create_material_bind_groups(
             &context.device,
             &context.queue,
             &context.material_bind_group_layout,
+            &context.surface_overlay_bind_group_layout,
             model,
             &self.draw_batches,
         );
@@ -1651,6 +3441,7 @@ impl ModelInstance {
 impl ModelRenderContext {
     /// 粒子批次容量上限（超过由采样器截断）。
     pub const VFX_PARTICLE_CAPACITY: usize = 4096;
+    pub const VFX_POLYLINE_VERTEX_CAPACITY: usize = Self::VFX_PARTICLE_CAPACITY * 12;
 
     pub(crate) fn vfx_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.vfx_bind_group_layout
@@ -1685,6 +3476,14 @@ impl ModelRenderContext {
                 )
             })
             .collect();
+        let cube_texture_views = textures
+            .iter()
+            .map(|texture| {
+                texture.as_ref().and_then(|texture| {
+                    create_vfx_cube_texture_view(&self.device, &self.queue, texture)
+                })
+            })
+            .collect();
         // 保留文件序号对齐（无绘制数据的模型给空缓冲，实例不会引用）。
         let meshes: Vec<GpuVfxMesh> = meshes
             .iter()
@@ -1697,9 +3496,12 @@ impl ModelRenderContext {
                             vertex.position[0],
                             vertex.position[1],
                             vertex.position[2],
-                            0.0,
+                            vertex.position_w,
                         ],
-                        uvs: vertex.uvs,
+                        normal: vertex.normal.map(|value| value as f32 / 255.0 - 0.5),
+                        tangent: vertex.tangent.map(|value| value as f32 / 255.0 - 0.5),
+                        // VDrw stores UVs around zero; MoveUV uses [0,1] coordinates.
+                        uvs: vertex.uvs.map(|uv| uv.map(|value| value + 0.5)),
                         // 顶点色：rgb 染色 + alpha 作为羽化遮罩（火舌翼缘
                         // 等 alpha=0 区域消隐；实心壳体模型 alpha 恒 255）。
                         color: [
@@ -1734,12 +3536,26 @@ impl ModelRenderContext {
         let mesh_instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weapon vfx mesh instances"),
             size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxMeshInstance>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let polyline_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon vfx polyline vertices"),
+            size: (Self::VFX_POLYLINE_VERTEX_CAPACITY * std::mem::size_of::<GpuVfxPolylineVertex>())
+                as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let decal_instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weapon vfx decal instances"),
+            size: (Self::VFX_PARTICLE_CAPACITY * std::mem::size_of::<GpuVfxDecalInstance>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         VfxParticles {
             instance_buffer,
             texture_views,
+            cube_texture_views,
             group_cache: HashMap::new(),
             bind_groups: Vec::new(),
             draw_ranges: Vec::new(),
@@ -1749,6 +3565,63 @@ impl ModelRenderContext {
             mesh_instance_buffer,
             mesh_instance_count: 0,
             mesh_draw_ranges: Vec::new(),
+            polyline_buffer,
+            polyline_draw_ranges: Vec::new(),
+            polyline_vertex_count: 0,
+            decal_instance_buffer,
+            decal_instance_count: 0,
+            decal_draw_ranges: Vec::new(),
+            document_sort_ranges: Vec::new(),
         }
+    }
+}
+
+impl ModelRenderContext {
+    /// Derive Binder inputs from the same orbit view used by the GPU camera.
+    pub fn binder_camera_snapshot(
+        &self,
+        model: &ModelInstance,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: super::ModelRenderOptions,
+    ) -> xiv_companion_data::VfxBinderCameraSnapshot {
+        super::camera_uniform_and_binder(
+            model.bounds_center,
+            model.bounds_radius,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        )
+        .1
+    }
+
+    /// Derive Binder inputs from the same orbit view used by the GPU camera.
+    pub fn vfx_camera_view_snapshot(
+        &self,
+        model: &ModelInstance,
+        viewport: [u32; 2],
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        options: super::ModelRenderOptions,
+    ) -> xiv_companion_data::VfxCameraViewSnapshot {
+        super::camera_uniform_and_vfx_view(
+            model.bounds_center,
+            model.bounds_radius,
+            viewport,
+            yaw,
+            pitch,
+            zoom,
+            pan,
+            options,
+        )
+        .1
     }
 }

@@ -9,6 +9,75 @@ use half::f16;
 use crate::renderer::{ModelRenderOptions, ModelRenderer};
 use crate::{ModelRenderData, PreparedModelOptions};
 
+const GPU_TESTS_DISABLED: &str =
+    "native render tests require the explicit test-session switch XIV_ALLOW_GPU_TESTS=1";
+static SNAPSHOT_INSTANCE: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+
+fn check_gpu_test_opt_in(value: Option<&std::ffi::OsStr>) -> Result<(), &'static str> {
+    if value == Some(std::ffi::OsStr::new("1")) {
+        Ok(())
+    } else {
+        Err(GPU_TESTS_DISABLED)
+    }
+}
+
+/// Keep driver initialization opt-in for each test process. The user has
+/// authorized native validation during development; this switch avoids accidental
+/// driver loading when ordinary tests are run with broad filters.
+pub fn require_gpu_test_opt_in() -> Result<(), &'static str> {
+    check_gpu_test_opt_in(std::env::var_os("XIV_ALLOW_GPU_TESTS").as_deref())
+}
+
+fn snapshot_instance() -> Result<wgpu::Instance, &'static str> {
+    snapshot_instance_with_opt_in(std::env::var_os("XIV_ALLOW_GPU_TESTS").as_deref())
+}
+
+fn snapshot_instance_with_opt_in(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<wgpu::Instance, &'static str> {
+    check_gpu_test_opt_in(value)?;
+    // Reuse the loader only after authorization. Driver enumeration itself can
+    // affect the desktop, so the gate must precede Instance::new.
+    Ok(SNAPSHOT_INSTANCE
+        .get_or_init(|| {
+            wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: if software_render_tests_requested() {
+                    wgpu::Backends::VULKAN
+                } else {
+                    wgpu::Backends::PRIMARY
+                },
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            })
+        })
+        .clone())
+}
+
+fn software_render_tests_requested() -> bool {
+    std::env::var_os("XIV_RENDER_TEST_SOFTWARE_ONLY").as_deref() == Some(std::ffi::OsStr::new("1"))
+}
+
+fn validate_software_adapter(
+    backend: wgpu::Backend,
+    device_type: wgpu::DeviceType,
+) -> Result<(), &'static str> {
+    if backend == wgpu::Backend::Vulkan && device_type == wgpu::DeviceType::Cpu {
+        Ok(())
+    } else {
+        Err("software render tests require a CPU Vulkan adapter; hardware fallback is forbidden")
+    }
+}
+
+/// An orbit-camera input to mounted playback before the captured frame.
+#[derive(Clone, Copy, Debug)]
+pub struct WeaponVfxCameraInput {
+    pub time: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub zoom: f32,
+    pub pan: [f32; 2],
+    pub roll: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct WeaponModelSnapshotOptions {
     pub name: String,
@@ -24,6 +93,8 @@ pub struct WeaponModelSnapshotOptions {
     pub power_preference: wgpu::PowerPreference,
     pub force_fallback_adapter: bool,
     pub capture_hdr_scene: bool,
+    /// Render the same prepared scene repeatedly while retaining temporal GPU resources.
+    pub render_repetitions: usize,
     /// 固定的 VFX 粒子批次（合成特效/确定性快照用）。
     pub vfx_quads: Vec<xiv_companion_data::VfxQuad>,
     /// 固定的 VFX 网格实例（Model/LightModel 本体路径，确定性快照用）。
@@ -32,6 +103,24 @@ pub struct WeaponModelSnapshotOptions {
     pub vfx_meshes: Vec<xiv_companion_data::VfxDrawModel>,
     /// VFX 贴图（文件 `Tex` 顺序；None = 解码失败用回退贴图）。
     pub vfx_textures: Vec<Option<crate::renderer::VfxTextureInput>>,
+    /// Test-only solid color for an injected VFX reflection cube provider.
+    pub vfx_reflection_cube_color: Option<[u8; 4]>,
+    /// Test-only solid color for an injected TC1 character portrait provider.
+    pub vfx_portrait_color: Option<[u8; 4]>,
+    /// 完整武器主/副模型挂载；用于按模型预览偏移采样真实整件 VFX。
+    pub weapon_vfx: Option<xiv_companion_data::WeaponVfxAttachments>,
+    pub weapon_vfx_time: f32,
+    /// Submit local owner poses and input timestamps through the production
+    /// attachment API before capturing the final frame.
+    pub weapon_vfx_pose_updates: Vec<(f32, String, xiv_companion_data::SkeletonPose)>,
+    /// Fail the capture if any mounted runtime uses continuous fallback.
+    pub require_staged_weapon_vfx: bool,
+    /// First camera supplies birth state; later cameras are explicit inputs.
+    pub weapon_vfx_camera_inputs: Vec<WeaponVfxCameraInput>,
+    /// Explicit definition selection for isolated Aura bind-group render tests.
+    pub aura_definition: Option<(usize, usize)>,
+    /// Exercise the preview's independent per-model Aura selection.
+    pub all_unambiguous_auras: bool,
 }
 
 impl WeaponModelSnapshotOptions {
@@ -84,6 +173,11 @@ impl WeaponModelSnapshotOptions {
         self
     }
 
+    pub fn with_render_repetitions(mut self, repetitions: usize) -> Self {
+        self.render_repetitions = repetitions.max(1);
+        self
+    }
+
     /// 固定 VFX 粒子批次（时间已由调用方采样，保证快照确定性）。
     pub fn with_vfx_quads(
         mut self,
@@ -119,6 +213,48 @@ impl WeaponModelSnapshotOptions {
         self.vfx_textures = textures.into_iter().collect();
         self
     }
+
+    pub fn with_vfx_reflection_cube_color(mut self, rgba: [u8; 4]) -> Self {
+        self.vfx_reflection_cube_color = Some(rgba);
+        self
+    }
+
+    pub fn with_vfx_portrait_color(mut self, rgba: [u8; 4]) -> Self {
+        self.vfx_portrait_color = Some(rgba);
+        self
+    }
+
+    /// 使用与 Web 预览相同的多 MDL 挂载运行时采样真实 VFX。
+    pub fn with_weapon_vfx(
+        mut self,
+        vfx: xiv_companion_data::WeaponVfxAttachments,
+        time: f32,
+    ) -> Self {
+        self.weapon_vfx = Some(vfx);
+        self.weapon_vfx_time = time;
+        self
+    }
+
+    pub fn with_weapon_vfx_pose_update(
+        mut self,
+        time: f32,
+        model_path: impl Into<String>,
+        pose: xiv_companion_data::SkeletonPose,
+    ) -> Self {
+        self.weapon_vfx_pose_updates
+            .push((time, model_path.into(), pose));
+        self
+    }
+
+    pub fn with_aura_definition(mut self, attachment_index: usize, particle_index: usize) -> Self {
+        self.aura_definition = Some((attachment_index, particle_index));
+        self
+    }
+
+    pub fn with_all_unambiguous_auras(mut self) -> Self {
+        self.all_unambiguous_auras = true;
+        self
+    }
 }
 
 impl Default for WeaponModelSnapshotOptions {
@@ -146,10 +282,20 @@ impl Default for WeaponModelSnapshotOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             capture_hdr_scene: false,
+            render_repetitions: 1,
             vfx_quads: Vec::new(),
             vfx_mesh_instances: Vec::new(),
             vfx_meshes: Vec::new(),
             vfx_textures: Vec::new(),
+            vfx_reflection_cube_color: None,
+            vfx_portrait_color: None,
+            weapon_vfx: None,
+            weapon_vfx_time: 0.0,
+            weapon_vfx_pose_updates: Vec::new(),
+            weapon_vfx_camera_inputs: Vec::new(),
+            require_staged_weapon_vfx: false,
+            aura_definition: None,
+            all_unambiguous_auras: false,
         }
     }
 }
@@ -162,10 +308,14 @@ pub struct WeaponModelSnapshot {
     pub adapter_name: String,
     pub adapter_backend: wgpu::Backend,
     pub hdr_scene_rgba: Option<Vec<[f32; 4]>>,
+    /// CPU geometry actually submitted by the mounted production adapter.
+    pub weapon_vfx_quads: Vec<xiv_companion_data::VfxQuad>,
 }
 
 #[derive(Debug)]
 pub enum WeaponModelSnapshotError {
+    GpuTestsDisabled,
+    InvalidVfxPose(String),
     InvalidViewport {
         width: u32,
         height: u32,
@@ -189,6 +339,8 @@ pub enum WeaponModelSnapshotError {
 impl fmt::Display for WeaponModelSnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::GpuTestsDisabled => f.write_str(GPU_TESTS_DISABLED),
+            Self::InvalidVfxPose(error) => write!(f, "invalid VFX pose: {error}"),
             Self::InvalidViewport { width, height } => {
                 write!(f, "invalid weapon snapshot viewport {width}x{height}")
             }
@@ -252,12 +404,9 @@ pub fn render_model_snapshot_with_skeleton_and_pose<M: ModelRenderData + ?Sized>
     skeleton: Option<&xiv_companion_data::ModelSkeleton>,
     pose: Option<&xiv_companion_data::SkeletonPose>,
 ) -> Result<ModelSnapshot, ModelSnapshotError> {
-    // libvulkan 的 ICD 扫描/加载在多个线程并发 vkCreateInstance 时存在已知竞态
-    // （loader_icd_scan 空函数指针，NVIDIA 等 dlopen 重 ICD 环境下随机 SIGSEGV）。
-    // 只串行化 Instance::new/request_adapter 不够：wgpu 的 Instance/Adapter 句柄
-    // 都存活到渲染结束，vkDestroyInstance 仍与其他线程的实例创建/销毁并发。
-    // 这里串行化整个快照渲染，任意时刻只有一个 Vulkan 实例生命周期在跑，
-    // ignored 快照套件可以多线程跑（--test-threads=N）而不再触发 ICD 竞态。
+    require_gpu_test_opt_in().map_err(|_| WeaponModelSnapshotError::GpuTestsDisabled)?;
+    // 复用进程内 Instance，避免反复加载原生驱动遗留描述符；仍串行化整个
+    // 快照渲染，避免各设备创建、绘制和释放在原生驱动内部互相交错。
     static SNAPSHOT_RENDER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _render_guard = SNAPSHOT_RENDER_LOCK
         .lock()
@@ -285,6 +434,7 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     skeleton: Option<&xiv_companion_data::ModelSkeleton>,
     pose: Option<&xiv_companion_data::SkeletonPose>,
 ) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
+    let snapshot_started = std::time::Instant::now();
     if options.width == 0 || options.height == 0 {
         return Err(WeaponModelSnapshotError::InvalidViewport {
             width: options.width,
@@ -301,34 +451,40 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         .output_dir
         .join(format!("{}.png", sanitize_file_stem(&options.name)));
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
+    let instance = snapshot_instance().map_err(|_| WeaponModelSnapshotError::GpuTestsDisabled)?;
+    let software_only = software_render_tests_requested();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: options.power_preference,
             compatible_surface: None,
-            force_fallback_adapter: options.force_fallback_adapter,
+            force_fallback_adapter: software_only || options.force_fallback_adapter,
         })
         .await
         .map_err(|error| WeaponModelSnapshotError::RequestAdapter(format!("{error:?}")))?;
     let adapter_info = adapter.get_info();
+    eprintln!(
+        "render snapshot {}: adapter={} backend={:?} device_type={:?}",
+        options.name, adapter_info.name, adapter_info.backend, adapter_info.device_type
+    );
+    if software_only {
+        validate_software_adapter(adapter_info.backend, adapter_info.device_type)
+            .map_err(|error| WeaponModelSnapshotError::RequestAdapter(error.to_owned()))?;
+        eprintln!(
+            "software render adapter: {} ({:?}, {:?})",
+            adapter_info.name, adapter_info.backend, adapter_info.device_type
+        );
+    }
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::empty(),
-            required_limits: {
-                let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
-                // VFX 网格实例布局 176B。
-                limits.max_vertex_buffer_array_stride =
-                    limits.max_vertex_buffer_array_stride.max(2_048);
-                limits
-            },
+            // Exercise the same requested limits as the browser canvas path.
+            required_limits: crate::renderer::ModelRenderContext::required_limits(adapter.limits()),
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         })
         .await
         .map_err(|error| WeaponModelSnapshotError::RequestDevice(error.to_string()))?;
+    let device_ready_elapsed = snapshot_started.elapsed();
 
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let msaa_samples = options.render_options.msaa_samples();
@@ -345,6 +501,107 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         options.prepared_model_options,
         skeleton,
     );
+    if let Some(rgba) = options.vfx_reflection_cube_color {
+        let texture = renderer.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("native snapshot VFX reflection cube"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for layer in 0..6 {
+            renderer.queue().write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("native snapshot VFX reflection cube view"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        let sampler = renderer.device().create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("native snapshot VFX reflection cube sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        renderer.set_vfx_reflection_provider(view, sampler);
+    }
+    if let Some(rgba) = options.vfx_portrait_color {
+        let texture = renderer.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("native snapshot VFX portrait"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        renderer.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&Default::default());
+        let sampler = renderer.device().create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("native snapshot VFX portrait sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        renderer.set_vfx_portrait_provider(view, sampler);
+    }
     if let (Some(skeleton), Some(pose)) = (skeleton, pose) {
         let joint_names = renderer.joint_names().to_vec();
         let mut cache = xiv_companion_data::SkeletonInverseBindCache::new();
@@ -367,17 +624,139 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
             );
             batch
         });
-    renderer.render_to(
-        &target_view,
-        &depth_view,
-        [options.width, options.height],
-        options.yaw,
-        options.pitch,
-        options.zoom,
-        options.pan,
-        options.render_options,
-        vfx_particles.as_ref(),
-    );
+    let weapon_vfx_particles = options
+        .weapon_vfx
+        .as_ref()
+        .map(|vfx| {
+            let camera_for = |input: WeaponVfxCameraInput| {
+                renderer.vfx_camera_view_snapshot(
+                    [options.width, options.height],
+                    input.yaw,
+                    input.pitch,
+                    input.zoom,
+                    input.pan,
+                    ModelRenderOptions {
+                        camera_roll: input.roll,
+                        ..options.render_options
+                    },
+                )
+            };
+            let camera = options
+                .weapon_vfx_camera_inputs
+                .first()
+                .copied()
+                .map(camera_for)
+                .unwrap_or_else(|| {
+                    renderer.vfx_camera_view_snapshot(
+                        [options.width, options.height],
+                        options.yaw,
+                        options.pitch,
+                        options.zoom,
+                        options.pan,
+                        options.render_options,
+                    )
+                });
+            let mut particles = renderer
+                .create_weapon_vfx_particles_with_camera_view(vfx, camera)
+                .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+            let mut camera_inputs = options.weapon_vfx_camera_inputs.iter().peekable();
+            for updates in options.weapon_vfx_pose_updates.chunk_by(|a, b| a.0 == b.0) {
+                let time = updates[0].0;
+                while camera_inputs.peek().is_some_and(|input| input.time < time) {
+                    let input = camera_inputs.next().unwrap();
+                    renderer
+                        .set_weapon_vfx_camera_view(&mut particles, camera_for(*input))
+                        .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+                    particles.advance_to(input.time);
+                }
+                if camera_inputs.peek().is_some_and(|input| input.time == time) {
+                    let input = camera_inputs.next().unwrap();
+                    renderer
+                        .set_weapon_vfx_camera_view(&mut particles, camera_for(*input))
+                        .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+                }
+                // Commit this camera and every owner's pose in the same input.
+                for (_, path, pose) in updates {
+                    particles
+                        .set_attachment_pose(path, pose)
+                        .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+                }
+                particles.advance_to(time);
+            }
+            for input in camera_inputs {
+                renderer
+                    .set_weapon_vfx_camera_view(&mut particles, camera_for(*input))
+                    .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+                particles.advance_to(input.time);
+            }
+            let final_camera = renderer.vfx_camera_view_snapshot(
+                [options.width, options.height],
+                options.yaw,
+                options.pitch,
+                options.zoom,
+                options.pan,
+                options.render_options,
+            );
+            renderer
+                .set_weapon_vfx_camera_view(&mut particles, final_camera)
+                .map_err(WeaponModelSnapshotError::InvalidVfxPose)?;
+            renderer.update_weapon_vfx_particles(&mut particles, options.weapon_vfx_time);
+            if options.require_staged_weapon_vfx {
+                let diagnostics = particles.binding_diagnostics();
+                if !diagnostics.is_empty() {
+                    return Err(WeaponModelSnapshotError::InvalidVfxPose(format!(
+                        "mounted playback did not remain staged: {diagnostics:?}"
+                    )));
+                }
+            }
+            Ok::<_, WeaponModelSnapshotError>(particles)
+        })
+        .transpose()?;
+    let rendered_vfx = weapon_vfx_particles
+        .as_ref()
+        .map(|particles| particles.particles())
+        .or(vfx_particles.as_ref());
+    let auras = if options.all_unambiguous_auras {
+        weapon_vfx_particles
+            .as_ref()
+            .map_or_else(Vec::new, |particles| {
+                particles.unambiguous_active_aura_resources()
+            })
+    } else {
+        options
+            .aura_definition
+            .and_then(|(attachment_index, particle_index)| {
+                let particles = weapon_vfx_particles.as_ref()?;
+                let active = particles.active_aura_instances();
+                let [instance] = active else { return None };
+                particles
+                    .aura_resources()
+                    .iter()
+                    .enumerate()
+                    .find(|(index, resource)| {
+                        instance.resource_index == *index
+                            && resource.attachment_index == attachment_index
+                            && resource.particle_index == particle_index
+                    })
+                    .map(|(_, resource)| resource)
+            })
+            .into_iter()
+            .collect()
+    };
+    for _ in 0..options.render_repetitions.max(1) {
+        renderer.render_to_with_auras(
+            &target_view,
+            &depth_view,
+            [options.width, options.height],
+            options.yaw,
+            options.pitch,
+            options.zoom,
+            options.pan,
+            options.render_options,
+            rendered_vfx,
+            &auras,
+        );
+    }
 
     let hdr_scene_rgba = if options.capture_hdr_scene {
         let scene_texture = renderer
@@ -394,6 +773,12 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     };
     let rgba = read_texture_rgba(&renderer, &target, options.width, options.height)?;
     write_png(&png_path, options.width, options.height, &rgba)?;
+    eprintln!(
+        "render snapshot {}: complete; adapter/device={:.3}s total={:.3}s",
+        options.name,
+        device_ready_elapsed.as_secs_f64(),
+        snapshot_started.elapsed().as_secs_f64()
+    );
 
     Ok(WeaponModelSnapshot {
         png_path,
@@ -402,6 +787,9 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
         adapter_name: adapter_info.name,
         adapter_backend: adapter_info.backend,
         hdr_scene_rgba,
+        weapon_vfx_quads: weapon_vfx_particles
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.sampled_quads().to_vec()),
     })
 }
 
@@ -444,7 +832,7 @@ fn create_depth_texture(
         sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24Plus,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -590,5 +978,76 @@ fn sanitize_file_stem(name: &str) -> String {
         "weapon-model".to_string()
     } else {
         stem.to_string()
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod native_resource_tests {
+    #[test]
+    #[ignore = "requires native GPU drivers and /proc"]
+    fn snapshot_initialization_does_not_accumulate_device_descriptors() {
+        let initialize = || {
+            let instance = super::snapshot_instance().expect("explicit native GPU test opt-in");
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                }))
+                .unwrap();
+            let (device, queue) =
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                    .unwrap();
+            drop(queue);
+            drop(device);
+            drop(adapter);
+            drop(instance);
+        };
+        let count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
+        initialize();
+        let baseline = count();
+        for _ in 0..12 {
+            initialize();
+        }
+        let after = count();
+        assert!(
+            after <= baseline + 4,
+            "GPU initialization retained descriptors: {baseline} -> {after}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gpu_test_policy_tests {
+    #[test]
+    fn software_render_tests_reject_hardware_adapters() {
+        use wgpu::{Backend, DeviceType};
+        assert!(super::validate_software_adapter(Backend::Vulkan, DeviceType::Cpu).is_ok());
+        for kind in [
+            DeviceType::DiscreteGpu,
+            DeviceType::IntegratedGpu,
+            DeviceType::VirtualGpu,
+            DeviceType::Other,
+        ] {
+            assert!(super::validate_software_adapter(Backend::Vulkan, kind).is_err());
+        }
+        assert!(super::validate_software_adapter(Backend::Gl, DeviceType::Cpu).is_err());
+    }
+
+    #[test]
+    fn denied_snapshot_does_not_initialize_native_drivers() {
+        let before = super::SNAPSHOT_INSTANCE.get().is_some();
+        assert!(super::snapshot_instance_with_opt_in(None).is_err());
+        assert_eq!(super::SNAPSHOT_INSTANCE.get().is_some(), before);
+    }
+
+    #[test]
+    fn native_gpu_tests_require_exact_explicit_opt_in() {
+        use std::ffi::OsStr;
+        assert!(super::check_gpu_test_opt_in(None).is_err());
+        for value in ["", "0", "true", "yes", " 1", "1 "] {
+            assert!(super::check_gpu_test_opt_in(Some(OsStr::new(value))).is_err());
+        }
+        assert!(super::check_gpu_test_opt_in(Some(OsStr::new("1"))).is_ok());
     }
 }

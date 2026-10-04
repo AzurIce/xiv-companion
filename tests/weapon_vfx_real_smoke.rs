@@ -4,14 +4,19 @@
 //! vw####.avfx 解析 → 确定性采样 → GPU 快照（固定时间，可复现）。
 //! 运行：XIV_GAME_DIR=... cargo test --features game-data,render-test-support
 //!   --test weapon_vfx_real_smoke render_installed_weapon_vfx_smoke -- --ignored --nocapture
+//! VFX_SMOKE_ITEM selects comma-separated items; VFX_SMOKE_DISTANCE changes diagnostic framing.
 
 use physis::resource::{Resource, SqPackResource};
 use xiv_companion::{
     AVFX_FPS, WeaponModelLoadRequest,
     game_data::{export_weapon_catalog_from_resource, game_version, normalize_game_dir},
-    load_weapon_model_from_resource_request, load_weapon_vfx_from_resource,
-    renderer::test_support::{
-        WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
+    load_weapon_model_from_resource_request, load_weapon_vfx_attachments_from_resource,
+    renderer::{
+        ModelRenderOptions,
+        test_support::{
+            WeaponModelSnapshotOptions, WeaponVfxCameraInput,
+            render_weapon_model_snapshot_with_options,
+        },
     },
 };
 
@@ -36,7 +41,26 @@ fn render_installed_weapon_vfx_smoke() {
     // 15264 圣母盾 + 16053 屠龙戟·灵光（w0501b0060 variant1 → vw0001）。
     // 注意：VfxId 挂在 IMC 子集上，必须选 item 变体与 vfx 子集对齐的条目
     // （如 1671 火神刀 variant1 无特效，特效在其 variant2）。
-    for (item_id, label) in [(15264_u32, "holyshield"), (16053, "reikan-lance")] {
+    let items = std::env::var("VFX_SMOKE_ITEM")
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| {
+                    (
+                        item.trim().parse::<u32>().expect("VFX_SMOKE_ITEM"),
+                        "selected",
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_else(|_| {
+            vec![
+                (15264, "holyshield"),
+                (16053, "reikan-lance"),
+                (16061, "reikan-book"),
+            ]
+        });
+    for (item_id, label) in items {
         render_weapon_vfx_item(
             &mut resource,
             &catalog,
@@ -52,6 +76,35 @@ fn sample_seconds_label(item_id: u32) -> &'static str {
     "default"
 }
 
+fn mounted_preview_options(
+    name: String,
+    vfx: xiv_companion::WeaponVfxAttachments,
+    time: f32,
+    camera_distance: f32,
+    render_options: ModelRenderOptions,
+) -> WeaponModelSnapshotOptions {
+    let mut options = WeaponModelSnapshotOptions::new(name)
+        .with_output_dir("target/weapon-render-snapshots")
+        .with_viewport(1024, 1024)
+        .with_camera(0.65, 0.35, camera_distance, [0.0, 0.0])
+        .with_render_options(render_options)
+        .with_weapon_vfx(vfx, time)
+        .with_all_unambiguous_auras();
+    // Match browser rAF playback, including its initial zero input and its Aura
+    // selection. One jump to t=.8 is not the same input as 48 displayed frames.
+    options.weapon_vfx_camera_inputs = (0..=(time * 60.0).ceil() as u32)
+        .map(|frame| WeaponVfxCameraInput {
+            time: (frame as f32 / 60.0).min(time),
+            yaw: options.yaw,
+            pitch: options.pitch,
+            zoom: options.zoom,
+            pan: options.pan,
+            roll: render_options.camera_roll,
+        })
+        .collect();
+    options
+}
+
 fn render_weapon_vfx_item(
     resource: &mut SqPackResource,
     catalog: &xiv_companion::WeaponCatalogPackage,
@@ -59,6 +112,16 @@ fn render_weapon_vfx_item(
     label: &str,
     _tag: &str,
 ) {
+    let camera_distance = std::env::var("VFX_SMOKE_DISTANCE")
+        .map(|value| value.parse::<f32>().expect("VFX_SMOKE_DISTANCE"))
+        .unwrap_or(3.2);
+    let msaa_samples = std::env::var("VFX_SMOKE_MSAA")
+        .map(|value| value.parse::<u32>().expect("VFX_SMOKE_MSAA"))
+        .unwrap_or(1);
+    let render_options = ModelRenderOptions {
+        msaa_samples,
+        ..Default::default()
+    };
     let item = catalog
         .items
         .iter()
@@ -92,8 +155,46 @@ fn render_weapon_vfx_item(
             }
         }
     }
-    let vfx = load_weapon_vfx_from_resource(resource, &request)
+    let mounted_vfx = load_weapon_vfx_attachments_from_resource(resource, &model)
+        .unwrap_or_else(|error| panic!("load mounted vfx for {item_id}: {error:#}"))
         .unwrap_or_else(|| panic!("mounted vfx must resolve for {item_id}"));
+    eprintln!(
+        "mounted effects: {:?}",
+        mounted_vfx
+            .attachments
+            .iter()
+            .map(|attachment| (&attachment.model_path, &attachment.data.avfx_path))
+            .collect::<Vec<_>>()
+    );
+    let attachment = mounted_vfx
+        .attachments
+        .iter()
+        .find(|attachment| {
+            attachment.data.file.particles.iter().any(|particle| {
+                matches!(
+                    particle.particle_type,
+                    Some(
+                        xiv_companion::ParticleType::Decal | xiv_companion::ParticleType::DecalRing
+                    )
+                )
+            })
+        })
+        .unwrap_or(&mounted_vfx.attachments[0]);
+    let vfx = &attachment.data;
+    if item_id == 16964 {
+        assert!(
+            attachment.model_path.contains("/w5682/"),
+            "16964 Decal must be mounted by the loaded w5682 accessory: {}",
+            attachment.model_path
+        );
+        assert!(
+            !vfx.file
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("quad approximation")),
+            "the dedicated Decal path must not retain the old quad fallback diagnostic"
+        );
+    }
     eprintln!(
         "[{label}] models(parsed)={} textures={}",
         vfx.file.models.len(),
@@ -208,10 +309,13 @@ fn render_weapon_vfx_item(
 
     // 基线（无 VFX）对照，用于确认画面中哪些元素来自特效。
     let baseline = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-baseline"))
-            .with_output_dir("target/weapon-render-snapshots")
-            .with_viewport(1024, 1024)
-            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0]),
+        WeaponModelSnapshotOptions::new(format!(
+            "installed-vfx-{item_id}-baseline-{msaa_samples}x"
+        ))
+        .with_output_dir("target/weapon-render-snapshots")
+        .with_viewport(1024, 1024)
+        .with_camera(0.65, 0.35, camera_distance, [0.0, 0.0])
+        .with_render_options(render_options),
         &model,
     )
     .expect("render baseline");
@@ -251,12 +355,6 @@ fn render_weapon_vfx_item(
         }
     }
     // 保持文件序号对齐（实例 model_index 指文件 Modl 序号）。
-    let meshes: Vec<xiv_companion::VfxDrawModel> = vfx
-        .file
-        .models
-        .iter()
-        .map(|model| model.draw.clone().unwrap_or_default())
-        .collect();
     // 文件 Tex 序号对齐的贴图输入（解码失败项由渲染端回退）。
     let textures: Vec<Option<xiv_companion::renderer::VfxTextureInput>> = vfx
         .textures
@@ -264,20 +362,17 @@ fn render_weapon_vfx_item(
         .map(|texture| {
             texture
                 .as_ref()
-                .map(|texture| xiv_companion::renderer::VfxTextureInput {
-                    rgba: texture.rgba.clone(),
-                    width: texture.width,
-                    height: texture.height,
-                })
+                .map(xiv_companion::renderer::VfxTextureInput::from)
         })
         .collect();
 
     // 增亮诊断：同位置粒子放大提亮，验证粒子几何/遮挡（正式强度走上面采样值）。
     let magnified = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-ring"))
+        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-ring-{msaa_samples}x"))
             .with_output_dir("target/weapon-render-snapshots")
             .with_viewport(1024, 1024)
-            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+            .with_camera(0.65, 0.35, camera_distance, [0.0, 0.0])
+            .with_render_options(render_options)
             .with_vfx_quads(quads.iter().enumerate().map(|(index, quad)| {
                 let mut boosted = *quad;
                 // 二分诊断：偶数序号 → 环位置（已知可见）；奇数序号 → 原位置。
@@ -298,40 +393,61 @@ fn render_weapon_vfx_item(
     // 渲染路径有效性：增亮粒子必须产生像素变化。
     let baseline_bytes = std::fs::read(&baseline.png_path).expect("read baseline png");
     let boosted_bytes = std::fs::read(&magnified.png_path).expect("read boosted png");
-    assert_ne!(
-        baseline_bytes, boosted_bytes,
+    assert!(
+        baseline_bytes != boosted_bytes,
         "boosted vfx particles produced no pixel change"
     );
 
-    // 正式渲染：真实采样值（尺寸/亮度为 v1 近似参数）。
+    // Render the actual sampled values, without the diagnostic boost.
     let snapshot = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-vfx"))
-            .with_output_dir("target/weapon-render-snapshots")
-            .with_viewport(1024, 1024)
-            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
-            .with_vfx_quads(quads)
-            .with_vfx_mesh_instances(mesh_instances)
-            .with_vfx_meshes(meshes.clone())
-            .with_vfx_textures(textures.iter().cloned()),
+        mounted_preview_options(
+            format!("installed-vfx-{item_id}-vfx-{msaa_samples}x"),
+            mounted_vfx.clone(),
+            sample_seconds,
+            camera_distance,
+            render_options,
+        ),
         &model,
     )
     .unwrap_or_else(|error| panic!("render weapon with vfx {item_id}: {error:#}"));
     eprintln!("snapshot: {}", snapshot.png_path.display());
+    let snapshot_bytes = std::fs::read(&snapshot.png_path).expect("read actual vfx png");
+    assert!(
+        baseline_bytes != snapshot_bytes,
+        "mounted VFX produced no final pixel change"
+    );
 
     // 稳态对照：burst 结束后（t=4s）的常驻特效形态。
     let mut late_quads = Vec::new();
     let mut late_meshes = Vec::new();
     runtime.sample(4.0, &mut late_quads);
     runtime.sample_mesh(4.0, &mut late_meshes);
+    if item_id == 16061 {
+        let rings: Vec<_> = late_quads.iter().filter_map(|quad| quad.disc).collect();
+        assert_eq!(rings.len(), 1);
+        assert_eq!(rings[0].counts, [1, 2, 64]);
+        assert_eq!(rings[0].vertex_count(), 378);
+        for radius in rings[0].radius {
+            assert!((radius - 0.26).abs() < 1e-6);
+        }
+        for width in rings[0].width {
+            assert!((width - 0.03).abs() < 1e-6);
+        }
+        assert!(
+            !vfx.file
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Disc") && warning.contains("quad approximation"))
+        );
+    }
     let steady = render_weapon_model_snapshot_with_options(
-        WeaponModelSnapshotOptions::new(format!("installed-vfx-{item_id}-steady"))
-            .with_output_dir("target/weapon-render-snapshots")
-            .with_viewport(1024, 1024)
-            .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
-            .with_vfx_quads(late_quads)
-            .with_vfx_mesh_instances(late_meshes)
-            .with_vfx_meshes(meshes)
-            .with_vfx_textures(textures),
+        mounted_preview_options(
+            format!("installed-vfx-{item_id}-steady-{msaa_samples}x"),
+            mounted_vfx,
+            4.0,
+            camera_distance,
+            render_options,
+        ),
         &model,
     )
     .unwrap_or_else(|error| panic!("render steady vfx {item_id}: {error:#}"));

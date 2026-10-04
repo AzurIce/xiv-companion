@@ -6,11 +6,12 @@ publish.workspace = true
 
 [features]
 default = []
-game-data = ["dep:anyhow", "dep:physis"]
+game-data = ["dep:anyhow", "dep:bcdec_rs", "dep:physis"]
 wasm = ["dep:tsify", "dep:wasm-bindgen", "tsify/js"]
 
 [dependencies]
 anyhow = { version = "1.0.102", optional = true }
+bcdec_rs = { version = "0.2.0", optional = true }
 half = "2.7.1"
 physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -19,3 +20,4 @@ wasm-bindgen = { version = "0.2.121", optional = true }
 
 [dev-dependencies]
 futures-executor = "0.3.32"
+serde_json = "1.0.148"

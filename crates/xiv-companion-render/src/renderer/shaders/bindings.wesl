@@ -1,14 +1,7 @@
 // Model shader module, part of the `package` WESL package
 // (compiled to OUT_DIR/model.wgsl by the build script).
 
-struct Camera {
-    view_proj: mat4x4<f32>,
-    light_dir: vec4<f32>,
-    view_dir: vec4<f32>,
-    camera_position: vec4<f32>,
-    options: vec4<f32>, // x: normal mapping, y: normal y sign, z: uv scroll time, w: debug mode
-    dynamic_emissive_color: vec4<f32>, // runtime material dynamic emissive multiplier
-};
+import package::camera::Camera;
 
 struct Material {
     diffuse_color: vec4<f32>,
@@ -121,6 +114,7 @@ struct VertexOutput {
     @location(10) bitangent1: vec4<f32>,
     @location(11) color1: vec4<f32>,
     @location(12) world_position: vec3<f32>,
+    @location(13) model_position: vec3<f32>,
 };
 
 @group(0) @binding(0)
@@ -216,11 +210,18 @@ var tile_array_sampler: sampler;
 @group(1) @binding(30)
 var detail_array_sampler: sampler;
 
-@group(1) @binding(31)
-var decal_texture: texture_2d<f32>;
+struct SurfaceOverlay {
+    aura_params: array<vec4<f32>, 16>,
+};
 
-@group(1) @binding(32)
-var decal_sampler: sampler;
+@group(3) @binding(0)
+var<uniform> surface_overlay: SurfaceOverlay;
+
+@group(3) @binding(1)
+var surface_overlay_texture: texture_2d_array<f32>;
+
+@group(3) @binding(2)
+var surface_overlay_sampler: sampler;
 
 struct FragmentOutput {
     @location(0) color: vec4<f32>,

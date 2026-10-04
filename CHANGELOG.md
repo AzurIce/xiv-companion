@@ -2,29 +2,199 @@
 
 ## 开发中
 
-- 模型预览（武器）新增常驻武器特效（VFX）渲染，灵光系列武器（屠龙戟·灵光、圣母盾·灵光等）的火舌、光罩、流光与星点按真实客户端数据呈现：数据层新增 avfx 解析器与确定性粒子采样器（Scheduler 常驻时间轴 → Emitter 按 CrI 事件网格创建粒子（永生粒子 Life=-1 每圈只创建一次）→ Point/Cone/ConeModel/CylinderModel/SphereModel/Model 形状出生点与注入 → 粒子 SRT/颜色/UV 全曲线动画；曲线容器按真实磁盘布局解析——多轴曲线为 ACT+X/Y/Z 子块、颜色曲线为 RGB/A/Bri/SclA 子块、IntList 为字节数组，字段语义对齐 VFXEditor/AVFXTools 并以 1304 个真实 avfx 全量校验）；加载链路按 IMC VfxId 判定（不按物品名猜系列）挂载 `vw####.avfx` 与 atex 贴图（A8 单通道格式新增解码），无特效武器静默降级；渲染层新增 VFX 粒子管线：billboard/定向四边形 + Model/LightModel 内嵌绘制网格实例（火舌/光罩本体按真实轮廓与 TRS 动画绘制，顶点色含羽化遮罩），TC1（贴图序号取 TLst）/TC2（TxNo + TCCT/TCAT 合成模式）/TD（扭曲贴图按 DPow 抖动目标 UV）三贴图着色，贴图边界模式（TBUT/TBVT）逐层生效（渐变贴图 Clamp 防止越界回绕出异色条纹），TC1 的 TLst 形状遮罩按亮度→alpha 采样（白形黑底的遮罩贴图不再把颜色乘黑——焰心恢复亮青白），贴图合成扩为 TC1+TC2/TC3/TC4 四层（光罩双层卷动纹理恢复；无 TC1 贴图的粒子采样内置回退光点保持形状），DrawMode 的 Blend/Add 分别走 alpha 混合/加色管线（Bri 亮度倍率只作用于加色发光粒子，SclA 贴图 alpha 缩放参与强度），粒子剔除模式（CulT 剔正面=光罩内侧薄纱观感）与标准深度测试保持武器与特效的遮挡关系，atex 按线性数据采样（不做 sRGB 解码），HDR 由 bloom 拾取；特效挂载按 avfx Binder 的 BPID 绑到武器 MDL 的 ElementId 绑点（基部/中部/尖部，光效锚定刃部而非原点）；Powder 粒子按 Smpl 参数喷出短寿命星点子粒子（颜色帧簿 + UV 翻页）。粒子系统字段级补全（对齐 VFXEditor/AVFXTools 全字段定义）：解析覆盖 Smpl 全字段（旋转/枢轴/径向方向/速度衰减/UV 随机与循环/重建联动等）、粒子参数全套（DwPr 绘制优先级、坐标计算顺序、远近裁剪、光照应用率、深度偏移、Dawntrail 新增参数）、TN/TR/TP 贴图块（法线/反射/调色板，解析保留、渲染待场景光照模型）、Binder 四组属性（PrpS/Prp1/Prp2/PrpG 含环形绑点与位置曲线）、Efct 效果器参数与原始负载、根级全局参数（AvfxMain 绘制层/裁剪盒/淡出/修正值全套——真实武器文件未知块清零）；模拟层消费随机曲线（`*R` 随机轴与颜色 `Ran*` 按 RanT 语义逐实例播种重掷）、ItPr 父级影响（PICd 的 Initial/Always 分量 + ICbS/ICbR 门控，Always 位置以发射器位移差量跟随）、ItEm 子发射器递归创建（GenD 延迟、父链变换传递）、BIAX/Y/Z 按事件内序号逐粒子旋转、StFr 创建起始帧门控、Life ValR 实例寿命随机、发射器 Gra/ARs 传递粒子（ARs 按逐帧等比衰减的解析积分计算位移）；渲染层按 DwPr 绘制优先级排序（同级保持创建序）、Smpl 枢轴旋转逐实例传入 shader。着色对齐真实观感：网格粒子（火舌/爪壳/膜）的 TC1 由「覆盖写」改为按 TCCT/TCAT 与底色合成（几何与顶点色承担形状，遮罩条纹参与成色，爪壳恢复亮白发光而非暗色玻璃）；VDrw 顶点解析全部四组 UV（此前只取首组），每层贴图按 UvSN 选逐顶点基底组（tone 渐变条采到正确的青白区段）；UV 变换按 AVFXTools `MoveUV` 改为绕 (0.5,0.5) 旋转+缩放+滚动（消费 UvSet `Rot`/`RotR` 旋转曲线，逐实例量化打包随实例上传）；TLst 形状遮罩的 alpha 改为亮度 × 贴图自身 alpha（BC3 贴图如 glow001b 由 alpha 通道携带辉光形状，此前亮度近似让软光 quad 带硬方边）；未知 TCCT 合成模式不再按 Multiply 兜底（对齐 AVFXTools 的跳过，柔光层不再被噪声纹压暗）；修复 SclA 在网格粒子上被乘两次导致的过曝；网格粒子 TC1 的 alpha 改取遮罩层自身（黑底区透明——火舌刃恢复 tex5 式的半透明虹彩条带而非实心白块，此前「TC1 与底色全量合成」把遮罩形状也抹成了实心）；粒子 `DsDt`/`DsDw` 深度标志接入渲染管线（爪笼壳等 `DsDw=true` 的实心壳体现在写深度、正确遮挡身后的武器几何与后排粒子，此前全部粒子只测不写）。模型页新增「VFX」开关，特效随模型加载自动挂载并按 rAF 时钟采样播放。合成 fixture 解析/采样单测、native mock 快照、真实武器全链路 GPU 冒烟（屠龙戟·灵光/圣母盾，含 burst 后稳态对照）与 7727 模型全量审计全程守护。已知近似（后续迭代）：scheduler 12 触发器（拔刀/收刀演出）未消费、Effector 不做运行时模拟（武器特效基本不用）、TN/TR 需场景光照/反射模型暂未渲染。
-- 新增 IMC 解析与武器 VFX 审计，作为武器光效调研的数据基线：数据层新增 `imc` 模块（variant/material-set 表读取，布局对齐 xivModdingFramework：头部 `subset_count + kind`（1=武器 NonSet/31=装备 Set），每条 6 字节 MaterialSet/Decal/Mask/Vfx/Animation，含合成字节单元测试）；新增 `weapon_vfx_audit` 测试——以 IMC 的 VfxId 为唯一判定依据（不按物品名猜系列），枚举武器目录各模型的 `vw*.avfx` 引用、探测文件存在性与数字填充风格、扫描 avfx 顶层块构成（Schd/Emit/Ptcl 等），并统计带特效模型的 mtrl shpk 分布；产物落 `target/weapon-vfx-audit/`，已挂入 `verify-weapon-render.ps1`。
+- 武器模型预览支持首版 VFX：按 IMC 加载挂载特效与贴图、模型及绑点资源，显示常见粒子、网格火焰与武器表面 Aura；支持启停、重播和主副手资源。亮度及部分场景合成为近似预览，完整游戏效果继续补齐。
+
+- 修复浏览器 VFX 初始化的资源限额和纹理采样控制流错误；特效相机更新失败时仍显示基础模型。重复预览差异按类型汇总，展开保留全部受影响资源和参数。
+
+- 改善特效播放的曲线、共享随机、出生历史和重播一致性，修正延迟创建、骨骼/相机绑定及父子实例的部分时序问题；未支持配置保留降级诊断。
+
+- 首版验收使用与网页一致的逐帧播放和 Aura 选择；屠龙戟·灵光、圣母盾·灵光的原生 GPU 1x/4x 检查通过。新增 Chromium shader 编译验证，覆盖浏览器和原生验证之间的差异。
+
+- VFX 进度页区分首版合入条件、当前覆盖与后续缺口；详细数值研究保留归档，完整格式或游戏画面覆盖不作为本版合入前提。
+
+- 修复多个武器附件对同目标、同优先级的 Aura 无法选出资源的问题：按实际创建顺序选择，较早资源恢复后可替换后来绑定；效果结束保留最后参数，回退播放重建一致顺序。 同步修正Fresnel世界轴与模型轴的单精度旋转、归一化及模型缩放后的方向输出。
+
+
+- 原生离屏渲染与 GPU 上传测试通过明确的测试进程开关启用，恢复开发中的原生验证；新增隔离 GPU 设备和桌面连接的软件 Vulkan 单项验证入口，限定 CPU adapter。快照测试记录实际设备和初始化/总耗时，便于区分渲染准备与桌面异常。
+
+
+- 武器预览按前向 Decal 的客户端 pass 掩码选择可用接收面：没有水面模板 `0x40` 时，DDTT=1 不再错误投到普通模型表面，DDTT=2 保留普通 pass 且不重复合成；MSAA 1x/4x 原生像素对照通过。水面模板接收链及 deferred GBuffer 仍待接入。
+
+
+- 接入 `DwOT=Reverse` 的桶内绘制逆序：保留不同优先级的先后关系，同优先级的 Quad、Mesh 与绘制阶段随机调用同步反转，连续预览和逐步播放保持一致。绘制优先级按客户端有符号低字节解释，修正 257 等编码别名的排序及随机调用错位。
+
+
+- 修复 Polyline 的动画与拖尾时序：长度、宽度、柔化和扰动按绘制时刻求值，颜色及 UV 保留普通更新缓存；预热更新变换与重力，历史点仅在提交绘制时推进，跳过中间绘制不再生成多余轨迹；逐步播放按绘制优先级执行 Model 选模与 Polyline 扰动随机调用，避免不同优先级实例取错随机值。
+
+
+- 原生渲染快照复用 GPU 实例，避免长时间批量验证时反复初始化驱动造成文件描述符累积、分配失败和进程崩溃；设备与快照参数仍按各次请求创建。
+
+
+- 修正受限逐步播放在发射器循环后重新锁存 Add `CrI` 的时钟：周期创建后的下一次间隔使用累计年龄，避免过早再次创建。新增先失败后通过的循环调度回归；基础数据层 650 项、带 `game-data` 的 822 项通过（16 忽略）。连续采样和客户端同条件动态时序仍待核实。
+
+
+- 修正零基线 `CrC` 搭配非零 `CrCR` 时被提前剪掉的连续事件流；随机数量现在仍会进入 seeded count 选择并产生合法创建，新增零基线随机数量回归。
+
+
+- staged 播放现在在每个 emitter 周期批次保存创建事件序号，并按实例种子消费 `CrCR` 随机数量；原有随机数量准入不再只是诊断放行，新增零基线 staged 数量回归。
+
+
+- 补齐受限 trace/staged 播放的终止延迟创建：`CrTm=2`、正 `GenD` 且 `CrCn>1` 的项在父实例死亡回调处分配 helper，按 `bGD` 批量或逐次创建，并从回调边界重新计时；新增终止 helper 生命周期和 signed threshold 回归。`CrCn=1` 的正延迟终止继续按客户端不可执行路径跳过。
+
+
+- 连续路径接入子发射器自身 `VRX/VRY/VRZ`/随机曲线：按客户端方向基底重建初速度，并与 emitter `ARs/ARsR` 在循环时钟上联合积分；零初速度仍不产生位移。新增 emitter VR + 阻力回归；staged 子发射器因缺逐帧历史仍保持回退边界。
+
+
+- staged emitter 调度继续接入 `CrCR`：周期创建数量按实例种子和事件序号进行构造期随机取样；安装审计覆盖由 `1257/1464` 增至 `1276/1464`，有限 Smpl Powder 观察由 `9628406` 增至 `9703248`，`CrIR/CrCR` fallback 已清零。
+
+
+- staged emitter 调度接入 `CrIR`：按 emitter 实例种子和事件序号锁存逐事件随机间隔，历史窗口快进与完整枚举保持同一事件序列；安装审计覆盖由 `1136/1464` 增至 `1257/1464`，有限 Smpl Powder 观察由 `8333953` 增至 `9628406`，剩余 `CrCR` 数量随机为 19 个 emitter。
+
+
+- staged probe fallback 将发射器的形状、Effector、`CrIR` 间隔随机和 `CrCR` 数量随机拆为独立诊断；安装审计确认 160 个发射器因非零 `CrIR`、2 个因 Effector 回退，覆盖仍为 `1136/1464`，避免把不同未实现语义合并成同一 Point-shape 原因。
+
+
+- 同步 `vfx-audit` 与客户端 shader 说明中的当前安装快照，统一为 `1136/1464` 与 `8333953`；修正后的 Timeline 边界数字与历史阶段快照已明确区分。
+
+
+- staged fallback 细分 Powder 的 `bMV`、`bLoc`、非有限/非零 `CIM/CIMR` 诊断；这些配置继续整文件走连续路径，避免未接入角色输入时误报为零移动。
+
+
+- 安装审计 JSON 补充导出 `CIM/CIMR`；当前 2677 个启用 Smpl Powder 定义均为零，且没有启用 `bMV/bLoc`，覆盖率保持 1136/1464。
+
+
+- 修正 Timeline/Scheduler 正起始偏移的跨界 update：根实例在起点只初始化、不消费剩余 delta，下一次 update 才推进曲线年龄；新增回归后数据层 `619` 项全通过。
+
+
+- 依据客户端 `0x1403fbbc0` 的两条几何更新分支接入 Smpl Powder `bBnP` 父级绑定路径；staged 安装审计覆盖增至 1136/1464，累计观察 8333953 个有限 Powder quad，剩余 328 份继续走连续路径。新增 bBnP 准入与状态有限回归。
+
+
+- 上一阶段安装 staged 审计达到 653/1464，累计观察 2973900 个有限 Smpl Powder quad；其中 173 份新增文件来自 `SIDT=2/3/4` 固定轴准入。该历史数字随后由 `SIPT=1/2` 审计继续推进。
+
+
+- Powder staged 准入区分 `SIPT=1/2`：`SIPT=1` 保留 `VBMN` 绑定，`SIPT=2` 跳过绑定；早期把二者都当作中心出生的判断已由本节顶部修正。
+
+
+- Powder `SIDT=1` 的早期零方向解释已撤回；当前实现按 IRD 极角带采样，详见开发中 Powder 修正条目。
+
+
+- 安装 staged 审计验证 `SIDT=1` 后覆盖增至 984/1464，累计有限 Smpl Powder 观察增至 5746832；新增 287 份真实文件，剩余 480 份继续使用连续路径。
+
+
+- 接入客户端 `SIDT=5` 的有效 `IJMN` 模型顶点法线方向；合成回归通过，安装审计覆盖在该阶段暂未变化。更宽的 `SIDT=5+` 假设已由本节顶部收窄。
+
+
+- staged Smpl Powder 接入客户端初始化分支确认的 `SIDT=2/3/4` 固定 `+X/+Y/+Z` 注入方向；`SIDT=1/5+`、非零 `SIPT`、移动触发和其它绑定模式继续回退，并新增固定轴回归。
+
+
+- 修正 Powder 模型顶点选择：`IJMN/VBMN` 现在先按客户端 `VNum[ordinal]` 间接索引 `VEmt`，注入点和绑定点共用该映射；缺失或越界 `VNum` 的 staged 文件继续回退，并新增非自逆顺序回归。
+
+
+- staged `any_direction` 现在允许 ConeModel、CylinderModel、Model、SphereModel 的有限动画 IAX/IAY/IAZ 主曲线在出生时求值；随机注入角仍回退，安装覆盖保持 476/1464。
+
+
+- 校正并记录 staged 初始化 `GenD/bGD` 助手队列：批量与逐个延迟、容量占用和回调次数已由现有实例 trace/playback 覆盖；终止项延迟、`PrLk` 挂载与跨发射器时序仍未接入。
+
+
+- staged 形状采样允许 Cone、ConeModel、CylinderModel、Model、SphereModel 的有限主曲线在出生年龄求值；随机形状曲线和 Always 回调仍回退。合成回归覆盖动态半径、长度与旋转，安装覆盖保持 476/1464。
+
+
+- 细化 staged Decal / DecalRing 的 DDTT fallback 诊断：3..5 明确指出 deferred GBuffer target 尚未接入，未知值单独报告非法 DDTT；两类仍保持整文件回退，不增加覆盖率。
+
+
+- staged playback 放宽 SphereModel OnVertex 的静态 `any_direction` 子集：仅当 emitter 级 IAX/IAY/IAZ 主曲线恒定且随机曲线为空或为零时使用自定义注入方向；新增回归，安装审计覆盖保持 `476/1464`，未把合成扩展计入真实文件增长。
+
+- staged playback 新增静态 Model 发射器顶点子集：读取文件级 `VEmt/VNum`，按发射器共享 shape ordinal 选择顶点，保存 ToVertex/OnVertex 出生位置、法线或静态自定义方向、父级变换后的速度和 `ModelVertex` 绑定；缺失/越界顶点、动态旋转和随机速度仍回退，并新增合成回归。安装审计覆盖由 432 增至 476/1464，有限 Smpl Powder 观察由 1707419 增至 1939187。
+
+- staged playback 新增静态 CylinderModel 发射器子集：固定 Len/Rad/IjS/ROT、有效 DivX（允许 DivY=0）且无随机形状曲线时保存圆柱出生点、侧面方向、父级变换和 signed-index 绑定；`any_direction` 仅在 emitter 级注入角静态时准入，并新增动态曲线回退与合成回归。安装审计覆盖由 350 增至 432/1464，有限 Smpl Powder 观察由 1184088 增至 1707419；动态/Always 随机 CylinderModel 仍回退。
+
+- staged playback 新增静态 Cone 发射器子集：恒定 InS/OuS/IjS/IjA/ROT 且无随机曲线时保存出生偏移、父级变换后的注入方向和速度；新增合成回归。安装覆盖由 344 增至 350/1464，有限 Smpl Powder 观察由 1157388 增至 1184088，动态或 Always 随机 Cone 仍回退。
+
+- staged playback 接入静态 ConeModel 出生/绑定子集，复用 GeMT 分割、shape ordinal 和 ConeModel getter；新增合成回归。安装语料的 4 个相关 emitter 仍含动态或随机形状条件，因此覆盖保持 350/1464，未把合成支持误报为真实文件覆盖。
+
+- Cone 准入前的安装 staged 审计基线为 344/1464，累计 1157388 个有限 Smpl Powder quad；该基线用于对照本轮静态 Cone 扩展后的覆盖变化。
+
+- 安装 staged 审计验证子发射器准入后覆盖由 255 增至 344/1464，有限 Smpl Powder 观察由 766511 增至 1157388；剩余 Timeline offset fallback 为 38（效应器或 Clip），Timeline loop fallback 为 27。
+
+- staged 播放接入无效应器/Clip/循环的 Timeline 与 Scheduler 正起始偏移：延迟根在起点前不创建子项，跨起点只推进剩余 delta，`EdTm-StTm` 作为相对寿命；新增 Timeline/Scheduler 合成回归。安装审计覆盖由 181 增至 255/1464，Timeline offset fallback 由 295 降至 36，其余 36 项为效应器或 Clip 组合。
+
+- 受限逐步播放现准入 PICd=8：父位置、方向、scale/rotation 分量和颜色沿当前父矩阵复用 PICd=2 路径，并补充 Point/重力/预热合成回归。该实现是客户端 unstickiness 的完整跟随近似，黏着系数与地面查询仍未复现；Timeline 偏移阶段后安装语料覆盖为 255/1464。
+
+- staged 播放现在与客户端 PICd 归一化一致：原始 4/5/6/7/9 分别映射为 2/3/0/1/8，再进入父级位置、方向、分量与颜色路径；新增逐值对照回归。归一化变体仍可能同时受其它 blocker 阻挡。
+
+- 受限逐步播放新增无绑定 Smpl Powder 子集，并允许客户端已支持的负循环起点：固定槽位的创建延迟、寿命/重建、UV、尺寸、旋转、颜色、逐轴速度衰减、重力和父级尺寸缩放可保留增量状态；移动/角色位置触发、模型或顶点出生、顶点绑定和父位置绑定仍明确回退。安装客户端整文件覆盖由 76 增至 181/1464，105 份新增文件在混合更新中累计观察 530013 个有限 Smpl Powder quad；w0101/b0045 的真实 34 槽隔离在不规则更新、重复读取和重复运行下保持稳定，关闭 `bSCt` 的对照最多输出 1 个普通 Powder。安装语料没有有效负循环 emitter 或 particle 引用，该边界仅由合成回归闭合。
+
+- TR 的 `TxNo` / `TFT` 现在随 `ResolvedTexture` 和 `VfxMeshInstance` 保留，并覆盖启用与禁用回退值；它们暂时只作为待接入场景 cube/provider 的数据，不被错误当作普通二维颜色贴图。
+
+- TC1 `bUOS=-5` 角色肖像源现提供可注入的 2D view/sampler 接口，并按屏幕 UV 进入普通、soft 与 Decal 共用资源契约；未注入时保持禁用而不采样占位图。原生 wgpu 红/蓝 provider 回归覆盖 1x/4x 最终 HDR 像素；应用层真实 UI 肖像生成仍待接入。
+
+- TC1 的 `TxN`/`TxNR` 现在按客户端先合并主值与随机浮点偏移、一次向零截断，再加 `TLst长度 << 16` 正偏置并执行有符号余数，最后按 signed byte 读取列表；负选图值可正确环绕。静态 TC1 只读 `TLst[0]`，不再错误回退客户端不会解析的 `TxNo`；`bUSC/bPFC/bUOS` 保留为 `-2/-3/-5` 内建源。客户端共享随机序列与角色肖像 `-5` 资源继续保留为边界。
+
+- Laser 与非 Smpl Line 的未支持 RBDT 现在按 `Ptcl[index]` 明确诊断并跳过，不再在缺少专用方向语义时错误生成普通 Quad；合成采样与诊断回归覆盖该边界，安装语料的 59 个 Laser 和 4 个 Line 均保持在已支持配置内。
+
+- Decal/DecalRing sampler 的非有限 `SS/RF/WID/WIDR` 现在也输出索引化“可能跳过”诊断，保留原始值并维持 `DDTT` deferred 路径边界。
+
+- Cone/ConeModel/SphereModel/CylinderModel/Model emitter 的基础与随机形状曲线现在对非有限关键帧输出 emitter 索引化诊断，提示出生位置、方向或速度可能失效，同时保留原始曲线。
+
+- Emitter 生命周期与运动曲线 `CrC/CrCR/CrI/CrIR/Gra/GraR/ARs/ARsR/Col/Pos/Rot/Scl` 及启用寿命值现在也输出 emitter 索引化非有限诊断，覆盖创建、运动、变换和寿命采样边界。
+
+- `DsSp` 的未覆盖特殊几何仍保留索引化诊断和原始值，避免把普通颜色贴图误当场景深度。
+
+- 收窄 `DsSp` 未接线诊断范围：Quad、Powder、Windmill、Line、Laser、Model、Disc、LightModel 等已有 soft pass 的类型不再误报；未知类型继续按 `Ptcl[index]` 保留诊断。
+
+- Polyline 的原生 wgpu 线性 edge fixture 现在覆盖 `DsSp=1/SPFR=0.75` 的 1x/4x soft pass 实际提交与有限像素输出；该回归不宣称客户端同条件视觉一致。
+
+- 对齐 Polyline 解析诊断与 sampler 的实际准入：负/未知 `LnCT`、非法点数和连续 non-edge 不再静默跳过。
+
+- Polyline 的非 billboard 宽度方向已按 NBBA 0..2 接入专用 GPU 路径，使用实例 X/Y/Z 轴替代相机叉积；非法轴值继续回退，MSAA 1x/4x 原生像素回归通过。当前 138 个真实定义均未启用该模式，语义由客户端指令和合成回归固定。
+
+- 修正 Model、ConeModel、CylinderModel 与 SphereModel 的 ordered GeMT 选点顺序：同一发射器实例现跨 ItPr / ItEm、创建事件与已退休出生共享独立形状序号，概率拒绝不计数，staged 工厂的容量拒绝也不再错误消耗序号；连续查询会恢复共同存活窗口前的概率接受前缀。客户端全局随机源与历史容量竞争仍未复现。
+
+- 将 Disc 的分段、径向间隔、缩放百分比、几何主/随机曲线及内外边颜色切换为强类型解析和运行时消费，同时保留未知字段与完整原始负载；专用环形网格行为及既有客户端/GPU 验证边界不变。
+
+- 修正 Smpl 粉尘忽略逐轴速度系数的问题，使配置的减速、加速和反向运动参与飞行轨迹；长时间采样无需逐步回放，非有限位移不会提交绘制。客户端增量时钟和顶点绑定仍待补全。
+
 - 角色页「渲染」区块新增「角膜环强度」滑杆（0–2，默认 1）：渲染侧已消费虹膜色 alpha 作每侧角膜环强度，但 26 字节捏脸与调色板均无此数据，此前恒满强度；现作为外观覆盖随拼装重载生效（会话内调整，不进 ?c= 链接）。
+
 - bg 域新增逐贴图 UV 缩放：解析 `g_ColorUVScale`/`g_NormalUVScale`/`g_SpecularUVScale`（各含 map0/map1 两组 xy），bg 家族材质的 color/normal/specular 六个采样点按常量缩放，其余家族 uniform 恒 1 渲染不变。
+
 - 虹膜渲染按 MeddleTools iris.shpk 节点组补全：左右眼分侧（顶点色 G 通道选择右眼色）、眼白 g_WhiteEyeColor 与虹膜色按 mask.B 混合、角膜环带（g_IrisRingUvRadius ± FadeWidth 软环）以环色 × 每侧 limbal 强度 × g_IrisRingEmissiveIntensity 自发光；数据层解析 5 个 iris 材质常量（CRC 与缺省值同 MeddleTools），非 iris 家族 uniform 全零对现有渲染零影响。另将 bgprop/bgcrestchange 材质并入 Bg 家族（此前落 Unknown 走兜底路径）。
+
 - 模型着色器迁移为 WESL 包并整理渲染器目录：`xiv-companion-render` 在构建期用 wesl-rs 把 `src/renderer/shaders/` 的 WESL 包编译为 WGSL 产物（模型着色器与 bloom/compose 后处理各一个产物），渲染器与着色器测试统一消费链接产物；Rust 渲染器归入 `renderer/model/`（材质数据管道收进 `material/` 子模块），着色器全部位于 `renderer/shaders/`。着色器拆为 bindings/skinning/lighting/color_table/arrays/alpha/surface/shading/debug 九个模块加入口点根模块，跨模块依赖以显式 import 声明，链接保持无重命名、无裁剪。着色器回归测试中依赖声明顺序的区间断言改为按函数体提取，六个数值/格式锚点同步到 WESL 规范化输出；88 个单元测试与 42 张 native GPU 快照逐位一致。
+
 - 模型渲染器整理：`xiv-companion-render` 渲染核心从单个约 8900 行文件拆分为按职责划分的模块（渲染上下文与每帧绘制、管线构建、材质纹理绑定与上传、材质 uniform 参数、顶点装配与透明排序、后处理、相机/材质 uniform 布局，着色器与渲染测试随迁），行为不变、快照逐位一致；同时移除 wgpu 的 `webgl` feature——模型预览本就固定走 WebGPU 后端，构建不再包含 WebGL2 后端代码，着色器 16 纹理/16 采样器预算改为自设保守上限、不再以 WebGL2 兼容为由约束。
+
 - 修复 native GPU 快照套件多线程运行（`--test-threads=N`）时的确定性 SIGSEGV：快照渲染此前只串行化 wgpu 实例创建，wgpu 的 Instance/Adapter 句柄存活到渲染结束，实例销毁（vkDestroyInstance）仍与其他线程的 Vulkan 实例创建并发触发 libvulkan ICD 竞态（NVIDIA 等 dlopen 重 ICD 环境）；现 test_support 串行化整个快照渲染，任意时刻只跑一个 Vulkan 实例生命周期，Justfile 的多线程 ignored 快照命令可直接使用，并新增多线程并发渲染冒烟用例守护。
+
 - 修复文档化的 `cargo test --features web` 全量验证命令构建失败：`tests/weapon_shader_family_audit.rs` 的 characterglass 边界断言未按平台隔离地引用仅 Windows 可用的 DXBC 反汇编辅助（`disassemble_dxbc` 等），导致非 Windows 平台整个测试目标编译失败；DXBC 统计已收入 `#[cfg(windows)]` 块，shader 数量与标量参数等平台无关断言保留在所有平台运行，仅 Windows 用到的导入一并按平台门控。
+
 - 修复折叠侧边栏（72px）悬浮导航图标时标签 tooltip 被导航滚动容器右缘裁掉的问题：tooltip 此前以 `absolute` 渲染在 `overflow-y-auto` 的滚动条内，横向溢出被裁剪且 `z-50` 无法逃逸祖先的 overflow 裁剪；现改为悬浮时读取触发项的 `getBoundingClientRect`，由 `DesktopSidebar` 在滚动容器外以 `position: fixed` 渲染同层级的 tooltip，层叠与页面 `fixed inset-0 z-50` 弹窗无冲突（弹窗后绘制于上层且遮罩拦截指针，悬浮不再触发）；滚动导航列表或折叠状态变化时 tooltip 即消失。
+
 - 模型预览新增抗锯齿设置：场景 HDR 目标与全部场景管线支持 4x MSAA（bloom/compose 前 resolve 到单采样纹理，resolve 只平滑边缘、不改变内部亮度），模型预览页与角色页「渲染」区块新增「抗锯齿」选项（关 / MSAA 4x，默认开）；切换时重建 WebGPU 画布。native WGPU 断言 4x 边缘中间色像素显著多于单采样且内部亮度不变。
+
 - 睫毛/眉毛渲染重做：脸部 hair 材质（obj/face 下，如敖龙 `mt_c####f####_etc_a`）的发色恢复乘 mask R 明暗细节（真实纹理解码：眉发丝纹理 + 睫毛区压暗，此前按"数据通道"只取发色平色，睫毛亮成白粉点）；混合方式由 Cutout + screen-door 抖动改为 Transparent 真混合并关闭其 dither 深度（细发丝在 mipmap 下溶成半透明渐变带，抖动把它打成稀疏白点；下方是平滑皮肤，无头部毛发透出头皮的问题），睫毛/眉毛恢复为柔和连续的深色发丝。
+
 - 修复 web（wasm32）端角色/宠物骨架全部加载失败的问题：vendored havok 骨架解析把无父骨骼标记 -1 回转为 `usize::MAX`，而校验处与 `u64::MAX` 比较——在 64 位宿主上恰好相等、wasm32 下恒不成立，导致骨架解析必败，种族骨变形、裸肤拼接闭合与骨骼动画在 web 端全部静默失效（native 不受影响）。真实 sklb 在 wasmtime（wasm32）下验证了修复前后的失败/通过。
+
 - 浏览器重启后不再强制重新选择游戏目录：File System Access 的目录读取权限是会话级的，浏览器完全重启后句柄仍保存在 IndexedDB、权限重置为 prompt；恢复保存的目录时若权限为 prompt，设置页「UserLocal」卡片会显示琥珀色提示与「重新授权读取」按钮，点击后经浏览器权限确认沿用原句柄并恢复资源，仅权限被拒绝或句柄缺失时才需要重新走目录选择器。
+
 - 修复 ColorTable 材质（如坐骑大壳蟹 m0694b0001）渲染成大面积硬边色块的问题：Compatibility「base × colorset」组合从离线预乘改为 shader 内逐像素相乘，diffuse 不再被降采样到 colorset 索引分辨率，模型表面恢复平滑明暗与贴图细节。
+
 - PAP 骨骼动画采样与前端播放：数据层新增 `animation.rs`（pap 容器头解析 + 内嵌 havok tagfile，animations/bindings 平行数组按名表 `havok_index` 关联，track→bone 经 `binding.transform_track_to_bone_indices` 映射到本骨架，越界 track 丢弃计数；加载时按量化直方图预检剔除采样器不支持的动画，vendored 解析 panic 全部 catch_unwind 转错误），`sample_animation_pose`/`animation_joint_matrices` 采样到 SkeletonPose/关节矩阵（时间毫秒、越界钳制），角色 action.pap + 常用 emote、monster/demihuman mount/idle pap 多候选探测（命中合并、全缺返回空集不报错）；模型预览页（宠物/坐骑）与角色页右侧栏新增「动画」下拉（None=rest + 各动画名），选中后 rAF 循环 `t=(now-start)%duration` 采样并增量上传关节矩阵，切换动画/模型重置计时，无动画集时 UI 不出现、渲染行为不变。修复 vendored havok 样条求值的 knot 窗口重建 bug（上游仅在 span==p 的首段正确，中段四元数爆成非单位值导致姿态翻转）与顶点 blend 索引语义（bone_table 绝对下标，此前按 submesh 窗口偏移重映射在非 rest 姿势下撕碎多窗口网格）；web 画布 device limits 补 storage buffer 蒙皮下限（WebGPU 后端均满足），动画播放时预览强制原位布局（平铺偏移量在蒙皮前顶点位置里，动画下会随关节旋转）。
+
 - 骨骼 rest pose 与 GPU 蒙皮管线：数据层新增 `skeleton.rs`（sklb 解析容错 `blks`/`sklb` magic 与多版本头，vendored Havok 解析 panic 全部 `catch_unwind` 转错误；骨架不走 serde/IndexedDB，随加载内存存活），`load_chara_model_with_skeleton_from_resource`/`load_character_assembly_with_skeleton_from_resource` 平行入口随模型返回 rest pose 骨架（sklb 缺失静默降级）；渲染层 `create_model_with_skeleton` 构建实例 joint 表（mesh bone_table 名并集按名匹配）+ 实例级 joint storage buffer（256 上限）+ `update_joint_matrices` 姿势覆盖，WGSL 蒙皮 `Σ w·J·pos`（权重按和归一、法线 mat3(J) 近似）；rest pose 蒙皮输出与非蒙皮路径浮点噪声级一致（joint 数 0 旧分支零扰动），陆行鸟/中原男装配实测通过，颈部旋转冒烟肉眼可见。
 
+
 - 新增「角色」页（角色组装器）：选择种族/部族/性别后以该组默认捏脸为基底，编辑脸型、发型、眉/眼/鼻/嘴/轮廓、身高/体格/胸围滑条、面部特征位与肤色/发色/挑染/瞳色/唇色/特征色/面妆色色板（数据源 character-make/character-palette 资产），捏脸以 26 字节 hex 同步到 `#/character?c=` 链接；右侧经本地游戏目录实时装配角色模型预览（部件原位重叠、attribute 按名启用——裸装含 `atr_lod` 在内恒开（刘海/尾巴中段等几何都在该子网格）、`atr_fv_*` 脸部特征件按面部特征字节逐位开关、敖龙角与鳞片正确显示，角色渲染色按 shader 家族写入材质），附简版模型统计。
+
 - 角色拼装渲染点亮：默认捏脸 + human.cmp 调色板解析出角色渲染色（`CharacterAppearanceColors`：肤色/唇色+唇釉/发色/挑染/左右眼色+角膜环/特征色/面妆色 + lipstick/highlights/面妆镜像开关），加载时按 shader family 写入部件材质（skin 全收、hair 收发色、iris 收眼色、charactertattoo 收特征色，装备 character 等不受影响）；skin/hair/iris/charactertattoo shader 家族新增渲染分支（肤色乘算、唇妆混入、发色乘算+挑染、虹膜乘色、面纹 OptionColor），面妆 decal 贴图按真实数据探测的路径规律（`chara/common/texture/decal_face/_decal_*.tex`，BC4 贴图新增解码）加载并叠乘，缺失时静默降级。皮肤族材质按介电质处理（不再把 mask 数据通道误作金属度，皮肤不再渲染成金属质感）；头发以 mask R 通道作明暗渐变、G 通道作挑染区域，发色不再偏色发橙；发丝透明度改从法线贴图 Alpha 通道读取，并按 4x4 screen-door 抖动做 alpha clip（此前恒不透明/整片半透明/硬阈值削碎的问题全修，刘海等 atr_lod 子网格几何也恢复显示，头发不再秃碎）。
+
 - 跨族回退的种族骨变形：回退文件网格（维埃拉/硌狮小衣来自猫魅/鲁加、裸肤手足来自中原/拉拉男、共享发型来自中原）按源族骨架 rest → 自身骨架 rest 逐骨变形烘焙（骨按名映射、顶点按蒙皮权重加权），比例与手部错位修正；游戏的 PBD 运行态骨变形以骨架替换近似，身高/体格/胸围的 RGSP 缩放仍未应用。修复回退裸肤手/足与身体的拼接缝：逐骨刚性变形保持回退件尺寸，足筒上沿与小腿下沿之间会留出环状透底缺口（敖龙/猫魅等脚踝深色环），现按左右侧把足筒上沿平滑拉伸至套住小腿下沿；手腕叠加带恢复原生配对的逐顶点重合（回退手筒腕端吸附到前臂皮肤，原生为同一身体沿腕环切割），接缝不再随视角游动。
+
 - 模型预览布局新增原位模式：`component_preview_layout = false` 时多 MDL 部件不再平铺拆开而是按游戏坐标重叠（角色拼装使用），默认行为不变。
+
 - 数据层新增完整角色拼装（chara/human + 小衣装备域）链路：捏脸 26 字节结构（`CharacterCustomize`，含校验与 c 编码）、部件路径构建（游戏裸装 = 小衣 e0001 皮肤/内衣 top/dwn（sho 部分族有）+ 裸肤 e0000 手（足），硌狮/维埃拉无自身小衣文件按种族骨变形树回退、裸肤手足按版型回退中原同性别/拉拉男，脸/发/尾/兔耳含高地借脸与编号基数换算）、皮肤肤族材质表（精灵/猫魅→中原、鲁加女→高地女、拉拉女→拉拉男，跨族回退仍用角色自身肤族材质）、头发材质共享表与 human 域材质特例候选（脸与兔耳无版本目录/共享根改写）、加载入口 `load_character_assembly_from_resource`（对齐武器/装备/家具/宠物坐骑风格，sho/尾/兔耳可选探测合并，多 MDL 拼原位）；attribute 显隐按名判定（submesh 位是各 MDL 本地 attribute 表序、跨模型数值不可比），并暴露可用选项。
+
 - 新增捏脸数据资产：`character-make.json`（32 组默认捏脸与捏脸菜单，CharaMakeType + CharaMakeCustomize 生成，发型/面妆选项索引表）与 `character-palette.json`（human.cmp 全色板：眼/挑染/唇/特征/面妆公共区 + 32 组肤色/发色，RGBA 非 squared），随资源缓存体系分发；xtask 新增 `--character-make`/`--character-palette` 生成子命令。修正 CharaMakeCustomize 提取的槽映射：真实结构为 18 槽（槽序即 c 编码序，key 步长 130，选项按 Data 序号排序），替换此前"32 组 × 125 行"的错误假设——旧提取下 4 组默认发型指向不存在的文件（敖龙女 h0024、北洋鲁加男 h0130、硌狮女 h0028/h0008），其馀多组选项列表错位；32 组全量真实装配守护测试现已覆盖。
 
 ## 2026-09-11

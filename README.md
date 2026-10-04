@@ -10,6 +10,8 @@ The app currently includes:
 - live and cached character inventory browsing through API Bridge
 - collection browsing split into equipment possession and permanent unlocks, with bidirectional equipment progress updates from saved inventory snapshots
 - local game directory, resource cache, and API Bridge management under Settings
+- weapon model previews with a first usable subset of mounted VFX; see the
+  [release scope and verification](docs/vfx-v1.md) and [coverage tracker](docs/vfx-progress.html)
 
 ## Stack
 

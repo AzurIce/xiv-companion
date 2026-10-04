@@ -1,5 +1,13 @@
 use super::*;
 
+pub(crate) struct FlattenedModel {
+    pub vertices: Vec<GpuVertex>,
+    pub indices: Vec<u32>,
+    pub draw_batches: Vec<DrawBatch>,
+    pub joint_names: Vec<String>,
+    pub mdl_preview_offsets: HashMap<String, [f32; 3]>,
+}
+
 #[cfg(test)]
 pub(crate) fn flatten_model<M: ModelRenderData + ?Sized>(
     model: &M,
@@ -12,8 +20,12 @@ pub(crate) fn flatten_model_with_options<M: ModelRenderData + ?Sized>(
     model: &M,
     prepared_options: PreparedModelOptions,
 ) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>) {
-    let (vertices, indices, draw_batches, _joint_names) =
-        flatten_model_with_options_and_skeleton(model, prepared_options, None);
+    let FlattenedModel {
+        vertices,
+        indices,
+        draw_batches,
+        ..
+    } = flatten_model_with_options_and_skeleton(model, prepared_options, None);
     (vertices, indices, draw_batches)
 }
 
@@ -25,7 +37,7 @@ pub(crate) fn flatten_model_with_options_and_skeleton<M: ModelRenderData + ?Size
     model: &M,
     prepared_options: PreparedModelOptions,
     skeleton: Option<&xiv_companion_data::ModelSkeleton>,
-) -> (Vec<GpuVertex>, Vec<u32>, Vec<DrawBatch>, Vec<String>) {
+) -> FlattenedModel {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut draw_batches = Vec::new();
@@ -81,8 +93,18 @@ pub(crate) fn flatten_model_with_options_and_skeleton<M: ModelRenderData + ?Size
             Vec::new()
         };
         draw_batches.push(DrawBatch {
+            model_path: mesh
+                .path
+                .split('#')
+                .next()
+                .unwrap_or(&mesh.path)
+                .to_string(),
             material_slot: prepared_mesh.material_slot,
             material_bind_group_index: draw_batches.len(),
+            aura_surface_compatible: model
+                .materials()
+                .get(prepared_mesh.material_slot)
+                .is_some_and(material_accepts_aura),
             draw_role: prepared_mesh.draw_role,
             index_start,
             index_count: mesh.indices.len() as u32,
@@ -91,7 +113,37 @@ pub(crate) fn flatten_model_with_options_and_skeleton<M: ModelRenderData + ?Size
         });
     }
 
-    (vertices, indices, draw_batches, joint_names)
+    let mdl_preview_offsets = model
+        .meshes()
+        .iter()
+        .zip(component_offsets)
+        .map(|(mesh, offset)| {
+            let path = mesh
+                .path
+                .split_once('#')
+                .map_or(mesh.path.as_str(), |(path, _)| path);
+            (path.to_string(), offset)
+        })
+        .collect();
+    FlattenedModel {
+        vertices,
+        indices,
+        draw_batches,
+        joint_names,
+        mdl_preview_offsets,
+    }
+}
+
+pub(crate) fn material_accepts_aura(material: &ModelMaterial) -> bool {
+    material.shader_package_name.as_deref().is_some_and(|name| {
+        ["skin.shpk", "character.shpk", "characterlegacy.shpk"]
+            .iter()
+            .any(|family| name.eq_ignore_ascii_case(family))
+    }) && material
+        .character_colors
+        .as_ref()
+        .and_then(|colors| colors.decal_texture)
+        .is_none()
 }
 
 /// mesh 的 bone_table 名按表序并入实例 joint 表（去重，首见顺序）。skeleton
@@ -368,11 +420,15 @@ pub(crate) fn transparent_sort_direction(yaw: f32, pitch: f32) -> glam::Vec3 {
 pub(crate) fn draw_model_batch<'a>(
     render_pass: &mut wgpu::RenderPass<'a>,
     material_bind_groups: &'a [wgpu::BindGroup],
+    surface_overlay_bind_groups: &'a [wgpu::BindGroup],
+    auras: &'a [&'a WeaponVfxAuraResource],
     batch: &DrawBatch,
 ) {
     draw_model_batch_range(
         render_pass,
         material_bind_groups,
+        surface_overlay_bind_groups,
+        auras,
         batch,
         batch.index_start,
         batch.index_count,
@@ -382,28 +438,54 @@ pub(crate) fn draw_model_batch<'a>(
 pub(crate) fn draw_model_batch_range<'a>(
     render_pass: &mut wgpu::RenderPass<'a>,
     material_bind_groups: &'a [wgpu::BindGroup],
+    surface_overlay_bind_groups: &'a [wgpu::BindGroup],
+    auras: &'a [&'a WeaponVfxAuraResource],
     batch: &DrawBatch,
     index_start: u32,
     index_count: u32,
 ) {
-    if let Some(bind_group) = material_bind_groups
+    let material_bind_group = material_bind_groups
         .get(batch.material_bind_group_index)
-        .or_else(|| material_bind_groups.first())
+        .or_else(|| material_bind_groups.first());
+    let mut matching_auras = auras
+        .iter()
+        .filter(|resource| batch.accepts_aura_target(&resource.target_model_path));
+    let aura_bind_group = matching_auras
+        .next()
+        .filter(|_| matching_auras.next().is_none())
+        .map(|resource| &resource.overlay_bind_group);
+    let overlay_bind_group = aura_bind_group.or_else(|| {
+        surface_overlay_bind_groups
+            .get(batch.material_bind_group_index)
+            .or_else(|| surface_overlay_bind_groups.first())
+    });
+    if let (Some(bind_group), Some(overlay_bind_group)) = (material_bind_group, overlay_bind_group)
     {
         render_pass.set_bind_group(1, bind_group, &[]);
+        render_pass.set_bind_group(3, overlay_bind_group, &[]);
         render_pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DrawBatch {
+    pub(crate) model_path: String,
     pub(crate) material_slot: usize,
     pub(crate) material_bind_group_index: usize,
+    pub(crate) aura_surface_compatible: bool,
     pub(crate) draw_role: ModelMeshDrawRole,
     pub(crate) index_start: u32,
     pub(crate) index_count: u32,
     pub(crate) prepared_material: PreparedMaterial,
     pub(crate) transparent_triangles: Vec<TransparentTriangle>,
+}
+
+impl DrawBatch {
+    pub(crate) fn accepts_aura_target(&self, target_model_path: &str) -> bool {
+        self.index_count >= 3
+            && self.aura_surface_compatible
+            && self.model_path == target_model_path
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

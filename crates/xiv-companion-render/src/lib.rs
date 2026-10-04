@@ -40,6 +40,9 @@ pub use model::{
 #[cfg(feature = "renderer")]
 pub use renderer::{
     GpuVfxQuad, ModelDebugMode, ModelGlassBlendMode, ModelInstance, ModelRenderContext,
-    ModelRenderOptions, ModelRenderer, VfxParticles, VfxTextureInput, WeaponRenderOptions,
-    WeaponRenderer,
+    ModelRenderOptions, ModelRenderer, VfxAuraGpuTexture, VfxAuraTextureUploadError, VfxParticles,
+    VfxTextureCubeMipInput, VfxTextureInput, VfxTextureMipInput, VfxTextureMipRgba16fInput,
+    WeaponRenderOptions, WeaponRenderer, WeaponVfxAuraBindings, WeaponVfxAuraInput,
+    WeaponVfxAuraInstance, WeaponVfxAuraResource, WeaponVfxParticles, WeaponVfxPlayback,
+    prepare_weapon_vfx_aura_inputs,
 };

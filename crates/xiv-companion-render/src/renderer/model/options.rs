@@ -97,6 +97,8 @@ pub struct ModelRenderOptions {
     pub bloom: bool,
     pub bloom_strength: f32,
     pub uv_scroll_time: f32,
+    /// Camera roll around the view direction, in radians.
+    pub camera_roll: f32,
     /// VFX 粒子采样时钟（秒）；web 循环每帧写入，快照路径固定值保证确定性。
     pub vfx_time: f32,
     /// 是否绘制常驻 VFX 粒子批次（页面「武器特效」开关）。
@@ -104,6 +106,9 @@ pub struct ModelRenderOptions {
     /// Runtime material dynamic emissive multiplier. The preview default is
     /// the identity; the shader consumes it only for ColorTable emissive.
     pub dynamic_emissive_color: [f32; 3],
+    /// Runtime `InstanceParameter.m_EnvParameter.w` for the Aura emissive gate.
+    /// SqPack does not contain this per-instance value, so the default is off.
+    pub instance_env_parameter_w: f32,
     pub debug_mode: ModelDebugMode,
     pub glass_blend_mode: ModelGlassBlendMode,
     /// 场景 HDR 目标的 MSAA 采样数：1 = 关闭，4 = 4x 多重采样（resolve 后进
@@ -119,9 +124,11 @@ impl Default for ModelRenderOptions {
             bloom: true,
             bloom_strength: DEFAULT_BLOOM_STRENGTH,
             uv_scroll_time: 0.0,
+            camera_roll: 0.0,
             vfx_time: 0.0,
             vfx_enabled: true,
             dynamic_emissive_color: [1.0; 3],
+            instance_env_parameter_w: 0.0,
             debug_mode: ModelDebugMode::Final,
             glass_blend_mode: ModelGlassBlendMode::Alpha,
             msaa_samples: 1,
@@ -141,6 +148,11 @@ impl ModelRenderOptions {
             } else {
                 0.0
             },
+            camera_roll: if self.camera_roll.is_finite() {
+                self.camera_roll
+            } else {
+                0.0
+            },
             vfx_time: if self.vfx_time.is_finite() {
                 self.vfx_time
             } else {
@@ -150,6 +162,11 @@ impl ModelRenderOptions {
             dynamic_emissive_color: self
                 .dynamic_emissive_color
                 .map(|value| if value.is_finite() { value } else { 1.0 }),
+            instance_env_parameter_w: if self.instance_env_parameter_w.is_finite() {
+                self.instance_env_parameter_w
+            } else {
+                0.0
+            },
             debug_mode: self.debug_mode,
             glass_blend_mode: self.glass_blend_mode,
             msaa_samples: self.msaa_samples,

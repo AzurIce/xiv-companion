@@ -25,5 +25,7 @@ fn main() {
         compiler.build_artifact(&"package::main".parse().unwrap(), "model");
         compiler.build_artifact(&"package::postprocess".parse().unwrap(), "postprocess");
         compiler.build_artifact(&"package::vfx".parse().unwrap(), "vfx");
+        compiler.build_artifact(&"package::vfx_decal_1x".parse().unwrap(), "vfx_decal_1x");
+        compiler.build_artifact(&"package::vfx_decal_4x".parse().unwrap(), "vfx_decal_4x");
     }
 }

@@ -287,12 +287,14 @@ pub struct MdlBoneBoundingBoxMetadata {
 
 /// MDL 的 ElementId 条目（32 字节）：武器/配件的特效绑点（avfx Binder 的
 /// `BPID` 引用 `id`，如武器的 3=基部 / 4=中部 / 5=尖部），`translate`/`rotate`
-/// 为模型空间偏移。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+/// 为父骨骼空间的本地偏移。
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MdlElementId {
     pub id: u32,
     pub parent_bone_name: u32,
+    /// Resolved from `parent_bone_name` as a string-table byte offset.
+    pub parent_bone: Option<String>,
     pub translate: [f32; 3],
     pub rotate: [f32; 3],
 }
@@ -310,6 +312,7 @@ pub fn mdl_element_ids_from_mdl_bytes(bytes: &[u8]) -> anyhow::Result<Vec<MdlEle
     )?;
     let string_table_size = read_u32_le(bytes, offset + 4, "string table size")?;
     offset = checked_advance(offset, 8, bytes.len(), "string table header")?;
+    let string_table = read_bytes(bytes, offset, string_table_size as usize, "string table")?;
     offset = checked_advance(
         offset,
         string_table_size as usize,
@@ -319,27 +322,27 @@ pub fn mdl_element_ids_from_mdl_bytes(bytes: &[u8]) -> anyhow::Result<Vec<MdlEle
     let model_header = parse_model_header(bytes, offset)?;
     offset = checked_advance(offset, MODEL_HEADER_SIZE, bytes.len(), "model header")?;
     let count = usize::from(model_header.element_id_count);
-    let section = read_bytes(
-        bytes,
-        offset,
-        count * ELEMENT_ID_SIZE,
-        "element ids",
-    )?;
+    let section = read_bytes(bytes, offset, count * ELEMENT_ID_SIZE, "element ids")?;
     Ok(section
         .chunks_exact(ELEMENT_ID_SIZE)
-        .map(|chunk| MdlElementId {
-            id: u32::from_le_bytes(chunk[0..4].try_into().expect("element id")),
-            parent_bone_name: u32::from_le_bytes(chunk[4..8].try_into().expect("bone")),
-            translate: [
-                f32::from_le_bytes(chunk[8..12].try_into().expect("tx")),
-                f32::from_le_bytes(chunk[12..16].try_into().expect("ty")),
-                f32::from_le_bytes(chunk[16..20].try_into().expect("tz")),
-            ],
-            rotate: [
-                f32::from_le_bytes(chunk[20..24].try_into().expect("rx")),
-                f32::from_le_bytes(chunk[24..28].try_into().expect("ry")),
-                f32::from_le_bytes(chunk[28..32].try_into().expect("rz")),
-            ],
+        .map(|chunk| {
+            let parent_bone_name = u32::from_le_bytes(chunk[4..8].try_into().expect("bone"));
+            MdlElementId {
+                id: u32::from_le_bytes(chunk[0..4].try_into().expect("element id")),
+                parent_bone_name,
+                parent_bone: read_string_at(string_table, parent_bone_name)
+                    .filter(|name| !name.is_empty()),
+                translate: [
+                    f32::from_le_bytes(chunk[8..12].try_into().expect("tx")),
+                    f32::from_le_bytes(chunk[12..16].try_into().expect("ty")),
+                    f32::from_le_bytes(chunk[16..20].try_into().expect("tz")),
+                ],
+                rotate: [
+                    f32::from_le_bytes(chunk[20..24].try_into().expect("rx")),
+                    f32::from_le_bytes(chunk[24..28].try_into().expect("ry")),
+                    f32::from_le_bytes(chunk[28..32].try_into().expect("rz")),
+                ],
+            }
         })
         .collect())
 }
@@ -1285,6 +1288,31 @@ fn hex_u32(value: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn element_id_parent_bones_use_string_table_offsets_including_zero() {
+        let mut bytes = vec![0; MODEL_FILE_HEADER_SIZE];
+        write_u32(&mut bytes, 0, MDL_VERSION_V6);
+        let strings = b"n_hara\0n_haraB\0";
+        bytes.extend_from_slice(&[0; 8]);
+        write_u32(&mut bytes, MODEL_FILE_HEADER_SIZE + 4, strings.len() as u32);
+        bytes.extend_from_slice(strings);
+        let header = bytes.len();
+        bytes.extend_from_slice(&[0; MODEL_HEADER_SIZE]);
+        write_u16(&mut bytes, header + 0x18, 4);
+        for (id, parent) in [(3_u32, 0_u32), (4, 7), (5, 999), (6, 6)] {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&parent.to_le_bytes());
+            bytes.extend_from_slice(&[0; ELEMENT_ID_SIZE - 8]);
+        }
+
+        let points = mdl_element_ids_from_mdl_bytes(&bytes).unwrap();
+        assert_eq!(points[0].parent_bone.as_deref(), Some("n_hara"));
+        assert_eq!(points[1].parent_bone.as_deref(), Some("n_haraB"));
+        assert_eq!(points[2].parent_bone, None);
+        assert_eq!(points[2].parent_bone_name, 999);
+        assert_eq!(points[3].parent_bone, None);
+    }
 
     #[test]
     fn parses_meddle_aligned_mesh_and_extra_lod_tables() {

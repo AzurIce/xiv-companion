@@ -1,7 +1,7 @@
 //! 诊断探针：dump MDL 的 ElementId（武器 bind point 数据）。
 #![cfg(feature = "game-data")]
-use physis::resource::{Resource, SqPackResource};
 use physis::ReadableFile;
+use physis::resource::{Resource, SqPackResource};
 
 fn main() {
     let raw_dir = std::path::PathBuf::from(std::env::var("XIV_GAME_DIR").expect("XIV_GAME_DIR"));
@@ -10,8 +10,8 @@ fn main() {
     let path = std::env::args().nth(1).expect("mdl path");
     let bytes = resource.read(&path).expect("read mdl");
     std::fs::write("/tmp/w0501b0060.mdl", &bytes).expect("write raw mdl");
-    let model = physis::model::MDL::from_existing(physis::Platform::Win32, &bytes)
-        .expect("parse mdl");
+    let model =
+        physis::model::MDL::from_existing(physis::Platform::Win32, &bytes).expect("parse mdl");
     let debug = format!("{model:#?}");
     for line in debug.lines() {
         if line.contains("element_id") || line.contains("ElementId") {

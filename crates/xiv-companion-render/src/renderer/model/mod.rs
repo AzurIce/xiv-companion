@@ -25,6 +25,7 @@ mod options;
 mod pipelines;
 mod postprocess;
 mod vfx;
+mod vfx_attachments;
 
 #[cfg(test)]
 mod tests;
@@ -33,7 +34,14 @@ pub use context::{ModelInstance, ModelRenderContext, ModelRenderer};
 pub use options::{
     ModelDebugMode, ModelGlassBlendMode, ModelRenderOptions, WeaponRenderOptions, WeaponRenderer,
 };
-pub use vfx::{GpuVfxQuad, VfxParticles, VfxTextureInput};
+pub use vfx::{
+    GpuVfxDecalInstance, GpuVfxQuad, VfxAuraGpuTexture, VfxAuraTextureUploadError, VfxParticles,
+    VfxTextureCubeMipInput, VfxTextureInput, VfxTextureMipInput, VfxTextureMipRgba16fInput,
+};
+pub use vfx_attachments::{
+    WeaponVfxAuraBindings, WeaponVfxAuraInput, WeaponVfxAuraInstance, WeaponVfxAuraResource,
+    WeaponVfxParticles, WeaponVfxPlayback, prepare_weapon_vfx_aura_inputs,
+};
 
 use context::*;
 use instance::*;

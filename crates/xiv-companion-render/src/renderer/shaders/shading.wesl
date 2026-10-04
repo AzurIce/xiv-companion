@@ -1,6 +1,7 @@
 // Model shader module, part of the `package` WESL package
 // (compiled to OUT_DIR/model.wgsl by the build script).
-import package::bindings::{FragmentOutput, VertexOutput, camera, decal_sampler, decal_texture, mask_sampler, mask_texture, material};
+import package::aura::resolve_aura_surface_color;
+import package::bindings::{FragmentOutput, VertexOutput, camera, mask_sampler, mask_texture, material, surface_overlay_sampler, surface_overlay_texture};
 import package::lighting::{PREVIEW_AMBIENT_SCALE, PREVIEW_DIRECT_DIFFUSE_SCALE, PREVIEW_DIRECT_SPECULAR_SCALE, PREVIEW_KEY_COLOR, PREVIEW_RIM_SCALE, fresnel_schlick, ggx_anisotropic_distribution, ggx_geometry_schlick, hemisphere_irradiance, legacy_camera_reflection_lobe, resolve_anisotropy_frame, studio_environment};
 import package::surface::{SurfaceSamples, SurfaceState, resolve_specular_mask_factor, resolve_texture_mip_bias, resolve_uv};
 
@@ -30,7 +31,7 @@ fn resolve_character_family_base(
                 input.uv0.x * material.character_decal_uv.x + material.character_decal_uv.y,
                 input.uv0.y,
             );
-            let decal_sample = textureSample(decal_texture, decal_sampler, decal_uv);
+            let decal_sample = textureSample(surface_overlay_texture, surface_overlay_sampler, decal_uv, 0);
             color = mix(
                 color,
                 decal_sample.rgb * material.character_decal.rgb,
@@ -227,14 +228,22 @@ fn resolve_surface_output(
         max(lit_luminance, 1.0),
         uses_character_colortable_emissive_scale,
     );
-    let unscaled_emissive = surface.emissive - surface.color_table_emissive;
-    let color = lit
-        + unscaled_emissive
-        + surface.color_table_emissive * color_table_emissive_scale
-        + surface.ring_emission;
+    let unscaled_emissive = surface.emissive - surface.emissive_texture_term;
+    let source_emissive = select(
+        surface.emissive_texture_term,
+        surface.color_table_emissive,
+        uses_character_colortable_emissive_scale,
+    );
+    let color = lit + unscaled_emissive + surface.ring_emission;
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(color, surface.alpha);
+    let aura = resolve_aura_surface_color(
+        input,
+        normal,
+        color,
+        source_emissive * color_table_emissive_scale,
+    );
+    out.color = vec4<f32>(aura.main + aura.emissive, surface.alpha);
     return out;
 }
 

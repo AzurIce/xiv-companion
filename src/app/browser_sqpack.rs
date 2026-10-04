@@ -67,11 +67,11 @@ impl BrowserSqPack {
             return Err("尚未选择本地游戏目录".to_string());
         }
 
-        let game_prefix = if directory_has_child_directory(&root, "sqpack").await {
+        let game_prefix = if directory_has_child_directory(&root, "sqpack").await? {
             log::info("sqpack", "directory layout: game directory with sqpack");
             None
-        } else if let Some(game) = get_child_directory_handle(&root, "game").await {
-            if directory_has_child_directory(&game, "sqpack").await {
+        } else if let Some(game) = get_child_directory_handle(&root, "game").await? {
+            if directory_has_child_directory(&game, "sqpack").await? {
                 log::info("sqpack", "directory layout: install root with game/sqpack");
                 Some("game")
             } else {
@@ -110,6 +110,16 @@ impl BrowserSqPack {
             .await
     }
 
+    /// `None` means no entry was found in the available indices. Permission,
+    /// index parsing, data-file and decompression failures remain errors.
+    pub async fn try_read_optional_game_file(
+        &mut self,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        self.read_optional_game_file_with_window(path, SQPACK_READ_WINDOW, false)
+            .await
+    }
+
     pub async fn read_game_file_with_window(
         &mut self,
         path: &str,
@@ -125,12 +135,27 @@ impl BrowserSqPack {
         read_window: u64,
         warn_missing: bool,
     ) -> Result<Vec<u8>, String> {
+        self.read_optional_game_file_with_window(path, read_window, warn_missing)
+            .await?
+            .ok_or_else(|| format!("本地 SqPack 索引中没有 {path}"))
+    }
+
+    async fn read_optional_game_file_with_window(
+        &mut self,
+        path: &str,
+        read_window: u64,
+        warn_missing: bool,
+    ) -> Result<Option<Vec<u8>>, String> {
         log::debug(
             "sqpack",
             format!("reading game file: {path} (read_window={read_window} bytes)"),
         );
         let game_path = normalize_game_path(path);
-        let (index_path, dat_base) = self.find_entry_location(&game_path, warn_missing).await?;
+        let Some((index_path, dat_base)) =
+            self.find_entry_location(&game_path, warn_missing).await?
+        else {
+            return Ok(None);
+        };
         let index = self.index_cache.get(&index_path).ok_or_else(|| {
             format!("internal error: index {index_path} was not cached while reading {path}")
         })?;
@@ -140,7 +165,8 @@ impl BrowserSqPack {
         let dat_path = format!("{dat_base}.dat{}", entry.data_file_id);
         let bytes = self
             .read_sqpack_file_slice(&dat_path, entry.offset, read_window)
-            .await?;
+            .await
+            .map_err(|error| format!("读取 {dat_path} 的偏移 {} 失败: {error}", entry.offset))?;
         let mut cursor = Cursor::new(bytes);
         let decoded = read_sqpack_entry_from_reader(&mut cursor)
             .ok_or_else(|| format!("解包本地 SqPack 文件失败: {path}"))?;
@@ -152,7 +178,7 @@ impl BrowserSqPack {
                 decoded.len(),
             ),
         );
-        Ok(decoded)
+        Ok(Some(decoded))
     }
 
     pub async fn craft_data_cache_fingerprint(&self) -> Result<String, String> {
@@ -349,19 +375,25 @@ impl BrowserSqPack {
         &mut self,
         path: &str,
         warn_missing: bool,
-    ) -> Result<(String, String), String> {
+    ) -> Result<Option<(String, String)>, String> {
         let normalized_path = normalize_game_path(path);
         if let Some(location) = self.entry_location_cache.get(&normalized_path) {
-            return Ok(location.clone());
+            return Ok(Some(location.clone()));
         }
 
         let start_ms = log::now_ms();
         let candidates = sqpack_index_candidates_for_path(&normalized_path)
             .ok_or_else(|| format!("不支持的本地 SqPack 资源路径: {path}"))?;
 
+        let mut failures = Vec::new();
         for candidate in &candidates {
-            if !self.load_index_file(&candidate.index_file).await {
-                continue;
+            match self.load_index_file(&candidate.index_file).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    failures.push(error);
+                    continue;
+                }
             }
 
             if self
@@ -381,50 +413,53 @@ impl BrowserSqPack {
                         candidates.len(),
                     ),
                 );
-                return Ok(location);
+                return Ok(Some(location));
             }
         }
 
+        if !failures.is_empty() {
+            return Err(format!(
+                "无法查找本地 SqPack 资源 {path}:\n{}",
+                failures.join("\n")
+            ));
+        }
         if warn_missing {
             log::warn("sqpack", format!("missing in SqPack index: {path}"));
         }
-        Err(format!("本地 SqPack 索引中没有 {path}"))
+        Ok(None)
     }
 
-    async fn load_index_file(&mut self, index_file: &str) -> bool {
+    async fn load_index_file(&mut self, index_file: &str) -> Result<bool, String> {
         if self.index_cache.contains_key(index_file) {
-            return true;
+            return Ok(true);
         }
         if self.missing_index_cache.contains(index_file) {
-            return false;
+            return Ok(false);
         }
 
-        let Ok(bytes) = self.read_sqpack_file_all(index_file).await else {
+        let Some(file) = self
+            .get_optional_file(index_file)
+            .await
+            .map_err(|error| format!("读取 SqPack 索引 {index_file} 失败: {error}"))?
+        else {
             self.missing_index_cache.insert(index_file.to_string());
-            return false;
+            return Ok(false);
         };
-        match physis::sqpack::SqPackIndex::read_options(&mut Cursor::new(bytes), Endian::Little, ())
-        {
-            Ok(index) => {
-                self.index_cache.insert(index_file.to_string(), index);
-                true
-            }
-            Err(error) => {
-                log::warn(
-                    "sqpack",
-                    format!("failed to parse SqPack index {index_file}: {error}"),
-                );
-                self.missing_index_cache.insert(index_file.to_string());
-                false
-            }
-        }
+        let bytes = read_file_all(&file)
+            .await
+            .map_err(|error| format!("读取 SqPack 索引 {index_file} 失败: {error}"))?;
+        let index =
+            physis::sqpack::SqPackIndex::read_options(&mut Cursor::new(bytes), Endian::Little, ())
+                .map_err(|error| {
+                    format!("解析 SqPack 索引 {index_file} 失败: {}", error.root_cause())
+                })?;
+        self.index_cache.insert(index_file.to_string(), index);
+        Ok(true)
     }
 
     async fn read_sqpack_file_all(&self, path: &str) -> Result<Vec<u8>, String> {
         let file = self.get_file(path).await?;
-        let promise = call0(&file, "arrayBuffer")?;
-        let buffer = JsFuture::from(promise).await.map_err(format_js_error)?;
-        Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+        read_file_all(&file).await
     }
 
     async fn read_sqpack_file_slice(
@@ -448,11 +483,18 @@ impl BrowserSqPack {
     }
 
     async fn get_file(&self, path: &str) -> Result<JsValue, String> {
+        self.get_optional_file(path)
+            .await?
+            .ok_or_else(|| format!("找不到文件: {path}"))
+    }
+
+    async fn get_optional_file(&self, path: &str) -> Result<Option<JsValue>, String> {
         let mut current = self.root.clone();
         if let Some(prefix) = self.game_prefix {
-            current = get_child_directory_handle(&current, prefix)
-                .await
-                .ok_or_else(|| format!("找不到目录 {prefix}"))?;
+            let Some(directory) = get_child_directory_handle(&current, prefix).await? else {
+                return Ok(None);
+            };
+            current = directory;
         }
 
         let components = Path::new(path).components().collect::<Vec<_>>();
@@ -460,19 +502,24 @@ impl BrowserSqPack {
             let Component::Normal(name) = component else {
                 return Err(format!("非法路径组件: {path}"));
             };
-            current = get_child_directory_handle(&current, &name.to_string_lossy())
-                .await
-                .ok_or_else(|| format!("找不到目录: {}", name.to_string_lossy()))?;
+            let Some(directory) =
+                get_child_directory_handle(&current, &name.to_string_lossy()).await?
+            else {
+                return Ok(None);
+            };
+            current = directory;
         }
 
         let Some(Component::Normal(filename)) = components.last() else {
             return Err(format!("非法文件路径: {path}"));
         };
-        let handle = get_child_file_handle(&current, &filename.to_string_lossy())
-            .await
-            .ok_or_else(|| format!("找不到文件: {path}"))?;
+        let Some(handle) = get_child_file_handle(&current, &filename.to_string_lossy()).await?
+        else {
+            return Ok(None);
+        };
         let promise = call0(&handle, "getFile")?;
-        JsFuture::from(promise).await.map_err(format_js_error)
+        optional_handle_result(JsFuture::from(promise).await)
+            .map_err(|error| format!("getFile {path}: {error}"))
     }
 }
 
@@ -594,18 +641,51 @@ fn expansion_number_from_repository(repository: &str) -> Option<u8> {
     number.parse().ok()
 }
 
-async fn get_child_directory_handle(handle: &JsValue, name: &str) -> Option<JsValue> {
-    let promise = call1(handle, "getDirectoryHandle", &JsValue::from_str(name)).ok()?;
-    JsFuture::from(promise).await.ok()
+async fn get_child_directory_handle(
+    handle: &JsValue,
+    name: &str,
+) -> Result<Option<JsValue>, String> {
+    get_child_handle(handle, "getDirectoryHandle", name).await
 }
 
-async fn get_child_file_handle(handle: &JsValue, name: &str) -> Option<JsValue> {
-    let promise = call1(handle, "getFileHandle", &JsValue::from_str(name)).ok()?;
-    JsFuture::from(promise).await.ok()
+async fn get_child_file_handle(handle: &JsValue, name: &str) -> Result<Option<JsValue>, String> {
+    get_child_handle(handle, "getFileHandle", name).await
 }
 
-async fn directory_has_child_directory(handle: &JsValue, name: &str) -> bool {
-    get_child_directory_handle(handle, name).await.is_some()
+async fn get_child_handle(
+    handle: &JsValue,
+    method: &str,
+    name: &str,
+) -> Result<Option<JsValue>, String> {
+    let promise = call1(handle, method, &JsValue::from_str(name))?;
+    optional_handle_result(JsFuture::from(promise).await)
+        .map_err(|error| format!("{method} {name}: {error}"))
+}
+
+fn optional_handle_result(result: Result<JsValue, JsValue>) -> Result<Option<JsValue>, String> {
+    match result {
+        Ok(handle) => Ok(Some(handle)),
+        Err(error) => {
+            let name = js_sys::Reflect::get(&error, &JsValue::from_str("name"))
+                .ok()
+                .and_then(|name| name.as_string());
+            if name.as_deref() == Some("NotFoundError") {
+                Ok(None)
+            } else {
+                Err(format_js_error(error))
+            }
+        }
+    }
+}
+
+async fn directory_has_child_directory(handle: &JsValue, name: &str) -> Result<bool, String> {
+    Ok(get_child_directory_handle(handle, name).await?.is_some())
+}
+
+async fn read_file_all(file: &JsValue) -> Result<Vec<u8>, String> {
+    let promise = call0(file, "arrayBuffer")?;
+    let buffer = JsFuture::from(promise).await.map_err(format_js_error)?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
 fn call0(target: &JsValue, method: &str) -> Result<js_sys::Promise, String> {

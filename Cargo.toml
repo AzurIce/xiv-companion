@@ -104,6 +104,74 @@ xiv-companion-render = { path = "crates/xiv-companion-render", default-features 
 futures-executor = "0.3.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[[example]]
+name = "audit_model_skin_surfaces"
+required-features = ["game-data", "render-test-support"]
+
+[[example]]
+name = "audit_avfx_blocks"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_binder_fallbacks"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_clip_controls"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_double_binders"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_end_controls"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_mounted_vfx"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_retirement_helpers"
+required-features = ["game-data"]
+
+[[example]]
+name = "audit_staged_fallbacks"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_avfx"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_element_ids"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_gear"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_skl"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_weapon_bones"
+required-features = ["game-data"]
+
+[[example]]
+name = "dump_weapon_bounds"
+required-features = ["game-data"]
+
+[[example]]
+name = "inspect_avfx_binders"
+required-features = ["game-data"]
+
+[[example]]
+name = "scan_tc1"
+required-features = ["game-data"]
+
 [workspace]
 members = ["crates/*", "xtask/*"]
 resolver = "3"

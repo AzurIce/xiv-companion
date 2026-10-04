@@ -26,8 +26,17 @@ fn main() {
     // (父块, 子块) -> 出现该组合的 avfx 文件数
     let mut nested: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut files = 0usize;
+    let mut tp_files = 0usize;
+    let mut tp_blocks = 0usize;
+    let mut tp_enabled = 0usize;
+    let mut tp_types = BTreeMap::<String, usize>::new();
+    let mut tp_filters = BTreeMap::<i32, usize>::new();
+    let mut tp_borders = BTreeMap::<i32, usize>::new();
+    let mut tp_indexes = BTreeMap::<i32, usize>::new();
     for path in &paths {
-        let Some(bytes) = resource.read(path) else { continue };
+        let Some(bytes) = resource.read(path) else {
+            continue;
+        };
         files += 1;
         let mut seen_here = std::collections::BTreeSet::new();
         walk(&bytes, "AVFX".to_string(), 0, &mut |parent, name| {
@@ -36,8 +45,31 @@ fn main() {
         for key in seen_here {
             *nested.entry(key).or_default() += 1;
         }
+        if let Ok(file) = xiv_companion::AvfxFile::parse(&bytes) {
+            let mut has_tp = false;
+            for particle in &file.particles {
+                let Some(tp) = particle.texture_palette.as_ref() else {
+                    continue;
+                };
+                has_tp = true;
+                tp_blocks += 1;
+                if tp.enabled {
+                    tp_enabled += 1;
+                    *tp_types
+                        .entry(format!("{:?}", particle.particle_type))
+                        .or_default() += 1;
+                    *tp_filters.entry(tp.texture_filter).or_default() += 1;
+                    *tp_borders.entry(tp.texture_border).or_default() += 1;
+                    *tp_indexes.entry(tp.texture_index).or_default() += 1;
+                }
+            }
+            tp_files += usize::from(has_tp);
+        }
     }
     println!("files={files}");
+    println!(
+        "texture_palette: files={tp_files} blocks={tp_blocks} enabled={tp_enabled} types={tp_types:?} filters={tp_filters:?} borders={tp_borders:?} indexes={tp_indexes:?}"
+    );
     for ((parent, name), count) in &nested {
         println!("{parent}/{name}: {count}");
     }
@@ -47,7 +79,11 @@ fn walk(bytes: &[u8], parent: String, depth: usize, visit: &mut dyn FnMut(&str, 
     if depth > 4 {
         return;
     }
-    let (mut offset, end) = if depth == 0 { (8usize, bytes.len()) } else { (0, bytes.len()) };
+    let (mut offset, end) = if depth == 0 {
+        (8usize, bytes.len())
+    } else {
+        (0, bytes.len())
+    };
     while offset + 8 <= end {
         let mut raw = [0u8; 4];
         raw.copy_from_slice(&bytes[offset..offset + 4]);
@@ -64,7 +100,9 @@ fn walk(bytes: &[u8], parent: String, depth: usize, visit: &mut dyn FnMut(&str, 
         for (i, c) in raw.iter().rev().take(4).enumerate() {
             name[i] = *c;
         }
-        let name = String::from_utf8_lossy(&name).trim_matches(['\0', ' ']).to_string();
+        let name = String::from_utf8_lossy(&name)
+            .trim_matches(['\0', ' '])
+            .to_string();
         if name.is_empty() || !name.bytes().all(|c| c.is_ascii_graphic()) {
             break;
         }
@@ -72,10 +110,27 @@ fn walk(bytes: &[u8], parent: String, depth: usize, visit: &mut dyn FnMut(&str, 
         // 已知容器递归
         if matches!(
             name.as_str(),
-            "Schd" | "TmLn" | "Emit" | "Ptcl" | "Bind" | "Efct" | "Modl" | "Data" | "Life"
-                | "PrpS" | "Prp1" | "Prp2" | "PrpG" | "Smpl"
+            "Schd"
+                | "TmLn"
+                | "Emit"
+                | "Ptcl"
+                | "Bind"
+                | "Efct"
+                | "Modl"
+                | "Data"
+                | "Life"
+                | "PrpS"
+                | "Prp1"
+                | "Prp2"
+                | "PrpG"
+                | "Smpl"
         ) {
-            walk(&bytes[offset + 8..offset + 8 + size], name.clone(), depth + 1, visit);
+            walk(
+                &bytes[offset + 8..offset + 8 + size],
+                name.clone(),
+                depth + 1,
+                visit,
+            );
         }
         offset += 8 + size.div_ceil(4) * 4;
     }

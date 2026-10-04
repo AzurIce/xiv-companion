@@ -1,14 +1,113 @@
 #![cfg(all(feature = "game-data", feature = "render-test-support"))]
 
-//! 诊断探针：隔离渲染单个网格粒子（火舌），验证贴图采样/合成路径。
+//! 诊断探针：按粒子定义隔离真实特效，以及固定网格粒子的贴图采样/合成。
+//! `render_isolated_particle_definitions` 接受 VFX_PROBE_ITEM、VFX_PROBE_SECONDS
+//! 和逗号分隔的 VFX_PROBE_PARTICLES，默认逐项绘制物品 25053 在 4 秒时的粒子。
 //! 运行：XIV_GAME_DIR=... cargo test --features game-data,render-test-support
 //!   --test vfx_mesh_probe -- --ignored --nocapture
 
-use physis::resource::{Resource, SqPackResource};
+use physis::resource::SqPackResource;
 use xiv_companion::renderer::test_support::{
     WeaponModelSnapshotOptions, render_weapon_model_snapshot_with_options,
 };
 use xiv_companion::{WeaponModelLoadRequest, load_weapon_model_from_resource_request};
+
+#[test]
+#[ignore = "renders each selected particle definition from a mounted real VFX"]
+fn render_isolated_particle_definitions() {
+    let raw_dir = std::path::PathBuf::from(std::env::var("XIV_GAME_DIR").expect("XIV_GAME_DIR"));
+    let game_dir = xiv_companion::game_data::normalize_game_dir(&raw_dir).expect("game dir");
+    let game_dir_text = game_dir.to_str().expect("UTF-8 game dir");
+    let mut resource = SqPackResource::from_existing(game_dir_text);
+    let catalog = xiv_companion::game_data::export_weapon_catalog_from_resource(
+        SqPackResource::from_existing(game_dir_text),
+        game_dir.display().to_string(),
+        xiv_companion::game_data::game_version(&game_dir),
+        "vfx-particle-probe".to_string(),
+    )
+    .expect("weapon catalog");
+    let item_id = std::env::var("VFX_PROBE_ITEM")
+        .map(|value| value.parse::<u32>().expect("VFX_PROBE_ITEM"))
+        .unwrap_or(25053);
+    let time = std::env::var("VFX_PROBE_SECONDS")
+        .map(|value| value.parse::<f32>().expect("VFX_PROBE_SECONDS"))
+        .unwrap_or(4.0);
+    let item = catalog
+        .items
+        .iter()
+        .find(|item| item.id == item_id)
+        .expect("catalog item");
+    let model =
+        load_weapon_model_from_resource_request(&mut resource, &WeaponModelLoadRequest::from(item))
+            .expect("weapon model");
+    let vfx = xiv_companion::load_weapon_vfx_from_resource(&mut resource, &model)
+        .expect("load VFX")
+        .expect("mounted VFX");
+    let indexes: Vec<usize> = std::env::var("VFX_PROBE_PARTICLES")
+        .map(|value| {
+            value
+                .split(',')
+                .map(|index| index.trim().parse().expect("particle index"))
+                .collect()
+        })
+        .unwrap_or_else(|_| (0..vfx.file.particles.len()).collect());
+    let textures: Vec<_> = vfx
+        .textures
+        .iter()
+        .map(|texture| {
+            texture
+                .as_ref()
+                .map(xiv_companion::renderer::VfxTextureInput::from)
+        })
+        .collect();
+    let meshes: Vec<_> = vfx
+        .file
+        .models
+        .iter()
+        .map(|model| model.draw.clone().unwrap_or_default())
+        .collect();
+    for index in indexes {
+        let particle = vfx
+            .file
+            .particles
+            .get(index)
+            .expect("particle index in range");
+        let mut isolated = vfx.file.clone();
+        // Keep indexes and seeds stable. Disabling other definitions can relax
+        // the emitter child cap, so this is attribution, not a full-scene oracle.
+        for emitter in &mut isolated.emitters {
+            for item in &mut emitter.particle_items {
+                item.enabled &= item.target_index == index as i32;
+            }
+        }
+        let runtime = xiv_companion::VfxRuntime::with_bind_points(&isolated, &vfx.bind_points);
+        let mut quads = Vec::new();
+        let mut instances = Vec::new();
+        runtime.sample(time, &mut quads);
+        runtime.sample_mesh(time, &mut instances);
+        eprintln!(
+            "particle {index} {:?}: {} quads, {} meshes, RMT={}, RBDT={}",
+            particle.particle_type,
+            quads.len(),
+            instances.len(),
+            particle.draw_mode,
+            particle.rotation_direction_base
+        );
+        let shot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(format!("vfx-particle-{item_id}-{index}-{time}s"))
+                .with_output_dir("target/weapon-render-snapshots")
+                .with_viewport(512, 512)
+                .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                .with_vfx_quads(quads)
+                .with_vfx_mesh_instances(instances)
+                .with_vfx_meshes(meshes.clone())
+                .with_vfx_textures(textures.clone()),
+            &model,
+        )
+        .expect("isolated particle snapshot");
+        eprintln!("{}", shot.png_path.display());
+    }
+}
 
 #[test]
 #[ignore = "isolated mesh-particle probe for the lance flame"]
@@ -34,7 +133,8 @@ fn render_isolated_flame_mesh() {
     let request = WeaponModelLoadRequest::from(item);
     let model = load_weapon_model_from_resource_request(&mut resource, &request)
         .expect("load weapon model");
-    let vfx = xiv_companion::load_weapon_vfx_from_resource(&mut resource, &request)
+    let vfx = xiv_companion::load_weapon_vfx_from_resource(&mut resource, &model)
+        .expect("load mounted vfx")
         .expect("mounted vfx");
 
     let textures: Vec<Option<xiv_companion::renderer::VfxTextureInput>> = vfx
@@ -43,11 +143,7 @@ fn render_isolated_flame_mesh() {
         .map(|texture| {
             texture
                 .as_ref()
-                .map(|texture| xiv_companion::renderer::VfxTextureInput {
-                    rgba: texture.rgba.clone(),
-                    width: texture.width,
-                    height: texture.height,
-                })
+                .map(xiv_companion::renderer::VfxTextureInput::from)
         })
         .collect();
     let meshes: Vec<xiv_companion::VfxDrawModel> = vfx
@@ -61,21 +157,48 @@ fn render_isolated_flame_mesh() {
     let flame = xiv_companion::VfxMeshInstance {
         position: [0.0, 1.0, -0.02],
         orientation: [0.0, 0.0, 0.0, 1.0],
+        parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        movement_direction: [0.0; 3],
+        facing_parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        rotation_direction_base: xiv_companion_data::avfx::rotation_direction_base::NONE,
         scale: [1.0, 1.0, 1.0],
         color: [1.0, 1.0, 1.0, 1.0],
+        fresnel: None,
+        draw_layer: 0,
+        soft_key_offset: 0.0,
         draw_priority: 0,
+        draw_order: None,
         uv_origins: [[0.0, 0.0], [0.2, 0.0], [0.0, 0.0], [0.0, 0.0]],
         uv_scales: [[2.0, 0.4], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
         uv_rotations: [0.0; 4],
+        uv_by_pixel_position: [false; 4],
         texture_indexes: [5, 8, -1, -1],
         texture_uv_sets: [0, 1, 0, 0],
         combine_mode_tc1: [1, 1],
         combine_modes: [[0, 0]; 3],
         color_to_alpha: [false; 4],
         texture_borders: [[0; 2]; 4],
+        texture_filters: [1; 4],
+        texture_normal_index: -1,
+        normal_uv_set: 0,
+        normal_uv_origin: [0.0; 2],
+        normal_uv_scale: [1.0; 2],
+        normal_uv_rotation: 0.0,
+        normal_uv_by_pixel_position: false,
+        normal_texture_borders: [0; 2],
+        normal_texture_filter: 1,
+        normal_power: 0.0,
+        reflection_enabled: false,
+        reflection_use_screen_copy: false,
+        reflection_texture_index: -1,
+        reflection_texture_filter: 1,
+        reflection_calculate_color: 0,
+        reflection_rate: 0.0,
+        reflection_power: 0.0,
         texture1_is_shape_mask: true,
         texture1_enabled: true,
-        blend_add: true,
+        texture1_use_screen_copy: false,
+        draw_mode: xiv_companion_data::avfx::DRAW_MODE_ADD,
         depth_test: true,
         depth_write: false,
         texture_distortion_index: -1,
@@ -83,10 +206,21 @@ fn render_isolated_flame_mesh() {
         distortion_targets: 0,
         uvd_origin: [0.0, 0.0],
         uvd_scale: [1.0, 1.0],
+        uvd_rotation: 0.0,
+        uvd_by_pixel_position: false,
         distortion_uv_set: 2,
         distortion_borders: [0; 2],
+        distortion_filter: 1,
+        texture_palette_index: -1,
+        palette_offset: 0.0,
+        palette_border: 0,
+        palette_filter: 1,
         cull_mode: 0,
         model_index: 3,
+        soft_particle: false,
+        soft_particle_fade_range: 1.0,
+        depth_offset_type: 0,
+        depth_offset: 0.0,
     };
     let flame_only = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("vfx-probe-flame-textured")
@@ -260,10 +394,7 @@ fn render_isolated_flame_mesh() {
     let runtime5 = vfx.runtime();
     let mut m5 = Vec::new();
     runtime5.sample_mesh(4.0, &mut m5);
-    for (tex1, tex2, comb, tag) in [
-        (-1, 8, 0, "tex8only"),
-        (8, 5, 1, "tex8-add-tex5"),
-    ] {
+    for (tex1, tex2, comb, tag) in [(-1, 8, 0, "tex8only"), (8, 5, 1, "tex8-add-tex5")] {
         let instances: Vec<_> = m5
             .iter()
             .map(|instance| {
@@ -292,42 +423,76 @@ fn render_isolated_flame_mesh() {
 
     // 孤立星点 quad：tex3 遮罩 + flipbook cell (0,0)，看形状。
     let sparkle = xiv_companion::VfxQuad {
+        particle_type: Some(xiv_companion_data::avfx::ParticleType::Quad),
+        particle_index: 0,
+        soft_particle: false,
+        soft_particle_fade_range: 1.0,
+        depth_offset_type: 0,
+        depth_offset: 0.0,
+        powder_single: false,
+        windmill_uv_type: 0,
+        disc: None,
+        polygon: None,
+        laser: None,
+        line: None,
+        polyline: None,
+        decal: None,
         position: [0.0, 1.0, 0.0],
         size: [0.1, 0.1],
-        rotation: 0.0,
         orientation: [0.0, 0.0, 0.0, 1.0],
-        billboard: true,
+        parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        movement_direction: [0.0; 3],
+        facing_parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        rotation_direction_base:
+            xiv_companion_data::avfx::rotation_direction_base::CAMERA_BILLBOARD,
         color: [0.0, 0.7, 2.0, 1.0],
+        draw_layer: 0,
+        soft_key_offset: 0.0,
         draw_priority: 0,
+        draw_order: None,
         pivot: [0.0, 0.0],
         texture_indexes: [3, -1, -1, -1],
         texture_uv_sets: [0; 4],
-        combine_mode_tc1: [0, 3],
+        combine_mode_tc1: [1, 1],
         combine_modes: [[0; 2]; 3],
         color_to_alpha: [false; 4],
         uv_origins: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
         uv_scales: [[0.5, 0.5], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
         uv_rotations: [0.0; 4],
+        uv_by_pixel_position: [false; 4],
         texture_borders: [[0; 2]; 4],
+        texture_filters: [1; 4],
         texture1_is_shape_mask: true,
         texture1_enabled: true,
-        blend_add: true,
+        texture1_use_screen_copy: false,
+        draw_mode: xiv_companion_data::avfx::DRAW_MODE_ADD,
         depth_test: true,
         depth_write: false,
+        cull_mode: 0,
         texture_distortion_index: -1,
         distortion_power: 0.0,
         distortion_targets: 0,
         uvd_origin: [0.0, 0.0],
         uvd_scale: [1.0, 1.0],
+        uvd_rotation: 0.0,
+        uvd_by_pixel_position: false,
         distortion_uv_set: 0,
         distortion_borders: [0; 2],
+        distortion_filter: 1,
+        texture_palette_index: -1,
+        palette_offset: 0.0,
+        palette_border: 0,
+        palette_filter: 1,
     };
     let spark = render_weapon_model_snapshot_with_options(
         WeaponModelSnapshotOptions::new("vfx-probe-sparkle")
             .with_output_dir("target/weapon-render-snapshots")
             .with_viewport(512, 512)
             .with_camera(0.0, 0.0, 1.2, [0.0, 1.0])
-            .with_vfx_quads([xiv_companion::VfxQuad { size: [0.3, 0.3], ..sparkle }])
+            .with_vfx_quads([xiv_companion::VfxQuad {
+                size: [0.3, 0.3],
+                ..sparkle
+            }])
             .with_vfx_textures(textures.clone()),
         &model,
     )

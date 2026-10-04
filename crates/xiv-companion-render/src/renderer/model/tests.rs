@@ -218,7 +218,8 @@ fn model_shader_composes_colorset_diffuse_at_source_resolution() {
 #[test]
 fn model_shader_stays_within_material_binding_budget() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
-    let sampled_textures = shader.matches("@group(1) @binding").count();
+    let material_bindings = shader.matches("@group(1) @binding").count();
+    let overlay_bindings = shader.matches("@group(3) @binding").count();
     let texture_bindings = shader
         .lines()
         .filter(|line| line.contains("var ") && line.contains("texture_2d"))
@@ -228,10 +229,11 @@ fn model_shader_stays_within_material_binding_budget() {
         .filter(|line| line.contains("var ") && line.contains(": sampler"))
         .count();
     assert_eq!(
-        sampled_textures,
-        texture_bindings + sampler_bindings + 1,
-        "every group(1) binding must be accounted for (plus the material uniform buffer)"
+        material_bindings + overlay_bindings,
+        texture_bindings + sampler_bindings + 2,
+        "model material and overlay bindings must include exactly two uniform buffers"
     );
+    assert_eq!(overlay_bindings, 3);
     // Self-imposed conservative budget (formerly the WebGL2 limits; the
     // renderer now requires WebGPU everywhere but keeps the ceiling to
     // stop bind-group sprawl).
@@ -250,6 +252,838 @@ fn model_shader_stays_within_material_binding_budget() {
             && !shader.contains("material_map_sampler"),
         "binding 15 must be the colorset diffuse ramp and the material map binding must be gone"
     );
+}
+
+#[test]
+fn model_shader_keeps_face_decal_on_array_layer_zero() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    assert!(shader.contains("var surface_overlay_texture: texture_2d_array<f32>;"));
+    assert!(
+        shader.contains(
+            "textureSample(surface_overlay_texture, surface_overlay_sampler, decal_uv, 0)"
+        )
+    );
+}
+
+#[test]
+fn aura_targets_only_matching_model_surfaces_without_face_decal() {
+    for shader_package in ["skin.shpk", "character.shpk", "characterlegacy.shpk"] {
+        let mut material = fallback_material();
+        material.shader_package_name = Some(shader_package.to_string());
+        let mut mesh = test_mesh("normal", 0.0);
+        mesh.path = "chara/weapon/w0001/model/main.mdl#mesh0".to_string();
+        let mut model = crate::ModelData {
+            bounds: crate::ModelBounds::default(),
+            materials: vec![material],
+            textures: Vec::new(),
+            meshes: vec![mesh],
+        };
+        let (_, _, batches) = flatten_model(&model);
+        assert_eq!(batches[0].model_path, "chara/weapon/w0001/model/main.mdl");
+        assert!(batches[0].accepts_aura_target("chara/weapon/w0001/model/main.mdl"));
+        assert!(!batches[0].accepts_aura_target("chara/weapon/w0001/model/offhand.mdl"));
+
+        model.materials[0].character_colors = Some(crate::ModelMaterialCharacterColors {
+            colors: crate::CharacterAppearanceColors::default(),
+            decal_texture: Some(0),
+        });
+        let (_, _, batches) = flatten_model(&model);
+        assert!(!batches[0].accepts_aura_target("chara/weapon/w0001/model/main.mdl"));
+    }
+
+    let mut material = fallback_material();
+    material.shader_package_name = Some("hair.shpk".to_string());
+    let model = crate::ModelData {
+        bounds: crate::ModelBounds::default(),
+        materials: vec![material],
+        textures: Vec::new(),
+        meshes: vec![test_mesh("normal", 0.0)],
+    };
+    let (_, _, batches) = flatten_model(&model);
+    assert!(!batches[0].accepts_aura_target("test/normal.mdl"));
+}
+
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn face_decal_survives_array_slot_in_model_pipeline() {
+    use crate::test_support::{ModelSnapshotOptions, render_model_snapshot_with_options};
+
+    let mut material = fallback_material();
+    material.shader_package_name = Some("skin.shpk".to_string());
+    material.path =
+        Some("chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_fac_a.mtrl".to_string());
+    material.character_colors = Some(crate::ModelMaterialCharacterColors {
+        colors: crate::CharacterAppearanceColors {
+            skin: [1.0; 4],
+            decal: [1.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        },
+        decal_texture: Some(0),
+    });
+    let mut mesh = test_mesh("normal", 0.0);
+    for (vertex, position) in
+        mesh.vertices
+            .iter_mut()
+            .zip([[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]])
+    {
+        vertex.position = position;
+        vertex.normal = [0.0, 0.0, 1.0];
+    }
+    let mut decal = test_texture(crate::ModelTextureKind::Other);
+    decal.rgba = vec![255, 0, 0, 255];
+    let mut model = crate::ModelData {
+        bounds: crate::ModelBounds::default(),
+        materials: vec![material],
+        textures: vec![decal],
+        meshes: vec![mesh],
+    };
+    let options = ModelSnapshotOptions::new("face-decal-array-slot-on")
+        .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+        .with_viewport(96, 96)
+        .with_hdr_scene_capture();
+    let with_decal = render_model_snapshot_with_options(options.clone(), &model)
+        .expect("render face decal through the model pipeline")
+        .hdr_scene_rgba
+        .expect("HDR face decal snapshot");
+    model.materials[0]
+        .character_colors
+        .as_mut()
+        .unwrap()
+        .decal_texture = None;
+    let without_decal = render_model_snapshot_with_options(
+        ModelSnapshotOptions {
+            name: "face-decal-array-slot-off".to_string(),
+            ..options
+        },
+        &model,
+    )
+    .expect("render face without decal through the model pipeline")
+    .hdr_scene_rgba
+    .expect("HDR face baseline snapshot");
+    assert!(
+        with_decal
+            .iter()
+            .zip(&without_decal)
+            .any(|(on, off)| { on[0] > off[0] + 0.02 && on[1] < off[1] - 0.02 }),
+        "the face decal must change actual model pixels"
+    );
+}
+
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn aura_bind_group_can_draw_matching_model_surface() {
+    use crate::test_support::{ModelSnapshotOptions, render_model_snapshot_with_options};
+    use xiv_companion_data::{
+        AvfxColorCurve, AvfxCurve, AvfxCurveKey, AvfxEmitter, AvfxEmitterItem, AvfxFile,
+        AvfxParticle, AvfxParticleData, AvfxParticleDataModelSkin, AvfxParticleTexture,
+        AvfxTimeline, AvfxTimelineItem, AvfxUvSet, EmitterType, ParticleType, VfxPlayback,
+        VfxTextureRgba, WeaponVfxAttachment, WeaponVfxAttachments, WeaponVfxData,
+        WeaponVfxModelTargets,
+    };
+
+    let constant = |value| AvfxCurve {
+        keys: vec![AvfxCurveKey {
+            time: 0,
+            interpolation: 1,
+            x: 0.0,
+            y: 0.0,
+            z: value,
+        }],
+        ..Default::default()
+    };
+
+    let mut material = fallback_material();
+    material.shader_package_name = Some("character.shpk".into());
+    let mut mesh = test_mesh("normal", 0.0);
+    mesh.path = "target.mdl#mesh0".into();
+    for (vertex, position) in
+        mesh.vertices
+            .iter_mut()
+            .zip([[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]])
+    {
+        vertex.position = position;
+        vertex.normal = [0.0, 0.0, 1.0];
+    }
+    let mut model = crate::ModelData {
+        bounds: crate::ModelBounds::default(),
+        materials: vec![material],
+        textures: Vec::new(),
+        meshes: vec![mesh],
+    };
+    let mounts = WeaponVfxAttachments {
+        attachments: vec![WeaponVfxAttachment {
+            model_path: "target.mdl".into(),
+            data: WeaponVfxData {
+                avfx_path: "aura.avfx".into(),
+                file: AvfxFile {
+                    timelines: vec![AvfxTimeline {
+                        binder_index: -1,
+                        items: vec![AvfxTimelineItem {
+                            enabled: true,
+                            start_time: 0,
+                            end_time: -1,
+                            binder_index: -1,
+                            effector_index: -1,
+                            emitter_index: 0,
+                            platform: 0,
+                            clip_index: -1,
+                        }],
+                        ..Default::default()
+                    }],
+                    emitters: vec![AvfxEmitter {
+                        emitter_type: Some(EmitterType::Point),
+                        effector_index: -1,
+                        create_count: constant(1.0),
+                        create_interval: constant(100.0),
+                        particle_items: vec![AvfxEmitterItem {
+                            enabled: true,
+                            target_index: 0,
+                            parameter_link: -1,
+                            create_probability: 100,
+                            create_count: 1,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    particles: vec![AvfxParticle {
+                        particle_type: Some(ParticleType::ModelSkin),
+                        collision_type: -1,
+                        data: AvfxParticleData::ModelSkin(AvfxParticleDataModelSkin {
+                            fresnel_type: 1,
+                            aura_target: 2,
+                            sem: constant(1.0),
+                            eem: constant(1.0),
+                            color_begin: AvfxColorCurve {
+                                alpha: Some(constant(0.5)),
+                                ..Default::default()
+                            },
+                            color_end: AvfxColorCurve {
+                                alpha: Some(constant(0.5)),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                        uv_sets: vec![AvfxUvSet::default()],
+                        texture_color2: Some(AvfxParticleTexture {
+                            enabled: true,
+                            texture_index: 0,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }],
+                    texture_paths: vec!["aura.atex".into()],
+                    ..Default::default()
+                },
+                textures: vec![Some(VfxTextureRgba {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![255, 0, 0, 255],
+                    source_mip_count: 1,
+                    ..Default::default()
+                })],
+                ..Default::default()
+            },
+        }],
+        model_skin_targets: WeaponVfxModelTargets {
+            weapon: Some("target.mdl".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut playback = VfxPlayback::new_with_model_skin(mounts.attachments[0].data.runtime(), &[0]);
+    assert_eq!(playback.fallback_reason(), None);
+    assert!(playback.update_to(0.1));
+    assert_eq!(playback.model_skin_instances().len(), 1);
+    for family in ["skin", "character", "characterlegacy"] {
+        model.materials[0].shader_package_name = Some(format!("{family}.shpk"));
+        let options = ModelSnapshotOptions::new(format!("aura-{family}-off"))
+            .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+            .with_viewport(96, 96)
+            .with_hdr_scene_capture()
+            .with_weapon_vfx(mounts.clone(), 0.1);
+        let baseline = render_model_snapshot_with_options(options.clone(), &model)
+            .expect("draw model with default overlay bind group")
+            .hdr_scene_rgba
+            .unwrap();
+        let bound = render_model_snapshot_with_options(
+            ModelSnapshotOptions {
+                name: format!("aura-{family}-on"),
+                ..options.clone().with_aura_definition(0, 0)
+            },
+            &model,
+        )
+        .expect("draw model with target Aura bind group")
+        .hdr_scene_rgba
+        .unwrap();
+        assert!(baseline.iter().any(|pixel| pixel[0] > 0.1));
+        let changed = baseline
+            .iter()
+            .zip(&bound)
+            .filter(|(before, after)| (before[1] - after[1]).abs() > 0.05)
+            .count();
+        assert!(changed > 20, "active red Aura must change {family} pixels");
+        assert!(
+            baseline
+                .iter()
+                .zip(&bound)
+                .all(|(before, after)| (before[3] - after[3]).abs() < 1e-3)
+        );
+        let emissive = render_model_snapshot_with_options(
+            ModelSnapshotOptions {
+                name: format!("aura-{family}-emissive"),
+                ..options
+                    .with_aura_definition(0, 0)
+                    .with_render_options(ModelRenderOptions {
+                        instance_env_parameter_w: 1.0,
+                        ..Default::default()
+                    })
+            },
+            &model,
+        )
+        .expect("draw Aura with the runtime emissive gate")
+        .hdr_scene_rgba
+        .unwrap();
+        let brighter = bound
+            .iter()
+            .zip(&emissive)
+            .filter(|(off, on)| on[0] > off[0] + 0.05)
+            .count();
+        assert!(
+            brighter > 20,
+            "SEM/EEM must brighten {family} pixels only when enabled"
+        );
+        assert!(
+            bound
+                .iter()
+                .zip(&emissive)
+                .all(|(off, on)| (off[3] - on[3]).abs() < 1e-3)
+        );
+    }
+
+    let mut dual_model = model.clone();
+    let mut offhand_mesh = dual_model.meshes[0].clone();
+    offhand_mesh.path = "offhand.mdl#mesh0".into();
+    for vertex in &mut dual_model.meshes[0].vertices {
+        vertex.position[0] -= 0.55;
+    }
+    for vertex in &mut offhand_mesh.vertices {
+        vertex.position[0] += 0.55;
+    }
+    dual_model.meshes.push(offhand_mesh);
+    let mut dual_mounts = mounts.clone();
+    dual_mounts.model_skin_targets.off_hand = Some("offhand.mdl".into());
+    let attachment = &mut dual_mounts.attachments[0].data;
+    let mut offhand_particle = attachment.file.particles[0].clone();
+    if let AvfxParticleData::ModelSkin(data) = &mut offhand_particle.data {
+        data.aura_target = 4;
+    }
+    offhand_particle
+        .texture_color2
+        .as_mut()
+        .unwrap()
+        .texture_index = 1;
+    attachment.file.particles.push(offhand_particle);
+    let mut offhand_item = attachment.file.emitters[0].particle_items[0];
+    offhand_item.target_index = 1;
+    attachment.file.emitters[0]
+        .particle_items
+        .push(offhand_item);
+    attachment
+        .file
+        .texture_paths
+        .push("offhand-aura.atex".into());
+    attachment.textures.push(Some(VfxTextureRgba {
+        width: 1,
+        height: 1,
+        rgba: vec![0, 0, 255, 255],
+        source_mip_count: 1,
+        ..Default::default()
+    }));
+    let dual_options = ModelSnapshotOptions::new("aura-independent-targets-off")
+        .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+        .with_viewport(128, 96)
+        .with_camera(0.0, 0.0, 3.2, [0.0; 2])
+        .with_hdr_scene_capture()
+        .with_weapon_vfx(dual_mounts, 0.1);
+    let dual_baseline = render_model_snapshot_with_options(dual_options.clone(), &dual_model)
+        .expect("draw both model targets without Aura")
+        .hdr_scene_rgba
+        .unwrap();
+    let dual_bound = render_model_snapshot_with_options(
+        ModelSnapshotOptions {
+            name: "aura-independent-targets-on".into(),
+            ..dual_options.with_all_unambiguous_auras()
+        },
+        &dual_model,
+    )
+    .expect("draw both independent Aura targets")
+    .hdr_scene_rgba
+    .unwrap();
+    for half in 0..2 {
+        let changed = dual_baseline
+            .iter()
+            .zip(&dual_bound)
+            .enumerate()
+            .filter(|(index, (before, after))| {
+                (index % 128) / 64 == half
+                    && (before[0] - after[0]).abs() + (before[2] - after[2]).abs() > 0.05
+            })
+            .count();
+        assert!(changed > 20, "Aura must change model pixels in half {half}");
+    }
+
+    model.materials[0].shader_package_name = Some("character.shpk".into());
+    let render_mode3 = |angle| {
+        let mut attachment = mounts.clone();
+        let particle = &mut attachment.attachments[0].data.file.particles[0];
+        particle.rotation.y = Some(constant(angle));
+        let AvfxParticleData::ModelSkin(data) = &mut particle.data else {
+            unreachable!()
+        };
+        data.fresnel_type = 3;
+        data.fresnel_curve = constant(1.0);
+        data.color_begin.scale_rgb = Some(xiv_companion_data::AvfxColorScaleRgb {
+            r: Some(constant(0.0)),
+            ..Default::default()
+        });
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(format!("aura-mode3-angle-{angle}"))
+                .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+                .with_viewport(96, 96)
+                .with_hdr_scene_capture()
+                .with_weapon_vfx(attachment, 0.1)
+                .with_aura_definition(0, 0),
+            &model,
+        )
+        .expect("draw ModelSkin with instance-relative Fresnel direction")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    let mode3_aligned = render_mode3(0.0);
+    let mode3_turned = render_mode3(std::f32::consts::FRAC_PI_2);
+    assert!(
+        mode3_aligned
+            .iter()
+            .zip(&mode3_turned)
+            .filter(|(aligned, turned)| aligned[0] > turned[0] + 0.05)
+            .count()
+            > 20,
+        "instance-relative FrsT=3 must change model pixels when the particle rotates"
+    );
+
+    let mut roll_model = model.clone();
+    for vertex in &mut roll_model.meshes[0].vertices {
+        vertex.normal = [1.0, 0.0, 0.0];
+    }
+    let render_billboard_aura = |mode, axis: &str, roll, msaa| {
+        let mut attachment = mounts.clone();
+        let particle = &mut attachment.attachments[0].data.file.particles[0];
+        particle.rotation_direction_base = mode;
+        let AvfxParticleData::ModelSkin(data) = &mut particle.data else {
+            unreachable!()
+        };
+        data.fresnel_type = 3;
+        data.fresnel_curve = constant(1.0);
+        match axis {
+            "x" => data.fresnel_rotation.y = Some(constant(std::f32::consts::FRAC_PI_2)),
+            "y" => data.fresnel_rotation.x = Some(constant(std::f32::consts::FRAC_PI_2)),
+            _ => unreachable!(),
+        }
+        data.color_begin.scale_rgb = Some(xiv_companion_data::AvfxColorScaleRgb {
+            r: Some(constant(0.0)),
+            ..Default::default()
+        });
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(format!(
+                "aura-mode3-rbdt-{mode}-{axis}-roll-{roll}-msaa-{msaa}"
+            ))
+            .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+            .with_viewport(96, 96)
+            .with_camera(0.0, 0.0, 3.2, [0.0; 2])
+            .with_render_options(ModelRenderOptions {
+                camera_roll: roll,
+                msaa_samples: msaa,
+                ..Default::default()
+            })
+            .with_hdr_scene_capture()
+            .with_weapon_vfx(attachment, 0.1)
+            .with_aura_definition(0, 0),
+            &roll_model,
+        )
+        .expect("draw ModelSkin with a rolled camera and instance-relative Fresnel")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    for msaa in [1, 4] {
+        let rolled_screen = render_billboard_aura(5, "x", std::f32::consts::FRAC_PI_2, msaa);
+        let rolled_camera = render_billboard_aura(6, "x", std::f32::consts::FRAC_PI_2, msaa);
+        let rolled_y = render_billboard_aura(0, "y", std::f32::consts::FRAC_PI_2, msaa);
+        let rolled_world_up = render_billboard_aura(0, "x", std::f32::consts::FRAC_PI_2, msaa);
+        for actual in [&rolled_screen, &rolled_camera] {
+            assert!(
+                actual
+                    .iter()
+                    .zip(&rolled_y)
+                    .all(|(a, b)| { a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3) }),
+                "RBDT camera basis must match the fixed Fresnel axis at {msaa}x MSAA"
+            );
+        }
+        for actual in [&rolled_screen, &rolled_camera] {
+            assert!(
+                actual
+                    .iter()
+                    .zip(&rolled_world_up)
+                    .filter(|(a, b)| (a[0] - b[0]).abs() > 0.05)
+                    .count()
+                    > 20,
+                "rolled Aura must differ from the world-up direction at {msaa}x MSAA"
+            );
+        }
+    }
+
+    let render_uvpd = |x, y, msaa| {
+        let mut attachment = mounts.clone();
+        let AvfxParticleData::ModelSkin(data) =
+            &mut attachment.attachments[0].data.file.particles[0].data
+        else {
+            unreachable!()
+        };
+        data.fresnel_type = 0;
+        data.uv_point_density.x = Some(constant(x));
+        data.uv_point_density.y = Some(constant(y));
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(format!("aura-uvpd-{x}-{y}-msaa-{msaa}"))
+                .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+                .with_viewport(96, 96)
+                .with_camera(0.0, 0.0, 3.2, [0.0; 2])
+                .with_render_options(ModelRenderOptions {
+                    msaa_samples: msaa,
+                    ..Default::default()
+                })
+                .with_hdr_scene_capture()
+                .with_weapon_vfx(attachment, 0.1)
+                .with_aura_definition(0, 0),
+            &model,
+        )
+        .expect("draw ModelSkin with authored triplanar weights")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    for msaa in [1, 4] {
+        let axial = render_uvpd(1.0, 0.0, msaa);
+        let diagonal = render_uvpd(0.6, 0.8, msaa);
+        assert!(
+            axial
+                .iter()
+                .zip(&diagonal)
+                .filter(|(a, b)| a[0] > 0.4 && (b[0] / a[0] - 1.4).abs() < 0.08)
+                .count()
+                > 20,
+            "UVPD diagonal weights must use Euclidean normalization at {msaa}x MSAA"
+        );
+    }
+    let render_normal_weights = |normal: [f32; 3], name| {
+        let mut normal_model = model.clone();
+        for vertex in &mut normal_model.meshes[0].vertices {
+            vertex.normal = normal;
+        }
+        let mut attachment = mounts.clone();
+        let AvfxParticleData::ModelSkin(data) =
+            &mut attachment.attachments[0].data.file.particles[0].data
+        else {
+            unreachable!()
+        };
+        data.fresnel_type = 0;
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(name)
+                .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+                .with_viewport(96, 96)
+                .with_camera(0.0, 0.0, 3.2, [0.0; 2])
+                .with_hdr_scene_capture()
+                .with_weapon_vfx(attachment, 0.1)
+                .with_aura_definition(0, 0),
+            &normal_model,
+        )
+        .expect("draw ModelSkin with normal-derived triplanar weights")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    let normal_axial = render_normal_weights([1.0, 0.0, 0.0], "aura-normal-axial");
+    let normal_diagonal = render_normal_weights([0.6, 0.8, 0.0], "aura-normal-diagonal");
+    assert!(
+        normal_axial
+            .iter()
+            .zip(&normal_diagonal)
+            .filter(|(a, b)| a[0] > 0.4 && (b[0] / a[0] - 1.4).abs() < 0.08)
+            .count()
+            > 20,
+        "normal-derived triplanar weights must match the client L2 normalization"
+    );
+
+    model.materials[0].color_table_rows = Some(vec![crate::ColorTableRowColors::default()]);
+    model.materials[0].emissive_texture = Some(0);
+    model.materials[0].material_properties_texture = Some(1);
+    let mut emissive_texture = test_texture(crate::ModelTextureKind::Emissive);
+    emissive_texture.rgba = vec![0, 180, 0, 255];
+    let mut properties_texture = test_texture(crate::ModelTextureKind::MaterialProperties);
+    properties_texture.rgba = vec![0, 128, 128, 255];
+    model.textures = vec![emissive_texture, properties_texture];
+    let render_mode = |cm, enabled, dynamic_green| {
+        let mut attachment = mounts.clone();
+        let AvfxParticleData::ModelSkin(data) =
+            &mut attachment.attachments[0].data.file.particles[0].data
+        else {
+            unreachable!()
+        };
+        data.cm = cm;
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(format!(
+                "aura-cm-{cm}-gate-{enabled}-dynamic-{dynamic_green}"
+            ))
+            .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+            .with_viewport(96, 96)
+            .with_hdr_scene_capture()
+            .with_weapon_vfx(attachment, 0.1)
+            .with_aura_definition(0, 0)
+            .with_render_options(ModelRenderOptions {
+                instance_env_parameter_w: f32::from(enabled),
+                dynamic_emissive_color: [1.0, dynamic_green, 1.0],
+                ..Default::default()
+            }),
+            &model,
+        )
+        .expect("draw Character Aura emissive combine mode")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    let replace_off = render_mode(0, false, 1.0);
+    let add_off = render_mode(1, false, 1.0);
+    assert!(
+        replace_off
+            .iter()
+            .zip(&add_off)
+            .all(|(a, b)| { a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3) })
+    );
+    let replace_on = render_mode(0, true, 1.0);
+    let add_on = render_mode(1, true, 1.0);
+    let brighter = replace_on
+        .iter()
+        .zip(&add_on)
+        .filter(|(replace, add)| add[1] > replace[1] + 0.05)
+        .count();
+    assert!(
+        brighter > 20,
+        "bCM=1 must add existing emissive instead of replacing it"
+    );
+    let replace_dynamic = render_mode(0, true, 2.0);
+    assert!(
+        replace_on
+            .iter()
+            .zip(&replace_dynamic)
+            .all(|(a, b)| { a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3) }),
+        "bCM=0 at full strength must not retain dynamically scaled source emissive"
+    );
+}
+
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires a native GPU adapter"]
+fn aura_first_plane_uses_zy_model_position() {
+    use crate::test_support::{ModelSnapshotOptions, render_model_snapshot_with_options};
+    use xiv_companion_data::{
+        AvfxColorCurve, AvfxCurve, AvfxCurveKey, AvfxEmitter, AvfxEmitterItem, AvfxFile,
+        AvfxParticle, AvfxParticleData, AvfxParticleDataModelSkin, AvfxParticleTexture,
+        AvfxTimeline, AvfxTimelineItem, AvfxUvSet, EmitterType, ParticleType, VfxTextureRgba,
+        WeaponVfxAttachment, WeaponVfxAttachments, WeaponVfxData, WeaponVfxModelTargets,
+    };
+
+    let constant = |value| AvfxCurve {
+        keys: vec![AvfxCurveKey {
+            time: 0,
+            interpolation: 1,
+            x: 0.0,
+            y: 0.0,
+            z: value,
+        }],
+        ..Default::default()
+    };
+    let mut material = fallback_material();
+    material.shader_package_name = Some("character.shpk".into());
+    let mut mesh = test_mesh("normal", 0.0);
+    mesh.path = "target.mdl#mesh0".into();
+    for (vertex, position) in
+        mesh.vertices
+            .iter_mut()
+            .zip([[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]])
+    {
+        vertex.position = position;
+        vertex.normal = [0.0, 0.0, 1.0];
+    }
+    let model = crate::ModelData {
+        bounds: crate::ModelBounds::default(),
+        materials: vec![material],
+        textures: Vec::new(),
+        meshes: vec![mesh],
+    };
+    let mut mounts = WeaponVfxAttachments {
+        attachments: vec![WeaponVfxAttachment {
+            model_path: "target.mdl".into(),
+            data: WeaponVfxData {
+                avfx_path: "aura-zy.avfx".into(),
+                file: AvfxFile {
+                    timelines: vec![AvfxTimeline {
+                        binder_index: -1,
+                        items: vec![AvfxTimelineItem {
+                            enabled: true,
+                            start_time: 0,
+                            end_time: -1,
+                            binder_index: -1,
+                            effector_index: -1,
+                            emitter_index: 0,
+                            platform: 0,
+                            clip_index: -1,
+                        }],
+                        ..Default::default()
+                    }],
+                    emitters: vec![AvfxEmitter {
+                        emitter_type: Some(EmitterType::Point),
+                        effector_index: -1,
+                        create_count: constant(1.0),
+                        create_interval: constant(100.0),
+                        particle_items: vec![AvfxEmitterItem {
+                            enabled: true,
+                            target_index: 0,
+                            parameter_link: -1,
+                            create_probability: 100,
+                            create_count: 1,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    particles: vec![AvfxParticle {
+                        particle_type: Some(ParticleType::ModelSkin),
+                        collision_type: -1,
+                        data: AvfxParticleData::ModelSkin(AvfxParticleDataModelSkin {
+                            fresnel_type: 1,
+                            aura_target: 2,
+                            color_begin: AvfxColorCurve {
+                                alpha: Some(constant(0.5)),
+                                ..Default::default()
+                            },
+                            color_end: AvfxColorCurve {
+                                alpha: Some(constant(0.5)),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                        uv_sets: vec![AvfxUvSet::default()],
+                        texture_color2: Some(AvfxParticleTexture {
+                            enabled: true,
+                            texture_index: 0,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }],
+                    texture_paths: vec!["aura-zy.atex".into()],
+                    ..Default::default()
+                },
+                textures: vec![None],
+                ..Default::default()
+            },
+        }],
+        model_skin_targets: WeaponVfxModelTargets {
+            weapon: Some("target.mdl".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let AvfxParticleData::ModelSkin(data) = &mut mounts.attachments[0].data.file.particles[0].data
+    else {
+        unreachable!()
+    };
+    data.uv_point_density.x = Some(constant(1.0));
+
+    let render = |name, left_red: u8, right_red: u8| {
+        let mut attachment = mounts.clone();
+        attachment.attachments[0].data.textures[0] = Some(VfxTextureRgba {
+            width: 2,
+            height: 2,
+            rgba: [
+                [left_red, 0, 0, 255],
+                [right_red, 0, 0, 255],
+                [left_red, 0, 0, 255],
+                [right_red, 0, 0, 255],
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            source_mip_count: 1,
+            ..Default::default()
+        });
+        render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(name)
+                .with_output_dir("target/weapon-vfx-audit/model-skin-shaders")
+                .with_viewport(96, 96)
+                .with_hdr_scene_capture()
+                .with_weapon_vfx(attachment, 0.1)
+                .with_aura_definition(0, 0),
+            &model,
+        )
+        .expect("draw ModelSkin with an asymmetric first-plane texture")
+        .hdr_scene_rgba
+        .unwrap()
+    };
+    let gradient = render("aura-zy-gradient", 0, 255);
+    let constant = render("aura-zy-constant", 0, 0);
+    let control = render("aura-zy-control", 255, 255);
+    assert!(
+        constant
+            .iter()
+            .zip(&control)
+            .filter(|(a, b)| (a[0] - b[0]).abs() > 0.05)
+            .count()
+            > 20,
+        "the asymmetric texture fixture must affect visible Aura pixels"
+    );
+    assert!(
+        gradient
+            .iter()
+            .zip(&constant)
+            .all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)),
+        "the first Aura plane must use (z, y), so constant z cannot sample the right column"
+    );
+}
+
+#[test]
+fn model_aura_uses_unskinned_position_in_projection() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    assert!(shader.contains("out.model_position = input.position;"));
+    let aura = shader_fn_body(shader, "resolve_aura_surface_color");
+    assert!(aura.contains("let position = input.model_position;"));
+    assert!(aura.contains("bitcast<u32>(p[14].x)"));
+    assert!(aura.contains("bitcast<u32>(p[14].z)"));
+}
+
+#[test]
+fn model_aura_triplanar_weights_use_euclidean_length() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    let aura = shader_fn_body(shader, "resolve_aura_surface_color");
+    assert!(aura.contains("let weight_length = length(source_weights);"));
+    assert!(aura.contains("source_weights / max(weight_length, 1e-6)"));
+}
+
+#[test]
+fn model_aura_projection_uses_client_plane_axis_order() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    let projection = shader_fn_body(shader, "aura_triplanar");
+    for plane in ["position.zy", "position.xz", "position.xy"] {
+        assert!(
+            projection.contains(plane),
+            "the client Aura projection must preserve {plane}"
+        );
+    }
 }
 
 #[test]
@@ -595,12 +1429,16 @@ fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
     let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
     let surface = shader_fn_body(shader, "resolve_surface_output");
     for required in [
-        "samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb",
+        "out.emissive_texture_term = samples.emissive * material.emissive_color.a;",
+        "out.emissive_texture_term * camera.dynamic_emissive_color.rgb",
         "let uses_character_colortable_emissive_scale = material.properties.x > 0.5 && material.family_params.y > 0.5;",
         "let lit_luminance = dot(lit, vec3<f32>(0.29891, 0.58661, 0.11448));",
         "select(1.0, max(lit_luminance, 1.0), uses_character_colortable_emissive_scale)",
-        "let unscaled_emissive = surface.emissive - surface.color_table_emissive;",
-        "+ surface.color_table_emissive * color_table_emissive_scale + surface.ring_emission;",
+        "let unscaled_emissive = surface.emissive - surface.emissive_texture_term;",
+        "select(surface.emissive_texture_term, surface.color_table_emissive, uses_character_colortable_emissive_scale)",
+        "let color = lit + unscaled_emissive + surface.ring_emission;",
+        "source_emissive * color_table_emissive_scale)",
+        "out.color = vec4<f32>(aura.main + aura.emissive, surface.alpha);",
     ] {
         assert!(
             shader.contains(required) || surface.contains(required),
@@ -611,6 +1449,25 @@ fn model_shader_scales_only_character_colortable_emissive_by_lit_luminance() {
         !surface.contains("surface.emissive * color_table_emissive_scale"),
         "static/shader emissive must not inherit the ColorTable-only luminance scale"
     );
+}
+
+#[test]
+fn model_aura_emissive_keeps_runtime_gate_and_combine_modes() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/model.wgsl"));
+    let aura = shader_fn_body(shader, "resolve_aura_surface_color");
+    for required in [
+        "camera.instance_env_parameter.x > 0.0",
+        "mix(p[3].y, p[3].z, fresnel) * p[15].x",
+        "mix(original_emissive, aura_rgb, emission_strength)",
+        "original_emissive + aura_rgb * emission_strength",
+        "i32(p[15].z) != 0",
+    ] {
+        assert!(
+            aura.contains(required),
+            "Aura emissive must preserve {required}"
+        );
+    }
+    assert!(!aura.contains("aura_texture_alpha * emission_strength"));
 }
 
 #[test]
@@ -1209,6 +2066,28 @@ fn camera_uniform_carries_dynamic_emissive_with_identity_and_finite_fallbacks() 
         },
     );
     assert_eq!(uniform.dynamic_emissive_color, [1.0, 1.0, 0.25, 0.0]);
+}
+
+#[test]
+fn camera_uniform_carries_aura_emissive_gate_only_when_finite() {
+    let make = |value| {
+        camera_uniform(
+            [0.0; 3],
+            1.0,
+            [128, 64],
+            0.0,
+            0.0,
+            2.0,
+            [0.0; 2],
+            ModelRenderOptions {
+                instance_env_parameter_w: value,
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(make(1.0).instance_env_parameter, [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(make(f32::NAN).instance_env_parameter, [0.0; 4]);
+    assert_eq!(make(f32::INFINITY).instance_env_parameter, [0.0; 4]);
 }
 
 #[test]
@@ -2886,7 +3765,11 @@ fn flatten_model_with_skeleton_builds_joint_table_and_remaps_vertices() {
     };
     let skeleton = skinned_test_skeleton();
 
-    let (vertices, _, _, joint_names) = flatten_model_with_options_and_skeleton(
+    let FlattenedModel {
+        vertices,
+        joint_names,
+        ..
+    } = flatten_model_with_options_and_skeleton(
         &model,
         PreparedModelOptions::default(),
         Some(&skeleton),
@@ -2928,7 +3811,11 @@ fn flatten_model_with_skeleton_merges_bone_names_across_meshes() {
     };
     let skeleton = skinned_test_skeleton();
 
-    let (vertices, _, _, joint_names) = flatten_model_with_options_and_skeleton(
+    let FlattenedModel {
+        vertices,
+        joint_names,
+        ..
+    } = flatten_model_with_options_and_skeleton(
         &model,
         PreparedModelOptions::default(),
         Some(&skeleton),
@@ -3030,6 +3917,71 @@ fn flatten_model_overlaps_components_when_preview_layout_disabled() {
     assert!(
         (vertices[3].position[0] - 5.0).abs() > 0.04,
         "layout enabled must spread components apart from their source positions"
+    );
+}
+
+#[test]
+fn mdl_attachment_offsets_match_flattened_vertices_and_shape_layout() {
+    let mut primary = test_mesh("normal", 0.0);
+    primary.path = "main.mdl#part-0".into();
+    let shape = crate::ModelShapeInfo {
+        index: 0,
+        name: Some("extended".into()),
+        shape_index_mask: 1,
+        shape_index_mask_hex: "0x1".into(),
+        shape_mesh_index: 0,
+        shape_value_count: 1,
+    };
+    primary.shape_influences.push(shape.clone());
+    primary.shape_targets.push(crate::ModelShapeTarget {
+        shape,
+        vertex_deltas: vec![crate::ModelShapeVertexDelta {
+            vertex_index: 0,
+            position: [5.0, 0.0, 0.0],
+            normal: [0.0; 3],
+        }],
+    });
+    let mut secondary = test_mesh("normal", 4.0);
+    secondary.path = "sub.mdl#part-0".into();
+    let model = ComponentTestModel {
+        data: crate::ModelData {
+            bounds: Default::default(),
+            materials: vec![fallback_material()],
+            textures: Vec::new(),
+            meshes: vec![primary, secondary],
+        },
+        components: vec![0, 1],
+    };
+    let mut primary_offsets = Vec::new();
+    for (layout, shape) in [(true, 0), (true, 1), (false, 1)] {
+        let flattened = flatten_model_with_options_and_skeleton(
+            &model,
+            PreparedModelOptions::default()
+                .with_component_preview_layout(layout)
+                .with_enabled_shape_mask(shape),
+            None,
+        );
+        for (mesh_index, path) in ["main.mdl", "sub.mdl"].into_iter().enumerate() {
+            let offset = flattened.mdl_preview_offsets[path];
+            assert_eq!(flattened.draw_batches[mesh_index].model_path, path);
+            if !layout {
+                assert_eq!(offset, [0.0; 3]);
+            }
+            let source =
+                model_mesh_vertices_with_shape_mask(&model.data.meshes[mesh_index], Some(shape));
+            for (index, vertex) in source.iter().enumerate() {
+                let actual = flattened.vertices[mesh_index * 3 + index].position;
+                for axis in 0..3 {
+                    assert!((actual[axis] - vertex.position[axis] - offset[axis]).abs() < 1e-6);
+                }
+            }
+        }
+        primary_offsets.push(flattened.mdl_preview_offsets["main.mdl"]);
+        assert!(!flattened.mdl_preview_offsets.contains_key("unrelated.mdl"));
+    }
+    assert_ne!(
+        primary_offsets[0], primary_offsets[1],
+        "shape changes must update attachment placement"
     );
 }
 
@@ -3221,8 +4173,10 @@ fn test_batch(material_slot: usize, pass: PreparedRenderPass, center: [f32; 3]) 
         center,
     });
     DrawBatch {
+        model_path: "test.mdl".to_string(),
         material_slot,
         material_bind_group_index: material_slot,
+        aura_surface_compatible: false,
         draw_role: ModelMeshDrawRole::Normal,
         index_start: 0,
         index_count: 3,
@@ -3265,7 +4219,7 @@ fn test_sampling(
     }
 }
 
-fn test_mesh(category: &str, x: f32) -> crate::ModelMesh {
+pub(super) fn test_mesh(category: &str, x: f32) -> crate::ModelMesh {
     crate::ModelMesh {
         path: format!("test/{category}.mdl"),
         part_index: 0,

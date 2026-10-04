@@ -469,6 +469,18 @@ pub trait AsyncGameResource {
         Self: 'a;
 
     fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a>;
+
+    /// Returns `None` only when the resource is known to be absent. Backends that
+    /// cannot distinguish absence from a read failure propagate the error.
+    fn read_optional<'a>(
+        &'a mut self,
+        path: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + 'a>,
+    > {
+        Box::pin(async move { self.read(path).await.map(Some) })
+    }
+
     fn platform(&self) -> physis::Platform;
 }
 
@@ -12267,175 +12279,1168 @@ mod chara_loader_tests {
     }
 }
 
-/// 解析武器挂载的常驻 VFX：primary model 的 body IMC → variant 对应 VfxId →
-/// `vw####.avfx` → 解析 + 贴图解码。无 IMC / 无特效 / 文件缺失时返回 `None`
-/// （静默降级，不阻塞模型加载）；解析问题记入 `diagnostics`。
+/// 解析已加载主模型挂载的常驻 VFX。IMC、AVFX 与绑点仅使用实际加载的 body。
+/// 确认 IMC 缺失或 VfxId 为零时返回 `Ok(None)`；原生接口无法区分部分底层读取错误。
+/// 可识别的 IMC 读取/解析错误或挂载的 AVFX 全部加载失败时返回错误。
+/// 同 body 文件名回退成功时保留读取/解析诊断；贴图失败保留索引占位。
 #[cfg(feature = "game-data")]
 pub fn load_weapon_vfx_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
-    request: &WeaponModelLoadRequest,
-) -> Option<crate::avfx::WeaponVfxData> {
-    let model = request.primary_model();
-    for body_id in crate::weapon_body_ids(model) {
-        let imc_path = crate::weapon_body_imc_path(model.model_id, body_id);
-        let Some(imc_bytes) = resource.read(&imc_path) else {
-            continue;
-        };
-        let Ok(imc) = crate::imc::ImcFile::parse(&imc_bytes) else {
-            continue;
-        };
-        let Some(vfx_id) = imc
-            .subset_for_variant(model.variant_id)
-            .first()
-            .map(|entry| entry.vfx)
-        else {
-            continue;
-        };
-        if vfx_id == 0 {
-            continue;
-        }
-        for (_, avfx_path) in
-            crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id)
-        {
-            let Some(avfx_bytes) = resource.read(&avfx_path) else {
-                continue;
-            };
-            let Ok(file) = crate::avfx::AvfxFile::parse(&avfx_bytes) else {
-                continue;
-            };
-            let mut textures = Vec::new();
-            let mut diagnostics = Vec::new();
-            for texture_path in &file.texture_paths {
-                match resource
-                    .read(texture_path)
-                    .as_deref()
-                    .and_then(crate::avfx::decode_atex_rgba)
-                {
-                    Some(texture) => textures.push(Some(texture)),
-                    None => {
-                        diagnostics.push(format!("texture not decoded: {texture_path}"));
-                        textures.push(None);
-                    }
-                }
-            }
-            return Some(crate::avfx::WeaponVfxData {
-                avfx_path,
-                vfx_id,
-                bind_points: weapon_vfx_bind_points_sync(resource, model),
-                file,
-                textures,
-                diagnostics,
-            });
-        }
-    }
-    None
+    model: &WeaponModelData,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxData>> {
+    load_weapon_vfx_model_from_resource(resource, model.model_main, primary_weapon_mdl_path(model)?)
 }
 
-/// 武器特效绑点表：读取主模型 MDL 的 ElementId 区（首个命中的候选路径）。
 #[cfg(feature = "game-data")]
-fn weapon_vfx_bind_points_sync<R: physis::resource::Resource>(
+fn load_weapon_vfx_model_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
-    model: crate::PackedModelId,
-) -> Vec<crate::avfx::VfxBindPoint> {
-    crate::weapon_model_candidate_paths(model)
+    model: PackedModelId,
+    model_path: &str,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxData>> {
+    use anyhow::Context;
+
+    let Some(body_id) = weapon_vfx_body(model, model_path)? else {
+        return Ok(None);
+    };
+    let imc_path = weapon_vfx_imc_path(model.model_id, body_id);
+    let Some(imc_bytes) = resource.read(&imc_path) else {
+        if resource.exists(&imc_path) {
+            anyhow::bail!("failed to read existing IMC {imc_path}");
+        }
+        return Ok(None);
+    };
+    let imc = crate::imc::ImcFile::parse(&imc_bytes)
+        .with_context(|| format!("failed to parse IMC {imc_path}"))?;
+    let vfx_id = imc
+        .subset_for_variant(model.variant_id)
+        .first()
+        .map_or(0, |entry| entry.vfx);
+    if vfx_id == 0 {
+        return Ok(None);
+    }
+    let mut diagnostics = Vec::new();
+    let mut unavailable = Vec::new();
+    for (_, avfx_path) in crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id) {
+        let Some(avfx_bytes) = resource.read(&avfx_path) else {
+            if resource.exists(&avfx_path) {
+                diagnostics.push(format!("failed to read existing AVFX {avfx_path}"));
+            } else {
+                unavailable.push(format!("AVFX not found: {avfx_path}"));
+            }
+            continue;
+        };
+        let file = match crate::avfx::AvfxFile::parse(&avfx_bytes) {
+            Ok(file) => file,
+            Err(error) => {
+                diagnostics.push(format!("failed to parse AVFX {avfx_path}: {error}"));
+                continue;
+            }
+        };
+        let mut textures = Vec::new();
+        for texture_path in &file.texture_paths {
+            let decoded = resource
+                .read(texture_path)
+                .as_deref()
+                .and_then(crate::avfx::decode_atex_rgba);
+            match decoded {
+                Some(texture) => {
+                    if !texture.has_complete_source_mips() {
+                        diagnostics.push(format!(
+                            "texture mip chain incomplete: {texture_path} decoded {}/{} levels",
+                            texture.decoded_mip_count(),
+                            texture.source_mip_count,
+                        ));
+                    }
+                    textures.push(Some(texture));
+                }
+                None => {
+                    diagnostics.push(format!("texture not decoded: {texture_path}"));
+                    textures.push(None);
+                }
+            }
+        }
+        let bind_points = match resource.read(model_path) {
+            Some(bytes) => parse_weapon_vfx_bind_points(model_path, &bytes, &mut diagnostics),
+            None => {
+                diagnostics.push(format!("VFX bind point resource unavailable: {model_path}"));
+                Vec::new()
+            }
+        };
+        let skeleton_path = crate::skeleton::weapon_skeleton_path(model.model_id);
+        let skeleton = parse_weapon_vfx_skeleton(
+            &skeleton_path,
+            resource.read(&skeleton_path).as_deref(),
+            &mut diagnostics,
+        );
+        return Ok(Some(crate::avfx::WeaponVfxData {
+            avfx_path,
+            vfx_id,
+            bind_points,
+            skeleton,
+            file,
+            textures,
+            diagnostics,
+        }));
+    }
+    diagnostics.extend(unavailable);
+    Err(anyhow::anyhow!(
+        "failed to load VFX {vfx_id} mounted by {imc_path}:\n{}",
+        diagnostics.join("\n")
+    ))
+}
+
+#[cfg(feature = "game-data")]
+fn primary_weapon_mdl_path(model: &WeaponModelData) -> anyhow::Result<&str> {
+    // The model loaders record the successfully parsed primary MDL before all
+    // materials and secondary model paths.
+    model
+        .loaded_paths
         .iter()
-        .find_map(|path| resource.read(path))
-        .and_then(|bytes| crate::mdl_metadata::mdl_element_ids_from_mdl_bytes(&bytes).ok())
-        .map(|ids| {
-            ids.iter()
-                .map(|id| crate::avfx::VfxBindPoint {
-                    id: id.id,
-                    translate: id.translate,
-                    rotate: id.rotate,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .find(|path| path.ends_with(".mdl"))
+        .map(String::as_str)
+        .ok_or_else(|| anyhow::anyhow!("loaded weapon model has no primary MDL path"))
+}
+
+#[cfg(feature = "game-data")]
+fn weapon_vfx_body(model: PackedModelId, path: &str) -> anyhow::Result<Option<u16>> {
+    if !crate::weapon_model_candidate_paths(model)
+        .iter()
+        .any(|candidate| candidate == path)
+    {
+        anyhow::bail!("loaded MDL is not a candidate for this weapon: {path}");
+    }
+    let prefix = format!("chara/weapon/w{:04}/obj/body/b", model.model_id);
+    let Some(suffix) = path.strip_prefix(&prefix) else {
+        // Equipment-style glove models have no weapon-body VFX mount.
+        return Ok(None);
+    };
+    let body_id = suffix
+        .split('/')
+        .next()
+        .and_then(|body| body.parse::<u16>().ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid weapon body in loaded MDL path: {path}"))?;
+    Ok(Some(body_id))
+}
+
+/// IMC supplying a weapon body's VfxId, including the paired-offhand sharing rule.
+#[cfg(feature = "game-data")]
+pub fn weapon_vfx_imc_path(model_id: u16, body_id: u16) -> String {
+    // xivModdingFramework ImcSharingWeaponTypes / GetWeaponType and
+    // VFXEditor ItemRowWeapon: these offhands share the mainhand IMC, while
+    // their AVFX and MDL bind points remain in the offhand resource directory.
+    let imc_model_id = match model_id {
+        351..=400 | 1651..=1700 | 1851..=1900 | 2651..=2700 | 3051..=3100 | 3151..=3200 => {
+            model_id - 50
+        }
+        _ => model_id,
+    };
+    crate::weapon_body_imc_path(imc_model_id, body_id)
 }
 
 /// [`load_weapon_vfx_from_resource`] 的异步版（web 目录句柄等）。
 #[cfg(feature = "game-data")]
 pub async fn load_weapon_vfx_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
-    request: &WeaponModelLoadRequest,
-) -> Option<crate::avfx::WeaponVfxData> {
-    let model = request.primary_model();
-    for body_id in crate::weapon_body_ids(model) {
-        let imc_path = crate::weapon_body_imc_path(model.model_id, body_id);
-        let Ok(imc_bytes) = resource.read(&imc_path).await else {
-            continue;
-        };
-        let Ok(imc) = crate::imc::ImcFile::parse(&imc_bytes) else {
-            continue;
-        };
-        let Some(vfx_id) = imc
-            .subset_for_variant(model.variant_id)
-            .first()
-            .map(|entry| entry.vfx)
-        else {
-            continue;
-        };
-        if vfx_id == 0 {
-            continue;
-        }
-        for (_, avfx_path) in
-            crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id)
-        {
-            let Ok(avfx_bytes) = resource.read(&avfx_path).await else {
-                continue;
-            };
-            let Ok(file) = crate::avfx::AvfxFile::parse(&avfx_bytes) else {
-                continue;
-            };
-            let mut textures = Vec::new();
-            let mut diagnostics = Vec::new();
-            for texture_path in &file.texture_paths {
-                let decoded = resource
-                    .read(texture_path)
-                    .await
-                    .ok()
-                    .and_then(|bytes| crate::avfx::decode_atex_rgba(&bytes));
-                if decoded.is_none() {
-                    diagnostics.push(format!("texture not decoded: {texture_path}"));
-                }
-                textures.push(decoded);
-            }
-            return Some(crate::avfx::WeaponVfxData {
-                avfx_path,
-                vfx_id,
-                bind_points: weapon_vfx_bind_points_async(resource, model).await,
-                file,
-                textures,
-                diagnostics,
-            });
-        }
-    }
-    None
+    model: &WeaponModelData,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxData>> {
+    load_weapon_vfx_model_from_async_resource(
+        resource,
+        model.model_main,
+        primary_weapon_mdl_path(model)?,
+    )
+    .await
 }
 
-/// [`weapon_vfx_bind_points_sync`] 的异步版。
 #[cfg(feature = "game-data")]
-async fn weapon_vfx_bind_points_async<R: crate::AsyncGameResource>(
+async fn load_weapon_vfx_model_from_async_resource<R: AsyncGameResource>(
     resource: &mut R,
-    model: crate::PackedModelId,
-) -> Vec<crate::avfx::VfxBindPoint> {
-    let mut bytes = None;
-    for path in crate::weapon_model_candidate_paths(model) {
-        if let Ok(content) = resource.read(&path).await {
-            bytes = Some(content);
-            break;
+    model: PackedModelId,
+    model_path: &str,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxData>> {
+    use anyhow::Context;
+
+    let Some(body_id) = weapon_vfx_body(model, model_path)? else {
+        return Ok(None);
+    };
+    let imc_path = weapon_vfx_imc_path(model.model_id, body_id);
+    let Some(imc_bytes) = resource
+        .read_optional(&imc_path)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to read IMC {imc_path}: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let imc = crate::imc::ImcFile::parse(&imc_bytes)
+        .with_context(|| format!("failed to parse IMC {imc_path}"))?;
+    let vfx_id = imc
+        .subset_for_variant(model.variant_id)
+        .first()
+        .map_or(0, |entry| entry.vfx);
+    if vfx_id == 0 {
+        return Ok(None);
+    }
+    let mut diagnostics = Vec::new();
+    let mut unavailable = Vec::new();
+    for (_, avfx_path) in crate::weapon_vfx_avfx_candidate_paths(model.model_id, body_id, vfx_id) {
+        let avfx_bytes = match resource.read_optional(&avfx_path).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                unavailable.push(format!("AVFX not found: {avfx_path}"));
+                continue;
+            }
+            Err(error) => {
+                diagnostics.push(format!("failed to read {avfx_path}: {error}"));
+                continue;
+            }
+        };
+        let file = match crate::avfx::AvfxFile::parse(&avfx_bytes) {
+            Ok(file) => file,
+            Err(error) => {
+                diagnostics.push(format!("failed to parse AVFX {avfx_path}: {error}"));
+                continue;
+            }
+        };
+        let mut textures = Vec::new();
+        for texture_path in &file.texture_paths {
+            let decoded = match resource.read(texture_path).await {
+                Ok(bytes) => {
+                    let decoded = crate::avfx::decode_atex_rgba(&bytes);
+                    match &decoded {
+                        Some(texture) if !texture.has_complete_source_mips() => {
+                            diagnostics.push(format!(
+                                "texture mip chain incomplete: {texture_path} decoded {}/{} levels",
+                                texture.decoded_mip_count(),
+                                texture.source_mip_count,
+                            ));
+                        }
+                        None => diagnostics.push(format!("texture not decoded: {texture_path}")),
+                        Some(_) => {}
+                    }
+                    decoded
+                }
+                Err(error) => {
+                    diagnostics.push(format!("failed to read texture {texture_path}: {error}"));
+                    None
+                }
+            };
+            textures.push(decoded);
+        }
+        let bind_points = match resource.read(model_path).await {
+            Ok(bytes) => parse_weapon_vfx_bind_points(model_path, &bytes, &mut diagnostics),
+            Err(error) => {
+                diagnostics.push(format!(
+                    "failed to read VFX bind points from {model_path}: {error}"
+                ));
+                Vec::new()
+            }
+        };
+        let skeleton_path = crate::skeleton::weapon_skeleton_path(model.model_id);
+        let skeleton_bytes = match resource.read_optional(&skeleton_path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                diagnostics.push(format!(
+                    "failed to read VFX skeleton {skeleton_path}: {error}"
+                ));
+                None
+            }
+        };
+        let skeleton =
+            parse_weapon_vfx_skeleton(&skeleton_path, skeleton_bytes.as_deref(), &mut diagnostics);
+        return Ok(Some(crate::avfx::WeaponVfxData {
+            avfx_path,
+            vfx_id,
+            bind_points,
+            skeleton,
+            file,
+            textures,
+            diagnostics,
+        }));
+    }
+    diagnostics.extend(unavailable);
+    Err(anyhow::anyhow!(
+        "failed to load VFX {vfx_id} mounted by {imc_path}:\n{}",
+        diagnostics.join("\n")
+    ))
+}
+
+/// Load mounts on distinct, successfully loaded primary and secondary MDLs.
+/// A broken mount is retained as a diagnostic when another effect is available;
+/// with no successful effects, any mount failure is returned as an error.
+#[cfg(feature = "game-data")]
+pub fn load_weapon_vfx_attachments_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    model: &WeaponModelData,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxAttachments>> {
+    let models = loaded_weapon_vfx_models(model)?;
+    let mut loaded = crate::avfx::WeaponVfxAttachments {
+        model_skin_targets: weapon_vfx_model_targets(&models),
+        ..Default::default()
+    };
+    for (packed, path) in models {
+        let result = load_weapon_vfx_model_from_resource(resource, packed, path);
+        collect_weapon_vfx_attachment(&mut loaded, path, result);
+    }
+    finish_weapon_vfx_attachments(loaded)
+}
+
+/// Asynchronous counterpart of [`load_weapon_vfx_attachments_from_resource`].
+#[cfg(feature = "game-data")]
+pub async fn load_weapon_vfx_attachments_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    model: &WeaponModelData,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxAttachments>> {
+    let models = loaded_weapon_vfx_models(model)?;
+    let mut loaded = crate::avfx::WeaponVfxAttachments {
+        model_skin_targets: weapon_vfx_model_targets(&models),
+        ..Default::default()
+    };
+    for (packed, path) in models {
+        let result = load_weapon_vfx_model_from_async_resource(resource, packed, path).await;
+        collect_weapon_vfx_attachment(&mut loaded, path, result);
+    }
+    finish_weapon_vfx_attachments(loaded)
+}
+
+#[cfg(feature = "game-data")]
+fn weapon_vfx_model_targets(
+    models: &[(PackedModelId, &str)],
+) -> crate::avfx::WeaponVfxModelTargets {
+    crate::avfx::WeaponVfxModelTargets {
+        weapon: models.first().map(|(_, path)| (*path).to_string()),
+        off_hand: models.get(1).map(|(_, path)| (*path).to_string()),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn loaded_weapon_vfx_models(model: &WeaponModelData) -> anyhow::Result<Vec<(PackedModelId, &str)>> {
+    let primary_path = primary_weapon_mdl_path(model)?;
+    let mut targets = vec![(model.model_main, primary_path)];
+    if let Some(secondary) = model
+        .model_sub
+        .filter(|secondary| secondary.raw != model.model_main.raw)
+    {
+        let candidates = crate::weapon_model_candidate_paths(secondary);
+        // A declared but failed secondary must not borrow the primary's MDL,
+        // even when their candidate body fallback paths overlap.
+        if let Some(path) = model
+            .loaded_paths
+            .iter()
+            .find(|path| path.as_str() != primary_path && candidates.contains(path))
+        {
+            targets.push((secondary, path.as_str()));
         }
     }
-    bytes
-        .and_then(|bytes| crate::mdl_metadata::mdl_element_ids_from_mdl_bytes(&bytes).ok())
-        .map(|ids| {
-            ids.iter()
-                .map(|id| crate::avfx::VfxBindPoint {
-                    id: id.id,
-                    translate: id.translate,
-                    rotate: id.rotate,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    Ok(targets)
+}
+
+#[cfg(feature = "game-data")]
+fn collect_weapon_vfx_attachment(
+    loaded: &mut crate::avfx::WeaponVfxAttachments,
+    model_path: &str,
+    result: anyhow::Result<Option<crate::avfx::WeaponVfxData>>,
+) {
+    match result {
+        Ok(Some(data)) => loaded.attachments.push(crate::avfx::WeaponVfxAttachment {
+            model_path: model_path.to_string(),
+            data,
+        }),
+        Ok(None) => {}
+        Err(error) => loaded.diagnostics.push(format!("{model_path}: {error:#}")),
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn finish_weapon_vfx_attachments(
+    loaded: crate::avfx::WeaponVfxAttachments,
+) -> anyhow::Result<Option<crate::avfx::WeaponVfxAttachments>> {
+    if !loaded.attachments.is_empty() {
+        Ok(Some(loaded))
+    } else if loaded.diagnostics.is_empty() {
+        Ok(None)
+    } else {
+        anyhow::bail!("{}", loaded.diagnostics.join("\n"))
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn parse_weapon_vfx_bind_points(
+    path: &str,
+    bytes: &[u8],
+    diagnostics: &mut Vec<String>,
+) -> Vec<crate::avfx::VfxBindPoint> {
+    match crate::mdl_metadata::mdl_element_ids_from_mdl_bytes(bytes) {
+        Ok(ids) => ids
+            .into_iter()
+            .map(|id| crate::avfx::VfxBindPoint {
+                id: id.id,
+                parent_bone: id.parent_bone,
+                translate: id.translate,
+                rotate: id.rotate,
+            })
+            .collect(),
+        Err(error) => {
+            diagnostics.push(format!(
+                "failed to parse VFX bind points from {path}: {error:#}"
+            ));
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(feature = "game-data")]
+fn parse_weapon_vfx_skeleton(
+    path: &str,
+    bytes: Option<&[u8]>,
+    diagnostics: &mut Vec<String>,
+) -> Option<ModelSkeleton> {
+    let Some(bytes) = bytes else {
+        diagnostics.push(format!("VFX owner skeleton unavailable: {path}"));
+        return None;
+    };
+    match load_skeleton_from_sklb_bytes(bytes) {
+        Ok(skeleton) => Some(skeleton),
+        Err(error) => {
+            diagnostics.push(format!("failed to parse VFX skeleton {path}: {error}"));
+            None
+        }
+    }
+}
+
+#[cfg(all(test, feature = "game-data"))]
+mod vfx_loader_tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct TestResource {
+        files: HashMap<String, Vec<u8>>,
+        failures: HashMap<String, String>,
+        reads: Vec<String>,
+    }
+
+    impl physis::resource::Resource for TestResource {
+        fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+            self.reads.push(path.to_string());
+            if self.failures.contains_key(path) {
+                None
+            } else {
+                self.files.get(path).cloned()
+            }
+        }
+
+        fn exists(&mut self, path: &str) -> bool {
+            self.files.contains_key(path)
+        }
+    }
+
+    impl AsyncGameResource for TestResource {
+        type Error = String;
+        type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
+
+        fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
+            self.reads.push(path.to_string());
+            std::future::ready(match self.failures.get(path) {
+                Some(error) => Err(error.clone()),
+                None => self
+                    .files
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| format!("not found: {path}")),
+            })
+        }
+
+        fn platform(&self) -> physis::Platform {
+            physis::Platform::Win32
+        }
+
+        fn read_optional<'a>(
+            &'a mut self,
+            path: &'a str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<Vec<u8>>, String>> + 'a>,
+        > {
+            self.reads.push(path.to_string());
+            Box::pin(std::future::ready(match self.failures.get(path) {
+                Some(error) => Err(error.clone()),
+                None => Ok(self.files.get(path).cloned()),
+            }))
+        }
+    }
+
+    fn model(body: u16) -> WeaponModelData {
+        WeaponModelData {
+            item_id: 42,
+            item_name: "VFX loader test".to_string(),
+            model_main: PackedModelId::from_raw(64 | (2 << 16) | (1 << 32)),
+            model_sub: None,
+            stain_ids: [0; 2],
+            load_diagnostics: Vec::new(),
+            loaded_paths: vec!["common/staining.stm".to_string(), mdl_path(body)],
+            bounds: Default::default(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            meshes: Vec::new(),
+        }
+    }
+
+    fn mdl_path(body: u16) -> String {
+        format!("chara/weapon/w0064/obj/body/b{body:04}/model/w0064b{body:04}.mdl")
+    }
+
+    fn imc_path(body: u16) -> String {
+        crate::weapon_body_imc_path(64, body)
+    }
+
+    fn avfx_path(body: u16, candidate: usize) -> String {
+        crate::weapon_vfx_avfx_candidate_paths(64, body, 1)[candidate]
+            .1
+            .clone()
+    }
+
+    fn imc(vfx: u8) -> Vec<u8> {
+        // One variant, with no VFX in the default subset.
+        vec![1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, vfx, 0]
+    }
+
+    fn block(name: &str, payload: &[u8]) -> Vec<u8> {
+        let mut tag = [b' '; 4];
+        tag[..name.len()].copy_from_slice(name.as_bytes());
+        tag.reverse();
+        let mut bytes = tag.to_vec();
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        bytes.resize(bytes.len().next_multiple_of(4), 0);
+        bytes
+    }
+
+    fn avfx(textures: &[&str]) -> Vec<u8> {
+        let children: Vec<u8> = textures
+            .iter()
+            .flat_map(|path| block("Tex", format!("{path}\0").as_bytes()))
+            .collect();
+        block("AVFX", &children)
+    }
+
+    fn mdl(translate: [f32; 3]) -> Vec<u8> {
+        // File header, empty string table, model header, one ElementId.
+        let mut bytes = vec![0; 68 + 8 + 56];
+        bytes[..4].copy_from_slice(&0x0100_0006_u32.to_le_bytes());
+        bytes[100..102].copy_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        for value in translate.into_iter().chain([0.1_f32, 0.2, 0.3]) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn texture() -> Vec<u8> {
+        let mut bytes = vec![0; 80];
+        bytes[..4].copy_from_slice(&0x0080_0000_u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&0x1450_u32.to_le_bytes());
+        for offset in [8, 10, 12, 14] {
+            bytes[offset..offset + 2].copy_from_slice(&1_u16.to_le_bytes());
+        }
+        bytes[28..32].copy_from_slice(&80_u32.to_le_bytes());
+        bytes.extend_from_slice(&[255; 4]);
+        bytes
+    }
+
+    fn texture_with_truncated_mip() -> Vec<u8> {
+        let mut bytes = vec![0; 80];
+        bytes[..4].copy_from_slice(&0x0080_0000_u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&0x1131_u32.to_le_bytes());
+        bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        bytes[12..14].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[14] = 2;
+        bytes[28..32].copy_from_slice(&80_u32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&84_u32.to_le_bytes());
+        bytes.extend_from_slice(&[255; 4]);
+        bytes
+    }
+
+    fn resource(body: u16) -> TestResource {
+        TestResource {
+            files: HashMap::from([
+                (imc_path(body), imc(1)),
+                (avfx_path(body, 0), avfx(&[])),
+                (mdl_path(body), mdl([1.0, 2.0, 3.0])),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn load(
+        resource: &mut TestResource,
+        model: &WeaponModelData,
+        asynchronous: bool,
+    ) -> anyhow::Result<Option<crate::avfx::WeaponVfxData>> {
+        if asynchronous {
+            futures_executor::block_on(load_weapon_vfx_from_async_resource(resource, model))
+        } else {
+            load_weapon_vfx_from_resource(resource, model)
+        }
+    }
+
+    fn load_attachments(
+        resource: &mut TestResource,
+        model: &WeaponModelData,
+        asynchronous: bool,
+    ) -> anyhow::Result<Option<crate::avfx::WeaponVfxAttachments>> {
+        if asynchronous {
+            futures_executor::block_on(load_weapon_vfx_attachments_from_async_resource(
+                resource, model,
+            ))
+        } else {
+            load_weapon_vfx_attachments_from_resource(resource, model)
+        }
+    }
+
+    fn add_secondary(
+        model: &mut WeaponModelData,
+        resource: &mut TestResource,
+    ) -> (String, String, String) {
+        model.model_sub = Some(PackedModelId::from_raw(65 | (2 << 16) | (2 << 32)));
+        let mdl = "chara/weapon/w0065/obj/body/b0001/model/w0065b0001.mdl".to_string();
+        let imc_path = crate::weapon_body_imc_path(65, 1);
+        let avfx_path = crate::weapon_vfx_avfx_candidate_paths(65, 1, 2)[0]
+            .1
+            .clone();
+        let mut imc = imc(0);
+        imc[..2].copy_from_slice(&2_u16.to_le_bytes());
+        imc.extend_from_slice(&[1, 0, 0, 0, 2, 0]);
+        model.loaded_paths.push(mdl.clone());
+        resource.files.extend([
+            (mdl.clone(), self::mdl([7.0, 8.0, 9.0])),
+            (imc_path.clone(), imc),
+            (avfx_path.clone(), avfx(&["vfx/secondary.atex"])),
+        ]);
+        (mdl, imc_path, avfx_path)
+    }
+
+    #[test]
+    fn attachments_use_each_loaded_body_variant_and_bind_table() {
+        for asynchronous in [false, true] {
+            let mut model = model(1);
+            let mut resource = resource(1);
+            let (secondary_mdl, secondary_imc, secondary_avfx) =
+                add_secondary(&mut model, &mut resource);
+            let vfx = load_attachments(&mut resource, &model, asynchronous)
+                .unwrap()
+                .unwrap();
+            assert_eq!(vfx.attachments.len(), 2);
+            let primary = &vfx.attachments[0];
+            let secondary = &vfx.attachments[1];
+            assert_eq!(
+                vfx.model_skin_target_path(2),
+                Some(primary.model_path.as_str())
+            );
+            assert_eq!(
+                vfx.model_skin_target_path(4),
+                Some(secondary.model_path.as_str())
+            );
+            assert_eq!(vfx.model_skin_target_path(1), None);
+            assert_eq!(vfx.model_skin_target_path(6), None);
+            assert_eq!(primary.model_path, mdl_path(1));
+            assert_eq!(primary.data.avfx_path, avfx_path(1, 0));
+            assert_eq!(primary.data.bind_points[0].translate, [1.0, 2.0, 3.0]);
+            assert_eq!(secondary.model_path, secondary_mdl);
+            assert_eq!(secondary.data.avfx_path, secondary_avfx);
+            assert_eq!(secondary.data.vfx_id, 2);
+            assert_eq!(secondary.data.bind_points[0].translate, [7.0, 8.0, 9.0]);
+            assert_eq!(secondary.data.textures, [None]);
+            assert!(resource.reads.contains(&secondary_imc));
+            let messages = vfx.all_diagnostics().collect::<Vec<_>>();
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains(&secondary_mdl)
+                        && message.contains("vfx/secondary.atex"))
+            );
+            assert!(resource.reads.iter().all(|path| !path.contains("/b0002/")));
+        }
+    }
+
+    #[test]
+    fn paired_offhands_share_imc_but_use_their_own_effect_and_bind_points() {
+        for asynchronous in [false, true] {
+            for main_id in [326_u16, 1626, 1826, 2626, 3026, 3126] {
+                let off_id = main_id + 50;
+                let path =
+                    |id| format!("chara/weapon/w{id:04}/obj/body/b0001/model/w{id:04}b0001.mdl");
+                let mut model = model(1);
+                model.model_main =
+                    PackedModelId::from_raw(u64::from(main_id) | (1 << 16) | (1 << 32));
+                model.model_sub = Some(PackedModelId::from_raw(
+                    u64::from(off_id) | (2 << 16) | (1 << 32),
+                ));
+                model.loaded_paths = vec![path(main_id), path(off_id)];
+                let shared_imc = crate::weapon_body_imc_path(main_id, 1);
+                let main_avfx = crate::weapon_vfx_avfx_candidate_paths(main_id, 1, 1)[0]
+                    .1
+                    .clone();
+                let off_avfx = crate::weapon_vfx_avfx_candidate_paths(off_id, 1, 1)[0]
+                    .1
+                    .clone();
+                let mut resource = TestResource {
+                    files: HashMap::from([
+                        (shared_imc.clone(), imc(1)),
+                        (main_avfx.clone(), avfx(&[])),
+                        (off_avfx.clone(), avfx(&[])),
+                        (path(main_id), mdl([1.0, 2.0, 3.0])),
+                        (path(off_id), mdl([7.0, 8.0, 9.0])),
+                    ]),
+                    ..Default::default()
+                };
+                let vfx = load_attachments(&mut resource, &model, asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(vfx.attachments.len(), 2);
+                assert_eq!(vfx.attachments[1].model_path, path(off_id));
+                assert_eq!(vfx.model_skin_target_path(2), Some(path(main_id).as_str()));
+                assert_eq!(vfx.model_skin_target_path(4), Some(path(off_id).as_str()));
+                assert_eq!(vfx.attachments[1].data.avfx_path, off_avfx);
+                assert_eq!(
+                    vfx.attachments[1].data.bind_points[0].translate,
+                    [7.0, 8.0, 9.0]
+                );
+                assert_eq!(
+                    resource
+                        .reads
+                        .iter()
+                        .filter(|path| *path == &shared_imc)
+                        .count(),
+                    2
+                );
+                assert!(
+                    !resource
+                        .reads
+                        .contains(&crate::weapon_body_imc_path(off_id, 1))
+                );
+                // A missing offhand effect must not reuse the mainhand AVFX.
+                resource.files.remove(&off_avfx);
+                let vfx = load_attachments(&mut resource, &model, asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(vfx.attachments.len(), 1);
+                assert_eq!(vfx.model_skin_target_path(4), Some(path(off_id).as_str()));
+                assert!(vfx.diagnostics[0].contains(&off_avfx));
+            }
+        }
+    }
+
+    #[test]
+    fn imc_sharing_ranges_exclude_other_offhand_types() {
+        for (start, end) in [
+            (351, 400),
+            (1651, 1700),
+            (1851, 1900),
+            (2651, 2700),
+            (3051, 3100),
+            (3151, 3200),
+        ] {
+            for id in [start, end] {
+                assert_eq!(
+                    weapon_vfx_imc_path(id, 9),
+                    crate::weapon_body_imc_path(id - 50, 9)
+                );
+            }
+            for id in [start - 1, end + 1] {
+                assert_eq!(
+                    weapon_vfx_imc_path(id, 9),
+                    crate::weapon_body_imc_path(id, 9)
+                );
+            }
+        }
+        for id in [675, 2075, 2175, 2275, 2375, 2975] {
+            assert_eq!(
+                weapon_vfx_imc_path(id, 9),
+                crate::weapon_body_imc_path(id, 9)
+            );
+        }
+    }
+
+    #[test]
+    fn attachments_retain_partial_success_in_either_direction() {
+        for asynchronous in [false, true] {
+            for broken_primary in [false, true] {
+                let mut model = model(1);
+                let mut resource = resource(1);
+                let (secondary_mdl, secondary_imc, _) = add_secondary(&mut model, &mut resource);
+                let broken_path = if broken_primary {
+                    imc_path(1)
+                } else {
+                    secondary_imc
+                };
+                resource.files.insert(broken_path.clone(), vec![0]);
+                let vfx = load_attachments(&mut resource, &model, asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(vfx.attachments.len(), 1);
+                assert_eq!(vfx.model_skin_target_path(2), Some(mdl_path(1).as_str()));
+                assert_eq!(vfx.model_skin_target_path(4), Some(secondary_mdl.as_str()));
+                assert_eq!(
+                    vfx.attachments[0].model_path,
+                    if broken_primary {
+                        secondary_mdl
+                    } else {
+                        mdl_path(1)
+                    }
+                );
+                assert_eq!(vfx.diagnostics.len(), 1);
+                assert!(vfx.diagnostics[0].contains(&broken_path));
+            }
+        }
+    }
+
+    #[test]
+    fn attachments_support_secondary_only_and_report_failure_without_success() {
+        for asynchronous in [false, true] {
+            let mut model = model(1);
+            let mut resource = resource(1);
+            let (secondary_mdl, secondary_imc, _) = add_secondary(&mut model, &mut resource);
+            resource.files.insert(imc_path(1), imc(0));
+            let vfx = load_attachments(&mut resource, &model, asynchronous)
+                .unwrap()
+                .unwrap();
+            assert_eq!(vfx.attachments.len(), 1);
+            assert_eq!(vfx.attachments[0].model_path, secondary_mdl);
+            assert_eq!(vfx.model_skin_target_path(2), Some(mdl_path(1).as_str()));
+            assert_eq!(vfx.model_skin_target_path(4), Some(secondary_mdl.as_str()));
+            resource.files.insert(secondary_imc.clone(), vec![0]);
+            let error = load_attachments(&mut resource, &model, asynchronous).unwrap_err();
+            assert!(format!("{error:#}").contains(&secondary_imc));
+            resource.files.remove(&secondary_imc);
+            assert!(
+                load_attachments(&mut resource, &model, asynchronous)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn attachments_ignore_undeclared_unloaded_and_duplicate_secondary_models() {
+        for asynchronous in [false, true] {
+            for scenario in 0..3 {
+                let mut model = model(1);
+                let mut resource = resource(1);
+                let (secondary_mdl, _, _) = add_secondary(&mut model, &mut resource);
+                match scenario {
+                    0 => model.model_sub = None,
+                    1 => model.loaded_paths.retain(|path| path != &secondary_mdl),
+                    _ => model.model_sub = Some(model.model_main),
+                }
+                let vfx = load_attachments(&mut resource, &model, asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(vfx.attachments.len(), 1);
+                assert_eq!(vfx.model_skin_target_path(4), None);
+                assert!(resource.reads.iter().all(|path| !path.contains("w0065")));
+            }
+        }
+    }
+
+    #[test]
+    fn no_mount_does_not_search_another_body() {
+        for asynchronous in [false, true] {
+            for imc_bytes in [None, Some(imc(0))] {
+                let mut resource = resource(1);
+                if let Some(bytes) = imc_bytes {
+                    resource.files.insert(imc_path(2), bytes);
+                }
+                assert!(
+                    load(&mut resource, &model(2), asynchronous)
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(resource.reads, [imc_path(2)]);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_imc_reports_path_and_cause() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(1);
+            resource.files.insert(imc_path(2), vec![0]);
+            let error = load(&mut resource, &model(2), asynchronous).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains(&imc_path(2)) && message.contains("imc too short"));
+            assert_eq!(resource.reads, [imc_path(2)]);
+        }
+    }
+
+    #[test]
+    fn broken_mount_reports_all_candidates_without_borrowing_another_body() {
+        for asynchronous in [false, true] {
+            for malformed in [false, true] {
+                let mut resource = resource(1);
+                resource.files.insert(imc_path(2), imc(1));
+                if malformed {
+                    resource.files.insert(avfx_path(2, 0), vec![0]);
+                }
+                let message = format!(
+                    "{:#}",
+                    load(&mut resource, &model(2), asynchronous).unwrap_err()
+                );
+                assert!(message.contains(&imc_path(2)));
+                for index in 0..4 {
+                    assert!(message.contains(&avfx_path(2, index)));
+                }
+                if malformed {
+                    assert!(message.contains("failed to parse AVFX"));
+                }
+                assert!(resource.reads.iter().all(|path| path.contains("/b0002/")));
+            }
+        }
+    }
+
+    #[test]
+    fn filename_fallback_retains_errors_warnings_and_texture_slots() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(2);
+            resource.files.insert(avfx_path(2, 0), vec![0]);
+            let textures = ["vfx/missing.atex", "vfx/corrupt.atex", "vfx/good.atex"];
+            let mut children = block("TxCn", &2_u32.to_le_bytes());
+            for path in textures {
+                children.extend(block("Tex", format!("{path}\0").as_bytes()));
+            }
+            resource
+                .files
+                .insert(avfx_path(2, 2), block("AVFX", &children));
+            resource.files.insert(textures[1].to_string(), vec![0]);
+            resource.files.insert(textures[2].to_string(), texture());
+            let vfx = load(&mut resource, &model(2), asynchronous)
+                .unwrap()
+                .unwrap();
+            assert_eq!(vfx.avfx_path, avfx_path(2, 2));
+            assert_eq!(vfx.vfx_id, 1);
+            assert!(
+                vfx.diagnostics
+                    .iter()
+                    .any(|message| message.contains(&avfx_path(2, 0)))
+            );
+            assert!(
+                !vfx.diagnostics
+                    .iter()
+                    .any(|message| message.contains(&avfx_path(2, 1)))
+            );
+            assert!(
+                vfx.file
+                    .warnings
+                    .iter()
+                    .any(|message| message.contains("TxCn"))
+            );
+            assert_eq!(vfx.textures.len(), 3);
+            assert!(vfx.textures[0].is_none() && vfx.textures[1].is_none());
+            assert_eq!(vfx.textures[2].as_ref().unwrap().rgba, [255; 4]);
+            assert_eq!(vfx.bind_points[0].id, 4);
+            assert_eq!(vfx.bind_points[0].rotate, [0.1, 0.2, 0.3]);
+            for path in &textures[..2] {
+                assert!(vfx.diagnostics.iter().any(|message| message.contains(path)));
+            }
+        }
+    }
+
+    #[test]
+    fn vfx_loader_reports_incomplete_source_mip_chains() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(1);
+            let path = "vfx/truncated-mips.atex";
+            resource.files.insert(avfx_path(1, 0), avfx(&[path]));
+            resource
+                .files
+                .insert(path.to_string(), texture_with_truncated_mip());
+            let vfx = load(&mut resource, &model(1), asynchronous)
+                .unwrap()
+                .unwrap();
+            let texture = vfx.textures[0].as_ref().expect("base mip decoded");
+            assert_eq!(texture.source_mip_count, 2);
+            assert_eq!(texture.decoded_mip_count(), 1);
+            assert!(vfx.diagnostics.iter().any(|message| {
+                message.contains(path) && message.contains("decoded 1/2 levels")
+            }));
+        }
+    }
+
+    #[test]
+    fn resolved_primary_model_selects_both_mount_and_bind_points() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(1);
+            resource.files.extend([
+                (imc_path(2), imc(1)),
+                (avfx_path(2, 0), avfx(&[])),
+                (mdl_path(2), mdl([9.0; 3])),
+            ]);
+            let mut model = model(1);
+            model.loaded_paths.push(mdl_path(2));
+            let vfx = load(&mut resource, &model, asynchronous).unwrap().unwrap();
+            assert_eq!(vfx.avfx_path, avfx_path(1, 0));
+            assert_eq!(vfx.bind_points[0].translate, [1.0, 2.0, 3.0]);
+            assert!(vfx.skeleton.is_none());
+            assert_eq!(
+                vfx.diagnostics,
+                [format!(
+                    "VFX owner skeleton unavailable: {}",
+                    crate::weapon_skeleton_path(64)
+                )]
+            );
+            assert!(resource.reads.iter().all(|path| path.contains("/b0001/")));
+        }
+    }
+
+    #[test]
+    fn vfx_loader_keeps_model_and_bind_points_when_owner_skeleton_is_bad() {
+        for asynchronous in [false, true] {
+            for corrupt in [false, true] {
+                let mut resource = resource(2);
+                let path = crate::weapon_skeleton_path(64);
+                if corrupt {
+                    resource.files.insert(path.clone(), vec![0; 16]);
+                }
+                let vfx = load(&mut resource, &model(2), asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert!(vfx.skeleton.is_none());
+                assert_eq!(vfx.bind_points[0].translate, [1.0, 2.0, 3.0]);
+                assert!(
+                    vfx.diagnostics
+                        .iter()
+                        .any(|message| message.contains(&path))
+                );
+                assert!(resource.reads.contains(&path));
+                assert!(
+                    !path.contains("b0002"),
+                    "MDL body does not select base skeleton body"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bind_point_failures_are_reported_without_using_another_model() {
+        for asynchronous in [false, true] {
+            for missing in [false, true] {
+                let mut resource = resource(2);
+                resource.files.insert(mdl_path(1), mdl([9.0; 3]));
+                if missing {
+                    resource.files.remove(&mdl_path(2));
+                } else {
+                    resource.files.insert(mdl_path(2), vec![0]);
+                }
+                let vfx = load(&mut resource, &model(2), asynchronous)
+                    .unwrap()
+                    .unwrap();
+                assert!(vfx.bind_points.is_empty());
+                assert!(
+                    vfx.diagnostics
+                        .iter()
+                        .any(|message| message.contains(&mdl_path(2)))
+                );
+                assert!(!resource.reads.contains(&mdl_path(1)));
+            }
+        }
+    }
+
+    #[test]
+    fn absent_or_unrelated_primary_model_is_an_error() {
+        for asynchronous in [false, true] {
+            for paths in [Vec::new(), vec!["chara/unrelated.mdl".to_string()]] {
+                let mut resource = resource(2);
+                let mut model = model(2);
+                model.loaded_paths = paths;
+                assert!(load(&mut resource, &model, asynchronous).is_err());
+                assert!(resource.reads.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn equipment_style_gloves_do_not_search_weapon_bodies() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(2);
+            let mut model = model(2);
+            model.model_main = PackedModelId::from_raw(8822 | (1 << 16));
+            model.loaded_paths = vec!["chara/equipment/e8822/model/c0101e8822_glv.mdl".to_string()];
+            assert!(load(&mut resource, &model, asynchronous).unwrap().is_none());
+            assert!(resource.reads.is_empty());
+        }
+    }
+
+    #[test]
+    fn imc_read_failure_is_not_treated_as_an_absent_mount() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(2);
+            resource
+                .failures
+                .insert(imc_path(2), "permission revoked".to_string());
+            let message = format!(
+                "{:#}",
+                load(&mut resource, &model(2), asynchronous).unwrap_err()
+            );
+            assert!(message.contains(&imc_path(2)));
+            if asynchronous {
+                assert!(message.contains("permission revoked"));
+            }
+            assert_eq!(resource.reads, [imc_path(2)]);
+        }
+    }
+
+    #[test]
+    fn default_optional_read_does_not_guess_absence_from_error_text() {
+        struct UnknownFailure;
+        impl AsyncGameResource for UnknownFailure {
+            type Error = String;
+            type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
+
+            fn read<'a>(&'a mut self, _: &'a str) -> Self::ReadFuture<'a> {
+                std::future::ready(Err("not found or permission denied".to_string()))
+            }
+
+            fn platform(&self) -> physis::Platform {
+                physis::Platform::Win32
+            }
+        }
+        let error = futures_executor::block_on(load_weapon_vfx_from_async_resource(
+            &mut UnknownFailure,
+            &model(2),
+        ))
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(&imc_path(2)));
+        assert!(message.contains("not found or permission denied"));
+    }
+
+    #[test]
+    fn filename_fallback_preserves_read_failures_but_ignores_confirmed_absence() {
+        for asynchronous in [false, true] {
+            let mut resource = resource(2);
+            resource
+                .failures
+                .insert(avfx_path(2, 0), "permission revoked".to_string());
+            resource.files.insert(avfx_path(2, 2), avfx(&[]));
+            let vfx = load(&mut resource, &model(2), asynchronous)
+                .unwrap()
+                .unwrap();
+            assert_eq!(vfx.avfx_path, avfx_path(2, 2));
+            assert_eq!(vfx.diagnostics.len(), 2, "{:?}", vfx.diagnostics);
+            assert!(vfx.diagnostics[1].contains(&crate::weapon_skeleton_path(64)));
+            assert!(vfx.diagnostics[0].contains(&avfx_path(2, 0)));
+            if asynchronous {
+                assert!(vfx.diagnostics[0].contains("permission revoked"));
+            }
+        }
+    }
+
+    #[test]
+    fn asynchronous_read_failure_retains_resource_error() {
+        let mut resource = resource(2);
+        resource
+            .failures
+            .insert(avfx_path(2, 0), "permission revoked".to_string());
+        let message = format!("{:#}", load(&mut resource, &model(2), true).unwrap_err());
+        assert!(message.contains(&avfx_path(2, 0)));
+        assert!(message.contains("permission revoked"));
+    }
 }

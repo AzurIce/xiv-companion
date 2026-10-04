@@ -263,6 +263,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bcdec_rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f09c37bc0e9f0924b7dae9988265ef3c76c88538f41a3b06caf4bed07cee5226"
+
+[[package]]
 name = "binrw"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5107,10 +5113,12 @@ name = "xiv-companion-data"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bcdec_rs",
  "futures-executor",
  "half",
  "physis",
  "serde",
+ "serde_json",
  "tsify",
  "wasm-bindgen",
 ]
@@ -5124,6 +5132,7 @@ dependencies = [
  "half",
  "image",
  "pollster",
+ "serde_json",
  "wesl",
  "wgpu",
  "xiv-companion-data",

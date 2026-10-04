@@ -1,0 +1,6946 @@
+[
+  {
+    "mode": 0,
+    "source": 0,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 20,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          36,
+          -75
+        ],
+        "constructionState": [
+          1299350043,
+          4150927415,
+          1799713142,
+          2247676300
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 0,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 0,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 0,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 1,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 20,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          36,
+          -75
+        ],
+        "constructionState": [
+          1299350043,
+          4150927415,
+          1799713142,
+          2247676300
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 1,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 1,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 1,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 3,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 20,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          36,
+          -75
+        ],
+        "constructionState": [
+          1299350043,
+          4150927415,
+          1799713142,
+          2247676300
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 3,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 3,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 3,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 4,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": 2,
+            "modelBucket": 20,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          36,
+          -75
+        ],
+        "constructionState": [
+          1299350043,
+          4150927415,
+          1799713142,
+          2247676300
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3207593984,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 4,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 4,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 0,
+    "source": 4,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          -49,
+          -84
+        ],
+        "constructionState": [
+          448488982,
+          643481932,
+          934407046,
+          723553448
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3207971471,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          65,
+          -55
+        ],
+        "constructionState": [
+          2498575418,
+          420990039,
+          3358478731,
+          391216208
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3206755123,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 37,
+            "state": [
+              2498575418,
+              420990039,
+              3358478731,
+              391216208
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 0,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3203618675,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 0,
+            "paletteOffset": 3208195065,
+            "modelValue": 1,
+            "modelBucket": 1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3201409618,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 28,
+            "state": [
+              2381680799,
+              830734233,
+              2059906653,
+              544153312
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 0,
+            "paletteOffset": 3206166106,
+            "modelValue": 0,
+            "modelBucket": 5,
+            "draws": 30,
+            "state": [
+              2059906653,
+              544153312,
+              20906778,
+              795757459
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3206855653,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 33,
+            "state": [
+              795757459,
+              1755102565,
+              811349640,
+              3380790346
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 0,
+            "paletteOffset": 3199445044,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 36,
+            "state": [
+              3380790346,
+              2498575418,
+              420990039,
+              3358478731
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3137093107,
+          821167952,
+          2328167796,
+          3450572369
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 0,
+            "paletteOffset": 3204555586,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3202104156,
+            "modelValue": 1,
+            "modelBucket": 1,
+            "draws": 56,
+            "state": [
+              2496082361,
+              93322358,
+              2330895300,
+              3891095700
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3197218066,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 59,
+            "state": [
+              3891095700,
+              1242220329,
+              807202386,
+              3474168598
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3205778388,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 61,
+            "state": [
+              807202386,
+              3474168598,
+              1127670696,
+              1595496296
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3200414018,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 64,
+            "state": [
+              1595496296,
+              2292206759,
+              3677928846,
+              803679970
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3206777828,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 67,
+            "state": [
+              803679970,
+              3134234209,
+              815741160,
+              777332664
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 0,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 0,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3201409618,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 27,
+            "state": [
+              2728332712,
+              2381680799,
+              830734233,
+              2059906653
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 0,
+            "paletteOffset": 3208540926,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 29,
+            "state": [
+              830734233,
+              2059906653,
+              544153312,
+              20906778
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3200424515,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 31,
+            "state": [
+              544153312,
+              20906778,
+              795757459,
+              1755102565
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          2247676300,
+          1547958642,
+          4203610453,
+          3120566707
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206612577,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 0,
+            "paletteOffset": 3208463869,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 49,
+            "state": [
+              4181181390,
+              3137093107,
+              821167952,
+              2328167796
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207538415,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207013223,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3202104156,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3199784505,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 57,
+            "state": [
+              93322358,
+              2330895300,
+              3891095700,
+              1242220329
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 0,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 0,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3201409618,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 27,
+            "state": [
+              2728332712,
+              2381680799,
+              830734233,
+              2059906653
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 0,
+            "paletteOffset": 3208540926,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 29,
+            "state": [
+              830734233,
+              2059906653,
+              544153312,
+              20906778
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3200424515,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 31,
+            "state": [
+              544153312,
+              20906778,
+              795757459,
+              1755102565
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          2247676300,
+          1547958642,
+          4203610453,
+          3120566707
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206612577,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 0,
+            "paletteOffset": 3208463869,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 49,
+            "state": [
+              4181181390,
+              3137093107,
+              821167952,
+              2328167796
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207538415,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207013223,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3202104156,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3199784505,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 57,
+            "state": [
+              93322358,
+              2330895300,
+              3891095700,
+              1242220329
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 0,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 0,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3201409618,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 27,
+            "state": [
+              2728332712,
+              2381680799,
+              830734233,
+              2059906653
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 0,
+            "paletteOffset": 3208540926,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 29,
+            "state": [
+              830734233,
+              2059906653,
+              544153312,
+              20906778
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3200424515,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 31,
+            "state": [
+              544153312,
+              20906778,
+              795757459,
+              1755102565
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          2247676300,
+          1547958642,
+          4203610453,
+          3120566707
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": 1,
+            "paletteOffset": 3206612577,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 47,
+            "state": [
+              4203610453,
+              3120566707,
+              4181181390,
+              3137093107
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": 0,
+            "paletteOffset": 3208463869,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 49,
+            "state": [
+              4181181390,
+              3137093107,
+              821167952,
+              2328167796
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207538415,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": 1,
+            "paletteOffset": 3207013223,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": 1,
+            "paletteOffset": 3202104156,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": 1,
+            "paletteOffset": 3199784505,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 57,
+            "state": [
+              93322358,
+              2330895300,
+              3891095700,
+              1242220329
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 1,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3197401364,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3198939948,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3208195065,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3196085760,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3201409618,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 28,
+            "state": [
+              2381680799,
+              830734233,
+              2059906653,
+              544153312
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3208540926,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 30,
+            "state": [
+              2059906653,
+              544153312,
+              20906778,
+              795757459
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          1799713142,
+          2247676300,
+          1547958642,
+          4203610453
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3208062583,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3206612577,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 48,
+            "state": [
+              3120566707,
+              4181181390,
+              3137093107,
+              821167952
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3208463869,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 50,
+            "state": [
+              3137093107,
+              821167952,
+              2328167796,
+              3450572369
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3207538415,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3204555586,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3196291332,
+            "modelValue": 1,
+            "modelBucket": 20,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 1,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 1,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 1,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -2,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -2,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -2,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -2,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -2,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 3,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3197401364,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3198939948,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3208195065,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3196085760,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3201409618,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 28,
+            "state": [
+              2381680799,
+              830734233,
+              2059906653,
+              544153312
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3208540926,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 30,
+            "state": [
+              2059906653,
+              544153312,
+              20906778,
+              795757459
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          1799713142,
+          2247676300,
+          1547958642,
+          4203610453
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3208062583,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3206612577,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 48,
+            "state": [
+              3120566707,
+              4181181390,
+              3137093107,
+              821167952
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3208463869,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 50,
+            "state": [
+              3137093107,
+              821167952,
+              2328167796,
+              3450572369
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3207538415,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3204555586,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3196291332,
+            "modelValue": 1,
+            "modelBucket": 20,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 3,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 3,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 3,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -5,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -5,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -5,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -5,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -5,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 4,
+    "palette": true,
+    "light": false,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3197401364,
+            "modelValue": 1,
+            "modelBucket": 0,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3198939948,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3208195065,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3196085760,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 26,
+            "state": [
+              449460396,
+              2728332712,
+              2381680799,
+              830734233
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3201409618,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 28,
+            "state": [
+              2381680799,
+              830734233,
+              2059906653,
+              544153312
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3208540926,
+            "modelValue": 0,
+            "modelBucket": 20,
+            "draws": 30,
+            "state": [
+              2059906653,
+              544153312,
+              20906778,
+              795757459
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          1799713142,
+          2247676300,
+          1547958642,
+          4203610453
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3208062583,
+            "modelValue": 2,
+            "modelBucket": 0,
+            "draws": 46,
+            "state": [
+              1547958642,
+              4203610453,
+              3120566707,
+              4181181390
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3206612577,
+            "modelValue": 0,
+            "modelBucket": 1,
+            "draws": 48,
+            "state": [
+              3120566707,
+              4181181390,
+              3137093107,
+              821167952
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3208463869,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 50,
+            "state": [
+              3137093107,
+              821167952,
+              2328167796,
+              3450572369
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3207538415,
+            "modelValue": 1,
+            "modelBucket": 5,
+            "draws": 51,
+            "state": [
+              821167952,
+              2328167796,
+              3450572369,
+              2531467698
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3204555586,
+            "modelValue": 0,
+            "modelBucket": 0,
+            "draws": 53,
+            "state": [
+              3450572369,
+              2531467698,
+              915111097,
+              2496082361
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3196291332,
+            "modelValue": 1,
+            "modelBucket": 20,
+            "draws": 55,
+            "state": [
+              915111097,
+              2496082361,
+              93322358,
+              2330895300
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 4,
+    "palette": true,
+    "light": false,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 4,
+    "palette": true,
+    "light": true,
+    "emptyModels": false,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "mode": 3,
+    "source": 4,
+    "palette": true,
+    "light": true,
+    "emptyModels": true,
+    "instances": [
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          4061953237,
+          2129415220,
+          448488982,
+          643481932
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3197401364,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 20,
+            "state": [
+              2129415220,
+              448488982,
+              643481932,
+              934407046
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3203618675,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 21,
+            "state": [
+              448488982,
+              643481932,
+              934407046,
+              723553448
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3198939948,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 22,
+            "state": [
+              643481932,
+              934407046,
+              723553448,
+              3932869644
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3206785508,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 23,
+            "state": [
+              934407046,
+              723553448,
+              3932869644,
+              449460396
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208195065,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 24,
+            "state": [
+              723553448,
+              3932869644,
+              449460396,
+              2728332712
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3203358831,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 25,
+            "state": [
+              3932869644,
+              449460396,
+              2728332712,
+              2381680799
+            ]
+          }
+        ]
+      },
+      {
+        "first": [
+          0,
+          0
+        ],
+        "constructionState": [
+          3358478731,
+          391216208,
+          3936394860,
+          1299350043
+        ],
+        "steps": [
+          {
+            "age": 0,
+            "total": 1084227584,
+            "texture": -1,
+            "paletteOffset": 3207586928,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 40,
+            "state": [
+              391216208,
+              3936394860,
+              1299350043,
+              4150927415
+            ]
+          },
+          {
+            "age": 1080033280,
+            "total": 1091043328,
+            "texture": -1,
+            "paletteOffset": 3204924615,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 41,
+            "state": [
+              3936394860,
+              1299350043,
+              4150927415,
+              1799713142
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3199103790,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 42,
+            "state": [
+              1299350043,
+              4150927415,
+              1799713142,
+              2247676300
+            ]
+          },
+          {
+            "age": 1092616192,
+            "total": 1097859072,
+            "texture": -1,
+            "paletteOffset": 3196488967,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 43,
+            "state": [
+              4150927415,
+              1799713142,
+              2247676300,
+              1547958642
+            ]
+          },
+          {
+            "age": 3204448256,
+            "total": 1083179008,
+            "texture": -1,
+            "paletteOffset": 3208598911,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 44,
+            "state": [
+              1799713142,
+              2247676300,
+              1547958642,
+              4203610453
+            ]
+          },
+          {
+            "age": 1109393408,
+            "total": 1110704128,
+            "texture": -1,
+            "paletteOffset": 3208062583,
+            "modelValue": -1,
+            "modelBucket": -1,
+            "draws": 45,
+            "state": [
+              2247676300,
+              1547958642,
+              4203610453,
+              3120566707
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

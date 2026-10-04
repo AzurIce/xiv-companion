@@ -57,6 +57,8 @@ pub use xiv_companion_data::weapon_models::{
     load_furniture_model_from_async_resource, load_furniture_model_from_resource,
     load_weapon_model_from_async_resource, load_weapon_model_from_game_dir,
     load_weapon_model_from_resource, load_weapon_model_from_resource_request,
+    load_weapon_vfx_attachments_from_async_resource, load_weapon_vfx_attachments_from_resource,
     load_weapon_vfx_from_async_resource, load_weapon_vfx_from_resource,
     material_debug_info_from_mtrl_bytes, material_debug_info_from_resource, meshes_from_mdl_bytes,
+    weapon_vfx_imc_path,
 };

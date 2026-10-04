@@ -29,8 +29,8 @@ use xiv_companion::{
     CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
     FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAnimationSet,
     ModelAttributeOption, ModelSkeleton, PackedCharaModelId, PackedEquipmentModelId, PackedModelId,
-    WeaponModelData, WeaponModelTextureKind, WeaponStain, WeaponVfxData, equipment_slot_info,
-    is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
+    WeaponModelData, WeaponModelTextureKind, WeaponStain, WeaponVfxAttachments,
+    equipment_slot_info, is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
@@ -320,8 +320,8 @@ struct ModelResourceResult {
     skeleton: Option<Rc<ModelSkeleton>>,
     /// 宠物/坐骑的动画集（pap 候选全缺为 None）。
     animations: Option<Rc<ModelAnimationSet>>,
-    /// 武器常驻 VFX（imc 无 VfxId / 资源缺失为 None）。
-    vfx: Option<Rc<WeaponVfxData>>,
+    /// 武器常驻 VFX；错误独立于模型加载结果。
+    vfx: Result<Option<Rc<WeaponVfxAttachments>>, String>,
 }
 
 #[derive(Clone)]
@@ -330,7 +330,7 @@ struct ModelPreviewResult {
     result: Result<Rc<WeaponModelData>, String>,
     skeleton: Option<Rc<ModelSkeleton>>,
     animations: Option<Rc<ModelAnimationSet>>,
-    vfx: Option<Rc<WeaponVfxData>>,
+    vfx: Result<Option<Rc<WeaponVfxAttachments>>, String>,
 }
 
 impl PartialEq for ModelPreviewResult {
@@ -343,10 +343,15 @@ impl PartialEq for ModelPreviewResult {
             (Err(left), Err(right)) => left == right,
             _ => false,
         };
+        let vfx_eq = match (&self.vfx, &other.vfx) {
+            (Ok(left), Ok(right)) => optional_rc_eq(left, right),
+            (Err(left), Err(right)) => left == right,
+            _ => false,
+        };
         result_eq
             && optional_rc_eq(&self.skeleton, &other.skeleton)
             && optional_rc_eq(&self.animations, &other.animations)
-            && optional_rc_eq(&self.vfx, &other.vfx)
+            && vfx_eq
     }
 }
 
@@ -582,26 +587,31 @@ pub fn ModelPreviewPage() -> Element {
             let (result, skeleton, animations, vfx) = match &item {
                 ModelCatalogItem::Equipment(equipment) => match model_preview_support(equipment) {
                     ModelPreviewSupport::Weapon => {
-                        // 模型先行，VFX 随后（读取很小）；失败互不阻塞。
+                        // VFX follows the resolved primary MDL; its errors do not hide the model.
                         let result = load_weapon_model(equipment).await;
-                        let vfx = load_weapon_vfx(equipment).await;
+                        let vfx = match &result {
+                            Ok(model) => load_weapon_vfx(model).await,
+                            Err(_) => Ok(None),
+                        };
                         (result, None, None, vfx)
                     }
                     ModelPreviewSupport::Equipment => (
                         load_equipment_model(equipment, race_id).await,
                         None,
                         None,
-                        None,
+                        Ok(None),
                     ),
                     _ => return None,
                 },
                 ModelCatalogItem::Furniture(furniture) => {
-                    (load_furniture_model(furniture).await, None, None, None)
+                    (load_furniture_model(furniture).await, None, None, Ok(None))
                 }
                 ModelCatalogItem::Chara(chara) => {
                     match load_chara_model_with_animation_assets(chara).await {
-                        Ok((data, skeleton, animations)) => (Ok(data), skeleton, animations, None),
-                        Err(error) => (Err(error), None, None, None),
+                        Ok((data, skeleton, animations)) => {
+                            (Ok(data), skeleton, animations, Ok(None))
+                        }
+                        Err(error) => (Err(error), None, None, Ok(None)),
                     }
                 }
             };
@@ -822,7 +832,7 @@ pub fn ModelPreviewPage() -> Element {
                         .map(|catalog| catalog.stains.clone())
                         .unwrap_or_default();
                     rsx! {
-                        div { class: "grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[280px_minmax(0,1fr)]",
+                        div { class: "grid min-h-0 flex-1 grid-rows-[18rem_max-content] overflow-y-auto lg:grid-cols-[280px_minmax(0,1fr)] lg:grid-rows-1 lg:overflow-hidden",
                             ModelSearchPane {
                                 total_items,
                                 query: query_snapshot,
@@ -1071,12 +1081,22 @@ fn ModelPreviewPane(
         .and_then(|snapshot| snapshot.animations.clone());
     let current_vfx = current_snapshot
         .as_ref()
-        .and_then(|snapshot| snapshot.vfx.clone());
+        .and_then(|snapshot| snapshot.vfx.as_ref().ok())
+        .cloned()
+        .flatten();
+    let current_vfx_error = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.vfx.as_ref().err())
+        .cloned();
+    let current_vfx_diagnostics = current_vfx
+        .as_ref()
+        .map(|vfx| vfx.diagnostic_groups())
+        .unwrap_or_default();
     let current_progress =
         requested_key.and_then(|key| progress.filter(|progress| progress.item_id == key.item_id));
 
     rsx! {
-        section { class: "flex min-h-0 min-w-0 flex-col overflow-hidden bg-background",
+        section { class: "flex min-h-0 min-w-0 flex-col overflow-y-auto bg-background xl:overflow-hidden",
             if let Some(item) = selected.clone() {
                 div { class: "shrink-0 border-b p-4",
                     div { class: "flex min-w-0 flex-wrap items-center gap-3",
@@ -1112,8 +1132,8 @@ fn ModelPreviewPane(
                 }
 
                 if previewable {
-                    div { class: "flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row",
-                        div { class: "relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#0e1117]",
+                    div { class: "flex min-h-0 shrink-0 flex-col xl:flex-1 xl:flex-row xl:overflow-hidden",
+                        div { class: "relative h-80 min-w-0 shrink-0 overflow-hidden bg-[#0e1117] xl:h-auto xl:min-h-0 xl:flex-1",
                             {
                                 // 画布在物品切换、加载中与出错期间始终挂载，加载与错误
                                 // 状态用浮层覆盖，避免切换物品时重复初始化 WebGPU。
@@ -1195,6 +1215,32 @@ fn ModelPreviewPane(
                                     let animations = current_animations.clone();
                                     rsx! {
                                         div { class: "space-y-4",
+                                            if let Some(error) = current_vfx_error {
+                                                details { class: "border-b pb-3 text-xs text-amber-600 dark:text-amber-400",
+                                                    summary { class: "cursor-pointer font-medium", "VFX 读取失败" }
+                                                    p { class: "mt-2 whitespace-pre-wrap break-all", "{error}" }
+                                                }
+                                            }
+                                            if !current_vfx_diagnostics.is_empty() {
+                                                details { class: "border-b pb-3 text-xs text-amber-600 dark:text-amber-400",
+                                                    summary { class: "cursor-pointer font-medium", "VFX 预览差异（{current_vfx_diagnostics.len()} 类）" }
+                                                    ul { class: "mt-2 space-y-3",
+                                                        for (index, diagnostic) in current_vfx_diagnostics.iter().enumerate() {
+                                                            li { key: "{index}",
+                                                                p { "{vfx_limitation_label(&diagnostic.message)}" }
+                                                                details { class: "mt-1",
+                                                                    summary { class: "cursor-pointer", "查看涉及的 {diagnostic.details.len()} 处" }
+                                                                    ul { class: "mt-2 list-inside list-disc space-y-2 break-all",
+                                                                        for (detail_index, detail) in diagnostic.details.iter().enumerate() {
+                                                                            li { key: "{detail_index}", "{detail}" }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             WeaponRenderControls {
                                                 options: render_options,
                                                 model: data.clone(),
@@ -1272,6 +1318,22 @@ fn ModelPreviewPane(
                 }
             }
         }
+    }
+}
+
+fn vfx_limitation_label(message: &str) -> &str {
+    if message.contains("bATM=1 tone-map") {
+        "粒子亮度可能与游戏有差异：逐粒子色调映射尚未支持。"
+    } else if message.contains("bAFg=1 requests particle fog") {
+        "特效暂不受场景雾影响。"
+    } else if message.contains("bNea=1 near clip") {
+        "特效的近距离裁剪尚未支持。"
+    } else if message.contains("bFar=1 far clip") {
+        "特效的远距离裁剪尚未支持。"
+    } else if message.contains("lighting selections are parsed") {
+        "部分特效光照模式尚未支持。"
+    } else {
+        "部分特效资源或参数无法完整预览，具体影响见下方详情。"
     }
 }
 
@@ -1989,9 +2051,9 @@ const WEAPON_MODEL_CANVAS_ID: &str = "weapon-model-canvas";
 #[component]
 pub(crate) fn WeaponModelCanvas(
     model: Option<Rc<WeaponModelData>>,
-    /// 武器常驻 VFX（imc VfxId 命中时 Some）；随模型实例一起重建。
+    /// 武器常驻 VFX（imc VfxId 命中时 Some）；模型重建或 VFX 替换时重新上传。
     #[props(default)]
-    vfx: Option<Rc<WeaponVfxData>>,
+    vfx: Option<Rc<WeaponVfxAttachments>>,
     render_options: Signal<WeaponRenderOptions>,
     shape_mask: Option<u32>,
     race_id: u16,
@@ -2027,6 +2089,7 @@ pub(crate) fn WeaponModelCanvas(
         let animation_signal = use_signal(|| animation.clone());
         // 实例重建计数：set_model 后递增，rAF 循环据此刷新 joint 名表缓存。
         let joint_epoch = use_signal(|| 0_u64);
+        let vfx_epoch = use_signal(|| 0_u64);
         let instance_key = model.as_ref().map(|model| {
             model_instance_key(
                 model,
@@ -2049,6 +2112,7 @@ pub(crate) fn WeaponModelCanvas(
         let mut effect_in_flight = init_in_flight;
         let effect_animation = animation_signal;
         let mut effect_joint_epoch = joint_epoch;
+        let mut effect_vfx_epoch = vfx_epoch;
         use_effect(use_reactive((&instance_key, &msaa_setting), move |_| {
             if *effect_in_flight.peek() {
                 return;
@@ -2096,6 +2160,7 @@ pub(crate) fn WeaponModelCanvas(
                             options,
                             effect_animation,
                             effect_joint_epoch,
+                            effect_vfx_epoch,
                             effect_generation,
                             generation,
                         )
@@ -2150,7 +2215,6 @@ pub(crate) fn WeaponModelCanvas(
             let orbit_key = model_orbit_reset_key(&model, race_id);
             let mut renderer = renderer.borrow_mut();
             renderer.set_model(&model, prepared_options);
-            renderer.set_vfx(vfx.as_deref());
             // 实例重建后 joint 名表/缓冲均重置（rest）：rAF 循环据此刷新动画运行时。
             let next_epoch = *effect_joint_epoch.peek() + 1;
             effect_joint_epoch.set(next_epoch);
@@ -2158,6 +2222,22 @@ pub(crate) fn WeaponModelCanvas(
                 renderer.reset_orbit();
                 last_orbit_key.set(Some(orbit_key));
             }
+        }));
+
+        // VFX can recover or be replaced without changing the model instance key.
+        let set_vfx_key = (set_model_key, vfx.as_ref().map(Rc::as_ptr));
+        use_effect(use_reactive((&set_vfx_key,), move |_| {
+            if instance_key.is_none() {
+                return;
+            }
+            let Some(renderer) = renderer.peek().clone() else {
+                return;
+            };
+            renderer
+                .borrow_mut()
+                .set_vfx(vfx.as_deref(), *render_options.peek());
+            let next_epoch = *effect_vfx_epoch.peek() + 1;
+            effect_vfx_epoch.set(next_epoch);
         }));
 
         // 染色变化走增量材质更新，不重建实例。
@@ -2215,6 +2295,7 @@ fn start_weapon_render_loop(
     render_options: Signal<WeaponRenderOptions>,
     animation: Signal<Option<AnimationPlaybackState>>,
     joint_epoch: Signal<u64>,
+    vfx_epoch: Signal<u64>,
     generation: Signal<u64>,
     expected_generation: u64,
 ) {
@@ -2223,6 +2304,7 @@ fn start_weapon_render_loop(
     let callback_slot_for_loop = callback_slot.clone();
     let renderer_for_loop = renderer.clone();
     let mut animation_runtime: Option<AnimationLoopRuntime> = None;
+    let mut vfx_clock: Option<(u64, f64)> = None;
 
     *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
         let connected = {
@@ -2237,7 +2319,15 @@ fn start_weapon_render_loop(
                 );
                 let mut options = render_options();
                 options.uv_scroll_time = (time_ms as f32) / 1000.0;
-                options.vfx_time = (time_ms as f32) / 1000.0;
+                let epoch = *vfx_epoch.peek();
+                let started_at = match vfx_clock {
+                    Some((previous_epoch, started_at)) if previous_epoch == epoch => started_at,
+                    _ => {
+                        vfx_clock = Some((epoch, time_ms));
+                        time_ms
+                    }
+                };
+                options.vfx_time = ((time_ms - started_at).max(0.0) / 1000.0) as f32;
                 renderer.render_with_options(options);
                 true
             } else {
@@ -2818,6 +2908,31 @@ fn attribute_option_label(option: &ModelAttributeOption) -> String {
 #[cfg(test)]
 mod model_preview_tests {
     use super::*;
+
+    #[test]
+    fn preview_updates_when_vfx_fails_or_recovers_without_changing_model() {
+        let loaded = ModelPreviewResult {
+            key: ModelRequestKey {
+                item_id: 42,
+                race_id: 101,
+                stain_ids: [0; 2],
+            },
+            result: Ok(Rc::new(test_shape_model())),
+            skeleton: None,
+            animations: None,
+            vfx: Ok(None),
+        };
+        let mut changed = loaded.clone();
+        changed.vfx = Err("AVFX resource failed".to_string());
+        assert!(changed != loaded);
+        assert!(changed == changed.clone());
+        let failed = changed.clone();
+        changed.vfx = Err("another resource failed".to_string());
+        assert!(changed != failed);
+        changed.vfx = Ok(Some(Rc::new(WeaponVfxAttachments::default())));
+        assert!(changed != failed && changed != loaded);
+        assert!(changed == changed.clone());
+    }
 
     #[test]
     fn parses_model_preview_url_state_from_hash() {

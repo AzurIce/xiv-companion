@@ -245,8 +245,22 @@
   .collapse {
     visibility: collapse;
   }
+  .invisible {
+    visibility: hidden;
+  }
   .visible {
     visibility: visible;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border-width: 0;
   }
   .absolute {
     position: absolute;
@@ -503,6 +517,9 @@
   .h-64 {
     height: calc(var(--spacing) * 64);
   }
+  .h-80 {
+    height: calc(var(--spacing) * 80);
+  }
   .h-\[320px\] {
     height: 320px;
   }
@@ -698,6 +715,9 @@
   .flex-1 {
     flex: 1;
   }
+  .flex-shrink {
+    flex-shrink: 1;
+  }
   .shrink-0 {
     flex-shrink: 0;
   }
@@ -736,6 +756,9 @@
   }
   .touch-none {
     touch-action: none;
+  }
+  .list-inside {
+    list-style-position: inside;
   }
   .list-disc {
     list-style-type: disc;
@@ -787,6 +810,9 @@
   }
   .grid-cols-\[repeat\(auto-fill\,minmax\(1\.25rem\,1fr\)\)\] {
     grid-template-columns: repeat(auto-fill,minmax(1.25rem,1fr));
+  }
+  .grid-rows-\[18rem_max-content\] {
+    grid-template-rows: 18rem max-content;
   }
   .grid-rows-\[minmax\(0\,1fr\)\] {
     grid-template-rows: minmax(0,1fr);
@@ -1627,6 +1653,10 @@
   .uppercase {
     text-transform: uppercase;
   }
+  .ordinal {
+    --tw-ordinal: ordinal;
+    font-variant-numeric: var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) var(--tw-numeric-fraction,);
+  }
   .tabular-nums {
     --tw-numeric-spacing: tabular-nums;
     font-variant-numeric: var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) var(--tw-numeric-fraction,);
@@ -2326,6 +2356,11 @@
       grid-template-columns: minmax(0,1fr) 360px;
     }
   }
+  .lg\:grid-rows-1 {
+    @media (width >= 64rem) {
+      grid-template-rows: repeat(1, minmax(0, 1fr));
+    }
+  }
   .lg\:grid-rows-\[minmax\(0\,1fr\)_320px\] {
     @media (width >= 64rem) {
       grid-template-rows: minmax(0,1fr) 320px;
@@ -2425,6 +2460,11 @@
   .xl\:w-64 {
     @media (width >= 80rem) {
       width: calc(var(--spacing) * 64);
+    }
+  }
+  .xl\:flex-1 {
+    @media (width >= 80rem) {
+      flex: 1;
     }
   }
   .xl\:grid-cols-1 {
@@ -2558,6 +2598,11 @@
     @media (width >= 96rem) {
       border-bottom-style: var(--tw-border-style);
       border-bottom-width: 0px;
+    }
+  }
+  .dark\:text-amber-400 {
+    @media (prefers-color-scheme: dark) {
+      color: var(--color-amber-400);
     }
   }
 }

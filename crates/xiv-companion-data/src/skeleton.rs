@@ -555,6 +555,12 @@ pub fn character_skeleton_path(race_code: u16) -> String {
     format!("chara/human/c{race_code:04}/skeleton/base/b0001/skl_c{race_code:04}b0001.sklb")
 }
 
+/// Weapon owner's base skeleton (independent of the resolved MDL body ID).
+/// Additional partial skeletons and character-hand attachment are separate.
+pub fn weapon_skeleton_path(model_id: u16) -> String {
+    format!("chara/weapon/w{model_id:04}/skeleton/base/b0001/skl_w{model_id:04}b0001.sklb")
+}
+
 /// 宠物/坐骑骨架 sklb 路径（monster/demihuman 两套模板）。
 pub fn skeleton_path_for_chara_model(model: PackedCharaModelId) -> String {
     match model.chara_type {

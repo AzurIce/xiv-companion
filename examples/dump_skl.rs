@@ -12,16 +12,14 @@ fn main() {
     let game_dir = xiv_companion::game_data::normalize_game_dir(&raw_dir).expect("normalize");
     let mut resource = SqPackResource::from_existing(game_dir.to_str().expect("utf8"));
     let bytes = resource.read(&path).expect("read sklb");
-    let skeleton =
-        xiv_companion::load_skeleton_from_sklb_bytes(&bytes).expect("parse skeleton");
+    let skeleton = xiv_companion::load_skeleton_from_sklb_bytes(&bytes).expect("parse skeleton");
     let pose = xiv_companion::SkeletonPose::rest_pose(&skeleton);
     let world = xiv_companion::world_matrices(&skeleton, &pose);
     for (i, name) in skeleton.bone_names.iter().enumerate() {
         let m = world[i];
         eprintln!(
             "bone {i}: {name} parent={} world_pos=({:.3}, {:.3}, {:.3})",
-            skeleton.parent_indices[i],
-            m[12], m[13], m[14]
+            skeleton.parent_indices[i], m[12], m[13], m[14]
         );
     }
 }

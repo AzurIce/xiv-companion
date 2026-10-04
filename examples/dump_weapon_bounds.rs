@@ -15,13 +15,18 @@ fn main() {
     )
     .expect("catalog");
     for item_id in [16053_u32, 15264] {
-        let item = catalog.items.iter().find(|i| i.id == item_id).expect("item");
+        let item = catalog
+            .items
+            .iter()
+            .find(|i| i.id == item_id)
+            .expect("item");
         let request = xiv_companion::WeaponModelLoadRequest::from(item);
-        let model =
-            xiv_companion::load_weapon_model_from_resource_request(&mut resource, &request)
-                .expect("model");
+        let model = xiv_companion::load_weapon_model_from_resource_request(&mut resource, &request)
+            .expect("model");
         let b = model.bounds();
-        eprintln!("item {item_id}: bounds min={:?} max={:?} center={:?} r={:.3}",
-            b.min, b.max, b.center, b.radius);
+        eprintln!(
+            "item {item_id}: bounds min={:?} max={:?} center={:?} r={:.3}",
+            b.min, b.max, b.center, b.radius
+        );
     }
 }

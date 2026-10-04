@@ -215,6 +215,17 @@ pub(crate) fn create_mipped_rgba_texture(
     semantic: RgbaMipSemantic,
 ) -> wgpu::Texture {
     let levels = rgba_mip_chain(width, height, rgba, semantic);
+    create_rgba_texture_from_mips(device, queue, label, &levels, semantic)
+}
+
+pub(crate) fn create_rgba_texture_from_mips(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    levels: &[RgbaMipLevel],
+    semantic: RgbaMipSemantic,
+) -> wgpu::Texture {
+    let base = levels.first().expect("RGBA mip chain has a base level");
     let format = match semantic {
         RgbaMipSemantic::SrgbColor => wgpu::TextureFormat::Rgba8UnormSrgb,
         RgbaMipSemantic::LinearData | RgbaMipSemantic::PackedNormalRg => {
@@ -224,8 +235,8 @@ pub(crate) fn create_mipped_rgba_texture(
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
-            width,
-            height,
+            width: base.width,
+            height: base.height,
             depth_or_array_layers: 1,
         },
         mip_level_count: levels.len() as u32,

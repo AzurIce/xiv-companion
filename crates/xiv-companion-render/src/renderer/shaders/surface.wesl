@@ -171,6 +171,7 @@ struct SurfaceState {
     material_specular: vec3<f32>,
     anisotropy: f32,
     emissive: vec3<f32>,
+    emissive_texture_term: vec3<f32>,
     color_table_emissive: vec3<f32>,
     lightshaft: vec4<f32>,
     alpha: f32,
@@ -269,8 +270,9 @@ fn resolve_surface_state(
     );
     out.alpha = select(surface_alpha, out.lightshaft.a, pass_flags.is_lightshaft);
     out.emissive = resolve_emissive(samples.emissive);
+    out.emissive_texture_term = samples.emissive * material.emissive_color.a;
     out.color_table_emissive =
-        samples.emissive * material.emissive_color.a * camera.dynamic_emissive_color.rgb;
+        out.emissive_texture_term * camera.dynamic_emissive_color.rgb;
     return out;
 }
 

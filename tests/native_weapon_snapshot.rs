@@ -167,6 +167,52 @@ fn render_mock_weapon_model_snapshot() {
 }
 
 #[test]
+#[cfg(feature = "game-data")]
+#[ignore = "renders installed shield 16063 using the browser's requested device limits"]
+fn render_installed_shield_with_browser_device_limits() {
+    let game_dir = std::env::var("XIV_GAME_DIR").expect("installed game directory");
+    let request = WeaponModelLoadRequest {
+        item_id: 16_063,
+        item_name: "圣母盾·灵光".to_string(),
+        model_main: 0x0000_0001_0002_0069,
+        model_sub: 0,
+        stain_ids: [0, 0],
+    };
+    let mut resource = SqPackResource::from_existing(&game_dir);
+    let model = load_weapon_model_from_resource_request(&mut resource, &request)
+        .expect("load installed shield");
+    for msaa_samples in [1, 4] {
+        let snapshot = render_weapon_model_snapshot_with_options(
+            WeaponModelSnapshotOptions::new(format!("browser-limits-shield-16063-{msaa_samples}x"))
+                .with_viewport(640, 640)
+                .with_camera(0.65, 0.35, 3.2, [0.0, 0.0])
+                .with_render_options(ModelRenderOptions {
+                    msaa_samples,
+                    ..Default::default()
+                }),
+            &model,
+        )
+        .expect("render shield with browser limits");
+        let pixels = image::open(&snapshot.png_path)
+            .expect("read shield snapshot")
+            .to_rgba8();
+        let background = *pixels.get_pixel(0, 0);
+        let visible_pixels = pixels
+            .pixels()
+            .filter(|pixel| **pixel != background)
+            .count();
+        assert!(
+            visible_pixels > 1_000,
+            "MSAA {msaa_samples}: shield preview is blank"
+        );
+        eprintln!(
+            "shield {msaa_samples}x: {visible_pixels} visible pixels; {}",
+            snapshot.png_path.display()
+        );
+    }
+}
+
+#[test]
 #[ignore = "stresses concurrent native wgpu snapshot renders across threads"]
 fn render_mock_concurrent_snapshot_stress_smoke() {
     // 复现 native GPU 快照套件多线程 SIGSEGV 的用例：多线程并发跑完整快照渲染。
@@ -5211,13 +5257,33 @@ fn render_mock_weapon_vfx_particle_snapshot() {
         .map(|index| {
             let angle = index as f32 / 24.0 * std::f32::consts::TAU;
             xiv_companion::VfxQuad {
+                particle_type: Some(xiv_companion_data::avfx::ParticleType::Quad),
+                particle_index: 0,
+                soft_particle: index % 2 == 0,
+                soft_particle_fade_range: 0.8,
+                depth_offset_type: 0,
+                depth_offset: 0.0,
+                powder_single: false,
+                windmill_uv_type: 0,
+                disc: None,
+                polygon: None,
+                laser: None,
+                line: None,
+                polyline: None,
+                decal: None,
                 position: [angle.cos() * 0.7, 0.15, angle.sin() * 0.7],
                 size: [0.14, 0.14],
-                rotation: 0.0,
                 orientation: [0.0, 0.0, 0.0, 1.0],
-                billboard: true,
+                parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+                movement_direction: [0.0; 3],
+                facing_parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+                rotation_direction_base:
+                    xiv_companion_data::avfx::rotation_direction_base::CAMERA_BILLBOARD,
                 color: [3.0, 1.8, 0.6, 1.0],
+                draw_layer: 0,
+                soft_key_offset: 0.0,
                 draw_priority: 0,
+                draw_order: None,
                 pivot: [0.0, 0.0],
                 texture_indexes: [-1; 4],
                 texture_uv_sets: [0; 4],
@@ -5227,19 +5293,30 @@ fn render_mock_weapon_vfx_particle_snapshot() {
                 uv_origins: [[0.0; 2]; 4],
                 uv_scales: [[1.0; 2]; 4],
                 uv_rotations: [0.0; 4],
+                uv_by_pixel_position: [false; 4],
                 texture_borders: [[0; 2]; 4],
+                texture_filters: [1; 4],
                 texture1_is_shape_mask: false,
                 texture1_enabled: false,
-                blend_add: true,
+                texture1_use_screen_copy: false,
+                draw_mode: xiv_companion_data::avfx::DRAW_MODE_ADD,
                 depth_test: true,
                 depth_write: false,
+                cull_mode: 0,
                 texture_distortion_index: -1,
                 distortion_power: 0.0,
                 distortion_targets: 0,
                 uvd_origin: [0.0, 0.0],
                 uvd_scale: [1.0, 1.0],
+                uvd_rotation: 0.0,
+                uvd_by_pixel_position: false,
                 distortion_uv_set: 0,
                 distortion_borders: [0; 2],
+                distortion_filter: 1,
+                texture_palette_index: -1,
+                palette_offset: 0.0,
+                palette_border: 0,
+                palette_filter: 1,
             }
         })
         .collect::<Vec<_>>();
@@ -5257,7 +5334,7 @@ fn render_mock_weapon_vfx_particle_snapshot() {
         WeaponModelSnapshotOptions::new("vfx-mock-repeat")
             .with_viewport(512, 512)
             .with_camera(camera.0, camera.1, camera.2, camera.3)
-            .with_vfx_quads(quads),
+            .with_vfx_quads(quads.clone()),
         &model,
     )
     .expect("render vfx repeat snapshot");
@@ -5305,6 +5382,165 @@ fn render_mock_weapon_vfx_particle_snapshot() {
     assert!(
         warm_delta > 1500,
         "expected >1500 new warm-lit pixels from vfx ring, got {warm_delta}"
+    );
+
+    let mut msaa_options = ModelRenderOptions::default();
+    msaa_options.msaa_samples = 4;
+    let msaa4 = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-soft-msaa4")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3)
+            .with_render_options(msaa_options.clone())
+            .with_vfx_quads(quads.clone()),
+        &model,
+    )
+    .expect("render vfx msaa4 snapshot");
+    let msaa4_repeat = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-soft-msaa4-repeat")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3)
+            .with_render_options(msaa_options)
+            .with_vfx_quads(quads),
+        &model,
+    )
+    .expect("render vfx msaa4 repeat snapshot");
+    assert_eq!(
+        read_pixels(&msaa4.png_path),
+        read_pixels(&msaa4_repeat.png_path),
+        "4x soft-particle snapshot must be deterministic"
+    );
+
+    let mesh = xiv_companion_data::VfxDrawModel {
+        vertices: vec![
+            xiv_companion_data::VfxDrawVertex {
+                position: [-0.55, -0.45, 0.0],
+                position_w: 1.0,
+                normal: [128, 128, 255, 255],
+                tangent: [128, 128, 255, 255],
+                uvs: [[-0.5, -0.5]; 4],
+                color: [255; 4],
+            },
+            xiv_companion_data::VfxDrawVertex {
+                position: [0.55, -0.45, 0.0],
+                position_w: 1.0,
+                normal: [128, 128, 255, 255],
+                tangent: [128, 128, 255, 255],
+                uvs: [[0.5, -0.5]; 4],
+                color: [255; 4],
+            },
+            xiv_companion_data::VfxDrawVertex {
+                position: [0.0, 0.6, 0.0],
+                position_w: 1.0,
+                normal: [128, 128, 255, 255],
+                tangent: [128, 128, 255, 255],
+                uvs: [[0.0, 0.5]; 4],
+                color: [255; 4],
+            },
+        ],
+        indices: vec![0, 1, 2],
+    };
+    let mesh_instance = xiv_companion_data::VfxMeshInstance {
+        position: [0.0, 0.0, 0.0],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        movement_direction: [0.0; 3],
+        facing_parent_basis: xiv_companion::VFX_IDENTITY_BASIS,
+        rotation_direction_base: xiv_companion_data::avfx::rotation_direction_base::NONE,
+        scale: [1.0; 3],
+        color: [2.0, 0.6, 0.2, 1.0],
+        fresnel: None,
+        draw_layer: 0,
+        soft_key_offset: 0.0,
+        draw_priority: 0,
+        draw_order: None,
+        texture_indexes: [-1; 4],
+        texture_uv_sets: [0; 4],
+        combine_mode_tc1: [0, 0],
+        combine_modes: [[0, 0]; 3],
+        color_to_alpha: [false; 4],
+        uv_origins: [[0.0; 2]; 4],
+        uv_scales: [[1.0; 2]; 4],
+        uv_rotations: [0.0; 4],
+        uv_by_pixel_position: [false; 4],
+        texture_borders: [[0; 2]; 4],
+        texture_filters: [1; 4],
+        texture_normal_index: -1,
+        normal_uv_set: 0,
+        normal_uv_origin: [0.0; 2],
+        normal_uv_scale: [1.0; 2],
+        normal_uv_rotation: 0.0,
+        normal_uv_by_pixel_position: false,
+        normal_texture_borders: [0; 2],
+        normal_texture_filter: 1,
+        normal_power: 0.0,
+        reflection_enabled: false,
+        reflection_use_screen_copy: false,
+        reflection_texture_index: -1,
+        reflection_texture_filter: 1,
+        reflection_calculate_color: 0,
+        reflection_rate: 0.0,
+        reflection_power: 0.0,
+        texture1_is_shape_mask: false,
+        texture1_enabled: false,
+        texture1_use_screen_copy: false,
+        draw_mode: xiv_companion_data::avfx::DRAW_MODE_ADD,
+        depth_test: true,
+        depth_write: false,
+        texture_distortion_index: -1,
+        distortion_power: 0.0,
+        distortion_targets: 0,
+        uvd_origin: [0.0; 2],
+        uvd_scale: [1.0; 2],
+        uvd_rotation: 0.0,
+        uvd_by_pixel_position: false,
+        distortion_uv_set: 0,
+        distortion_borders: [0; 2],
+        distortion_filter: 1,
+        texture_palette_index: -1,
+        palette_offset: 0.0,
+        palette_border: 0,
+        palette_filter: 1,
+        cull_mode: 0,
+        model_index: 0,
+        soft_particle: true,
+        soft_particle_fade_range: 0.75,
+        depth_offset_type: 0,
+        depth_offset: 0.0,
+    };
+    let mesh_options = WeaponModelSnapshotOptions::new("vfx-mock-soft-mesh-msaa4")
+        .with_viewport(512, 512)
+        .with_camera(camera.0, camera.1, camera.2, camera.3)
+        .with_render_options({
+            let mut options = ModelRenderOptions::default();
+            options.msaa_samples = 4;
+            options
+        })
+        .with_vfx_mesh_instances([mesh_instance])
+        .with_vfx_meshes([mesh.clone()]);
+    let mesh_snapshot = render_weapon_model_snapshot_with_options(mesh_options, &model)
+        .expect("render soft mesh snapshot");
+    let mesh_pixels = read_pixels(&mesh_snapshot.png_path);
+    assert!(
+        mesh_pixels
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] > 0 || pixel[1] > 0 || pixel[2] > 0),
+        "soft mesh snapshot should contain rendered pixels"
+    );
+    let mesh_1x = render_weapon_model_snapshot_with_options(
+        WeaponModelSnapshotOptions::new("vfx-mock-soft-mesh-msaa1")
+            .with_viewport(512, 512)
+            .with_camera(camera.0, camera.1, camera.2, camera.3)
+            .with_vfx_mesh_instances([mesh_instance])
+            .with_vfx_meshes([mesh]),
+        &model,
+    )
+    .expect("render soft mesh 1x snapshot");
+    let mesh_1x_pixels = read_pixels(&mesh_1x.png_path);
+    assert!(
+        mesh_1x_pixels
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] > 0 || pixel[1] > 0 || pixel[2] > 0),
+        "1x soft mesh snapshot should contain rendered pixels"
     );
     eprintln!("vfx snapshot: rgb diff {difference}, warm delta {warm_delta}");
 }
