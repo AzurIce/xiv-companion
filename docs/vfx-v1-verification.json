@@ -1,0 +1,74 @@
+{
+  "release": "weapon-vfx-preview-v1",
+  "scope": "bounded usable weapon preview, not complete AVFX/client fidelity",
+  "validatedAt": "2026-10-04T23:14:17+08:00",
+  "baseCommit": "e82cb8d902afbf867703439f9eb98b4334e10dd2",
+  "candidateBranch": "release/vfx-preview-v1",
+  "checks": {
+    "workspace": "candidate workspace passed with game-data,render-test-support,web; data1409, renderer199; ignored cases are not counted",
+    "wasm": "candidate Web/WASM check passed",
+    "nativeGpu": {
+      "adapter": "NVIDIA RTX 4070 Ti SUPER",
+      "backend": "Vulkan",
+      "driver": "595.104.02",
+      "items": [
+        16053,
+        16063
+      ],
+      "msaa": [
+        1,
+        4
+      ],
+      "snapshots": 16,
+      "inputs": "initial zero plus 60Hz frames; web-equivalent Aura selection",
+      "assertions": "actual mounted images differ from baseline; diagnostic boosted images also differ"
+    },
+    "browserShaders": {
+      "browser": "Chrome/154.0.8037.57",
+      "modules": 5,
+      "result": "no compilation errors; pre-fix module rejects at906:26",
+      "artifactContentMatchesCandidate": true
+    },
+    "progressPage": {
+      "loaded": "ok",
+      "tasks": 6,
+      "coverage": 8,
+      "images": [
+        {
+          "loaded": true,
+          "src": "vfx-progress-assets/v1-lance-1x.png"
+        },
+        {
+          "loaded": true,
+          "src": "vfx-progress-assets/v1-shield-1x.png"
+        }
+      ],
+      "summary": "5 项本版通过、1 项进行中、0 项待处理。这里只统计首版合入条件；长期覆盖缺口在下方单独记录。",
+      "gateStatus": "six scoped gates passed; data updated after candidate validation"
+    }
+  },
+  "sourceSha256": {
+    "crates/xiv-companion-data/src/avfx.rs": "00e2db6f25989f14852637cef572b37af9514f49f17ee9676edcba31573091c1",
+    "crates/xiv-companion-data/src/avfx_sim.rs": "07b639e4c843ed7a6821b184c86fdd8b097cc21b70e17a0fcf01031fa7dede0f",
+    "crates/xiv-companion-data/src/avfx_sim/playback.rs": "05848ffecea2e75b08d8bbf78f0fc67fcc7c522e325dd10d8ee96c96b67603dd",
+    "crates/xiv-companion-render/src/renderer/model/context.rs": "1455c0d2a37db472d90848b7c219320e96c71b70a4021cb907ac9f22691a5931",
+    "crates/xiv-companion-render/src/renderer/model/vfx.rs": "9c38f968a83192fbc7fd3b508565446d92afc257089a68bfb665f0d03652fd39",
+    "crates/xiv-companion-render/src/renderer/model/vfx_attachments.rs": "940cb47a4b7c98782d24c7243ef3ab546354e23aae916598034def7562cc3678",
+    "crates/xiv-companion-render/src/renderer/shaders/vfx.wesl": "151b4de05940c09de7d64c8995e127915bec60dae454ae17d3baf68d41f217ab",
+    "crates/xiv-companion-render/src/test_support.rs": "8ee4751ac4f6a33eafc96501bcc6f5f2bf3c828a530a62876fe8c2b01901f4d7",
+    "src/app/model_canvas_renderer.rs": "1db078581959cf5243bda74801f922eebfe6a3ad981bc602ea0d0f68a5ddbf07",
+    "src/app/pages/weapon_models.rs": "cb9e857b7744103fa34ae6f0056404ce2cc19439d49039c55d654c4d3a7da7b0",
+    "tests/weapon_vfx_real_smoke.rs": "88f9f267cc3e8750b5ad913f9ee502ad0e9e702df292b6ab4037c2c4a2e9c5cb"
+  },
+  "remaining": [
+    "per-particle tone-map/fog/all lighting and scene providers",
+    "all particle/Binder/Clip/Smpl/LOD and non-weapon hosts",
+    "game-equivalent dynamic/pixel acceptance"
+  ],
+  "researchExcluded": [
+    "new raw-instruction probe scripts",
+    "expanded installed audit requiring transient executable-byte captures"
+  ],
+  "candidateCodeCommit": "8e07bd576e81f8114f149cf470ee9aa3adede86a",
+  "candidateState": "ready for review; not merged or pushed"
+}

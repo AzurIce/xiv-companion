@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>VFX 审查进度</title>
+  <style>
+    :root { --ink: #25272b; --muted: #636971; --line: #dde1e3; --paper: #fff; --wash: #f5f7f7; --teal: #08796c; --rose: #a73553; --blue: #215db3; }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    html { scroll-padding-top: 82px; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.65 system-ui, -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
+    a { color: var(--blue); text-underline-offset: 3px; overflow-wrap: anywhere; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+    h1, h2, h3, p, figure { margin: 0; }
+    h1 { font-size: 24px; font-weight: 650; line-height: 1.35; }
+    h2 { font-size: 18px; font-weight: 650; line-height: 1.45; }
+    h3 { font-size: 15px; line-height: 1.6; }
+    ul, ol { padding: 0; margin: 0; list-style: none; }
+    small { font-size: 12px; }
+    .wrap { max-width: 1280px; padding: 0 32px; margin: auto; }
+    .topbar { position: sticky; top: 0; z-index: 2; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .topbar .wrap { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; }
+    .brand { font-size: 13px; font-weight: 650; white-space: nowrap; }
+    nav { display: flex; gap: 24px; flex-wrap: wrap; }
+    nav a { color: var(--muted); text-decoration: none; font-size: 13px; padding: 10px 0; }
+    .intro { padding-top: 28px; padding-bottom: 23px; }
+    .heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px 24px; }
+    .state { color: var(--teal); font-size: 13px; font-weight: 600; margin-top: 7px; }
+    .dates { text-align: right; color: var(--muted); font-size: 12px; flex-shrink: 0; }
+    .sync { min-height: 21px; }
+    .sync[data-state="error"] { color: var(--rose); }
+    .intro p { max-width: 850px; margin-top: 12px; color: var(--muted); }
+    .activity { margin-top: 12px; display: flex; gap: 12px; align-items: baseline; }
+    .activity strong { color: var(--teal); font-size: 12px; flex-shrink: 0; }
+    .activity span { font-size: 13px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+    .metric { padding: 19px 24px 19px 0; min-width: 0; }
+    .metric + .metric { border-left: 1px solid var(--line); padding-left: 24px; }
+    .metric b { display: block; font-size: 24px; line-height: 1.4; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .metric .label { font-size: 13px; margin-top: 3px; }
+    .metric small { display: block; color: var(--muted); margin-top: 3px; }
+    section { padding-block: 28px; border-bottom: 1px solid var(--line); }
+    .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px 20px; margin-bottom: 17px; }
+    .badge { font-size: 12px; font-weight: 600; flex-shrink: 0; }
+    .badge.active { color: var(--teal); }
+    .badge.pending { color: var(--rose); }
+    .badge.verified { color: #397244; }
+    .focus-title { font-size: 16px; }
+    .focus-copy { margin-top: 6px; color: var(--muted); max-width: 1020px; }
+    code { font: 12px/1.7 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .resource { display: block; color: var(--muted); margin-top: 9px; }
+    .steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; margin-top: 22px; }
+    .step { border-top: 2px solid var(--line); padding-top: 9px; min-width: 0; }
+    .step.active { border-color: var(--teal); }
+    .step.verified { border-color: #70a176; }
+    .step small { color: var(--muted); display: block; margin-top: 3px; }
+    .step-label { font-size: 13px; font-weight: 600; margin-top: 3px; }
+    .images { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 23px; }
+    .images figure { min-width: 0; }
+    .image-link { display: block; background: #242c2f; border-radius: 4px; overflow: hidden; }
+    .images img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; }
+    figcaption { padding-top: 8px; }
+    figcaption strong { font-weight: 600; font-size: 13px; }
+    figcaption small { display: block; color: var(--muted); }
+    .controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 15px; }
+    fieldset { border: 0; margin: 0; padding: 0; display: flex; gap: 3px; flex-wrap: wrap; }
+    legend, .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .filter { cursor: pointer; position: relative; }
+    .filter input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .filter span { display: block; padding: 5px 10px; min-height: 33px; border-radius: 4px; color: var(--muted); font-size: 13px; border: 1px solid transparent; }
+    .filter input:checked + span { border-color: #a6c8c2; color: #056758; background: #eff7f4; }
+    .filter input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .search { width: 270px; max-width: 100%; }
+    .search input { width: 100%; border: 1px solid #c5cbcf; border-radius: 4px; padding: 7px 10px; background: var(--paper); font: inherit; font-size: 13px; }
+    .task-head { display: grid; grid-template-columns: 104px 105px 1fr; gap: 16px; font-size: 12px; color: var(--muted); padding: 7px 12px; background: var(--wash); }
+    .task-row { display: grid; grid-template-columns: 104px 105px minmax(0, 1fr); gap: 16px; padding: 15px 12px; border-bottom: 1px solid #e8ebed; }
+    .task-row:last-child { border-bottom: 0; }
+    .area { color: var(--muted); font-size: 13px; }
+    .task-title { font-size: 14px; font-weight: 600; }
+    .task-detail { font-size: 13px; color: var(--muted); margin-top: 3px; }
+    .task-content { min-width: 0; }
+    details { margin-top: 5px; font-size: 12px; }
+    summary { cursor: pointer; color: var(--blue); width: fit-content; }
+    .links { display: flex; flex-wrap: wrap; gap: 5px 18px; margin-top: 5px; }
+    .empty { color: var(--muted); padding: 24px 12px; }
+    .count { color: var(--muted); font-size: 12px; }
+    .status-note { color: var(--muted); font-size: 13px; margin: -6px 0 14px; }
+    .checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; }
+    .check { padding: 13px 0; border-top: 1px solid var(--line); }
+    .check-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 15px; font-size: 13px; }
+    .check p { font-size: 13px; color: var(--muted); margin-top: 4px; }
+    .check a { font-size: 12px; }
+    .note { margin-top: 16px; border-left: 3px solid #b44b64; padding-left: 12px; color: var(--muted); font-size: 13px; }
+    .updates li { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 20px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .updates strong { font-size: 13px; font-weight: 600; }
+    .updates p { font-size: 13px; color: var(--muted); }
+    footer { padding: 24px 0 34px; }
+    footer .links { font-size: 12px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 760px) {
+      .wrap { padding-inline: 20px; }
+      .heading { flex-direction: column; gap: 10px; }
+      .dates { text-align: left; }
+      .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      .metric { padding-right: 12px; }
+      .metric + .metric { padding-left: 12px; }
+      .metric b { font-size: 20px; }
+      .images { gap: 10px; }
+      .checks { grid-template-columns: 1fr; }
+      .task-head, .task-row { grid-template-columns: 80px 85px minmax(0, 1fr); gap: 10px; padding-inline: 0; }
+      .updates li { grid-template-columns: 1fr; gap: 3px; }
+    }
+    @media (max-width: 520px) {
+      .wrap { padding-inline: 16px; }
+      .topbar .wrap { min-height: 50px; }
+      nav { gap: 14px; }
+      nav a { font-size: 12px; }
+      .brand { font-size: 12px; }
+      h1 { font-size: 22px; }
+      .intro { padding-top: 22px; }
+      .metrics { grid-template-columns: 1fr; }
+      .metric, .metric + .metric { border-left: 0; padding: 12px 0; display: grid; grid-template-columns: 135px 1fr; column-gap: 12px; }
+      .metric + .metric { border-top: 1px solid #e8ebed; }
+      .metric b { grid-row: span 2; align-self: center; }
+      .metric .label, .metric small { margin: 0; }
+      .images { grid-template-columns: 1fr; gap: 18px; }
+      .images img { aspect-ratio: 4 / 3; max-height: 360px; }
+      .section-heading { flex-wrap: wrap; }
+      .task-head { display: none; }
+      .task-row { grid-template-columns: 90px minmax(0, 1fr); gap: 5px 10px; }
+      .task-content { grid-column: 1 / -1; }
+      .search { width: 100%; }
+      .filter span { padding-inline: 8px; }
+    }
+    @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="#top">XIV Companion · VFX</a>
+      <nav aria-label="页面导航"><a href="#focus">当前</a><a href="#tasks">合入</a><a href="#coverage">覆盖</a><a href="#validation">验证</a><a href="#updates">记录</a></nav>
+    </div>
+  </header>
+  <main class="wrap" id="top">
+    <div class="intro">
+      <div class="heading">
+        <div><h1>VFX 首版合入与覆盖记录</h1><div class="state" id="state">正在读取进度记录</div></div>
+        <div class="dates">
+          <div>工作更新 <time id="updated-at">待载入</time></div>
+          <div class="sync" id="sync" role="status">读取本地记录中</div>
+        </div>
+      </div>
+      <p id="summary"></p>
+      <div class="activity" id="activity-row" hidden><strong>当前记录</strong><span id="activity"></span></div>
+    </div>
+    <noscript><p class="empty">JavaScript 未启用。首版范围与记录：<a href="vfx-v1.md">武器 VFX 首个可用版本</a>。</p></noscript>
+    <p class="empty" id="initial-state">正在读取进度记录。</p>
+    <div id="content" hidden>
+      <div class="metrics" id="metrics" aria-label="验证范围"></div>
+      <section id="focus" aria-labelledby="focus-heading">
+        <div class="section-heading"><h2 id="focus-heading">当前优先</h2><span class="badge pending" id="focus-status"></span></div>
+        <h3 class="focus-title" id="focus-title"></h3><p class="focus-copy" id="focus-copy"></p><code class="resource" id="resource"></code>
+        <ol class="steps" id="steps" aria-label="当前审查阶段"></ol>
+        <div class="images" id="images"></div>
+      </section>
+      <section id="tasks" aria-labelledby="tasks-heading">
+        <div class="section-heading"><h2 id="tasks-heading">首版合入检查</h2><span class="count" id="task-count" aria-live="polite"></span></div>
+        <p class="status-note" id="task-status-summary"></p>
+        <div class="controls">
+          <fieldset id="filters"><legend>任务状态</legend>
+            <label class="filter"><input type="radio" name="filter" value="all" checked><span>全部</span></label>
+            <label class="filter"><input type="radio" name="filter" value="active"><span>进行中</span></label>
+            <label class="filter"><input type="radio" name="filter" value="pending"><span>待处理</span></label>
+            <label class="filter"><input type="radio" name="filter" value="verified"><span>本版通过</span></label>
+          </fieldset>
+          <label class="search"><span class="sr-only">搜索任务</span><input id="search" type="search" placeholder="搜索任务或字段" autocomplete="off"></label>
+        </div>
+        <div class="task-head" aria-hidden="true"><span>状态</span><span>范围</span><span>结果与剩余边界</span></div>
+        <ul id="task-list"></ul><p class="empty" id="no-results" hidden>没有匹配的任务。</p>
+      </section>
+      <section id="coverage" aria-labelledby="coverage-heading">
+        <div class="section-heading"><h2 id="coverage-heading">覆盖范围与后续事项</h2><span class="count">后续缺口不阻塞首版合入</span></div>
+        <ul class="checks" id="coverage-list"></ul>
+      </section>
+      <section id="validation" aria-labelledby="validation-heading">
+        <div class="section-heading"><h2 id="validation-heading">最近验证</h2><span class="count">按验证范围解读</span></div>
+        <ul class="checks" id="checks"></ul>
+        <p class="note">首版验收范围是可用的武器特效预览。游戏同条件画面、完整场景和全部字段覆盖属于后续验收；测试数量不作为功能完成率。</p>
+      </section>
+      <section id="updates" aria-labelledby="updates-heading">
+        <div class="section-heading"><h2 id="updates-heading">最近阶段</h2></div><ol class="updates" id="update-list"></ol>
+      </section>
+      <footer><h3>记录与依据</h3><div class="links" id="references"></div></footer>
+    </div>
+  </main>
+  <script>
+    "use strict";
+    (() => {
+      const labels = { active: "进行中", pending: "待处理", verified: "本版通过" };
+      const $ = (id) => document.getElementById(id);
+      const stamp = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+      let current = null;
+      let signature = "";
+      let loading = false;
+      const openEvidence = new Set();
+
+      function element(tag, text, className) {
+        const node = document.createElement(tag);
+        if (text !== undefined) node.textContent = text;
+        if (className) node.className = className;
+        return node;
+      }
+      function link(item) {
+        const a = element("a", item.label);
+        a.href = item.href;
+        a.target = "_blank";
+        a.rel = "noopener";
+        return a;
+      }
+      function renderTasks() {
+        if (!current) return;
+        const selected = document.querySelector('input[name="filter"]:checked').value;
+        const query = $("search").value.trim().toLocaleLowerCase();
+        const visible = current.tasks.filter(task => (selected === "all" || task.state === selected) && `${task.area} ${task.title} ${task.detail}`.toLocaleLowerCase().includes(query));
+        $("task-list").replaceChildren(...visible.map(task => {
+          const row = element("li", undefined, "task-row");
+          row.dataset.taskId = task.id;
+          const content = element("div", undefined, "task-content");
+          content.append(element("h3", task.title, "task-title"), element("p", task.detail, "task-detail"));
+          for (const [key, label] of [["integration", "预览接入"], ["proof", "验证范围"], ["acceptance", "验收缺口"]]) {
+            if (task[key]) content.append(element("p", `${label}：${task[key]}`, "task-detail"));
+          }
+          if (task.evidence?.length) {
+            const details = element("details");
+            details.open = openEvidence.has(task.id);
+            details.addEventListener("toggle", () => {
+              if (details.open) openEvidence.add(task.id);
+              else openEvidence.delete(task.id);
+            });
+            const links = element("div", undefined, "links");
+            links.append(...task.evidence.map(link));
+            details.append(element("summary", "验证依据"), links);
+            content.append(details);
+          }
+          row.append(element("span", labels[task.state], `badge ${task.state}`), element("span", task.area, "area"), content);
+          return row;
+        }));
+        $("task-count").textContent = `${visible.length} / ${current.tasks.length} 项`;
+        $("no-results").hidden = visible.length > 0;
+      }
+      function render(data) {
+        current = data;
+        $("state").textContent = data.state;
+        $("summary").textContent = data.summary;
+        $("activity").textContent = data.activity;
+        $("activity-row").hidden = false;
+        $("updated-at").dateTime = data.updatedAt;
+        $("updated-at").textContent = `${stamp.format(new Date(data.updatedAt))} CST`;
+        $("updated-at").title = data.updatedAt;
+        const counts = Object.fromEntries(Object.keys(labels).map(state => [state, data.tasks.filter(task => task.state === state).length]));
+        $("task-status-summary").textContent = `${counts.verified} 项本版通过、${counts.active} 项进行中、${counts.pending} 项待处理。这里只统计首版合入条件；长期覆盖缺口在下方单独记录。`;
+        $("metrics").replaceChildren(...data.metrics.map(item => {
+          const metric = element("div", undefined, "metric");
+          metric.append(element("b", item.value), element("div", item.label, "label"), element("small", item.detail));
+          return metric;
+        }));
+        const focus = data.focus;
+        $("focus-title").textContent = focus.title;
+        $("focus-status").textContent = focus.status;
+        $("focus-status").className = `badge ${focus.state}`;
+        $("focus-copy").textContent = focus.description;
+        $("resource").textContent = focus.resource;
+        $("steps").replaceChildren(...focus.steps.map(step => {
+          const li = element("li", undefined, `step ${step.state}`);
+          li.append(element("span", step.state === "verified" ? "已核实" : labels[step.state], `badge ${step.state}`), element("div", step.label, "step-label"), element("small", step.detail));
+          return li;
+        }));
+        $("images").replaceChildren(...focus.images.map(item => {
+          const figure = element("figure");
+          const a = link({ href: item.src, label: "" });
+          a.className = "image-link";
+          a.setAttribute("aria-label", `${item.title}，查看原图`);
+          const img = element("img");
+          img.src = item.src;
+          img.alt = `${item.title}：${item.detail}`;
+          a.append(img);
+          const caption = element("figcaption");
+          caption.append(element("strong", item.title), element("small", item.detail));
+          figure.append(a, caption);
+          return figure;
+        }));
+        $("coverage-list").replaceChildren(...(data.coverage ?? []).map(item => {
+          const li = element("li", undefined, "check");
+          const top = element("div", undefined, "check-top");
+          top.append(element("strong", item.title), element("span", item.level));
+          li.append(top, element("p", item.supported), element("p", `后续：${item.remaining}`));
+          return li;
+        }));
+        $("checks").replaceChildren(...data.checks.map(check => {
+          const li = element("li", undefined, "check");
+          const top = element("div", undefined, "check-top");
+          top.append(element("strong", check.name), element("span", check.result));
+          li.append(top, element("p", check.scope), link({ label: "查看记录", href: check.href }));
+          return li;
+        }));
+        $("update-list").replaceChildren(...data.updates.map(update => {
+          const li = element("li");
+          li.append(element("strong", update.title), element("p", update.detail));
+          return li;
+        }));
+        $("references").replaceChildren(...data.references.map(link));
+        renderTasks();
+        $("initial-state").hidden = true;
+        $("content").hidden = false;
+      }
+      function validate(data) {
+        function texts(item, keys) {
+          for (const key of keys) if (typeof item?.[key] !== "string") throw new Error(`Invalid ${key}`);
+        }
+        function list(items, keys) {
+          if (!Array.isArray(items)) throw new Error("Invalid progress list");
+          for (const item of items) texts(item, keys);
+        }
+        if (!data || !Number.isFinite(Date.parse(data.updatedAt))) throw new Error("Invalid progress timestamp");
+        texts(data, ["updatedAt", "state", "summary", "activity"]);
+        texts(data.focus, ["state", "title", "status", "description", "resource"]);
+        list(data.metrics, ["value", "label", "detail"]);
+        list(data.tasks, ["id", "state", "area", "title", "detail"]);
+        list(data.checks, ["name", "result", "scope", "href"]);
+        list(data.updates, ["title", "detail"]);
+        list(data.references, ["label", "href"]);
+        list(data.focus.steps, ["state", "label", "detail"]);
+        list(data.focus.images, ["src", "title", "detail"]);
+        list(data.coverage ?? [], ["title", "level", "supported", "remaining"]);
+        const ids = new Set();
+        for (const task of data.tasks) {
+          if (!Object.hasOwn(labels, task.state)) throw new Error(`Invalid task state: ${task.id} (${task.state})`);
+          if (!task.id || ids.has(task.id)) throw new Error(`Invalid task id: ${task.id}`);
+          ids.add(task.id);
+          list(task.evidence ?? [], ["label", "href"]);
+        }
+        for (const item of [data.focus, ...data.focus.steps]) if (!Object.hasOwn(labels, item.state)) throw new Error(`Invalid stage state: ${item.label ?? item.title} (${item.state})`);
+      }
+      function reloadData() {
+        if (loading) return;
+        loading = true;
+        const script = document.createElement("script");
+        const before = window.VFX_PROGRESS;
+        let finished = false;
+        const timeout = setTimeout(() => finish(false, "脚本加载超时"), 12000);
+        function finish(ok, reason = "脚本加载失败") {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timeout);
+          script.remove();
+          loading = false;
+          if (ok) {
+            try {
+              const data = window.VFX_PROGRESS;
+              if (data === before) throw new Error("Progress script did not provide a new record");
+              validate(data);
+              const next = JSON.stringify(data);
+              if (next !== signature) {
+                render(data);
+                signature = next;
+              }
+              $("sync").dataset.state = "ok";
+              $("sync").textContent = `本地记录已读取 · ${stamp.format(new Date()).split(" ").pop()}`;
+              return;
+            } catch (error) {
+              console.error(error);
+              reason = `记录校验或显示失败：${error.message}`;
+            }
+          }
+          $("sync").dataset.state = "error";
+          $("sync").textContent = current ? `读取失败 · 保留上次记录 · ${reason}` : `进度记录读取失败 · ${reason}`;
+          if (!current) {
+            const message = element("p", `vfx-progress-data.js：${reason}，等待下次重试。`);
+            const source = link({ href: "vfx-progress-data.js", label: "打开数据文件，确认它与进度页在同一目录" });
+            $("initial-state").replaceChildren(message, source);
+          }
+        }
+        script.onload = () => finish(true);
+        script.onerror = () => finish(false);
+        // Local files have no HTTP cache to bypass. Keep their filesystem URL intact.
+        // Use a classic script so file:// does not require fetch or a server.
+        script.src = window.location.protocol === "file:"
+          ? "vfx-progress-data.js"
+          : `vfx-progress-data.js?read=${Date.now()}`;
+        document.head.append(script);
+      }
+      $("filters").addEventListener("change", renderTasks);
+      $("search").addEventListener("input", renderTasks);
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) reloadData(); });
+      setInterval(() => { if (!document.hidden) reloadData(); }, 5000);
+      reloadData();
+    })();
+  </script>
+</body>
+</html>
