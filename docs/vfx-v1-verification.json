@@ -70,5 +70,27 @@
     "expanded installed audit requiring transient executable-byte captures"
   ],
   "candidateCodeCommit": "8e07bd576e81f8114f149cf470ee9aa3adede86a",
-  "candidateState": "ready for review; not merged or pushed"
+  "candidateState": "merged into local dev; not pushed",
+  "integration": {
+    "integratedAt": "2026-10-06T18:00:38+08:00",
+    "branch": "dev",
+    "worktree": "../xiv-companion-dev",
+    "method": "fast-forward",
+    "previousDev": "d695be53434f44e7fe61a0093d1930a09d765db4",
+    "integratedCandidate": "583065c",
+    "commitsIncluded": 22,
+    "sourceHashes": "11 of 11 matched at integration; runtime unchanged",
+    "verification": "existing workspace, WASM, browser and native GPU receipts retained; integration checks verify hashes, progress loader, unchanged original dev working files and clean diff",
+    "pushed": false,
+    "mainCorrection": {
+      "restoredTo": "ce20f595550e1f84817bcd98ffb9ef1358d53ebb",
+      "mistargetedIntegrationBackup": "backup/vfx-main-mistargeted-20261006"
+    },
+    "preservedDevWork": {
+      "worktree": "../xiv-companion",
+      "branch": "wip/dev-before-vfx-preview-v1",
+      "modifiedAndUntrackedFiles": 28,
+      "contentHashes": "all original file hashes unchanged"
+    }
+  }
 }

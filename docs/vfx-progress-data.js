@@ -1,16 +1,16 @@
 window.VFX_PROGRESS = {
   "schemaVersion": 2,
-  "updatedAt": "2026-10-04T23:17:01+08:00",
-  "state": "首个可用版本 · 合入候选已准备",
-  "latestAuditCorrection": "收紧目标为可并入main的首版预览；18条bATM是新增诊断按粒子重复，不是18项功能退化。",
+  "updatedAt": "2026-10-06T18:00:38+08:00",
+  "state": "首个可用版本 · 已合入本地 dev",
+  "latestAuditCorrection": "合入目标纠正为dev；本地main已恢复ce20f59。首版范围保持不变，完整覆盖留待后续。",
   "currentAudit": "两份真实武器逐帧播放1x/4x均通过；完整覆盖与游戏像素一致性保留为后续事项。",
-  "activity": "首版候选已提交；后续按覆盖表推进，完整覆盖不阻塞本版。",
+  "activity": "2026-10-06：候选583065c已快进合入本地dev；main误合入已撤回，远端尚未推送。",
   "summary": "首版提供常见武器特效的近似预览，保留明确降级提示。核心可用性验证已通过；完整tone-map、雾、所有字段及游戏画面一致性不阻塞本版。",
   "focus": {
     "state": "verified",
-    "title": "首版合入候选已准备",
+    "title": "首版已合入本地 dev",
     "status": "6项首版检查通过",
-    "description": "release/vfx-preview-v1已保留运行时、回归与覆盖文档；独立候选workspace及WASM通过，研究工作区保留。",
+    "description": "release/vfx-preview-v1候选583065c已快进合入本地dev；验收源码未改动，11项摘要一致。main恢复ce20f59，原dev未提交开发保留在原工作区。",
     "resource": "docs/vfx-v1.md",
     "steps": [
       {
@@ -22,6 +22,11 @@ window.VFX_PROGRESS = {
         "state": "verified",
         "label": "独立候选与最终检查",
         "detail": "代码提交8e07bd5；独立候选普通workspace、WASM及进度页检查通过。"
+      },
+      {
+        "state": "verified",
+        "label": "本地 dev 合入",
+        "detail": "2026-10-06从d695be5快进22个提交，无冲突；main误合入已撤回。"
       }
     ],
     "images": [
@@ -40,7 +45,7 @@ window.VFX_PROGRESS = {
   "metrics": [
     {
       "label": "本次目标",
-      "value": "首版可合入",
+      "value": "已合入本地 dev",
       "detail": "近似武器预览；长期全覆盖单独维护。"
     },
     {
@@ -126,11 +131,11 @@ window.VFX_PROGRESS = {
       ]
     },
     {
-      "id": "merge-candidate",
+      "id": "dev-integration",
       "state": "verified",
       "area": "合入",
-      "title": "独立、可审查的合入候选",
-      "detail": "release/vfx-preview-v1，代码提交8e07bd5；运行时代码、普通回归与验收文档已整理，原始客户端指令探针留在研究工作区。",
+      "title": "首版合入本地 dev",
+      "detail": "2026-10-06：583065c已快进合入本地dev，无冲突；验收源码摘要一致。main恢复ce20f59，origin/dev尚未推送。",
       "evidence": [
         {
           "label": "合入清单",
@@ -230,6 +235,10 @@ window.VFX_PROGRESS = {
     }
   ],
   "updates": [
+    {
+      "title": "2026-10-06 首版合入本地 dev",
+      "detail": "合入目标纠正为dev：候选583065c快进合入，main恢复ce20f59。原dev工作区的28个修改/未跟踪文件原样保留在wip/dev-before-vfx-preview-v1，远端尚未推送。"
+    },
     {
       "title": "2026-10-04 收紧首版范围",
       "detail": "从全覆盖改为可用预览与可合入候选；首版条件与长期覆盖分列。"
