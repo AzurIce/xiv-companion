@@ -1,6 +1,7 @@
 mod character;
 pub mod collection;
 pub mod crafting;
+mod glamour;
 pub mod home;
 pub mod inventory;
 pub mod notes;
@@ -11,6 +12,7 @@ pub mod weapon_models;
 pub use character::CharacterPage;
 pub use collection::CollectionPage;
 pub use crafting::CraftingPage;
+pub use glamour::GlamourPage;
 pub use home::HomePage;
 pub use inventory::InventoryPage;
 pub use notes::NotesPage;

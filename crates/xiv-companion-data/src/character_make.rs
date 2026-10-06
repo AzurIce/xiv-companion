@@ -118,8 +118,9 @@ pub struct CharacterPaletteMeta {
 ///
 /// 布局：色项 = 连续 u32，文件内字节序为 r,g,b,a（Anamnesis 按字节读取）；
 /// 色板区 4608 + 32 × 1280 = 45568 色项（182272 字节）。真实文件在色板区后
-/// 还带 4480 字节尾部（32 × 140 字节的种族缩放参数记录，RGSP 同源的
-/// CharaMakeParameter 数据，TexTools `CMP.cs` 读写；调色板用途忽略之）。
+/// 还带 4480 字节尾部（80 × 56 字节的种族缩放参数记录，RGSP 同源
+/// CharaMakeParameter 数据，xivModdingFramework `CharaMakeParameter.cs` 读写；
+/// 调色板用途忽略之，缩放表解析见 `crate::racial_scaling`）。
 pub fn character_palette_from_cmp_bytes(bytes: &[u8]) -> Result<CharacterPalette, String> {
     const COLOR_BYTES: usize = 4;
     let expected = (CMP_TRIBE_BASE_INDEX

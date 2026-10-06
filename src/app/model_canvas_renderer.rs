@@ -13,14 +13,29 @@ use xiv_companion::renderer::{
 };
 use xiv_companion::{ModelRenderData, PreparedModelOptions, WeaponVfxAttachments};
 
+/// 场景实例条目：稳定 key（如 "body" / "slot:4"）+ GPU 实例 + 可选的武器
+/// 挂接规则。key 供逐件增量更新（换件只重建该件实例、染色只更新该件材质）
+/// 定位；`attach` 为 Some 时该实例的 joint 矩阵按挂点骨规则（姿势世界 ×
+/// 校正）逐帧驱动，不走 inverse bind。
+struct SceneEntry {
+    key: String,
+    instance: ModelInstance,
+    attach: Option<xiv_companion::WeaponAttachInfo>,
+}
+
+/// 单模型模式的场景 key（`set_model` 等单模型 API 的作用目标）。
+const SINGLE_MODEL_SCENE_KEY: &str = "model";
+
 pub struct WebModelCanvasRenderer {
     canvas: HtmlCanvasElement,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     depth_texture: wgpu::Texture,
     context: ModelRenderContext,
-    instance: Option<ModelInstance>,
-    /// 常驻 VFX 运行时与 GPU 批次（模型切换时经 `set_vfx` 整体替换）。
+    scene: Vec<SceneEntry>,
+    /// 场景结构修订号：实例增删/替换时递增（rAF 动画驱动据此刷新逐件 joint 表）。
+    scene_revision: u64,
+    /// 常驻 VFX 运行时与 GPU 批次（单模型预览）。
     vfx: Option<WeaponVfxParticles>,
     orbit: Rc<RefCell<OrbitState>>,
     msaa_samples: u32,
@@ -118,7 +133,8 @@ impl WebModelCanvasRenderer {
             config,
             depth_texture,
             context,
-            instance: None,
+            scene: Vec::new(),
+            scene_revision: 0,
             vfx: None,
             orbit,
             msaa_samples,
@@ -133,28 +149,33 @@ impl WebModelCanvasRenderer {
     /// Replace all mounted effects and their shared GPU resources.
     pub fn set_vfx(&mut self, vfx: Option<&WeaponVfxAttachments>, options: ModelRenderOptions) {
         let orbit = self.orbit.borrow();
-        self.vfx = self.instance.as_ref().and_then(|model| {
-            let data = vfx?;
-            let camera = self.context.vfx_camera_view_snapshot(
-                model,
-                [self.config.width, self.config.height],
-                orbit.yaw,
-                orbit.pitch,
-                orbit.zoom,
-                [orbit.pan_x, orbit.pan_y],
-                options,
-            );
-            match self
-                .context
-                .create_weapon_vfx_particles_with_camera_view(model, data, camera)
-            {
-                Ok(vfx) => Some(vfx),
-                Err(error) => {
-                    web_sys::console::warn_1(&format!("VFX camera: {error}").into());
-                    None
+        self.vfx = self
+            .scene
+            .iter()
+            .find(|entry| entry.key == SINGLE_MODEL_SCENE_KEY)
+            .and_then(|entry| {
+                let model = &entry.instance;
+                let data = vfx?;
+                let camera = self.context.vfx_camera_view_snapshot(
+                    model,
+                    [self.config.width, self.config.height],
+                    orbit.yaw,
+                    orbit.pitch,
+                    orbit.zoom,
+                    [orbit.pan_x, orbit.pan_y],
+                    options,
+                );
+                match self
+                    .context
+                    .create_weapon_vfx_particles_with_camera_view(model, data, camera)
+                {
+                    Ok(vfx) => Some(vfx),
+                    Err(error) => {
+                        web_sys::console::warn_1(&format!("VFX camera: {error}").into());
+                        None
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// Forward an owning weapon's sampled local pose before rendering this
@@ -170,14 +191,99 @@ impl WebModelCanvasRenderer {
             .set_attachment_pose(model_path, pose)
     }
 
-    /// 同步替换当前模型实例：重建顶点/索引缓冲、绘制批次与材质 bind group，
-    /// 不触碰设备、管线、surface 与轨道相机。
+    /// 同步替换当前模型实例（单模型模式）：重建顶点/索引缓冲、绘制批次与
+    /// 材质 bind group，不触碰设备、管线、surface 与轨道相机。等价于
+    /// `set_scene(vec![(SINGLE_MODEL_SCENE_KEY, instance)])`。
     pub fn set_model<M: ModelRenderData + ?Sized>(
         &mut self,
         model: &M,
         prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion::ModelSkeleton>,
     ) {
-        self.instance = Some(self.context.create_model(model, prepared_options));
+        let instance = self
+            .context
+            .create_model_with_skeleton(model, prepared_options, skeleton);
+        self.set_scene(vec![(SINGLE_MODEL_SCENE_KEY.to_string(), instance)]);
+    }
+
+    /// 为 `model` 创建 GPU 实例（骨架版）：`skeleton` 为 Some 时构建实例
+    /// joint 表（网格 bone_table 名并集，按名映射到骨架）并上传 rest pose
+    /// 关节矩阵；无骨架时 joint 数 0（静态 bind pose）。配合
+    /// [`Self::set_scene`]/[`Self::upsert_instance_with_attach`] 组装多实例场景。
+    pub fn create_instance<M: ModelRenderData + ?Sized>(
+        &self,
+        model: &M,
+        prepared_options: PreparedModelOptions,
+        skeleton: Option<&xiv_companion::ModelSkeleton>,
+    ) -> ModelInstance {
+        self.context
+            .create_model_with_skeleton(model, prepared_options, skeleton)
+    }
+
+    /// 全量替换场景（身体 + 各槽位装备件等多实例）。传入顺序即绘制顺序；
+    /// scene revision 递增。
+    pub fn set_scene(&mut self, entries: Vec<(String, ModelInstance)>) {
+        self.vfx = None;
+        self.scene = entries
+            .into_iter()
+            .map(|(key, instance)| SceneEntry {
+                key,
+                instance,
+                attach: None,
+            })
+            .collect();
+        self.scene_revision += 1;
+    }
+
+    /// 增/替单件实例：key 已存在则原位替换（保持绘制顺序），不存在则尾部
+    /// 追加。换件/改隐藏标签只重建对应实例，其余实例不动。`attach` 为 Some
+    /// 时该实例是武器挂接件：动画驱动按挂点骨规则（姿势世界 × 校正）逐帧
+    /// 出该实例的 joint 矩阵，不走 inverse bind。
+    pub fn upsert_instance_with_attach(
+        &mut self,
+        key: &str,
+        instance: ModelInstance,
+        attach: Option<xiv_companion::WeaponAttachInfo>,
+    ) {
+        if key == SINGLE_MODEL_SCENE_KEY {
+            self.vfx = None;
+        }
+        match self.scene.iter().position(|entry| entry.key == key) {
+            Some(index) => {
+                self.scene[index].instance = instance;
+                self.scene[index].attach = attach;
+            }
+            None => self.scene.push(SceneEntry {
+                key: key.to_string(),
+                instance,
+                attach,
+            }),
+        }
+        self.scene_revision += 1;
+    }
+
+    /// 移除单件实例；key 不存在为空操作。返回是否发生移除。
+    pub fn remove_instance(&mut self, key: &str) -> bool {
+        let removed = self
+            .scene
+            .iter()
+            .position(|entry| entry.key == key)
+            .map(|index| self.scene.remove(index))
+            .is_some();
+        if removed {
+            self.scene_revision += 1;
+        }
+        removed
+    }
+
+    /// 场景结构修订号（实例增删/替换递增；材质/joint 更新不变）。
+    pub fn scene_revision(&self) -> u64 {
+        self.scene_revision
+    }
+
+    /// 场景全部实例的 key（绘制顺序）。
+    pub fn scene_keys(&self) -> Vec<String> {
+        self.scene.iter().map(|entry| entry.key.clone()).collect()
     }
 
     /// 物品切换时对齐重建画布的旧行为，重置轨道相机视角。
@@ -187,12 +293,17 @@ impl WebModelCanvasRenderer {
 
     pub fn render_with_options(&mut self, options: ModelRenderOptions) {
         self.resize_to_client();
-        let Some(instance) = &self.instance else {
+        if self.scene.is_empty() {
             return;
-        };
+        }
         let orbit = self.orbit.borrow();
         let mut vfx_ready = true;
-        if let Some(vfx) = &mut self.vfx {
+        let instance = self
+            .scene
+            .iter()
+            .find(|entry| entry.key == SINGLE_MODEL_SCENE_KEY)
+            .map(|entry| &entry.instance);
+        if let (Some(vfx), Some(instance)) = (&mut self.vfx, instance) {
             let camera = self.context.vfx_camera_view_snapshot(
                 instance,
                 [self.config.width, self.config.height],
@@ -209,6 +320,11 @@ impl WebModelCanvasRenderer {
                 vfx.advance_to(options.vfx_time);
             }
         }
+        let instances = self
+            .scene
+            .iter()
+            .map(|entry| &entry.instance)
+            .collect::<Vec<_>>();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -225,7 +341,7 @@ impl WebModelCanvasRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         // Read the already advanced VFX state; equal timestamps do not update twice.
         if options.vfx_enabled && vfx_ready {
-            if let Some(vfx) = &mut self.vfx {
+            if let (Some(vfx), Some(instance)) = (&mut self.vfx, instance) {
                 vfx.update(&self.context, instance, options.vfx_time);
             }
         }
@@ -237,8 +353,8 @@ impl WebModelCanvasRenderer {
             .then_some(self.vfx.as_ref())
             .flatten()
             .map_or_else(Vec::new, |vfx| vfx.unambiguous_active_aura_resources());
-        self.context.render_with_auras(
-            instance,
+        self.context.render_scene(
+            &instances,
             &view,
             &depth_view,
             [self.config.width, self.config.height],
@@ -253,25 +369,60 @@ impl WebModelCanvasRenderer {
         output.present();
     }
 
+    /// 单模型模式的材质增量更新（等价 `update_scene_materials` 对
+    /// SINGLE_MODEL_SCENE_KEY）。
     pub fn update_materials<M: ModelRenderData + ?Sized>(&mut self, model: &M) {
-        if let Some(instance) = &mut self.instance {
-            instance.update_materials(&self.context, model);
+        self.update_scene_materials(SINGLE_MODEL_SCENE_KEY, model);
+    }
+
+    /// 单件材质增量更新（染色编辑只重建该件材质 bind group，不动实例几何
+    /// 与 joint 绑定）；key 不存在为空操作。
+    pub fn update_scene_materials<M: ModelRenderData + ?Sized>(&mut self, key: &str, model: &M) {
+        if let Some(entry) = self.scene.iter_mut().find(|entry| entry.key == key) {
+            entry.instance.update_materials(&self.context, model);
         }
     }
 
-    /// 实例 joint 名表（蒙皮实例为空表）；动画播放驱动按名计算关节矩阵。
+    /// 实例 joint 名表（单模型模式；蒙皮实例为空表）；动画播放驱动按名计算
+    /// 关节矩阵。多实例场景用 [`Self::scene_joint_tables`]。
     pub fn joint_names(&self) -> Vec<String> {
-        self.instance
-            .as_ref()
-            .map(|instance| instance.joint_names().to_vec())
+        self.scene
+            .iter()
+            .find(|entry| entry.key == SINGLE_MODEL_SCENE_KEY)
+            .map(|entry| entry.instance.joint_names().to_vec())
             .unwrap_or_default()
     }
 
-    /// 覆盖实例 joint 矩阵（动画采样结果，`update_joint_matrices` 增量上传，
-    /// 立即生效于后续渲染）；无蒙皮实例为空操作。
+    /// 场景全部实例的 joint 表 + 武器挂接规则（key + 名表 + attach，绘制
+    /// 顺序）。attach 为 Some 的实例按挂点骨规则驱动（姿势世界 × 校正），
+    /// 不走 inverse bind；其余实例走世界 × inverse(bind world)。
+    pub fn scene_joint_tables(
+        &self,
+    ) -> Vec<(String, Vec<String>, Option<xiv_companion::WeaponAttachInfo>)> {
+        self.scene
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key.clone(),
+                    entry.instance.joint_names().to_vec(),
+                    entry.attach,
+                )
+            })
+            .collect()
+    }
+
+    /// 覆盖实例 joint 矩阵（单模型模式；动画采样结果增量上传，立即生效于
+    /// 后续渲染）；无蒙皮实例为空操作。
     pub fn update_joint_matrices(&mut self, matrices: &[[f32; 16]]) {
-        if let Some(instance) = &mut self.instance {
-            instance.update_joint_matrices(&self.context, matrices);
+        self.update_scene_joint_matrices(SINGLE_MODEL_SCENE_KEY, matrices);
+    }
+
+    /// 单件 joint 矩阵上传；key 不存在为空操作。
+    pub fn update_scene_joint_matrices(&mut self, key: &str, matrices: &[[f32; 16]]) {
+        if let Some(entry) = self.scene.iter_mut().find(|entry| entry.key == key) {
+            entry
+                .instance
+                .update_joint_matrices(&self.context, matrices);
         }
     }
 
@@ -295,8 +446,6 @@ impl WebModelCanvasRenderer {
         }
     }
 }
-
-pub type WebWeaponCanvasRenderer = WebModelCanvasRenderer;
 
 #[derive(Debug)]
 struct OrbitState {

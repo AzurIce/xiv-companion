@@ -38,8 +38,10 @@
     --color-black: #000;
     --color-white: #fff;
     --spacing: 0.25rem;
+    --container-xs: 20rem;
     --container-sm: 24rem;
     --container-md: 28rem;
+    --container-xl: 36rem;
     --container-2xl: 42rem;
     --container-3xl: 48rem;
     --container-5xl: 64rem;
@@ -418,6 +420,9 @@
   .mb-3 {
     margin-bottom: calc(var(--spacing) * 3);
   }
+  .mb-4 {
+    margin-bottom: calc(var(--spacing) * 4);
+  }
   .mb-5 {
     margin-bottom: calc(var(--spacing) * 5);
   }
@@ -517,6 +522,9 @@
   .h-64 {
     height: calc(var(--spacing) * 64);
   }
+  .h-72 {
+    height: calc(var(--spacing) * 72);
+  }
   .h-80 {
     height: calc(var(--spacing) * 80);
   }
@@ -549,6 +557,9 @@
   }
   .max-h-\[min\(680px\,calc\(100vh-2rem\)\)\] {
     max-height: min(680px, calc(100vh - 2rem));
+  }
+  .max-h-\[min\(720px\,calc\(100vh-2rem\)\)\] {
+    max-height: min(720px, calc(100vh - 2rem));
   }
   .max-h-\[min\(760px\,calc\(100vh-2rem\)\)\] {
     max-height: min(760px, calc(100vh - 2rem));
@@ -696,6 +707,12 @@
   }
   .max-w-sm {
     max-width: var(--container-sm);
+  }
+  .max-w-xl {
+    max-width: var(--container-xl);
+  }
+  .max-w-xs {
+    max-width: var(--container-xs);
   }
   .min-w-0 {
     min-width: calc(var(--spacing) * 0);
@@ -1083,6 +1100,12 @@
       border-color: color-mix(in oklab, var(--color-foreground) 20%, transparent);
     }
   }
+  .border-foreground\/60 {
+    border-color: color-mix(in srgb, #252525 60%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-foreground) 60%, transparent);
+    }
+  }
   .border-input {
     border-color: var(--color-input);
   }
@@ -1416,6 +1439,9 @@
   .py-10 {
     padding-block: calc(var(--spacing) * 10);
   }
+  .py-16 {
+    padding-block: calc(var(--spacing) * 16);
+  }
   .pt-1 {
     padding-top: calc(var(--spacing) * 1);
   }
@@ -1741,6 +1767,9 @@
       --tw-ring-color: color-mix(in oklab, var(--color-primary) 50%, transparent);
     }
   }
+  .ring-ring {
+    --tw-ring-color: var(--color-ring);
+  }
   .ring-offset-1 {
     --tw-ring-offset-width: 1px;
     --tw-ring-offset-shadow: var(--tw-ring-inset,) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
@@ -1802,6 +1831,11 @@
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
+  .transition-transform {
+    transition-property: transform, translate, scale, rotate;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
   .duration-200 {
     --tw-duration: 200ms;
     transition-duration: 200ms;
@@ -1836,6 +1870,16 @@
     &:last-child {
       border-bottom-style: var(--tw-border-style);
       border-bottom-width: 0px;
+    }
+  }
+  .hover\:scale-110 {
+    &:hover {
+      @media (hover: hover) {
+        --tw-scale-x: 110%;
+        --tw-scale-y: 110%;
+        --tw-scale-z: 110%;
+        scale: var(--tw-scale-x) var(--tw-scale-y);
+      }
     }
   }
   .hover\:border-border {
@@ -2146,9 +2190,19 @@
       opacity: 50%;
     }
   }
+  .sm\:h-80 {
+    @media (width >= 40rem) {
+      height: calc(var(--spacing) * 80);
+    }
+  }
   .sm\:h-\[380px\] {
     @media (width >= 40rem) {
       height: 380px;
+    }
+  }
+  .sm\:w-56 {
+    @media (width >= 40rem) {
+      width: calc(var(--spacing) * 56);
     }
   }
   .sm\:w-64 {
@@ -2169,6 +2223,11 @@
   .sm\:grid-cols-2 {
     @media (width >= 40rem) {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .sm\:grid-cols-8 {
+    @media (width >= 40rem) {
+      grid-template-columns: repeat(8, minmax(0, 1fr));
     }
   }
   .sm\:grid-cols-\[7rem_minmax\(0\,1fr\)\] {
@@ -2261,6 +2320,16 @@
       text-align: left;
     }
   }
+  .lg\:sticky {
+    @media (width >= 64rem) {
+      position: sticky;
+    }
+  }
+  .lg\:top-4 {
+    @media (width >= 64rem) {
+      top: calc(var(--spacing) * 4);
+    }
+  }
   .lg\:col-span-2 {
     @media (width >= 64rem) {
       grid-column: span 2 / span 2;
@@ -2301,6 +2370,11 @@
       height: 100vh;
     }
   }
+  .lg\:max-h-96 {
+    @media (width >= 64rem) {
+      max-height: calc(var(--spacing) * 96);
+    }
+  }
   .lg\:min-h-0 {
     @media (width >= 64rem) {
       min-height: calc(var(--spacing) * 0);
@@ -2309,6 +2383,11 @@
   .lg\:w-80 {
     @media (width >= 64rem) {
       width: calc(var(--spacing) * 80);
+    }
+  }
+  .lg\:w-\[22rem\] {
+    @media (width >= 64rem) {
+      width: 22rem;
     }
   }
   .lg\:max-w-\[calc\(100vw-8rem\)\] {
@@ -2371,9 +2450,24 @@
       flex-direction: column;
     }
   }
+  .lg\:flex-row {
+    @media (width >= 64rem) {
+      flex-direction: row;
+    }
+  }
   .lg\:flex-wrap {
     @media (width >= 64rem) {
       flex-wrap: wrap;
+    }
+  }
+  .lg\:items-start {
+    @media (width >= 64rem) {
+      align-items: flex-start;
+    }
+  }
+  .lg\:gap-5 {
+    @media (width >= 64rem) {
+      gap: calc(var(--spacing) * 5);
     }
   }
   .lg\:overflow-hidden {
@@ -2384,6 +2478,11 @@
   .lg\:overflow-visible {
     @media (width >= 64rem) {
       overflow: visible;
+    }
+  }
+  .lg\:overflow-y-auto {
+    @media (width >= 64rem) {
+      overflow-y: auto;
     }
   }
   .lg\:border-r {
@@ -2460,6 +2559,11 @@
   .xl\:w-64 {
     @media (width >= 80rem) {
       width: calc(var(--spacing) * 64);
+    }
+  }
+  .xl\:w-\[24rem\] {
+    @media (width >= 80rem) {
+      width: 24rem;
     }
   }
   .xl\:flex-1 {
@@ -2566,6 +2670,11 @@
   .\32 xl\:grid-cols-2 {
     @media (width >= 96rem) {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .\32 xl\:grid-cols-4 {
+    @media (width >= 96rem) {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
   .\32 xl\:grid-cols-\[160px_minmax\(0\,1fr\)\] {
@@ -2880,6 +2989,21 @@
   syntax: "*";
   inherits: false;
 }
+@property --tw-scale-x {
+  syntax: "*";
+  inherits: false;
+  initial-value: 1;
+}
+@property --tw-scale-y {
+  syntax: "*";
+  inherits: false;
+  initial-value: 1;
+}
+@property --tw-scale-z {
+  syntax: "*";
+  inherits: false;
+  initial-value: 1;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -2951,6 +3075,9 @@
       --tw-backdrop-sepia: initial;
       --tw-duration: initial;
       --tw-ease: initial;
+      --tw-scale-x: 1;
+      --tw-scale-y: 1;
+      --tw-scale-z: 1;
     }
   }
 }

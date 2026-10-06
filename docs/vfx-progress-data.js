@@ -1,32 +1,37 @@
 window.VFX_PROGRESS = {
   "schemaVersion": 2,
-  "updatedAt": "2026-10-06T18:00:38+08:00",
-  "state": "首个可用版本 · 已合入本地 dev",
+  "updatedAt": "2026-10-06T21:24:20+08:00",
+  "state": "幻化 / VFX 已整合到本地 dev",
   "latestAuditCorrection": "合入目标纠正为dev；本地main已恢复ce20f59。首版范围保持不变，完整覆盖留待后续。",
-  "currentAudit": "两份真实武器逐帧播放1x/4x均通过；完整覆盖与游戏像素一致性保留为后续事项。",
-  "activity": "2026-10-06：候选583065c已快进合入本地dev；main误合入已撤回，远端尚未推送。",
+  "currentAudit": "整合版workspace共1799项通过、0失败、356忽略；WASM编译通过。原生多实例+VFX、真实剑盾rest/动画及16053/16063挂载1x/4x均通过，共24份定向快照。",
+  "activity": "整合与验收完成，已合入本地dev，尚未推送。原dev的28个和glamour的23个工作文件保持原样；幻化页自动加载武器VFX仍待接入。",
   "summary": "首版提供常见武器特效的近似预览，保留明确降级提示。核心可用性验证已通过；完整tone-map、雾、所有字段及游戏画面一致性不阻塞本版。",
   "focus": {
     "state": "verified",
-    "title": "首版已合入本地 dev",
-    "status": "6项首版检查通过",
-    "description": "release/vfx-preview-v1候选583065c已快进合入本地dev；验收源码未改动，11项摘要一致。main恢复ce20f59，原dev未提交开发保留在原工作区。",
-    "resource": "docs/vfx-v1.md",
+    "title": "dev 整合幻化与 VFX",
+    "status": "已通过验收并合入本地 dev",
+    "description": "glamour的套装管理、逐件换装、染色、骨架与体型缩放已与VFX首版整合。统一IMC和场景渲染入口；原glamour工作区保留。幻化页自动武器VFX尚未接入。",
+    "resource": "docs/dev-glamour-vfx-integration.md",
     "steps": [
       {
         "state": "verified",
-        "label": "实际预览与原生代表性验证",
-        "detail": "用户截图已可见；两份真实资源的1x/4x逐帧挂载验收通过。"
+        "label": "保留源工作区并整合冲突",
+        "detail": "23个原glamour修改/未跟踪文件保持不变；9个冲突文件已解决。"
       },
       {
         "state": "verified",
-        "label": "独立候选与最终检查",
-        "detail": "代码提交8e07bd5；独立候选普通workspace、WASM及进度页检查通过。"
+        "label": "普通workspace回归",
+        "detail": "1799项通过、0失败、356忽略；data1449、renderer203，忽略项不计为通过。"
       },
       {
         "state": "verified",
-        "label": "本地 dev 合入",
-        "detail": "2026-10-06从d695be5快进22个提交，无冲突；main误合入已撤回。"
+        "label": "WASM与原生GPU验收",
+        "detail": "WASM编译、多实例+VFX 1x/4x、真实剑盾rest/动画及16053/16063挂载1x/4x通过；24份定向快照，独立日志保留。"
+      },
+      {
+        "state": "verified",
+        "label": "合入本地 dev",
+        "detail": "整合提交合入本地dev；main保持ce20f59，远端尚未推送。"
       }
     ],
     "images": [
@@ -39,6 +44,16 @@ window.VFX_PROGRESS = {
         "src": "vfx-progress-assets/v1-shield-1x.png",
         "title": "圣母盾·灵光 #16063",
         "detail": "原生RTX 4070 Ti SUPER，真实资源逐帧播放0.8秒。展示本版近似效果，不代表游戏同条件画面对照。"
+      },
+      {
+        "src": "vfx-progress-assets/dev-dressed-sword-shield-rest.png",
+        "title": "敖龙女 · 剑盾穿搭 Rest",
+        "detail": "整合版RTX 4070 Ti SUPER实装资源原生快照；七件装备与身体独立实例。取景仍使用未缩放bounds，超长武器可能超出画面。"
+      },
+      {
+        "src": "vfx-progress-assets/dev-dressed-sword-shield-animated.png",
+        "title": "敖龙女 · 剑盾随角色动画",
+        "detail": "整合版RTX 4070 Ti SUPER实装资源原生快照；七件装备与身体独立实例。取景仍使用未缩放bounds，超长武器可能超出画面。"
       }
     ]
   },
@@ -46,7 +61,7 @@ window.VFX_PROGRESS = {
     {
       "label": "本次目标",
       "value": "已合入本地 dev",
-      "detail": "近似武器预览；长期全覆盖单独维护。"
+      "detail": "幻化与VFX首版已整合；长期全覆盖及幻化自动武器VFX继续维护。"
     },
     {
       "label": "首版真实样本",
@@ -142,6 +157,19 @@ window.VFX_PROGRESS = {
           "href": "vfx-v1.md#merge"
         }
       ]
+    },
+    {
+      "id": "glamour-integration",
+      "state": "verified",
+      "area": "整合",
+      "title": "dev 整合幻化与VFX",
+      "detail": "9个冲突文件已解决，统一IMC和场景渲染；普通workspace、WASM与定向原生GPU验收通过，已合入本地dev。幻化自动武器VFX另列待办。",
+      "evidence": [
+        {
+          "label": "整合范围与验收",
+          "href": "dev-glamour-vfx-integration.md"
+        }
+      ]
     }
   ],
   "coverage": [
@@ -149,7 +177,7 @@ window.VFX_PROGRESS = {
       "title": "武器挂载与资源",
       "level": "首版可用",
       "supported": "IMC→AVFX、主副手挂载、贴图和绘制模型、基础骨架/绑点；资源失败保留诊断。",
-      "remaining": "安装全集验收、其它宿主资源与动态游戏来源。"
+      "remaining": "幻化页IMC→AVFX资源加载与动画武器宿主接入、安装全集验收、其它宿主资源与动态游戏来源。"
     },
     {
       "title": "常见粒子与网格",
@@ -199,13 +227,19 @@ window.VFX_PROGRESS = {
       "name": "代表性真实武器",
       "result": "16053 / 16063 · 原生1x/4x通过",
       "scope": "NVIDIA RTX 4070 Ti SUPER / Vulkan，按网页逐帧输入并选择Aura；两种MSAA共16份快照，实际特效区别于无VFX基线。",
-      "href": "vfx-v1.md#verification"
+      "href": "dev-glamour-vfx-integration.md#验证"
+    },
+    {
+      "name": "幻化与VFX共享场景",
+      "result": "原生多实例与剑盾动画通过",
+      "scope": "NVIDIA RTX 4070 Ti SUPER / Vulkan，多实例+VFX 1x/4x共6份快照；七件装备与身体独立实例、剑盾rest/动画共2份快照。共享渲染器验收，幻化页自动加载武器VFX仍待接入。",
+      "href": "dev-glamour-vfx-integration.md#验证"
     },
     {
       "name": "普通测试与网页编译",
       "result": "全部通过",
-      "scope": "workspace game-data/render-test-support/web普通测试通过；data1409、renderer199及应用/审计用例通过。忽略的GPU/安装/研究测试不计通过；Web/WASM编译通过。",
-      "href": "vfx-v1.md#verification"
+      "scope": "整合版workspace game-data/render-test-support/web：1799通过、0失败、356忽略；data1449、renderer203及应用/集成用例通过。忽略项不计通过；Web/WASM编译通过。",
+      "href": "dev-glamour-vfx-integration.md#验证"
     },
     {
       "name": "浏览器shader与初始化",
@@ -222,11 +256,19 @@ window.VFX_PROGRESS = {
   ],
   "references": [
     {
+      "label": "当前dev整合范围与验收",
+      "href": "dev-glamour-vfx-integration.md"
+    },
+    {
+      "label": "当前dev整合源码与日志摘要",
+      "href": "dev-glamour-vfx-verification.json"
+    },
+    {
       "label": "首版范围、命令和已知差异",
       "href": "vfx-v1.md"
     },
     {
-      "label": "本版验证与源码摘要",
+      "label": "首版候选历史验证与源码摘要",
       "href": "vfx-v1-verification.json"
     },
     {
@@ -235,6 +277,10 @@ window.VFX_PROGRESS = {
     }
   ],
   "updates": [
+    {
+      "title": "2026-10-06 整合幻化与VFX",
+      "detail": "将glamour当前开发快照11c7968f与VFX首版在本地dev整合，解决9个冲突文件。1799项普通测试、WASM及定向原生GPU回归通过；原工作区保留，尚未推送。"
+    },
     {
       "title": "2026-10-06 首版合入本地 dev",
       "detail": "合入目标纠正为dev：候选583065c快进合入，main恢复ce20f59。原dev工作区的28个修改/未跟踪文件原样保留在wip/dev-before-vfx-preview-v1，远端尚未推送。"

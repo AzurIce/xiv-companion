@@ -6006,6 +6006,7 @@ mod tests {
     fn element_target_pose_keeps_parent_basis_and_uses_root_for_unknown_bones() {
         use crate::skeleton::{BoneTransform, ModelSkeleton, SkeletonPose, quat_from_axis_angle};
         let skeleton = ModelSkeleton {
+            body_scaling: None,
             bone_names: vec!["root".into(), "tip".into()],
             parent_indices: vec![-1, 0],
             rest_pose: vec![
@@ -6056,6 +6057,7 @@ mod tests {
         // Skinning matrices at rest would be identity and lose both parents.
         assert_ne!(matrices[0], points[0].local_matrix());
         let empty = ModelSkeleton {
+            body_scaling: None,
             bone_names: vec![],
             parent_indices: vec![],
             rest_pose: vec![],
@@ -6074,6 +6076,7 @@ mod tests {
     fn bone_pose_provider_preserves_shear_mirrors_and_rejects_invalid_target_identity() {
         use crate::{BoneTransform, ModelSkeleton, SkeletonPose, VfxRuntime, quat_from_axis_angle};
         let skeleton = ModelSkeleton {
+            body_scaling: None,
             bone_names: vec!["root".into(), "tip".into()],
             parent_indices: vec![-1, 0],
             rest_pose: vec![

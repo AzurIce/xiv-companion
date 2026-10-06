@@ -163,8 +163,8 @@ fn face_attribute_options_from_installed_game() {
 /// - 裸装身体 = 小衣 e0001（top/dwn 全族恒有；sho 仅中原男/女、鲁加男、
 ///   拉拉男）+ 裸肤 e0000（全槽仅中原男/女、拉拉男有文件）；硌狮/维埃拉
 ///   无自身 e0001 文件；
-/// - human.cmp = 182272 字节色板区 + 4480 字节尾部（32 × 140 字节 RGSP
-///   缩放记录）。
+/// - human.cmp = 182272 字节色板区 + 4480 字节尾部（80 × 56 字节 RGSP
+///   缩放记录，xivModdingFramework `CharaMakeParameter.cs` 布局）。
 #[test]
 #[ignore = "probes installed game data; requires XIV_GAME_DIR"]
 fn probe_character_file_numbering_and_cmp_layout() {
@@ -296,14 +296,15 @@ fn probe_character_file_numbering_and_cmp_layout() {
         186752,
         "human.cmp = 182272 palette + 4480 RGSP tail"
     );
-    // 尾部按 32 条 × 140 字节解析为 35 个 float 的记录（RGSP 缩放参数）。
+    // 尾部按 80 条 × 56 字节解析为 14 个 float 的记录（RGSP 缩放参数，
+    // `racial_scaling` 模块的解析器布局；条目 0 = 中原男/女共用）。
     let tail_float = |record: usize, index: usize| -> f32 {
-        let at = 182272 + record * 140 + index * 4;
+        let at = 182272 + record * 56 + index * 4;
         f32::from_le_bytes([cmp[at], cmp[at + 1], cmp[at + 2], cmp[at + 3]])
     };
     println!(
         "CMP rgsp record0 floats: {:?}",
-        (0..4).map(|i| tail_float(0, i)).collect::<Vec<_>>()
+        (0..14).map(|i| tail_float(0, i)).collect::<Vec<_>>()
     );
     // 色板锚点：眼色块 0 首项、肤色 tribe1 男块 (18+3)*256 首项。
     let color = |index: usize| {

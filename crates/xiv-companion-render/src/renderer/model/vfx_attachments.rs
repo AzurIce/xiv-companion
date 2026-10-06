@@ -3502,6 +3502,7 @@ mod tests {
         let mut mounts = point_mount();
         let mount = &mut mounts.attachments[0];
         mount.data.skeleton = Some(ModelSkeleton {
+            body_scaling: None,
             bone_names: vec!["root".into()],
             parent_indices: vec![-1],
             rest_pose: vec![BoneTransform {

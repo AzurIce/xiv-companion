@@ -1,0 +1,93 @@
+{
+  "scope": "dev integration of current glamour snapshot and first usable VFX preview; not full client or glamour weapon-VFX hosting",
+  "verifiedAt": "2026-10-06T21:24:20+08:00",
+  "devBase": "c93b36a15a356a954178dc39f83225798182f450",
+  "glamourHead": "3a76f44",
+  "glamourWorkingSnapshot": "11c7968f7132d8a2d3afe266b4de9a7401541faa",
+  "resolvedConflictFiles": 9,
+  "checks": {
+    "workspace": {
+      "passed": 1799,
+      "failed": 0,
+      "ignored": 356,
+      "dataPassed": 1449,
+      "rendererPassed": 203
+    },
+    "wasm": "passed",
+    "nativeScene": {
+      "adapter": "NVIDIA GeForce RTX 4070 Ti SUPER",
+      "backend": "Vulkan",
+      "msaa": [
+        1,
+        4
+      ],
+      "snapshots": 6,
+      "result": "passed; both models and VFX visible; matches same-bounds combined meshes"
+    },
+    "nativeDressed": {
+      "result": "passed; final run uses independent build cache and retained raw log",
+      "snapshots": 2,
+      "assertions": "seven equipment pieces; non-uniform rest and animated pixels; sword/shield attach origins move with pose"
+    },
+    "nativeWeapons": {
+      "result": "passed",
+      "items": [
+        16053,
+        16063
+      ],
+      "msaa": [
+        1,
+        4
+      ],
+      "snapshots": 16,
+      "assertions": "mounted VFX differs from no-VFX baseline; initial zero and 60Hz frames; web-equivalent Aura selection"
+    }
+  },
+  "sourceSha256": {
+    "crates/xiv-companion-data/src/imc.rs": "1a62a52dec725a643d94a47c3fc6e5268b2942005fb9fc59dd673514b6ece537",
+    "crates/xiv-companion-data/src/equipment_params.rs": "32d191e7f46ad490597293bcdbd4472997f1e253eb2e0dcc3f6bc0383c5c24a9",
+    "crates/xiv-companion-data/src/racial_scaling.rs": "4a898184856957868beb0509c3e8720e8d1b690bf9fab56fc3ddfcf12c398a1d",
+    "crates/xiv-companion-data/src/skeleton.rs": "a139fd618627e895b642f7b882f8059ff28bd16f80e43dbe07b1c6a609fff26b",
+    "crates/xiv-companion-data/src/weapon_models.rs": "b0e5a36a3d09b7b24a50d7365dd2a2305bd30f38fb27505fcd9b807281bb42d6",
+    "crates/xiv-companion-render/src/renderer/model/context.rs": "8508f0da843b60ff6d8f4dcc98058c42fd49ef8ab09e1e4a0bf015e79ad3ccb1",
+    "crates/xiv-companion-render/src/renderer/model/instance.rs": "c7a1c3332f3fb1f33ba3a34ff29a59488ae4b69d6cf0c871f2c29e2308ad82e7",
+    "crates/xiv-companion-render/src/test_support.rs": "1c06e330f2b59613bff4dc276716f0851f25a91420b8aaa2f324fe33c05bccf5",
+    "src/app/model_canvas_renderer.rs": "4510c8063066fbc9a0c8b045192f2c5722bd1c5e25f77a9f5d4c26ea1afce08b",
+    "src/app/pages/weapon_models.rs": "837d4bc2552cc899c9184f283cb4784271dfa2ca4a8c6d48f62d44222d6ed04f",
+    "src/app/pages/glamour.rs": "6f5f201304d9a0c0bea78736ce06365f79290ff09ed35fbec76a77266f113b22",
+    "src/app/glamour_state.rs": "1bb579826e89752a5da2a565d7233aeb0ee0ee8d5c2e61045cad14c13a640235",
+    "tests/vfx_render_semantics.rs": "1b73e40581778d56f287dbfb8d9faeb18a062229bd06682bcfa2f68fa116ec79",
+    "tests/native_dressed_character.rs": "55d02ed22ac47c4fd3c3a890fcab9688045b2f6f06668423ae56cac57411de7b",
+    "tests/weapon_vfx_real_smoke.rs": "88f9f267cc3e8750b5ad913f9ee502ad0e9e702df292b6ab4037c2c4a2e9c5cb"
+  },
+  "reference": {
+    "repository": "TexTools/xivModdingFramework",
+    "commit": "25b3ae72099c12915eb68a574d1e2b40cee0d1c9",
+    "files": [
+      "Variants/FileTypes/Imc.cs",
+      "Variants/DataContainers/XivImc.cs",
+      "General/DataContainers/CharaMakeParameter.cs"
+    ]
+  },
+  "logDirectory": "/tmp/xiv-companion-glamour-vfx-verification-20261006",
+  "logSha256": {
+    "workspace.log": "8fd9e3307147bacd679daff6d6370947fbbc0aa8329d2537da205d702a220f0e",
+    "wasm.log": "7774fecbd1d2bf67e33f3c8769f635fdaa5e0b917fa0d1c72bbc94c58f4d406a",
+    "multi-scene-gpu.log": "c67f1e22f9ed662634989863269dcfcbe133b5c91031b0fe8cec66db2fe004fb",
+    "vfx-gpu-1x.log": "9b2165fa567272ae6f2e1fc8368edbbabb6202ee5a9822ca6dc23d287cb8df40",
+    "vfx-gpu-4x.log": "6fd99cf0ddf6fdb64a9e09356700f108ef330c35b4644936e352c580a2905234",
+    "dressed-gpu.log": "c31cdf1b241719dc753365e38d484f8e5386b04bf3b763eaf1cfe86d37978cea"
+  },
+  "remaining": [
+    "glamour page IMC-to-AVFX resource loading and animated weapon hosts",
+    "game-equivalent PBD, complete character bones, all VFX/scene providers and pixel acceptance",
+    "camera bounds follow scaling/animated weapons"
+  ],
+  "preservedWork": {
+    "originalDevFiles": 28,
+    "glamourFiles": 23,
+    "contentHashes": "all unchanged"
+  },
+  "pushed": false,
+  "state": "validated and integrated into local dev; not pushed"
+}

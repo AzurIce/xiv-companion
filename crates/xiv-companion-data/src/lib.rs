@@ -7,6 +7,8 @@ pub mod character_make;
 pub mod collection;
 pub mod collection_classification;
 pub mod craft_data;
+#[cfg(feature = "game-data")]
+pub mod equipment_params;
 pub mod furniture;
 #[cfg(feature = "game-data")]
 pub mod game_data;
@@ -16,6 +18,7 @@ mod mdl_geometry;
 #[cfg(feature = "game-data")]
 pub mod mdl_metadata;
 pub mod model;
+pub mod racial_scaling;
 pub mod skeleton;
 #[cfg(feature = "game-data")]
 pub mod staining;
@@ -33,10 +36,13 @@ pub use character_make::*;
 pub use collection::*;
 pub use collection_classification::*;
 pub use craft_data::*;
+#[cfg(feature = "game-data")]
+pub use equipment_params::*;
 pub use furniture::*;
 pub use imc::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;
 pub use model::*;
+pub use racial_scaling::*;
 pub use skeleton::*;
 pub use weapon_models::*;

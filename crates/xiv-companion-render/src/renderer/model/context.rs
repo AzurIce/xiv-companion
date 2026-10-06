@@ -819,8 +819,8 @@ impl ModelRenderer {
         vfx: Option<&VfxParticles>,
         auras: &[&WeaponVfxAuraResource],
     ) {
-        self.context.render_with_auras(
-            &self.instance,
+        self.context.render_scene(
+            &[&self.instance],
             target_view,
             depth_view,
             viewport,
@@ -2174,7 +2174,7 @@ impl ModelRenderContext {
     /// [`ModelRenderContext::create_model`] 的骨架版：`skeleton` 为 Some 时
     /// 构建实例 joint 表（全部渲染 mesh bone_table 名并集，按名→骨骼索引），
     /// 顶点 blend 索引重映射为实例 joint 下标，预分配 joint storage buffer 并
-    /// 上传 rest pose 关节矩阵（world × inverse(bind world)，rest 输出恒等）。
+    /// 上传展示 rest pose 关节矩阵（world × inverse(bind world)，含角色体型缩放）。
     /// 无骨架时 joint 数 0，shader 走原路径。bone storage 上限 256 个 mat4，
     /// 超出截断并记日志。材质更新（`ModelInstance::update_materials`）只重建
     /// group(1)，joint 绑定在 group(2) 不受影响。
@@ -2277,7 +2277,9 @@ impl ModelRenderContext {
             }),
         );
         if let Some(skeleton) = skeleton.filter(|_| joint_count > 0) {
-            let rest_pose = xiv_companion_data::SkeletonPose::rest_pose(skeleton);
+            // 展示用 rest pose（含 RGSP 体型缩放）；inverse bind 仍按原始 rest
+            // （SkeletonInverseBindCache 内部用 SkeletonPose::rest_pose）。
+            let rest_pose = skeleton.scaled_rest_pose();
             let matrices = xiv_companion_data::joint_matrices(
                 skeleton,
                 &rest_pose,
@@ -2573,70 +2575,15 @@ impl ModelRenderContext {
         }
     }
 
-    pub fn render(
+    /// 多实例场景渲染：一个 render pass 内画全部实例（共享相机/深度/光照/
+    /// 后处理），相机取场景包围球（各实例包围球并）。蒙皮实例各自的 joint
+    /// 表经 `update_joint_matrices` 逐实例上传；透明三角形跨实例全局
+    /// back-to-front 排序（各实例索引流写自己的 transparent index buffer，
+    /// 按全局绘制序列切换实例缓冲绘制）。不透明/切割/描边/加色各趟按
+    /// "趟外层 × 实例外层"顺序绘制，趟内语义与单实例一致。
+    pub fn render_scene(
         &mut self,
-        model: &ModelInstance,
-        target_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        viewport: [u32; 2],
-        yaw: f32,
-        pitch: f32,
-        zoom: f32,
-        pan: [f32; 2],
-        options: ModelRenderOptions,
-        vfx: Option<&VfxParticles>,
-    ) {
-        self.render_with_aura(
-            model,
-            target_view,
-            depth_view,
-            viewport,
-            yaw,
-            pitch,
-            zoom,
-            pan,
-            options,
-            vfx,
-            None,
-        );
-    }
-
-    /// Shade a prepared Aura on compatible batches of its target model.
-    pub fn render_with_aura(
-        &mut self,
-        model: &ModelInstance,
-        target_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        viewport: [u32; 2],
-        yaw: f32,
-        pitch: f32,
-        zoom: f32,
-        pan: [f32; 2],
-        options: ModelRenderOptions,
-        vfx: Option<&VfxParticles>,
-        aura: Option<&WeaponVfxAuraResource>,
-    ) {
-        let auras = aura.into_iter().collect::<Vec<_>>();
-        self.render_with_auras(
-            model,
-            target_view,
-            depth_view,
-            viewport,
-            yaw,
-            pitch,
-            zoom,
-            pan,
-            options,
-            vfx,
-            &auras,
-        );
-    }
-
-    /// Shade independent Aura targets without resolving competing instances
-    /// on the same model.
-    pub fn render_with_auras(
-        &mut self,
-        model: &ModelInstance,
+        instances: &[&ModelInstance],
         target_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         viewport: [u32; 2],
@@ -2648,9 +2595,10 @@ impl ModelRenderContext {
         vfx: Option<&VfxParticles>,
         auras: &[&WeaponVfxAuraResource],
     ) {
+        let (bounds_center, bounds_radius) = scene_bounds(instances);
         let uniform = camera_uniform(
-            model.bounds_center,
-            model.bounds_radius,
+            bounds_center,
+            bounds_radius,
             viewport,
             yaw,
             pitch,
@@ -2686,13 +2634,15 @@ impl ModelRenderContext {
                 params: compose_post_params(options.bloom_strength(), self.format),
             }),
         );
-        let sorted_transparent = sorted_transparent_triangles(&model.draw_batches, yaw, pitch);
-        if !sorted_transparent.indices.is_empty() {
-            self.queue.write_buffer(
-                &model.transparent_index_buffer,
-                0,
-                bytemuck::cast_slice(&sorted_transparent.indices),
-            );
+        let sorted_transparent = sorted_scene_transparent_triangles(instances, yaw, pitch);
+        for (instance, indices) in instances.iter().zip(&sorted_transparent.indices) {
+            if !indices.is_empty() {
+                self.queue.write_buffer(
+                    &instance.transparent_index_buffer,
+                    0,
+                    bytemuck::cast_slice(indices),
+                );
+            }
         }
         let viewport = [viewport[0].max(1), viewport[1].max(1)];
         self.ensure_post_process_targets(viewport);
@@ -2839,88 +2789,111 @@ impl ModelRenderContext {
             });
 
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(2, &model.joint_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for instance in instances {
+                render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(instance.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.pipeline
-                } else {
-                    &self.culled_pipeline
-                });
-                draw_model_batch(
-                    &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
-                    auras,
-                    batch,
-                );
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass() == PreparedRenderPass::Opaque)
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.pipeline
+                    } else {
+                        &self.culled_pipeline
+                    });
+                    draw_model_batch(
+                        &mut render_pass,
+                        &instance.material_bind_groups,
+                        &instance.surface_overlay_bind_groups,
+                        auras,
+                        batch,
+                    );
+                }
+
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.cutout_pipeline
+                    } else {
+                        &self.cutout_culled_pipeline
+                    });
+                    draw_model_batch(
+                        &mut render_pass,
+                        &instance.material_bind_groups,
+                        &instance.surface_overlay_bind_groups,
+                        auras,
+                        batch,
+                    );
+                }
+
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.uses_dither_depth_prepass())
+                {
+                    render_pass.set_pipeline(if batch.render_backfaces() {
+                        &self.dither_depth_pipeline
+                    } else {
+                        &self.dither_depth_culled_pipeline
+                    });
+                    draw_model_batch(
+                        &mut render_pass,
+                        &instance.material_bind_groups,
+                        &instance.surface_overlay_bind_groups,
+                        auras,
+                        batch,
+                    );
+                }
+
+                render_pass.set_pipeline(&self.outline_pipeline);
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.uses_outline_pass())
+                {
+                    draw_model_batch(
+                        &mut render_pass,
+                        &instance.material_bind_groups,
+                        &instance.surface_overlay_bind_groups,
+                        auras,
+                        batch,
+                    );
+                }
             }
 
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass() == PreparedRenderPass::Cutout)
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.cutout_pipeline
-                } else {
-                    &self.cutout_culled_pipeline
-                });
-                draw_model_batch(
-                    &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
-                    auras,
-                    batch,
-                );
-            }
-
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.uses_dither_depth_prepass())
-            {
-                render_pass.set_pipeline(if batch.render_backfaces() {
-                    &self.dither_depth_pipeline
-                } else {
-                    &self.dither_depth_culled_pipeline
-                });
-                draw_model_batch(
-                    &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
-                    auras,
-                    batch,
-                );
-            }
-
-            render_pass.set_pipeline(&self.outline_pipeline);
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.uses_outline_pass())
-            {
-                draw_model_batch(
-                    &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
-                    auras,
-                    batch,
-                );
-            }
-
-            render_pass.set_index_buffer(
-                model.transparent_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
+            // 跨实例透明段：按全局深度序绘制，实例切换时换绑顶点/索引/joint。
+            let mut bound_instance: Option<usize> = None;
+            let mut bound_transparent = false;
             for draw in &sorted_transparent.draws {
-                let batch = &model.draw_batches[draw.batch_index];
+                let Some(instance) = instances.get(draw.instance_index) else {
+                    continue;
+                };
+                let Some(batch) = instance.draw_batches.get(draw.batch_index) else {
+                    continue;
+                };
+                if bound_instance != Some(draw.instance_index) {
+                    render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        instance.transparent_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    bound_instance = Some(draw.instance_index);
+                    bound_transparent = true;
+                } else if !bound_transparent {
+                    render_pass.set_index_buffer(
+                        instance.transparent_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    bound_transparent = true;
+                }
                 let pipeline = if batch.pass() == PreparedRenderPass::Glass {
                     if batch.uses_additive_glass_pipeline(options.glass_blend_mode) {
                         if batch.render_backfaces() {
@@ -2941,8 +2914,8 @@ impl ModelRenderContext {
                 render_pass.set_pipeline(pipeline);
                 draw_model_batch_range(
                     &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
+                    &instance.material_bind_groups,
+                    &instance.surface_overlay_bind_groups,
                     auras,
                     batch,
                     draw.index_start,
@@ -2950,29 +2923,34 @@ impl ModelRenderContext {
                 );
             }
 
-            render_pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in model
-                .draw_batches
-                .iter()
-                .filter(|batch| batch.pass().uses_additive_pipeline())
-            {
-                let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
-                render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
-                    &self.lightshaft_pipeline
-                } else if dedicated {
-                    &self.lightshaft_culled_pipeline
-                } else if batch.render_backfaces() {
-                    &self.additive_pipeline
-                } else {
-                    &self.additive_culled_pipeline
-                });
-                draw_model_batch(
-                    &mut render_pass,
-                    &model.material_bind_groups,
-                    &model.surface_overlay_bind_groups,
-                    auras,
-                    batch,
-                );
+            for instance in instances {
+                render_pass.set_bind_group(2, &instance.joint_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, instance.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(instance.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                for batch in instance
+                    .draw_batches
+                    .iter()
+                    .filter(|batch| batch.pass().uses_additive_pipeline())
+                {
+                    let dedicated = lightshaft_uses_dedicated_pipeline(options.debug_mode);
+                    render_pass.set_pipeline(if dedicated && batch.render_backfaces() {
+                        &self.lightshaft_pipeline
+                    } else if dedicated {
+                        &self.lightshaft_culled_pipeline
+                    } else if batch.render_backfaces() {
+                        &self.additive_pipeline
+                    } else {
+                        &self.additive_culled_pipeline
+                    });
+                    draw_model_batch(
+                        &mut render_pass,
+                        &instance.material_bind_groups,
+                        &instance.surface_overlay_bind_groups,
+                        auras,
+                        batch,
+                    );
+                }
             }
 
             if let Some(vfx) = vfx.filter(|_| !has_screen_copy && !has_segmented_vfx) {
@@ -3624,4 +3602,28 @@ impl ModelRenderContext {
         )
         .1
     }
+}
+
+/// 场景包围球：全部实例包围球的并（模型空间）。空场景返回单位球。
+pub(crate) fn scene_bounds(instances: &[&ModelInstance]) -> ([f32; 3], f32) {
+    scene_bounds_from_spheres(
+        &instances
+            .iter()
+            .map(|instance| (instance.bounds_center, instance.bounds_radius))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// [`sorted_scene_transparent_batches`] 的实例版：按各实例 draw_batches 分组
+/// 传入核心排序。
+pub(crate) fn sorted_scene_transparent_triangles(
+    instances: &[&ModelInstance],
+    yaw: f32,
+    pitch: f32,
+) -> SortedSceneTransparentDraws {
+    let batches = instances
+        .iter()
+        .map(|instance| &instance.draw_batches[..])
+        .collect::<Vec<_>>();
+    sorted_scene_transparent_batches(&batches, yaw, pitch)
 }

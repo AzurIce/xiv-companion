@@ -11,12 +11,9 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
-#[cfg(target_arch = "wasm32")]
-use xiv_companion::PreparedModelOptions;
-
 use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
-use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
+use crate::app::model_canvas_renderer::WebModelCanvasRenderer;
 use crate::app::ui::{
     Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, EmptyState, GitHubRepoButton,
     input_class,
@@ -29,8 +26,9 @@ use xiv_companion::{
     CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
     FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAnimationSet,
     ModelAttributeOption, ModelSkeleton, PackedCharaModelId, PackedEquipmentModelId, PackedModelId,
-    WeaponModelData, WeaponModelTextureKind, WeaponStain, WeaponVfxAttachments,
-    equipment_slot_info, is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
+    PreparedModelOptions, WeaponModelData, WeaponModelTextureKind, WeaponStain,
+    WeaponVfxAttachments, equipment_slot_info, is_weapon_equip_slot_category,
+    model_attribute_options, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
@@ -2080,7 +2078,7 @@ pub(crate) fn WeaponModelCanvas(
 
     #[cfg(target_arch = "wasm32")]
     {
-        let renderer = use_signal(|| None::<WasmRc<RefCell<WebWeaponCanvasRenderer>>>);
+        let renderer = use_signal(|| None::<WasmRc<RefCell<WebModelCanvasRenderer>>>);
         let init_generation = use_signal(|| 0_u64);
         let init_in_flight = use_signal(|| false);
         // 当前 renderer 创建时的 MSAA 采样数（设置变化时据此丢弃重建）。
@@ -2140,7 +2138,7 @@ pub(crate) fn WeaponModelCanvas(
                         .ok_or_else(|| "canvas 未挂载".to_string())?
                         .dyn_into::<HtmlCanvasElement>()
                         .map_err(|_| "canvas 元素类型错误".to_string())?;
-                    WebWeaponCanvasRenderer::from_canvas_with_msaa(canvas, msaa_setting).await
+                    WebModelCanvasRenderer::from_canvas_with_msaa(canvas, msaa_setting).await
                 }
                 .await;
 
@@ -2184,8 +2182,14 @@ pub(crate) fn WeaponModelCanvas(
         // 物品/模型/shape/种族/部件变体变化时同步重建 GPU 实例：复用常驻
         // context，不再重新初始化设备与管线。物品/模型/种族变化重置轨道相机
         // 视角（对齐画布重建的旧行为）；shape 与部件变体变化保持视角。
-        let set_model_key = (instance_key, model_revision, renderer_ready);
+        let set_model_key = (
+            instance_key,
+            model_revision,
+            renderer_ready,
+            animation.as_ref().map(|state| Rc::as_ptr(&state.skeleton)),
+        );
         let instance_model = model.clone();
+        let instance_skeleton = animation.as_ref().map(|state| state.skeleton.clone());
         let instance_attribute_names = enabled_attribute_names.clone();
         let mut last_orbit_key = use_signal(|| None::<(u32, u64, u64, u16)>);
         use_effect(use_reactive((&set_model_key,), move |_| {
@@ -2214,7 +2218,7 @@ pub(crate) fn WeaponModelCanvas(
             }
             let orbit_key = model_orbit_reset_key(&model, race_id);
             let mut renderer = renderer.borrow_mut();
-            renderer.set_model(&model, prepared_options);
+            renderer.set_model(&model, prepared_options, instance_skeleton.as_deref());
             // 实例重建后 joint 名表/缓冲均重置（rest）：rAF 循环据此刷新动画运行时。
             let next_epoch = *effect_joint_epoch.peek() + 1;
             effect_joint_epoch.set(next_epoch);
@@ -2278,6 +2282,432 @@ pub(crate) fn WeaponModelCanvas(
     }
 }
 
+/// 多实例场景画布的单件模型描述：模型数据 + 实例准备选项（含遮蔽隐藏标签
+/// 与按名启用的 attribute 名单）+ 两个修订号。`revision` 变化重建该件 GPU
+/// 实例（换件/换隐藏标签，只动这一件）；`materials_revision` 变化只做该件
+/// 材质增量更新（染色，毫秒级）。Rc 相等按指针——页面以新 Rc 表达新数据。
+/// `attach` 为武器挂接规则（武器件 Some）：该实例 joint 矩阵按挂点骨规则
+/// （姿势世界 × 校正）逐帧驱动，不走 inverse bind。
+#[derive(Clone)]
+pub(crate) struct SceneCanvasModel {
+    pub key: String,
+    pub model: Rc<WeaponModelData>,
+    pub prepared_options: PreparedModelOptions,
+    pub revision: u64,
+    pub materials_revision: u64,
+    pub attach: Option<xiv_companion::WeaponAttachInfo>,
+}
+
+impl PartialEq for SceneCanvasModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.revision == other.revision
+            && self.materials_revision == other.materials_revision
+            && Rc::ptr_eq(&self.model, &other.model)
+            && self.prepared_options == other.prepared_options
+            && self.attach == other.attach
+    }
+}
+
+/// 多实例角色场景画布：身体 + 各槽位装备件为独立 GPU 实例（共享相机/光照/
+/// 后处理与一副骨架），换件只重建对应实例、染色只更新对应材质，透明三角形
+/// 跨实例全局排序。蒙皮实例各自持有 joint 表，动画每帧逐件采样上传（同骨架
+/// 同一姿态）。
+#[component]
+pub(crate) fn CharacterSceneCanvas(
+    entries: Vec<SceneCanvasModel>,
+    render_options: Signal<WeaponRenderOptions>,
+    /// 骨架动画播放状态；None 时各实例保持创建时的 rest pose。
+    #[props(default)]
+    animation: Option<AnimationPlaybackState>,
+    /// 场景骨架（件实例 joint 表构建 + 动画采样共用）；None 为静态场景。
+    #[props(default)]
+    skeleton: Option<Rc<ModelSkeleton>>,
+    /// 轨道相机重置修订号（角色/种族整体变化时递增）。
+    #[props(default = 0)]
+    orbit_reset_revision: u64,
+) -> Element {
+    let init_error = use_signal(|| None::<String>);
+    let ready = use_signal(|| false);
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let renderer = use_signal(|| None::<WasmRc<RefCell<WebModelCanvasRenderer>>>);
+        let init_generation = use_signal(|| 0_u64);
+        let init_in_flight = use_signal(|| false);
+        let mut created_msaa = use_signal(|| 1_u32);
+        let animation_signal = use_signal(|| animation.clone());
+        let renderer_ready = renderer.read().is_some();
+        let msaa_setting = render_options().msaa_samples();
+
+        // WebGPU context 一次性初始化（同 WeaponModelCanvas）。
+        let mut effect_error = init_error;
+        let mut effect_ready = ready;
+        let mut effect_renderer = renderer;
+        let mut effect_generation = init_generation;
+        let mut effect_in_flight = init_in_flight;
+        let effect_animation = animation_signal;
+        use_effect(use_reactive((&renderer_ready, &msaa_setting), move |_| {
+            if *effect_in_flight.peek() {
+                return;
+            }
+            if effect_renderer.peek().is_some() {
+                if *created_msaa.peek() == msaa_setting {
+                    return;
+                }
+                effect_renderer.set(None);
+                effect_ready.set(false);
+            }
+            let generation = *effect_generation.peek() + 1;
+            effect_generation.set(generation);
+            effect_in_flight.set(true);
+            let options = render_options;
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = async {
+                    let window =
+                        web_sys::window().ok_or_else(|| "当前运行环境没有 window".to_string())?;
+                    let document = window
+                        .document()
+                        .ok_or_else(|| "当前运行环境没有 document".to_string())?;
+                    let canvas = document
+                        .get_element_by_id(WEAPON_MODEL_CANVAS_ID)
+                        .ok_or_else(|| "canvas 未挂载".to_string())?
+                        .dyn_into::<HtmlCanvasElement>()
+                        .map_err(|_| "canvas 元素类型错误".to_string())?;
+                    WebModelCanvasRenderer::from_canvas_with_msaa(canvas, msaa_setting).await
+                }
+                .await;
+
+                effect_in_flight.set(false);
+                match result {
+                    Ok(renderer) => {
+                        if *effect_generation.peek() != generation {
+                            return;
+                        }
+                        let renderer = WasmRc::new(RefCell::new(renderer));
+                        effect_renderer.set(Some(renderer.clone()));
+                        created_msaa.set(msaa_setting);
+                        effect_error.set(None);
+                        effect_ready.set(true);
+                        start_scene_render_loop(
+                            renderer,
+                            options,
+                            effect_animation,
+                            effect_generation,
+                            generation,
+                        )
+                    }
+                    Err(error) if *effect_generation.peek() == generation => {
+                        effect_error.set(Some(error))
+                    }
+                    Err(_) => {}
+                }
+            });
+        }));
+
+        // 动画播放状态 prop → Signal 镜像。
+        let mut effect_animation = animation_signal;
+        use_effect(use_reactive((&animation,), move |(next,)| {
+            if effect_animation() != next {
+                effect_animation.set(next);
+            }
+        }));
+
+        // 实例结构 diff：revision 变化的件重建实例（create_instance + 骨架），
+        // 消失的 key 移除，其余不动；同时登记各件材质修订号（创建时材质即
+        // 最新，材质 effect 只处理后续漂移）。
+        let scene_signature = entries
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.revision))
+            .collect::<Vec<_>>();
+        let mut applied_revisions = use_signal(|| std::collections::HashMap::<String, u64>::new());
+        let mut applied_materials = use_signal(|| std::collections::HashMap::<String, u64>::new());
+        let apply_entries = entries.clone();
+        let apply_skeleton = skeleton.clone();
+        use_effect(use_reactive(
+            (&scene_signature, &renderer_ready),
+            move |(_, ready)| {
+                if !ready {
+                    return;
+                }
+                let Some(renderer) = renderer.peek().clone() else {
+                    return;
+                };
+                let mut renderer = renderer.borrow_mut();
+                let mut applied = applied_revisions.write();
+                let mut applied_materials = applied_materials.write();
+                for entry in &apply_entries {
+                    if applied.get(&entry.key) == Some(&entry.revision) {
+                        continue;
+                    }
+                    let instance = renderer.create_instance(
+                        &entry.model,
+                        entry.prepared_options.clone(),
+                        apply_skeleton.as_deref(),
+                    );
+                    // 武器挂接件：创建时 joint 初值是 rest 的 world×inverse(bind)
+                    // （恒等）——对挂点骨局部空间的武器顶点等于停在原点，这里
+                    // 立即按挂接规则上传 rest 挂接矩阵兜底（无动画集也正确）。
+                    let rest_attach = entry.attach.and_then(|attach| {
+                        apply_skeleton.as_deref().map(|skeleton| {
+                            let rest = skeleton.scaled_rest_pose();
+                            xiv_companion::weapon_attach_joint_matrices(
+                                skeleton,
+                                &rest,
+                                instance.joint_names(),
+                                attach.correction,
+                            )
+                        })
+                    });
+                    renderer.upsert_instance_with_attach(&entry.key, instance, entry.attach);
+                    if let Some(matrices) = rest_attach {
+                        renderer.update_scene_joint_matrices(&entry.key, &matrices);
+                    }
+                    applied.insert(entry.key.clone(), entry.revision);
+                    applied_materials.insert(entry.key.clone(), entry.materials_revision);
+                }
+                let removed = applied
+                    .keys()
+                    .filter(|key| !apply_entries.iter().any(|entry| entry.key == **key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for key in removed {
+                    renderer.remove_instance(&key);
+                    applied.remove(&key);
+                    applied_materials.remove(&key);
+                }
+            },
+        ));
+
+        // 染色漂移：materials_revision 变化的件做材质增量更新（不重建实例）。
+        let materials_signature = entries
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.materials_revision))
+            .collect::<Vec<_>>();
+        let materials_entries = entries.clone();
+        use_effect(use_reactive(
+            (&materials_signature, &renderer_ready),
+            move |(_, ready)| {
+                if !ready {
+                    return;
+                }
+                let Some(renderer) = renderer.peek().clone() else {
+                    return;
+                };
+                for entry in &materials_entries {
+                    if applied_materials.peek().get(&entry.key) == Some(&entry.materials_revision) {
+                        continue;
+                    }
+                    renderer
+                        .borrow_mut()
+                        .update_scene_materials(&entry.key, &entry.model);
+                    applied_materials
+                        .write()
+                        .insert(entry.key.clone(), entry.materials_revision);
+                }
+            },
+        ));
+
+        // 轨道相机重置（角色整体变化）。
+        use_effect(use_reactive(
+            (&orbit_reset_revision, &renderer_ready),
+            move |(_, ready)| {
+                if !ready {
+                    return;
+                }
+                if let Some(renderer) = renderer.peek().clone() {
+                    renderer.borrow_mut().reset_orbit();
+                }
+            },
+        ));
+    }
+
+    rsx! {
+        div { class: "absolute inset-0",
+            canvas {
+                id: WEAPON_MODEL_CANVAS_ID,
+                class: "h-full w-full cursor-grab touch-none select-none bg-[#0e1117] active:cursor-grabbing",
+            }
+            if let Some(error) = init_error() {
+                div { class: "absolute inset-x-4 top-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 shadow-sm",
+                    "{error}"
+                }
+            }
+            if cfg!(target_arch = "wasm32") && !ready() && init_error().is_none() {
+                WeaponModelLoadingView {
+                    progress: None,
+                    stage: Some("正在初始化 WebGPU 渲染".to_string()),
+                }
+            }
+            if !cfg!(target_arch = "wasm32") {
+                div { class: "absolute inset-0 flex items-center justify-center p-6 text-sm text-muted-foreground",
+                    "WebGPU canvas 仅在 wasm32 web 构建中启用"
+                }
+            }
+        }
+    }
+}
+
+/// rAF 场景动画运行时：逐件 joint 表（名表 + 武器挂接规则）+ 共享 inverse
+/// bind 缓存，随场景结构修订号（实例增删/替换）刷新；`playing` 记录当前各件
+/// joint buffer 对应的动画（None = 已是 rest）。
+#[cfg(target_arch = "wasm32")]
+struct SceneAnimationRuntime {
+    revision: u64,
+    tables: Vec<(String, Vec<String>, Option<xiv_companion::WeaponAttachInfo>)>,
+    inverse_bind: xiv_companion::SkeletonInverseBindCache,
+    playing: Option<usize>,
+    started_at_ms: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_scene_render_loop(
+    renderer: WasmRc<RefCell<WebModelCanvasRenderer>>,
+    render_options: Signal<WeaponRenderOptions>,
+    animation: Signal<Option<AnimationPlaybackState>>,
+    generation: Signal<u64>,
+    expected_generation: u64,
+) {
+    let callback_slot: WasmRc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
+        WasmRc::new(RefCell::new(None));
+    let callback_slot_for_loop = callback_slot.clone();
+    let renderer_for_loop = renderer.clone();
+    let mut animation_runtime: Option<SceneAnimationRuntime> = None;
+
+    *callback_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |time_ms: f64| {
+        let connected = {
+            let mut renderer = renderer_for_loop.borrow_mut();
+            if renderer.canvas_connected() && *generation.peek() == expected_generation {
+                drive_scene_animation_playback(
+                    &mut renderer,
+                    &animation(),
+                    &mut animation_runtime,
+                    time_ms,
+                );
+                let mut options = render_options();
+                options.uv_scroll_time = (time_ms as f32) / 1000.0;
+                renderer.render_with_options(options);
+                true
+            } else {
+                false
+            }
+        };
+
+        if connected {
+            if let (Some(window), Some(callback)) =
+                (web_sys::window(), callback_slot_for_loop.borrow().as_ref())
+            {
+                let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+            }
+        } else {
+            let _ = callback_slot_for_loop.borrow_mut().take();
+        }
+    }) as Box<dyn FnMut(f64)>));
+
+    if let (Some(window), Some(callback)) = (web_sys::window(), callback_slot.borrow().as_ref()) {
+        let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    }
+}
+
+/// 每帧场景动画驱动：场景结构变化时刷新逐件 joint 表；选中动画时采样一次
+/// 时间、逐件计算并上传关节矩阵（各实例 joint 表都对到同一副骨架；武器挂
+/// 接件走挂点骨规则——姿势世界 × 校正，采样姿势每帧最多算一次）；切回
+/// Rest 时对全部实例一次性上传 rest 关节矩阵。武器件的创建时 joint 初值
+/// 由实例应用处上传 rest 挂接矩阵兜底（无动画集时也不会停在原点）。
+#[cfg(target_arch = "wasm32")]
+fn drive_scene_animation_playback(
+    renderer: &mut WebModelCanvasRenderer,
+    playback: &Option<AnimationPlaybackState>,
+    runtime: &mut Option<SceneAnimationRuntime>,
+    time_ms: f64,
+) {
+    let revision = renderer.scene_revision();
+    if runtime.as_ref().map(|runtime| runtime.revision) != Some(revision) {
+        *runtime = Some(SceneAnimationRuntime {
+            revision,
+            tables: renderer.scene_joint_tables(),
+            inverse_bind: xiv_companion::SkeletonInverseBindCache::new(),
+            playing: None,
+            started_at_ms: time_ms,
+        });
+    }
+    let Some(runtime) = runtime.as_mut() else {
+        return;
+    };
+    let SceneAnimationRuntime {
+        tables,
+        inverse_bind,
+        playing,
+        started_at_ms,
+        ..
+    } = runtime;
+    let Some(playback) = playback else {
+        // 动画状态消失（骨架/动画集未就绪）：新实例已是 rest，旧姿态随之丢弃。
+        *playing = None;
+        return;
+    };
+    match playback.selected {
+        Some(index) => {
+            let Some(animation) = playback.set.animations.get(index) else {
+                return;
+            };
+            if *playing != Some(index) {
+                *playing = Some(index);
+                *started_at_ms = time_ms;
+            }
+            let duration_ms = animation.duration_ms.max(1.0);
+            let time = ((time_ms - *started_at_ms) as f32).rem_euclid(duration_ms);
+            let mut attach_pose = None;
+            for (key, names, attach) in tables.iter() {
+                let matrices = if let Some(attach) = attach {
+                    let pose = attach_pose.get_or_insert_with(|| {
+                        xiv_companion::sample_animation_pose(
+                            &playback.set,
+                            index,
+                            time,
+                            &playback.skeleton,
+                        )
+                    });
+                    xiv_companion::weapon_attach_joint_matrices(
+                        &playback.skeleton,
+                        pose,
+                        names,
+                        attach.correction,
+                    )
+                } else {
+                    xiv_companion::animation_joint_matrices(
+                        &playback.set,
+                        index,
+                        time,
+                        &playback.skeleton,
+                        names,
+                        inverse_bind,
+                    )
+                };
+                renderer.update_scene_joint_matrices(key, &matrices);
+            }
+        }
+        None => {
+            if playing.take().is_some() {
+                let rest = playback.skeleton.scaled_rest_pose();
+                for (key, names, attach) in tables.iter() {
+                    let matrices = if let Some(attach) = attach {
+                        xiv_companion::weapon_attach_joint_matrices(
+                            &playback.skeleton,
+                            &rest,
+                            names,
+                            attach.correction,
+                        )
+                    } else {
+                        inverse_bind.joint_matrices(&playback.skeleton, &rest, names)
+                    };
+                    renderer.update_scene_joint_matrices(key, &matrices);
+                }
+            }
+        }
+    }
+}
+
 /// rAF 动画播放运行时：joint 名表 + inverse bind 缓存随实例重建（joint_epoch）
 /// 刷新；`playing` 记录当前 joint buffer 对应的动画（None = 已是 rest）。
 #[cfg(target_arch = "wasm32")]
@@ -2291,7 +2721,7 @@ struct AnimationLoopRuntime {
 
 #[cfg(target_arch = "wasm32")]
 fn start_weapon_render_loop(
-    renderer: WasmRc<RefCell<WebWeaponCanvasRenderer>>,
+    renderer: WasmRc<RefCell<WebModelCanvasRenderer>>,
     render_options: Signal<WeaponRenderOptions>,
     animation: Signal<Option<AnimationPlaybackState>>,
     joint_epoch: Signal<u64>,
@@ -2356,7 +2786,7 @@ fn start_weapon_render_loop(
 /// 时重置计时）；切回 Rest 时上传一次 rest 关节矩阵。
 #[cfg(target_arch = "wasm32")]
 fn drive_animation_playback(
-    renderer: &mut WebWeaponCanvasRenderer,
+    renderer: &mut WebModelCanvasRenderer,
     playback: &Option<AnimationPlaybackState>,
     epoch: u64,
     runtime: &mut Option<AnimationLoopRuntime>,
@@ -2402,7 +2832,7 @@ fn drive_animation_playback(
         }
         None => {
             if runtime.playing.take().is_some() {
-                let rest = xiv_companion::SkeletonPose::rest_pose(&playback.skeleton);
+                let rest = playback.skeleton.scaled_rest_pose();
                 let matrices = runtime.inverse_bind.joint_matrices(
                     &playback.skeleton,
                     &rest,
@@ -2842,7 +3272,7 @@ fn model_has_shape_mask(model: &WeaponModelData, shape_mask: u32) -> bool {
         .any(|shape| shape.shape_index_mask == shape_mask)
 }
 
-fn model_has_attribute_submeshes(model: &WeaponModelData) -> bool {
+pub(crate) fn model_has_attribute_submeshes(model: &WeaponModelData) -> bool {
     model.meshes.iter().any(|mesh| {
         mesh.submesh
             .as_ref()

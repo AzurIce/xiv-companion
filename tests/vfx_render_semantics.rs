@@ -1485,6 +1485,7 @@ fn preview_camera_inputs_reach_actual_attachment_gpu() {
                 references.push(make_reference(now));
                 wrong_horizontal.push(make_reference(facing(rotation, current_t, moved, true)));
                 let skeleton = ModelSkeleton {
+                    body_scaling: None,
                     bone_names: vec!["root".into()],
                     parent_indices: vec![-1],
                     rest_pose: vec![BoneTransform {
@@ -1724,6 +1725,7 @@ fn render_bone_pose_attachment_history_gpu(point_zero_direction: bool) {
                 ..Default::default()
             };
             let skeleton = ModelSkeleton {
+                body_scaling: None,
                 bone_names: vec!["root".into()],
                 parent_indices: vec![-1],
                 rest_pose: vec![BoneTransform {
@@ -13724,6 +13726,92 @@ fn distortion_layer_uses_its_own_filter() {
                 background[2],
                 background[3],
             ],
+        );
+    }
+}
+
+/// The scene path must keep every model's buffers and the VFX stage alive together.
+/// Compare separate GPU instances with a combined mesh under identical bounds.
+#[test]
+#[ignore = "requires native wgpu"]
+fn multi_instance_scene_keeps_models_and_vfx_at_1x_and_4x() {
+    use xiv_companion::PreparedModelOptions;
+    use xiv_companion::renderer::test_support::{SceneSnapshotEntry, render_scene_snapshot};
+
+    let panel = |side: f32| {
+        let mut model = vfx_semantics_model();
+        let mesh = &mut model.meshes[0];
+        mesh.path = format!("scene-panel-{side}");
+        let template = mesh.vertices[0];
+        mesh.vertices.extend(
+            [[-0.2, -0.3], [0.2, -0.3], [0.0, 0.3]].map(|[x, y]| ModelVertex {
+                position: [side + x, y, 0.0],
+                ..template
+            }),
+        );
+        mesh.indices = vec![3, 4, 5];
+        model
+    };
+    let left = panel(-0.45);
+    let right = panel(0.45);
+    let mut combined = left.clone();
+    combined.meshes.extend(right.meshes.clone());
+    let prepared = PreparedModelOptions::default().with_component_preview_layout(false);
+    let entries = [&left, &right]
+        .map(|model| SceneSnapshotEntry::new(model).with_prepared_options(prepared.clone()));
+    let pixels = |snapshot: xiv_companion::renderer::test_support::ModelSnapshot| {
+        image::open(snapshot.png_path)
+            .unwrap()
+            .to_rgba8()
+            .into_raw()
+    };
+    for msaa_samples in [1, 4] {
+        let options = WeaponModelSnapshotOptions::new(format!("glamour-vfx-scene-{msaa_samples}"))
+            .with_viewport(64, 64)
+            .with_camera(0.0, 0.0, 3.0, [0.0; 2])
+            .with_prepared_model_options(prepared.clone())
+            .with_render_options(ModelRenderOptions {
+                msaa_samples,
+                ..Default::default()
+            });
+        let mut baseline_options = options.clone();
+        baseline_options.name.push_str("-baseline");
+        let baseline =
+            pixels(render_scene_snapshot(baseline_options, &entries, None, None).unwrap());
+        let background = &baseline[..3];
+        for range in [0..32, 32..64] {
+            let foreground = (0..64)
+                .flat_map(|y| range.clone().map(move |x| y * 64 + x))
+                .filter(|&index| {
+                    baseline[index * 4..index * 4 + 3]
+                        .iter()
+                        .zip(background)
+                        .any(|(a, b)| a.abs_diff(*b) > 10)
+                })
+                .count();
+            assert!(
+                foreground > 15,
+                "both scene instances must remain visible at {msaa_samples}x"
+            );
+        }
+        let mut particle = quad([0.0, 0.0, 1.0, 1.0], true);
+        particle.size = [0.2; 2];
+        let options = options
+            .with_vfx_quads([particle])
+            .with_vfx_textures([solid([255; 4])]);
+        let scene = pixels(render_scene_snapshot(options.clone(), &entries, None, None).unwrap());
+        let mut single_options = options;
+        single_options.name.push_str("-combined");
+        let single =
+            pixels(render_weapon_model_snapshot_with_options(single_options, &combined).unwrap());
+        assert!(
+            scene == single,
+            "scene and combined meshes must produce the same VFX composition at {msaa_samples}x"
+        );
+        let center = (32 * 64 + 32) * 4;
+        assert!(
+            scene[center + 2] > baseline[center + 2] + 20,
+            "VFX must remain visible after drawing the scene"
         );
     }
 }

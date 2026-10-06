@@ -951,6 +951,11 @@ pub struct PreparedModelOptions {
     /// （角色拼装的全部件即按游戏原位叠加）。
     #[serde(default = "default_component_preview_layout")]
     pub component_preview_layout: bool,
+    /// 整网格隐藏标签（模型 mesh 下标）：着装遮蔽等场景下标记"该网格本轮
+    /// 不渲染"，数据本体不动（件级缓存可复用，遮蔽组合变化只改标签）。
+    /// `None`/空 = 全部可见；隐藏网格连同其透明/加色批次一并跳过。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_mesh_indices: Option<Vec<usize>>,
 }
 
 fn default_component_preview_layout() -> bool {
@@ -965,6 +970,7 @@ impl Default for PreparedModelOptions {
             enabled_shape_mask: None,
             attribute_parts_only: false,
             component_preview_layout: true,
+            hidden_mesh_indices: None,
         }
     }
 }
@@ -994,6 +1000,11 @@ impl PreparedModelOptions {
         self.component_preview_layout = component_preview_layout;
         self
     }
+
+    pub fn with_hidden_mesh_indices(mut self, hidden_mesh_indices: Vec<usize>) -> Self {
+        self.hidden_mesh_indices = Some(hidden_mesh_indices);
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1003,6 +1014,11 @@ pub struct PreparedMesh {
     pub material_slot: usize,
     pub draw_role: ModelMeshDrawRole,
     pub renders_in_main_pass: bool,
+    /// 整网格隐藏标签（来自 `PreparedModelOptions::hidden_mesh_indices`）：
+    /// true 时渲染层连网格带全部透明/加色批次一并跳过（遮蔽组合变化不
+    /// 动模型数据本体）。
+    #[serde(default)]
+    pub mesh_hidden: bool,
     #[serde(default)]
     pub visibility: PreparedMeshVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1824,6 +1840,10 @@ pub fn prepare_model_for_render_with_options<M: ModelRenderData + ?Sized>(
                     draw_role,
                     renders_in_main_pass: draw_role.renders_in_main_pass()
                         && visibility.submesh_attributes_visible,
+                    mesh_hidden: options
+                        .hidden_mesh_indices
+                        .as_ref()
+                        .is_some_and(|hidden| hidden.contains(&mesh_index)),
                     visibility,
                     submesh: mesh.submesh.clone(),
                     shape_influences: mesh.shape_influences.clone(),
@@ -3763,13 +3783,46 @@ fn human_body_ids_from_material_file(material_file: &str) -> Option<(u16, u16)> 
     Some((race_id.parse().ok()?, body_id.parse().ok()?))
 }
 
-/// 装备模型路径的兜底 race code（中原人男）。
+/// 装备模型路径的兜底 race code（中原人男，种族骨变形树的树根）。
 ///
 /// 完整 race code 表（依据 xivModdingFramework `XivRace` 枚举）：0101/0201
 /// 中原人男/女，0301/0401 高地人男/女，0501/0601 精灵男/女，0701/0801 猫魅
 /// 男/女，0901/1001 鲁加男/女，1101/1201 拉拉菲尔男/女，1301/1401 敖龙男/女，
 /// 1501/1601 硌狮男/女，1701/1801 维埃拉男/女。
 pub const EQUIPMENT_MODEL_FALLBACK_RACE_ID: u16 = 101;
+
+/// 装备模型的种族候选链：自身 + 种族骨变形树（`chara/xls/boneDeformer/human.pbd`）
+/// 祖先，按由近及远排序，树根 c0101 收尾。
+///
+/// 游戏语义：某族对某（套装, 槽位）没有自有模型时（EQDP `HasModel=0`，真实
+/// 数据验证与 sqpack 文件存在性一一对应），游戏沿骨变形树向上取最近一个有
+/// 模型的祖先族文件，再按 PBD 变形链烘焙到角色体型（Meddle
+/// `PbdFile.GetDeformers(from, to)` 只能沿祖先链走；运行态每个槽位的变形源族
+/// 由游戏挂在模型上的 `DeformerStruct{DeformerId}` 给出）。这里不解析 EQDP，
+/// 由加载方按候选顺序探测文件存在性，等价于取最近的有模型祖先。
+///
+/// 链取自真实 `human.pbd`（CN 客户端探测）：女系各族（含高地女）→ 中原女
+/// c0201 → c0101；拉拉女 → 拉拉男 c1101 → c0101；硌狮男 → 鲁加男 c0901 →
+/// c0101；其余男系各族直连 c0101。未知/NPC race code 退化为 [自身, c0101]。
+pub fn equipment_model_race_candidates(race_id: u16) -> Vec<u16> {
+    let chain: &[u16] = match race_id {
+        // 女系（高地女/精灵女/猫魅女/鲁加女/敖龙女/硌狮女/维埃拉女）→ 中原女。
+        401 | 601 | 801 | 1001 | 1401 | 1601 | 1801 => &[race_id, 201, 101],
+        // 拉拉女 → 拉拉男；硌狮男 → 鲁加男。
+        1201 => &[1201, 1101, 101],
+        1501 => &[1501, 901, 101],
+        // 中原女 → 中原男；其余男系直连树根。
+        201 => &[201, 101],
+        _ => &[race_id, 101],
+    };
+    let mut race_ids = Vec::new();
+    for &candidate in chain {
+        if candidate != 0 && !race_ids.contains(&candidate) {
+            race_ids.push(candidate);
+        }
+    }
+    race_ids
+}
 
 /// 装备 Item Model{Main/Sub} raw u64 的解码结果。
 ///
@@ -3836,14 +3889,10 @@ pub fn equipment_model_candidate_paths(
         return Vec::new();
     }
 
-    // 请求的 race 优先，c0101 兜底；各 race 是否有模型由 EQDP 决定，这里不做
-    // 解析，缺失时由加载方按候选顺序尝试下一个。
-    let mut race_ids = Vec::new();
-    for candidate in [race_id, EQUIPMENT_MODEL_FALLBACK_RACE_ID] {
-        if candidate != 0 && !race_ids.contains(&candidate) {
-            race_ids.push(candidate);
-        }
-    }
+    // 候选 race 按种族骨变形树祖先链（[`equipment_model_race_candidates`]）：
+    // 各 race 是否有模型由 EQDP 决定，这里不做解析，缺失时由加载方按候选顺序
+    // 尝试下一个。
+    let race_ids = equipment_model_race_candidates(race_id);
 
     let (root, type_prefix) = if slot.is_accessory {
         ("chara/accessory/a", 'a')
@@ -3866,6 +3915,18 @@ pub fn equipment_material_candidate_paths(
     model: PackedEquipmentModelId,
     model_path: &str,
     material_name: &str,
+) -> Vec<String> {
+    equipment_material_candidate_paths_with_version(model, model_path, material_name, None)
+}
+
+/// [`equipment_material_candidate_paths`] 的材质版本覆盖版：`version_override`
+/// 提供时（着装装配从 IMC 条目解析的 MaterialSet）替代 variant 猜测作为首选
+/// 版本目录；为 None 时与原行为一致。
+pub fn equipment_material_candidate_paths_with_version(
+    model: PackedEquipmentModelId,
+    model_path: &str,
+    material_name: &str,
+    version_override: Option<u16>,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
     let normalized_name = normalize_resource_path(material_name);
@@ -3911,10 +3972,10 @@ pub fn equipment_material_candidate_paths(
         );
     }
 
-    // 材质版本目录由 IMC 条目的 MaterialSet 决定；不解析 IMC 时用物品的 IMC
-    // 子集 id（variant）作为首选，v0001 兜底，并保留无版本目录的形式。
+    // 材质版本目录由 IMC 条目的 MaterialSet 决定；调用方未解析 IMC 时用物品的
+    // IMC 子集 id（variant）作为首选，v0001 兜底，并保留无版本目录的形式。
     let mut versions = Vec::new();
-    for version in [model.variant_id, 1] {
+    for version in [version_override.unwrap_or(model.variant_id), 1] {
         if version != 0 && !versions.contains(&version) {
             versions.push(version);
         }
@@ -7095,11 +7156,13 @@ mod color_table_bake_tests {
         let model = PackedEquipmentModelId::from_raw(0x0000_0000_0001_2276);
         let slot = equipment_slot_info(5).expect("glv slot");
 
+        // 高地女（c0401）沿骨变形树回退：c0401 → c0201（中原女）→ c0101。
         let candidates = equipment_model_candidate_paths(model, slot, 401);
         assert_eq!(
             candidates,
             vec![
                 "chara/equipment/e8822/model/c0401e8822_glv.mdl".to_string(),
+                "chara/equipment/e8822/model/c0201e8822_glv.mdl".to_string(),
                 "chara/equipment/e8822/model/c0101e8822_glv.mdl".to_string(),
             ]
         );
@@ -7115,6 +7178,26 @@ mod color_table_bake_tests {
             equipment_model_candidate_paths(PackedEquipmentModelId::default(), slot, 101)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn equipment_model_race_candidates_follow_deform_tree() {
+        // 树根与直挂男系：自身 → c0101。
+        assert_eq!(equipment_model_race_candidates(101), vec![101]);
+        assert_eq!(equipment_model_race_candidates(1301), vec![1301, 101]);
+        assert_eq!(equipment_model_race_candidates(1701), vec![1701, 101]);
+        // 中原女 → 中原男。
+        assert_eq!(equipment_model_race_candidates(201), vec![201, 101]);
+        // 女系各族经中原女（c0201）再到树根：敖龙女/高地女/维埃拉女。
+        assert_eq!(equipment_model_race_candidates(1401), vec![1401, 201, 101]);
+        assert_eq!(equipment_model_race_candidates(401), vec![401, 201, 101]);
+        assert_eq!(equipment_model_race_candidates(1801), vec![1801, 201, 101]);
+        // 拉拉女经拉拉男；硌狮男经鲁加男。
+        assert_eq!(equipment_model_race_candidates(1201), vec![1201, 1101, 101]);
+        assert_eq!(equipment_model_race_candidates(1501), vec![1501, 901, 101]);
+        // 未知/NPC race code：自身 + 树根兜底。
+        assert_eq!(equipment_model_race_candidates(9104), vec![9104, 101]);
+        assert_eq!(equipment_model_race_candidates(0), vec![101]);
     }
 
     #[test]

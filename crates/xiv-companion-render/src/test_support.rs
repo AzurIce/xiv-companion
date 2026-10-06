@@ -381,6 +381,62 @@ pub type ModelSnapshotOptions = WeaponModelSnapshotOptions;
 pub type ModelSnapshot = WeaponModelSnapshot;
 pub type ModelSnapshotError = WeaponModelSnapshotError;
 
+/// 多实例场景快照的单条目：模型 + 准备选项 + 可选的关节矩阵覆盖。
+/// `joint_matrices` 为 None 时按 `skeleton` + `pose` 计算（rest/世界 ×
+/// inverse bind）；Some 时创建实例后直接上传（武器挂接等自定义关节规则，
+/// 长度按实例 joint 表截断——调用方应与实例 joint 名表对齐）。
+pub struct SceneSnapshotEntry<'a> {
+    pub model: &'a (dyn crate::ModelRenderData + 'a),
+    pub prepared_options: PreparedModelOptions,
+    pub joint_matrices: Option<Vec<[f32; 16]>>,
+}
+
+impl<'a> SceneSnapshotEntry<'a> {
+    pub fn new(model: &'a (dyn crate::ModelRenderData + 'a)) -> Self {
+        Self {
+            model,
+            prepared_options: PreparedModelOptions::default(),
+            joint_matrices: None,
+        }
+    }
+
+    pub fn with_prepared_options(mut self, prepared_options: PreparedModelOptions) -> Self {
+        self.prepared_options = prepared_options;
+        self
+    }
+
+    pub fn with_joint_matrices(mut self, joint_matrices: Vec<[f32; 16]>) -> Self {
+        self.joint_matrices = Some(joint_matrices);
+        self
+    }
+}
+
+/// 多实例场景快照（`render_scene` 路径）：各条目一个 GPU 实例（骨架蒙皮同
+/// 单模型路径），逐条上传关节矩阵后共享相机/光照/后处理一帧渲染。
+/// `pose` 为 None 时各实例保持创建时的 rest pose 关节矩阵。
+pub fn render_scene_snapshot(
+    options: ModelSnapshotOptions,
+    entries: &[SceneSnapshotEntry],
+    skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    pose: Option<&xiv_companion_data::SkeletonPose>,
+) -> Result<ModelSnapshot, ModelSnapshotError> {
+    require_gpu_test_opt_in().map_err(|_| WeaponModelSnapshotError::GpuTestsDisabled)?;
+    let _render_guard = SNAPSHOT_RENDER_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pollster::block_on(render_scene_snapshot_async(
+        options, entries, skeleton, pose,
+    ))
+}
+
+/// libvulkan 的 ICD 扫描/加载在多个线程并发 vkCreateInstance 时存在已知竞态
+/// （loader_icd_scan 空函数指针，NVIDIA 等 dlopen 重 ICD 环境下随机 SIGSEGV）。
+/// 只串行化 Instance::new/request_adapter 不够：wgpu 的 Instance/Adapter 句柄
+/// 都存活到渲染结束，vkDestroyInstance 仍与其他线程的实例创建/销毁并发。
+/// 这里串行化整个快照渲染，任意时刻只有一个 Vulkan 实例生命周期在跑，
+/// ignored 快照套件可以多线程跑（--test-threads=N）而不再触发 ICD 竞态。
+static SNAPSHOT_RENDER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn render_model_snapshot<M: ModelRenderData + ?Sized>(
     name: impl Into<String>,
     model: &M,
@@ -405,9 +461,6 @@ pub fn render_model_snapshot_with_skeleton_and_pose<M: ModelRenderData + ?Sized>
     pose: Option<&xiv_companion_data::SkeletonPose>,
 ) -> Result<ModelSnapshot, ModelSnapshotError> {
     require_gpu_test_opt_in().map_err(|_| WeaponModelSnapshotError::GpuTestsDisabled)?;
-    // 复用进程内 Instance，避免反复加载原生驱动遗留描述符；仍串行化整个
-    // 快照渲染，避免各设备创建、绘制和释放在原生驱动内部互相交错。
-    static SNAPSHOT_RENDER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _render_guard = SNAPSHOT_RENDER_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -793,6 +846,130 @@ async fn render_model_snapshot_async<M: ModelRenderData + ?Sized>(
     })
 }
 
+async fn render_scene_snapshot_async(
+    options: WeaponModelSnapshotOptions,
+    entries: &[SceneSnapshotEntry<'_>],
+    skeleton: Option<&xiv_companion_data::ModelSkeleton>,
+    pose: Option<&xiv_companion_data::SkeletonPose>,
+) -> Result<WeaponModelSnapshot, WeaponModelSnapshotError> {
+    if options.width == 0 || options.height == 0 {
+        return Err(WeaponModelSnapshotError::InvalidViewport {
+            width: options.width,
+            height: options.height,
+        });
+    }
+
+    fs::create_dir_all(&options.output_dir).map_err(|source| WeaponModelSnapshotError::Io {
+        action: "create weapon snapshot output directory",
+        path: options.output_dir.clone(),
+        source,
+    })?;
+    let png_path = options
+        .output_dir
+        .join(format!("{}.png", sanitize_file_stem(&options.name)));
+
+    let instance = snapshot_instance().map_err(|_| WeaponModelSnapshotError::GpuTestsDisabled)?;
+    let software_only = software_render_tests_requested();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: options.power_preference,
+            compatible_surface: None,
+            force_fallback_adapter: software_only || options.force_fallback_adapter,
+        })
+        .await
+        .map_err(|error| WeaponModelSnapshotError::RequestAdapter(format!("{error:?}")))?;
+    let adapter_info = adapter.get_info();
+    eprintln!(
+        "render scene snapshot {}: adapter={} backend={:?} device_type={:?}",
+        options.name, adapter_info.name, adapter_info.backend, adapter_info.device_type
+    );
+    if software_only {
+        validate_software_adapter(adapter_info.backend, adapter_info.device_type)
+            .map_err(|error| WeaponModelSnapshotError::RequestAdapter(error.to_owned()))?;
+    }
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: crate::renderer::ModelRenderContext::required_limits(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| WeaponModelSnapshotError::RequestDevice(error.to_string()))?;
+
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let msaa_samples = options.render_options.msaa_samples();
+    let target = create_target_texture(&device, options.width, options.height, format);
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let depth = create_depth_texture(&device, options.width, options.height, msaa_samples);
+    let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut context =
+        crate::renderer::ModelRenderContext::new_with_msaa(device, queue, format, msaa_samples);
+    let mut instances: Vec<crate::renderer::ModelInstance> = entries
+        .iter()
+        .map(|entry| {
+            context.create_model_with_skeleton(
+                entry.model,
+                entry.prepared_options.clone(),
+                skeleton,
+            )
+        })
+        .collect();
+    let mut inverse_bind = xiv_companion_data::SkeletonInverseBindCache::new();
+    for (entry, instance) in entries.iter().zip(instances.iter_mut()) {
+        if let Some(matrices) = &entry.joint_matrices {
+            instance.update_joint_matrices(&context, matrices);
+        } else if let (Some(skeleton), Some(pose)) = (skeleton, pose) {
+            let matrices = inverse_bind.joint_matrices(skeleton, pose, instance.joint_names());
+            instance.update_joint_matrices(&context, &matrices);
+        }
+    }
+    let instance_refs: Vec<&crate::renderer::ModelInstance> = instances.iter().collect();
+    let vfx_particles = (!options.vfx_quads.is_empty() || !options.vfx_mesh_instances.is_empty())
+        .then(|| {
+            let mut batch =
+                context.create_vfx_particles(&options.vfx_textures, &options.vfx_meshes);
+            batch.update(&context, &options.vfx_quads);
+            batch.update_mesh(&context, &options.vfx_mesh_instances);
+            batch
+        });
+    context.render_scene(
+        &instance_refs,
+        &target_view,
+        &depth_view,
+        [options.width, options.height],
+        options.yaw,
+        options.pitch,
+        options.zoom,
+        options.pan,
+        options.render_options,
+        vfx_particles.as_ref(),
+        &[],
+    );
+
+    let rgba = read_texture_bytes(
+        context.device(),
+        context.queue(),
+        &target,
+        options.width,
+        options.height,
+        4,
+    )?;
+    write_png(&png_path, options.width, options.height, &rgba)?;
+
+    Ok(WeaponModelSnapshot {
+        png_path,
+        width: options.width,
+        height: options.height,
+        adapter_name: adapter_info.name,
+        adapter_backend: adapter_info.backend,
+        hdr_scene_rgba: None,
+        weapon_vfx_quads: Vec::new(),
+    })
+}
+
 fn create_target_texture(
     device: &wgpu::Device,
     width: u32,
@@ -843,7 +1020,14 @@ fn read_texture_rgba(
     width: u32,
     height: u32,
 ) -> Result<Vec<u8>, WeaponModelSnapshotError> {
-    read_texture_bytes(renderer, texture, width, height, 4)
+    read_texture_bytes(
+        renderer.device(),
+        renderer.queue(),
+        texture,
+        width,
+        height,
+        4,
+    )
 }
 
 fn read_texture_rgba16f(
@@ -852,7 +1036,14 @@ fn read_texture_rgba16f(
     width: u32,
     height: u32,
 ) -> Result<Vec<[f32; 4]>, WeaponModelSnapshotError> {
-    let bytes = read_texture_bytes(renderer, texture, width, height, 8)?;
+    let bytes = read_texture_bytes(
+        renderer.device(),
+        renderer.queue(),
+        texture,
+        width,
+        height,
+        8,
+    )?;
     Ok(bytes
         .chunks_exact(8)
         .map(|pixel| {
@@ -865,7 +1056,8 @@ fn read_texture_rgba16f(
 }
 
 fn read_texture_bytes(
-    renderer: &ModelRenderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
@@ -874,18 +1066,16 @@ fn read_texture_bytes(
     let unpadded_bytes_per_row = width * bytes_per_pixel;
     let padded_bytes_per_row = align_to(unpadded_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let output_buffer_size = padded_bytes_per_row as u64 * height as u64;
-    let output_buffer = renderer.device().create_buffer(&wgpu::BufferDescriptor {
+    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("native weapon snapshot readback"),
         size: output_buffer_size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
 
-    let mut encoder = renderer
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("native weapon snapshot readback encoder"),
-        });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("native weapon snapshot readback encoder"),
+    });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -907,14 +1097,13 @@ fn read_texture_bytes(
             depth_or_array_layers: 1,
         },
     );
-    let submission = renderer.queue().submit(std::iter::once(encoder.finish()));
+    let submission = queue.submit(std::iter::once(encoder.finish()));
     let buffer_slice = output_buffer.slice(..);
     let (sender, receiver) = mpsc::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    renderer
-        .device()
+    device
         .poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
             timeout: None,

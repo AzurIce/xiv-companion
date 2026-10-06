@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use crate::app::icons::{Icon, IconKind};
 use crate::app::modules::{APP_MODULES, ModuleGroup, ModuleStatus, module_group_label};
 use crate::app::pages::{
-    CharacterPage, CollectionPage, CraftingPage, HomePage, InventoryPage, ModelPreviewPage,
-    NotesPage, SettingsPage,
+    CharacterPage, CollectionPage, CraftingPage, GlamourPage, HomePage, InventoryPage,
+    ModelPreviewPage, NotesPage, SettingsPage,
 };
 use crate::app::ui::{Badge, BadgeVariant};
 
@@ -13,6 +13,7 @@ pub enum Route {
     Home,
     Crafting,
     Notes,
+    Glamour,
     WeaponModels,
     Character,
     Inventory,
@@ -37,6 +38,7 @@ impl Route {
         match path {
             "/crafting" => Route::Crafting,
             "/notes" => Route::Notes,
+            "/glamour" => Route::Glamour,
             "/equipment-models" | "/weapon-models" => Route::WeaponModels,
             "/character" => Route::Character,
             "/inventory" => Route::Inventory,
@@ -51,6 +53,7 @@ impl Route {
             Route::Home => "/",
             Route::Crafting => "/crafting",
             Route::Notes => "/notes",
+            Route::Glamour => "/glamour",
             Route::WeaponModels => "/equipment-models",
             Route::Character => "/character",
             Route::Inventory => "/inventory",
@@ -64,6 +67,7 @@ impl Route {
             Route::Home => "首页",
             Route::Crafting => "合成检索",
             Route::Notes => "制作清单",
+            Route::Glamour => "幻化",
             Route::WeaponModels => "模型预览",
             Route::Character => "角色",
             Route::Inventory => "物品",
@@ -96,6 +100,7 @@ fn navigate(route: Route) {
 fn module_icon(id: &str) -> IconKind {
     match id {
         "notes" => IconKind::BookOpen,
+        "glamour" => IconKind::Shirt,
         "equipment-models" => IconKind::Box,
         "character" => IconKind::PersonStanding,
         "inventory" => IconKind::PackageSearch,
@@ -437,6 +442,7 @@ fn PageContent(current: Route) -> Element {
             Route::Home => rsx! { HomePage {} },
             Route::Crafting => rsx! { CraftingPage {} },
             Route::Notes => rsx! { NotesPage {} },
+            Route::Glamour => rsx! { GlamourPage {} },
             Route::WeaponModels => rsx! { ModelPreviewPage {} },
             Route::Character => rsx! { CharacterPage {} },
             Route::Inventory => rsx! { InventoryPage {} },

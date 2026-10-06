@@ -1796,6 +1796,109 @@ fn transparent_triangle_metadata_uses_global_indices_and_centroids() {
 }
 
 #[test]
+fn scene_transparent_sort_interleaves_instances_globally_by_depth() {
+    // 实例 0（身体，前景透明）与实例 1（装备，背景透明）深度交错：全局序必须
+    // 跨实例穿插，而不是先画完一个实例再画另一个。
+    let mut body = test_batch(0, PreparedRenderPass::Transparent, [0.0; 3]);
+    body.transparent_triangles = vec![
+        TransparentTriangle {
+            indices: [0, 1, 2],
+            center: [0.0, 0.0, -1.0],
+        },
+        TransparentTriangle {
+            indices: [3, 4, 5],
+            center: [0.0, 0.0, 3.0],
+        },
+    ];
+    let mut gear = test_batch(1, PreparedRenderPass::Transparent, [0.0; 3]);
+    gear.transparent_triangles = vec![
+        TransparentTriangle {
+            indices: [0, 1, 2],
+            center: [0.0, 0.0, 1.0],
+        },
+        TransparentTriangle {
+            indices: [3, 4, 5],
+            center: [0.0, 0.0, -3.0],
+        },
+    ];
+
+    let sorted = sorted_scene_transparent_batches(&[&[body], &[gear]], 0.0, 0.0);
+
+    // yaw=0 时视线朝 -Z：远处（z=-3）先画，近处（z=3）后画，两实例交替。
+    assert_eq!(
+        sorted
+            .draws
+            .iter()
+            .map(|draw| (draw.instance_index, draw.batch_index))
+            .collect::<Vec<_>>(),
+        vec![(1, 0), (0, 0), (1, 0), (0, 0)]
+    );
+    // 每实例索引流按全局深度序写入自己的缓冲（实例 0：z=-1 先于 z=3；
+    // 实例 1：z=-3 先于 z=1）。
+    assert_eq!(sorted.indices[0], vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(sorted.indices[1], vec![3, 4, 5, 0, 1, 2]);
+    // 全局绘制的段序与各实例索引流一一对应。
+    let body_draws = sorted
+        .draws
+        .iter()
+        .filter(|draw| draw.instance_index == 0)
+        .collect::<Vec<_>>();
+    assert_eq!(body_draws[0].index_start, 0);
+    assert_eq!(body_draws[1].index_start, 3);
+}
+
+#[test]
+fn scene_transparent_sort_skips_opaque_and_merges_adjacent_runs() {
+    let mut body_opaque = test_batch(0, PreparedRenderPass::Opaque, [0.0, 0.0, -50.0]);
+    body_opaque.transparent_triangles = Vec::new();
+    let mut gear = test_batch(1, PreparedRenderPass::Glass, [0.0; 3]);
+    gear.transparent_triangles = vec![
+        TransparentTriangle {
+            indices: [0, 1, 2],
+            center: [0.0, 0.0, 2.0],
+        },
+        TransparentTriangle {
+            indices: [3, 4, 5],
+            center: [0.0, 0.0, 1.0],
+        },
+    ];
+
+    let sorted = sorted_scene_transparent_batches(&[&[body_opaque], &[gear]], 0.0, 0.0);
+
+    // 不透明批次不参与排序；同实例同批次的相邻段合并成一段。
+    assert_eq!(sorted.indices[0], Vec::<u32>::new());
+    assert_eq!(sorted.indices[1], vec![3, 4, 5, 0, 1, 2]);
+    assert_eq!(
+        sorted.draws,
+        vec![SceneTransparentDraw {
+            instance_index: 1,
+            batch_index: 0,
+            index_start: 0,
+            index_count: 6,
+        }]
+    );
+}
+
+#[test]
+fn scene_bounds_unwraps_all_instance_spheres() {
+    // 相同中心不同半径：并集半径覆盖最大球。
+    assert_eq!(
+        scene_bounds_from_spheres(&[([0.0; 3], 1.0), ([0.0; 3], 3.0)]),
+        ([0.0, 0.0, 0.0], 3.0)
+    );
+    // 分离球：中心取中点，半径覆盖两球。
+    let (center, radius) =
+        scene_bounds_from_spheres(&[([-2.0, 0.0, 0.0], 1.0), ([2.0, 0.0, 0.0], 1.0)]);
+    assert!((center[0] - 0.0).abs() < 1e-6);
+    assert!(
+        (radius - 3.0).abs() < 1e-6,
+        "radius must cover both spheres"
+    );
+    // 空场景：保守单位球。
+    assert_eq!(scene_bounds_from_spheres(&[]), ([0.0; 3], 1.0));
+}
+
+#[test]
 fn prepared_material_pass_maps_alpha_modes_and_draw_roles() {
     assert_eq!(
         test_prepared_render_pass(
@@ -3672,6 +3775,38 @@ fn flatten_model_filters_non_surface_roles_but_keeps_additive_lightshafts() {
 }
 
 #[test]
+fn flatten_model_skips_hidden_meshes_entirely() {
+    let model = crate::ModelData {
+        bounds: crate::ModelBounds::default(),
+        materials: vec![fallback_material()],
+        textures: Vec::new(),
+        meshes: vec![
+            test_mesh("normal", 0.0),
+            test_mesh("glass", 3.0),
+            test_mesh("normal", 6.0),
+        ],
+    };
+
+    // 隐藏下标 1（glass）：连同透明批次一并跳过，其余网格照常展平。
+    let (vertices, indices, batches) = flatten_model_with_options(
+        &model,
+        PreparedModelOptions::default().with_hidden_mesh_indices(vec![1]),
+    );
+
+    assert_eq!(vertices.len(), 6);
+    assert_eq!(indices.len(), 6);
+    assert_eq!(batches.len(), 2);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch.pass() == PreparedRenderPass::Opaque)
+    );
+    // 不隐藏时 glass 批次在场（对照，确保隐藏是标签生效而非数据差异）。
+    let (_, _, all_batches) = flatten_model(&model);
+    assert_eq!(all_batches.len(), 3);
+}
+
+#[test]
 fn flatten_model_preserves_extended_vertex_channels() {
     let mut mesh = test_mesh("normal", 0.0);
     mesh.vertices[0].uv1 = [0.1, 0.2];
@@ -3752,6 +3887,7 @@ fn skinned_test_skeleton() -> xiv_companion_data::ModelSkeleton {
         bone_names: vec!["n_root".to_string(), "n_spine".to_string()],
         parent_indices: vec![-1, 0],
         rest_pose: vec![xiv_companion_data::BoneTransform::IDENTITY; 2],
+        body_scaling: None,
     }
 }
 

@@ -1,4 +1,4 @@
-//! Minimal `.imc`（variant / material-set 表）读取器。
+//! 武器、装备与饰品共用的 `.imc`（variant / material-set 表）读取器。
 //!
 //! 布局依据 xivModdingFramework `Variants/FileTypes/Imc.cs`：文件头为
 //! `subset_count: i16 + kind: i16`（1 = NonSet（武器、怪物），31 = Set（装备）），
@@ -10,7 +10,7 @@
 use std::fmt;
 
 /// 一条 variant 条目；`vfx` 即武器 avfx 的 VfxId（0 = 无特效）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImcEntry {
     pub material_set: u8,
@@ -20,11 +20,45 @@ pub struct ImcEntry {
     pub animation: u8,
 }
 
+impl ImcEntry {
+    /// MDL 本地 attribute 可见性位；高 6 位另存 sound id。
+    pub fn attribute_mask(&self) -> u16 {
+        self.mask & 0x3FF
+    }
+    pub fn sound_id(&self) -> u8 {
+        (self.mask >> 10) as u8
+    }
+}
+
+/// 装备/饰品 set 的 IMC 文件路径（`chara/equipment/e####/e####.imc` /
+/// `chara/accessory/a####/a####.imc`）。
+pub fn equipment_imc_path(set_id: u16, is_accessory: bool) -> String {
+    if is_accessory {
+        format!("chara/accessory/a{set_id:04}/a{set_id:04}.imc")
+    } else {
+        format!("chara/equipment/e{set_id:04}/e{set_id:04}.imc")
+    }
+}
+
+/// Set 型 IMC 的槽位偏移（met/top/glv/dwn/sho → 0..4，xivModdingFramework
+/// `Imc.SlotOffsetDictionary`）。
+pub fn imc_slot_offset(abbreviation: &str) -> Option<usize> {
+    match abbreviation {
+        "met" | "ear" => Some(0),
+        "top" | "nek" => Some(1),
+        "glv" | "wrs" => Some(2),
+        "dwn" | "rir" => Some(3),
+        "sho" | "ril" => Some(4),
+        _ => None,
+    }
+}
+
 /// `.imc` 解析错误；本模块保持零依赖，不引入 anyhow。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImcParseError {
     TooShort { len: usize },
     UnknownKind { raw_kind: i16 },
+    InvalidSubsetCount { count: i16 },
     Truncated { len: usize, expected: usize },
 }
 
@@ -37,6 +71,7 @@ impl fmt::Display for ImcParseError {
                     "imc too short: {len} bytes (need at least the 4-byte header)"
                 )
             }
+            Self::InvalidSubsetCount { count } => write!(f, "negative imc subset count {count}"),
             Self::UnknownKind { raw_kind } => write!(
                 f,
                 "unknown imc kind {raw_kind} (expected 1 = NonSet or 31 = Set)"
@@ -79,7 +114,11 @@ impl ImcFile {
         if bytes.len() < 4 {
             return Err(ImcParseError::TooShort { len: bytes.len() });
         }
-        let subset_count = i16::from_le_bytes([bytes[0], bytes[1]]) as u16;
+        let count = i16::from_le_bytes([bytes[0], bytes[1]]);
+        if count < 0 {
+            return Err(ImcParseError::InvalidSubsetCount { count });
+        }
+        let subset_count = count as u16;
         let raw_kind = i16::from_le_bytes([bytes[2], bytes[3]]);
         let kind = match raw_kind {
             1 => Some(ImcKind::NonSet),
@@ -130,6 +169,12 @@ impl ImcFile {
             subsets,
             trailing_bytes: bytes.len() - expected,
         })
+    }
+
+    /// 子集按 variant 查询；非法槽位回退第一个条目，NonSet 恒为单条。
+    pub fn entry(&self, variant: u16, slot_offset: usize) -> &ImcEntry {
+        let subset = self.subset_for_variant(variant);
+        subset.get(slot_offset).unwrap_or(&subset[0])
     }
 
     /// 取 variant 对应的子集（1 起）；0 或越界回落到默认子集。
@@ -232,5 +277,91 @@ mod tests {
             })
         );
         assert_eq!(ImcFile::parse(&[]), Err(ImcParseError::TooShort { len: 0 }));
+    }
+    fn imc_entry_bytes(material_set: u8, mask: u16) -> [u8; 6] {
+        let mut bytes = [0; 6];
+        bytes[0] = material_set;
+        bytes[2..4].copy_from_slice(&mask.to_le_bytes());
+        bytes
+    }
+
+    /// Set 型 IMC：2 子集，默认子集全 0，子集 1 全 material_set=1，子集 2
+    /// 全 material_set=2（mask 按槽位区分）。
+    fn set_imc_fixture() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_i16.to_le_bytes());
+        bytes.extend_from_slice(&31_i16.to_le_bytes());
+        for _ in 0..5 {
+            bytes.extend_from_slice(&imc_entry_bytes(1, 0x3FF));
+        }
+        for slot in 0..5 {
+            bytes.extend_from_slice(&imc_entry_bytes(1, 0x3FF & !(1 << slot)));
+        }
+        for slot in 0..5 {
+            bytes.extend_from_slice(&imc_entry_bytes(2, 0x0001 << slot));
+        }
+        bytes
+    }
+
+    #[test]
+    fn imc_set_lookup_is_one_based_with_default_fallback() {
+        let imc = ImcFile::parse(&set_imc_fixture()).expect("parse Set IMC");
+        assert_eq!(imc.kind, Some(ImcKind::Set));
+        assert_eq!(imc.subset_count, 2);
+        // 1 基：subset 1 → 第一子集（mask 清除对应槽位）。
+        assert_eq!(imc.entry(1, 1).material_set, 1);
+        assert_eq!(imc.entry(1, 1).mask, 0x3FF & !0b10);
+        assert_eq!(imc.entry(2, 4).material_set, 2);
+        assert_eq!(imc.entry(2, 4).mask, 0x0010);
+        // 0 与越界子集 → 默认子集。
+        assert_eq!(imc.entry(0, 0).mask, 0x3FF);
+        assert_eq!(imc.entry(3, 2).mask, 0x3FF);
+        // 槽位偏移越界钳到 0。
+        assert_eq!(imc.entry(2, 9).mask, imc.entry(2, 0).mask);
+        // attribute 位与 sound id 拆分。
+        let entry = ImcEntry {
+            mask: 0x47FE,
+            ..ImcEntry::default()
+        };
+        assert_eq!(entry.attribute_mask(), 0x03FE);
+        assert_eq!(entry.sound_id(), 0x11);
+    }
+
+    #[test]
+    fn imc_non_set_lookup() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_i16.to_le_bytes());
+        bytes.extend_from_slice(&1_i16.to_le_bytes());
+        bytes.extend_from_slice(&imc_entry_bytes(1, 0x3FF));
+        bytes.extend_from_slice(&imc_entry_bytes(3, 0x00FF));
+        bytes.extend_from_slice(&imc_entry_bytes(4, 0x0FFF));
+        let imc = ImcFile::parse(&bytes).expect("parse NonSet IMC");
+        assert_eq!(imc.kind, Some(ImcKind::NonSet));
+        assert_eq!(imc.subset_count, 2);
+        assert_eq!(imc.entry(1, 0).material_set, 3);
+        assert_eq!(imc.entry(2, 0).material_set, 4);
+        assert_eq!(imc.entry(2, 0).attribute_mask(), 0x03FF);
+        // 默认子集回退。
+        assert_eq!(imc.entry(9, 0).material_set, 1);
+        // 槽位偏移在 NonSet 下钳到唯一条目。
+        assert_eq!(imc.entry(1, 3).material_set, 3);
+    }
+
+    #[test]
+    fn imc_rejects_malformed_bytes() {
+        assert!(ImcFile::parse(&[0; 3]).is_err());
+        assert!(ImcFile::parse(&[1, 0, 2, 0]).is_err());
+        // 声明 2 子集但字节不足。
+        let mut bytes = set_imc_fixture();
+        bytes.truncate(bytes.len() - 6);
+        assert!(ImcFile::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_negative_subset_count() {
+        assert_eq!(
+            ImcFile::parse(&[255, 255, 1, 0]),
+            Err(ImcParseError::InvalidSubsetCount { count: -1 })
+        );
     }
 }
