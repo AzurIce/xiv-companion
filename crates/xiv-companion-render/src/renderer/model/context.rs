@@ -976,7 +976,9 @@ impl ModelRenderContext {
             }),
         );
         if let Some(skeleton) = skeleton.filter(|_| joint_count > 0) {
-            let rest_pose = xiv_companion_data::SkeletonPose::rest_pose(skeleton);
+            // 展示用 rest pose（含 RGSP 体型缩放）；inverse bind 仍按原始 rest
+            // （SkeletonInverseBindCache 内部用 SkeletonPose::rest_pose）。
+            let rest_pose = skeleton.scaled_rest_pose();
             let matrices = xiv_companion_data::joint_matrices(
                 skeleton,
                 &rest_pose,

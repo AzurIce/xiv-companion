@@ -49,6 +49,12 @@ pub struct ModelSkeleton {
     pub bone_names: Vec<String>,
     pub parent_indices: Vec<i32>,
     pub rest_pose: Vec<BoneTransform>,
+    /// 体型缩放（RGSP，见 `crate::racial_scaling`）：角色装配加载时按
+    /// human.cmp 缩放参数表 + 捏脸字节（身高/尾长/胸围）附着；None = 恒等。
+    /// 只作用于**展示姿势**（[`ModelSkeleton::scaled_rest_pose`] 与
+    /// 动画采样输出的合成），不参与 inverse bind / 种族骨变形烘焙
+    /// （两者都以原始 rest pose 为准）。
+    pub body_scaling: Option<crate::racial_scaling::BodyScaling>,
 }
 
 impl ModelSkeleton {
@@ -58,6 +64,17 @@ impl ModelSkeleton {
 
     pub fn bone_index(&self, name: &str) -> Option<usize> {
         self.bone_names.iter().position(|bone| bone == name)
+    }
+
+    /// 展示用 rest pose：rest 合成体型缩放（无缩放时与原 rest 逐骨一致）。
+    /// 绑定语义（inverse bind、race deform 烘焙）请用原始 rest pose
+    /// （[`SkeletonPose::rest_pose`]）。
+    pub fn scaled_rest_pose(&self) -> SkeletonPose {
+        let mut pose = SkeletonPose::rest_pose(self);
+        if let Some(scaling) = self.body_scaling {
+            pose.apply_body_scaling(self, &scaling);
+        }
+        pose
     }
 }
 
@@ -135,6 +152,54 @@ impl SkeletonPose {
 
     fn local_transform(&self, bone: usize, rest: &BoneTransform) -> BoneTransform {
         self.transforms.get(bone).copied().unwrap_or(*rest)
+    }
+
+    /// 把体型缩放（RGSP）合成进姿势：身高 × `n_root` 局部 scale（全模型关于
+    /// 原点均匀缩放）；尾长 × 尾链根局部 scale（`n_sippo_*` 链中父骨不属尾链
+    /// 的第一根，其后代随层级继承）；胸围逐轴 × `j_mune_l`/`j_mune_r` 局部
+    /// scale。对 rest 或动画采样得到的原始姿势调用一次；**不幂等**，重复
+    /// 调用会重复累积。目标骨缺失时跳过该项（不报错）。
+    pub fn apply_body_scaling(
+        &mut self,
+        skeleton: &ModelSkeleton,
+        scaling: &crate::racial_scaling::BodyScaling,
+    ) {
+        use crate::racial_scaling::{BUST_BONES, HEIGHT_BONE, TAIL_BONE_PREFIX};
+        if scaling.is_identity() {
+            return;
+        }
+        let scale_bone = |transforms: &mut Vec<BoneTransform>, bone: usize, factor: [f32; 3]| {
+            if let Some(slot) = transforms.get_mut(bone) {
+                for (axis, value) in slot.scale.iter_mut().enumerate() {
+                    *value *= factor[axis];
+                }
+            }
+        };
+        if scaling.height != 1.0
+            && let Some(bone) = skeleton.bone_index(HEIGHT_BONE)
+        {
+            scale_bone(&mut self.transforms, bone, [scaling.height; 3]);
+        }
+        if scaling.tail != 1.0 {
+            // 尾链根：n_sippo_* 中父骨不是尾骨的第一根（一般为 n_sippo_a）。
+            let chain_root = (0..skeleton.bone_count()).find(|&bone| {
+                if !skeleton.bone_names[bone].starts_with(TAIL_BONE_PREFIX) {
+                    return false;
+                }
+                let parent = skeleton.parent_indices[bone];
+                parent < 0 || !skeleton.bone_names[parent as usize].starts_with(TAIL_BONE_PREFIX)
+            });
+            if let Some(bone) = chain_root {
+                scale_bone(&mut self.transforms, bone, [scaling.tail; 3]);
+            }
+        }
+        if scaling.bust != [1.0; 3] {
+            for name in BUST_BONES {
+                if let Some(bone) = skeleton.bone_index(name) {
+                    scale_bone(&mut self.transforms, bone, scaling.bust);
+                }
+            }
+        }
     }
 }
 
@@ -397,7 +462,10 @@ impl SkeletonInverseBindCache {
     }
 
     /// 实例 joint 名表 → 关节矩阵（world × inverse(bind world)）。
-    /// 缺失名回退单位阵（顶点等价于不蒙皮）。
+    /// 缺失名回退：脸部（`j_f_*`）与发件扩展骨（`j_ex_h*`）锚定头骨 `j_kao`
+    /// 的关节矩阵（无 `j_kao` 时 `n_root`；这两族在游戏里挂在头骨链下，
+    /// 其 sklb 不随装配加载——锚定使它们随身高缩放/头部姿势移动，跟随头骨
+    /// 是固定的近似），其余缺失名回退单位阵（顶点等价于不蒙皮）。
     pub fn joint_matrices(
         &mut self,
         skeleton: &ModelSkeleton,
@@ -413,10 +481,27 @@ impl SkeletonInverseBindCache {
             .iter()
             .map(|name| match skeleton.bone_index(name) {
                 Some(bone) => mat4_mul(world[bone], self.inverse_bind_world[bone]),
-                None => IDENTITY_MAT4,
+                None => match missing_joint_anchor(skeleton, name) {
+                    Some(anchor) => mat4_mul(world[anchor], self.inverse_bind_world[anchor]),
+                    None => IDENTITY_MAT4,
+                },
             })
             .collect()
     }
+}
+
+/// 缺失 joint 名的锚定骨：脸部 Dawntrail 骨（`j_f_*`）与发件扩展骨
+/// （`j_ex_h*`，真实数据里如 `j_ex_h0002_ke_a_l`）挂头骨 `j_kao`（游戏
+/// 骨架里它们在脸部/发件 partial skeleton 中，根在头骨链下；锚定后其
+/// 顶点随头骨 joint 移动——身高缩放与头部姿势下与头一致，代价是丢失
+/// 脸部独立微动画，预览可接受）。其余缺失名不锚定（回退单位阵）。
+fn missing_joint_anchor(skeleton: &ModelSkeleton, name: &str) -> Option<usize> {
+    if !(name.starts_with("j_f_") || name.starts_with("j_ex_h")) {
+        return None;
+    }
+    skeleton
+        .bone_index("j_kao")
+        .or_else(|| skeleton.bone_index("n_root"))
 }
 
 /// `joint_matrices` 的无缓存便捷版（每次重算 inverse bind；调用方高频更新
@@ -427,6 +512,28 @@ pub fn joint_matrices(
     joint_names: &[String],
 ) -> Vec<[f32; 16]> {
     SkeletonInverseBindCache::new().joint_matrices(skeleton, pose, joint_names)
+}
+
+/// 武器挂接件的关节矩阵：joint 名即挂点骨名（人体骨架 `n_buki_r` 主手 /
+/// `n_buki_l` 副手），矩阵 = 该骨姿势世界矩阵 × `correction`。武器顶点
+/// 不在绑定空间而在挂点骨局部空间（原点在握把、轴向对齐骨局部轴），因此
+/// **不乘 inverse(bind world)**；`correction` 是武器模型局部 → 骨局部的
+/// 常量校正。骨缺失回退单位阵（顶点等价于停在原点；挂点骨恒在人体骨架内，
+/// 不走 [`joint_matrices`] 的脸部/发件锚定回退）。
+pub fn weapon_attach_joint_matrices(
+    skeleton: &ModelSkeleton,
+    pose: &SkeletonPose,
+    joint_names: &[String],
+    correction: [f32; 16],
+) -> Vec<[f32; 16]> {
+    let world = world_matrices(skeleton, pose);
+    joint_names
+        .iter()
+        .map(|name| match skeleton.bone_index(name) {
+            Some(bone) => mat4_mul(world[bone], correction),
+            None => IDENTITY_MAT4,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +865,7 @@ fn parse_havok_skeleton(havok: &[u8]) -> Result<ModelSkeleton, SkeletonError> {
         bone_names: havok_skeleton.bone_names.clone(),
         parent_indices,
         rest_pose,
+        body_scaling: None,
     })
 }
 
@@ -856,6 +964,7 @@ mod tests {
                     scale: [1.0; 3],
                 },
             ],
+            body_scaling: None,
         }
     }
 
@@ -1000,6 +1109,42 @@ mod tests {
     }
 
     #[test]
+    fn weapon_attach_joint_matrices_use_pose_world_times_correction() {
+        // 武器挂接不做 inverse bind：joint 矩阵 = 挂点骨姿势世界 × 校正。
+        // rest 下挂点骨世界矩阵平移即骨位（与 joint_matrices 的恒等输出不同）。
+        let skeleton = two_bone_skeleton();
+        let rest = SkeletonPose::rest_pose(&skeleton);
+        let names = vec!["child".to_string(), "missing".to_string()];
+
+        let identity_correction =
+            weapon_attach_joint_matrices(&skeleton, &rest, &names, IDENTITY_MAT4);
+        let world = world_matrices(&skeleton, &rest);
+        assert_mat4_approx(
+            &identity_correction[0],
+            &world[1],
+            1e-6,
+            "rest attach joint",
+        );
+        assert_mat4_approx(&identity_correction[1], &IDENTITY_MAT4, 0.0, "missing bone");
+
+        // 校正右乘生效：纯平移校正在挂接点基础上再平移（骨局部系）。
+        let mut translated_correction = IDENTITY_MAT4;
+        translated_correction[12] = 0.5;
+        translated_correction[13] = 0.25;
+        let corrected =
+            weapon_attach_joint_matrices(&skeleton, &rest, &names[..1], translated_correction);
+        let origin = mat4_transform_point(corrected[0], [0.0; 3]);
+        assert_mat4_approx(&origin, &[1.5, 3.25, 3.0], 1e-6, "corrected attach origin");
+
+        // 姿势驱动：父骨平移经父链传入挂点骨世界矩阵。
+        let mut pose = SkeletonPose::rest_pose(&skeleton);
+        pose.set_translation(0, [10.0, 0.0, 0.0])
+            .expect("set translation");
+        let posed = weapon_attach_joint_matrices(&skeleton, &pose, &names[..1], IDENTITY_MAT4);
+        let origin = mat4_transform_point(posed[0], [0.0; 3]);
+        assert_mat4_approx(&origin, &[10.0, 1.0, 0.0], 1e-6, "posed attach origin");
+    }
+    #[test]
     fn pose_index_out_of_range_is_an_error_not_panic() {
         let mut pose = SkeletonPose::new(2);
         assert!(pose.set_rotation(2, [0.0; 4]).is_err());
@@ -1113,6 +1258,7 @@ mod tests {
             bone_names: vec!["a".to_string(), "b".to_string()],
             parent_indices: vec![1, 0],
             rest_pose: vec![BoneTransform::IDENTITY; 2],
+            body_scaling: None,
         };
         assert_eq!(
             validate_skeleton(&cyclic),
@@ -1145,6 +1291,7 @@ mod tests {
                     scale: child_scale,
                 },
             ],
+            body_scaling: None,
         }
     }
 
@@ -1253,5 +1400,192 @@ mod tests {
         let normal = mesh.vertices[0].normal;
         let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
         assert!((length - 1.0).abs() < 1e-5, "normal stays unit");
+    }
+
+    // -----------------------------------------------------------------------
+    // 体型缩放（RGSP）姿势合成
+    // -----------------------------------------------------------------------
+
+    /// 人形小骨架：n_root → n_hara → (j_mune_l, n_sippo_a → n_sippo_b)。
+    fn humanoid_scaling_skeleton(
+        scaling: Option<crate::racial_scaling::BodyScaling>,
+    ) -> ModelSkeleton {
+        let bone = |translation: [f32; 3]| BoneTransform {
+            translation,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        };
+        ModelSkeleton {
+            bone_names: vec![
+                "n_root".to_string(),
+                "n_hara".to_string(),
+                "j_mune_l".to_string(),
+                "n_sippo_a".to_string(),
+                "n_sippo_b".to_string(),
+            ],
+            parent_indices: vec![-1, 0, 1, 1, 3],
+            rest_pose: vec![
+                bone([0.0; 3]),
+                bone([0.0, 0.5, 0.0]),
+                bone([0.1, 0.3, 0.0]),
+                bone([0.0, 0.1, -0.2]),
+                bone([0.0, -0.1, -0.1]),
+            ],
+            body_scaling: scaling,
+        }
+    }
+
+    #[test]
+    fn scaled_rest_pose_applies_height_tail_bust_to_target_bones() {
+        let scaling = crate::racial_scaling::BodyScaling {
+            height: 2.0,
+            tail: 3.0,
+            bust: [1.1, 1.2, 1.3],
+        };
+        let skeleton = humanoid_scaling_skeleton(Some(scaling));
+        let pose = skeleton.scaled_rest_pose();
+        // 目标骨局部 scale 乘上系数，其余骨不变。
+        assert_eq!(
+            pose.transform(0).unwrap().scale,
+            [2.0; 3],
+            "n_root × height"
+        );
+        assert_eq!(pose.transform(1).unwrap().scale, [1.0; 3], "n_hara 不变");
+        assert_eq!(
+            pose.transform(2).unwrap().scale,
+            [1.1, 1.2, 1.3],
+            "j_mune_l × bust（逐轴）"
+        );
+        assert_eq!(
+            pose.transform(3).unwrap().scale,
+            [3.0; 3],
+            "尾链根 n_sippo_a × tail"
+        );
+        assert_eq!(
+            pose.transform(4).unwrap().scale,
+            [1.0; 3],
+            "尾链其余骨不直接缩放（随父链继承）"
+        );
+        // 原始 rest pose 不被污染（bind 语义保持未缩放）。
+        assert_eq!(skeleton.rest_pose[0].scale, [1.0; 3]);
+        assert_eq!(skeleton.rest_pose[3].scale, [1.0; 3]);
+
+        // 世界矩阵：身高 2 倍沿根链传播（n_hara 世界 y = 0.5 × 2 = 1.0）；
+        // n_sippo_b 世界平移 = 2×(hara + 3×sippo_a) 平移 + 6×sippo_b 平移。
+        let world = world_matrices(&skeleton, &pose);
+        assert_mat4_approx(&world[1][12..15], &[0.0, 1.0, 0.0], 1e-6, "n_hara world");
+        assert_mat4_approx(
+            &world[4][12..15],
+            &[0.0, 0.6, -1.0],
+            1e-6,
+            "n_sippo_b world（身高 2 × 尾 3 复合）",
+        );
+        // 无缩放骨架：scaled_rest_pose 与 rest 逐骨一致。
+        let plain = humanoid_scaling_skeleton(None);
+        assert_eq!(
+            plain.scaled_rest_pose(),
+            SkeletonPose::rest_pose(&plain),
+            "无体型缩放时展示 rest = 原始 rest"
+        );
+    }
+
+    #[test]
+    fn body_scaling_flows_through_skinning_and_weapon_attach() {
+        // 蒙皮：joint = scaled_world × inverse(raw bind world) —— 身高 2 倍时
+        // 任意骨 joint 都是关于原点的 2 倍缩放（顶点随体型缩放）。
+        let skeleton = humanoid_scaling_skeleton(Some(crate::racial_scaling::BodyScaling {
+            height: 2.0,
+            ..crate::racial_scaling::BodyScaling::IDENTITY
+        }));
+        let pose = skeleton.scaled_rest_pose();
+        let names: Vec<String> = skeleton.bone_names.clone();
+        let joints = joint_matrices(&skeleton, &pose, &names);
+        let skinned = mat4_transform_point(joints[1], [0.0, 0.5, 0.0]);
+        assert_mat4_approx(&skinned, &[0.0, 1.0, 0.0], 1e-5, "蒙皮点随身高加倍");
+        // rest（未缩放）下 joint = 恒等。
+        let identity_joints =
+            joint_matrices(&skeleton, &SkeletonPose::rest_pose(&skeleton), &names);
+        assert_mat4_approx(&identity_joints[1], &IDENTITY_MAT4, 1e-5, "raw rest joint");
+
+        // 武器挂接：挂点骨世界矩阵随身高缩放（武器随身体变大/变小）——挂到
+        // n_sippo_b（类比 n_buki_l/r 的深层骨），attach 原点高度随身高加倍。
+        let attach_names = vec!["n_sippo_b".to_string()];
+        let unscaled = weapon_attach_joint_matrices(
+            &skeleton,
+            &SkeletonPose::rest_pose(&skeleton),
+            &attach_names,
+            IDENTITY_MAT4,
+        );
+        let scaled = weapon_attach_joint_matrices(&skeleton, &pose, &attach_names, IDENTITY_MAT4);
+        let unscaled_origin = mat4_transform_point(unscaled[0], [0.0; 3]);
+        let scaled_origin = mat4_transform_point(scaled[0], [0.0; 3]);
+        assert_mat4_approx(
+            &scaled_origin,
+            &[
+                unscaled_origin[0] * 2.0,
+                unscaled_origin[1] * 2.0,
+                unscaled_origin[2] * 2.0,
+            ],
+            1e-5,
+            "挂接点随身高缩放",
+        );
+    }
+
+    #[test]
+    fn body_scaling_composes_on_top_of_sampled_scale_reset() {
+        // 动画采样会用 track 值（一般 1.0）覆盖局部 scale：RGSP 必须在采样后
+        // 重新叠加，而不是烘进 rest。模拟"采样把 n_root scale 覆盖为 1.0"的
+        // 姿势，apply_body_scaling 后恢复身高系数。
+        let scaling = crate::racial_scaling::BodyScaling {
+            height: 1.5,
+            ..crate::racial_scaling::BodyScaling::IDENTITY
+        };
+        let skeleton = humanoid_scaling_skeleton(Some(scaling));
+        let mut pose = SkeletonPose::rest_pose(&skeleton);
+        pose.set_transform(
+            0,
+            BoneTransform {
+                translation: [0.0, 0.1, 0.0], // 动画同时改了平移
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3], // track 覆盖 scale
+            },
+        )
+        .expect("set sampled transform");
+        pose.apply_body_scaling(&skeleton, &scaling);
+        assert_eq!(
+            pose.transform(0).unwrap().scale,
+            [1.5; 3],
+            "采样覆盖后身高系数重新叠加"
+        );
+        assert_eq!(
+            pose.transform(0).unwrap().translation,
+            [0.0, 0.1, 0.0],
+            "采样的平移保留"
+        );
+    }
+
+    #[test]
+    fn missing_face_and_hair_bones_anchor_to_head_joint() {
+        // 脸部 j_f_* / 发件 j_ex_h* 骨不在装配骨架里（真实人体 MDL 的骨表
+        // 就引用这些 partial skeleton 骨）：关节矩阵锚定头骨（无 j_kao 时
+        // n_root）——身高缩放时与头骨同步缩放，不再停在未缩放位置。
+        let skeleton = humanoid_scaling_skeleton(Some(crate::racial_scaling::BodyScaling {
+            height: 2.0,
+            ..crate::racial_scaling::BodyScaling::IDENTITY
+        }));
+        let pose = skeleton.scaled_rest_pose();
+        let names = vec![
+            "j_f_hoho_l".to_string(),
+            "j_ex_h0002_ke_a_l".to_string(),
+            "n_truly_missing".to_string(),
+        ];
+        let joints = joint_matrices(&skeleton, &pose, &names);
+        let root_joint = joint_matrices(&skeleton, &pose, &["n_root".to_string()])[0];
+        assert_mat4_approx(&joints[0], &root_joint, 1e-6, "j_f_* 锚定头骨链 joint");
+        assert_mat4_approx(&joints[1], &root_joint, 1e-6, "j_ex_h* 锚定头骨链 joint");
+        assert_mat4_approx(&joints[2], &IDENTITY_MAT4, 0.0, "其余缺失名回退单位阵");
+        // 锚定生效后顶点随身高缩放（本骨架无 j_kao → n_root：身高 2 倍）。
+        let skinned = mat4_transform_point(joints[0], [0.0, 1.0, 0.0]);
+        assert_mat4_approx(&skinned, &[0.0, 2.0, 0.0], 1e-5, "脸部顶点随身高缩放");
     }
 }

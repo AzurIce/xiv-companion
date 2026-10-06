@@ -15,6 +15,7 @@ mod mdl_geometry;
 #[cfg(feature = "game-data")]
 pub mod mdl_metadata;
 pub mod model;
+pub mod racial_scaling;
 pub mod skeleton;
 #[cfg(feature = "game-data")]
 pub mod staining;
@@ -36,5 +37,6 @@ pub use furniture::*;
 #[cfg(feature = "game-data")]
 pub use mdl_metadata::*;
 pub use model::*;
+pub use racial_scaling::*;
 pub use skeleton::*;
 pub use weapon_models::*;

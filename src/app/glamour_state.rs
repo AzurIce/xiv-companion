@@ -115,6 +115,10 @@ impl GlamourPiece {
 pub struct GlamourSet {
     pub id: String,
     pub name: String,
+    /// 套装独立角色形象（52 字符 hex，同角色页 `?c=` 参数）。None = 跟随页面级
+    /// 预览形象（`GlamourState::preview_customize`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customize: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pieces: BTreeMap<GlamourSlot, GlamourPiece>,
     /// 毫秒时间戳，用于列表排序。
@@ -126,6 +130,17 @@ impl GlamourSet {
     pub fn piece_count(&self) -> usize {
         self.pieces.len()
     }
+
+    /// 复制套装：换新 id、名称加「（副本）」后缀、刷新更新时间，装备与独立形象等
+    /// 其余字段原样保留。
+    pub fn duplicate(&self, id: String, updated_at: u64) -> GlamourSet {
+        GlamourSet {
+            id,
+            name: format!("{}（副本）", self.name),
+            updated_at,
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,8 +148,9 @@ impl GlamourSet {
 pub struct GlamourState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sets: Vec<GlamourSet>,
-    /// 预览角色的捏脸（52 字符 hex，同角色页 `?c=` 参数），页面级而非套装级。
-    /// None = 未自定义（预览用捏脸菜单默认）。
+    /// 预览角色的捏脸（52 字符 hex，同角色页 `?c=` 参数），页面级默认值；
+    /// 套装可用 `GlamourSet::customize` 单独绑定。None = 未自定义（预览用捏脸
+    /// 菜单默认）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_customize: Option<String>,
 }
@@ -228,15 +244,16 @@ fn normalize_state(raw: Value) -> GlamourState {
         .unwrap_or_default();
     GlamourState {
         sets: normalize_sets(parsed),
-        preview_customize: normalize_preview_customize(
+        preview_customize: normalize_customize_hex(
             raw.get("previewCustomize").and_then(Value::as_str),
         ),
     }
 }
 
-/// 预览捏脸 hex 的轻量形状校验（52 字符 hex = 26 字节捏脸 × 2；逐字节语义
-/// 校验在页面层 `customize_from_hex` 进行）。
-fn normalize_preview_customize(value: Option<&str>) -> Option<String> {
+/// 捏脸 hex 的轻量形状校验（52 字符 hex = 26 字节捏脸 × 2；逐字节语义校验在
+/// 页面层 `customize_from_hex` 进行）。页面级 `preview_customize` 与套装级
+/// `customize` 共用。
+fn normalize_customize_hex(value: Option<&str>) -> Option<String> {
     const PREVIEW_CUSTOMIZE_HEX_LEN: usize = 52;
     let value = value?.trim();
     (value.len() == PREVIEW_CUSTOMIZE_HEX_LEN && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -254,6 +271,7 @@ fn normalize_sets(sets: Vec<GlamourSet>) -> Vec<GlamourSet> {
         if set.name.is_empty() {
             set.name = "未命名套装".to_string();
         }
+        set.customize = normalize_customize_hex(set.customize.as_deref());
         set.pieces.retain(|_, piece| piece.item_id != 0);
         set.pieces
             .retain(|slot, piece| slot.accepts(piece.equip_slot_category));
@@ -282,6 +300,7 @@ mod tests {
         GlamourSet {
             id: id.to_string(),
             name: name.to_string(),
+            customize: None,
             pieces: BTreeMap::new(),
             updated_at: 0,
         }
@@ -375,6 +394,88 @@ mod tests {
         }
         let state = normalize_state(serde_json::json!({}));
         assert_eq!(state.preview_customize, None);
+    }
+
+    #[test]
+    fn set_customize_round_trips_serde() {
+        let mut set = set("a", "测试");
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(!json.contains("customize"));
+        set.customize = Some("a1".repeat(26));
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"customize\""));
+        let parsed: GlamourSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, set);
+    }
+
+    #[test]
+    fn normalize_validates_set_customize_hex_shape() {
+        let mut valid_set = set("a", "有效");
+        valid_set.customize = Some("a1".repeat(26));
+        let mut upper_set = set("b", "大写保留原文");
+        upper_set.customize = Some("AB".repeat(26));
+        let mut too_long = set("c", "长度错误");
+        too_long.customize = Some("a1".repeat(27));
+        let mut non_hex = set("d", "非 hex");
+        non_hex.customize = Some("zz".repeat(26));
+
+        let normalized = normalize_sets(vec![
+            valid_set.clone(),
+            upper_set.clone(),
+            too_long,
+            non_hex,
+        ]);
+        assert_eq!(normalized[0].customize, valid_set.customize);
+        assert_eq!(normalized[1].customize, upper_set.customize);
+        assert_eq!(normalized[2].customize, None);
+        assert_eq!(normalized[3].customize, None);
+    }
+
+    #[test]
+    fn import_v1_export_without_customize_field() {
+        let imported = import_glamour_json(
+            r#"{"schemaVersion":1,"sets":[{"id":"a","name":"套装","updatedAt":1}]}"#,
+        )
+        .unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].customize, None);
+    }
+
+    #[test]
+    fn export_import_carries_set_customize() {
+        let mut state = GlamourState::default();
+        let mut with_customize = set("a", "绑定形象");
+        with_customize.customize = Some("a1".repeat(26));
+        state.sets.push(with_customize);
+        state.sets.push(set("b", "跟随页面"));
+
+        let json = export_glamour_json(&state).unwrap();
+        let imported = import_glamour_json(&json).unwrap();
+        assert_eq!(imported, state.sets);
+        assert_eq!(imported[0].customize, Some("a1".repeat(26)));
+        assert_eq!(imported[1].customize, None);
+    }
+
+    #[test]
+    fn import_drops_invalid_set_customize() {
+        let imported = import_glamour_json(
+            r#"{"schemaVersion":1,"sets":[{"id":"a","name":"套装","customize":"zz","updatedAt":1}]}"#,
+        )
+        .unwrap();
+        assert_eq!(imported[0].customize, None);
+    }
+
+    #[test]
+    fn duplicate_keeps_customize_override() {
+        let mut original = set("a", "套装");
+        original.customize = Some("a1".repeat(26));
+        original.pieces.insert(GlamourSlot::Body, piece(20, 4));
+        let copy = original.duplicate("b".to_string(), 42);
+        assert_eq!(copy.id, "b");
+        assert_eq!(copy.name, "套装（副本）");
+        assert_eq!(copy.updated_at, 42);
+        assert_eq!(copy.customize, original.customize);
+        assert_eq!(copy.pieces, original.pieces);
     }
 
     #[test]

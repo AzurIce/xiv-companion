@@ -8,8 +8,13 @@
 //!   c07/08），见 [`CharacterCustomize::race_code_from_parts`]。
 //! - 部件路径：游戏裸装身体 = 小衣装备 e0001（xivModdingFramework
 //!   `Mdl.GetMdlPath` equipment 分支 + 真实边界测量：top/dwn = 皮肤网格 +
-//!   内衣网格，sho 仅中原男/女、鲁加男、拉拉男有）；硌狮/维埃拉无自身
-//!   e0001 文件，按种族骨变形树回退（[`smallclothes_model_race_candidates`]）。
+//!   内衣网格，sho 仅中原男/女、鲁加男、拉拉男有文件）。小衣回退与装备
+//!   同一套 EQDP + 骨变形树语义：游戏取 `human.pbd` 骨变形树上最近的
+//!   EQDP HasModel=1 祖先族模型（[`smallclothes_model_race_candidates`]
+//!   直接复用装备的祖先链；真实数据验证 EQDP set 0/1 HasModel 与链上
+//!   文件存在性 18 族 × 5 槽一一对应）。硌狮/维埃拉无自身 e0001 文件：
+//!   硌狮男→鲁加男、硌狮女/维埃拉女→中原女、维埃拉男→中原男；无 e0001
+//!   sho 的族同样沿树回退小衣鞋（如敖龙女→中原女），不做赤脚处理。
 //!   `chara/human/c{race}/obj/body/b####` 的 b 文件不是玩家裸模（b0002 实测
 //!   仅为颈部补丁等小件）。脸 `c{race}f{head+1}_fac.mdl`（高地无脸模，借
 //!   中原同性别）；发 `c{race}h{hair}_hir.mdl`；尾 `c{race}t{tail+1}_til.mdl`
@@ -74,33 +79,37 @@ pub fn skin_race_for(race_code: u16) -> u16 {
     }
 }
 
-/// 小衣模型文件的种族候选（真实 SqPack 普查：仅硌狮 1501/1601 与维埃拉
-/// 1701/1801 无 `c{race}e0001` 文件，按种族骨变形树回退——硌狮→鲁加、
-/// 维埃拉→猫魅；本实现不应用骨变形，比例为回退种族）。
+/// 小衣模型文件的种族候选：与装备同一套 EQDP + 骨变形树回退语义——游戏
+/// 取骨变形树（`chara/xls/boneDeformer/human.pbd`）上最近的 EQDP HasModel=1
+/// 祖先族模型，直接复用 [`crate::model::equipment_model_race_candidates`]
+/// 的祖先链（真实数据验证：EQDP set 1 HasModel 与链上文件存在性 18 族 × 5
+/// 槽一一对应，见 `probe_smallclothes_bare_limb_race_fallback_eqdp`）。
+///
+/// 仅硌狮 1501/1601 与维埃拉 1701/1801 无 `c{race}e0001` 文件：硌狮男→
+/// 鲁加男 c0901，硌狮女/维埃拉女→中原女 c0201，维埃拉男→中原男 c0101
+/// （2026-09-22 之前的手写表错用鲁加女/猫魅男/猫魅女身体）。e0001 sho 仅
+/// 中原男/女、鲁加男、拉拉男有文件，其余族同样沿链回退小衣鞋（如敖龙女→
+/// 中原女），与游戏一致——游戏裸装不存在赤脚。
 pub fn smallclothes_model_race_candidates(race_code: u16) -> Vec<u16> {
-    match race_code {
-        1501 => vec![1501, 901],
-        1601 => vec![1601, 1001],
-        1701 => vec![1701, 701],
-        1801 => vec![1801, 801],
-        _ => vec![race_code],
-    }
+    crate::model::equipment_model_race_candidates(race_code)
 }
 
-/// 裸肤手/足（e0000 glv/sho）的种族候选。真实 SqPack 普查：e0000 全槽仅
-/// 中原男/女与拉拉男有文件，其余族按版型回退（拉拉女→拉拉男，其余→中原
-/// 同性别；未应用骨变形，手部比例为回退种族）。
+/// e0000 有模型文件的种族（真实 SqPack 普查 + EQDP set 0 HasModel 逐族逐槽
+/// 一致：glv/sho 仅中原男/女、鲁加男、拉拉男；top/dwn 另有鲁加男与拉拉女，
+/// 裸装拼装只用 glv）。
+const BARE_LIMB_FILE_RACES: [u16; 4] = [101, 201, 901, 1101];
+
+/// 裸肤手（e0000 glv）的种族候选：骨变形树祖先链截至首个有 e0000 文件的
+/// 种族（[`BARE_LIMB_FILE_RACES`]）。拉拉女→拉拉男 c1101、硌狮男→鲁加男
+/// c0901（此前错回退中原男）、其余男系→中原男 c0101、其余女系→中原女
+/// c0201。
 pub fn bare_limb_model_race_candidates(race_code: u16) -> Vec<u16> {
-    let fit = match race_code {
-        1201 => 1101,
-        _ if (race_code / 100) % 2 == 0 => 201,
-        _ => 101,
-    };
-    if fit == race_code {
-        vec![race_code]
-    } else {
-        vec![race_code, fit]
-    }
+    let chain = crate::model::equipment_model_race_candidates(race_code);
+    let end = chain
+        .iter()
+        .position(|candidate| BARE_LIMB_FILE_RACES.contains(candidate))
+        .map_or(chain.len(), |index| index + 1);
+    chain.into_iter().take(end).collect()
 }
 
 /// 面妆 decal 贴图目录（真实 SqPack 探测：`_decal_1.tex`..=`_decal_69.tex`
@@ -316,13 +325,66 @@ impl CharacterCustomize {
         self.race == RACE_VIERA
     }
 
+    /// 耳饰显隐的 EQP 位（头部条目 bits 46-49 按种族分组；Penumbra `EqpEntry`
+    /// 命名，经真实 EQP 表核对——耳饰位存在任意分组组合的部分置位，且分组与
+    /// 耳形对应）。
+    #[cfg(feature = "game-data")]
+    pub fn earring_eqp_bit(&self) -> u8 {
+        use crate::equipment_params::EquipmentParameterEntry as E;
+        match self.race {
+            RACE_ELEZEN | RACE_LALAFELL => E::HEAD_SHOW_EARRINGS_LALA_ELEZEN,
+            RACE_MIQOTE | RACE_HROTHGAR | RACE_VIERA => E::HEAD_SHOW_EARRINGS_MIQO_HROTH_VIERA,
+            RACE_AU_RA => E::HEAD_SHOW_EARRINGS_AURA,
+            // 中原/鲁加（含非法 race 的保守回退）。
+            _ => E::HEAD_SHOW_EARRINGS_HYUR_ROE,
+        }
+    }
+
+    /// 耳朵几何的隐藏方式（头部条目 bits 50-53；真实脸部 MDL attribute 表
+    /// 探测结论，见 [`EarConcealment`]）。
+    #[cfg(feature = "game-data")]
+    pub fn ear_concealment(&self) -> EarConcealment {
+        use crate::equipment_params::EquipmentParameterEntry as E;
+        match self.race {
+            // 人族耳：脸部 `atr_mim` 子网格（c0101/c0201/c0501/c0601/c0901/
+            // c1001/c1101/c1201 脸部 MDL 均含 atr_mim attribute）。
+            RACE_HYUR | RACE_ELEZEN | RACE_LALAFELL | RACE_ROEGADYN => {
+                EarConcealment::FaceAttribute(E::HEAD_SHOW_EAR_HUMAN, "atr_mim")
+            }
+            // 猫魅耳：脸部基础网格内（c0701/c0801 脸部 MDL 无耳 attribute，
+            // 耳顶点与面部同网格蒙皮到 j_mimi_l/r），无法按网格隔离。
+            RACE_MIQOTE => EarConcealment::Unsupported(E::HEAD_SHOW_EAR_MIQO),
+            // 敖龙角：脸部 `atr_hrn` 子网格（c1301/c1401 脸部 MDL 含 atr_hrn）。
+            RACE_AU_RA => EarConcealment::FaceAttribute(E::HEAD_SHOW_EAR_AURA, "atr_hrn"),
+            // 维埃拉耳：独立 zear 部件（c1701/c1801 zear MDL 无 attribute，
+            // 整部件隐藏）。
+            RACE_VIERA => EarConcealment::ZearPart(E::HEAD_SHOW_EAR_VIERA),
+            // 硌狮：无耳部显隐位（脸部 MDL 也无耳 attribute），不处理。
+            _ => EarConcealment::None,
+        }
+    }
+
     /// 调色板 (tribe, gender) 区索引：`(tribe - 1) * 2 + gender`（human.cmp 布局）。
     pub fn palette_group_index(&self) -> usize {
         (usize::from(self.tribe.max(1)) - 1) * 2 + usize::from(self.gender.min(1))
     }
 }
 
-/// 角色拼装部件类别。身体为小衣（e0001 top/dwn/sho）与裸肤（e0000 glv/sho）
+/// 耳朵几何的 EQP 显隐机制（[`CharacterCustomize::ear_concealment`]）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EarConcealment {
+    /// 脸部 attribute 子网格（位 + attribute 名）。
+    FaceAttribute(u8, &'static str),
+    /// 维埃拉兔耳：zear 部件整网格。
+    ZearPart(u8),
+    /// 该族耳朵无法按网格/attribute 隔离（猫魅）：不隐藏，调用方记诊断。
+    Unsupported(u8),
+    /// 该族无耳部显隐位（硌狮等）。
+    None,
+}
+
+/// 角色拼装部件类别。身体为小衣（e0001 top/dwn/sho）与裸肤手（e0000 glv）
 /// 装备 MDL，特殊部位（脸/发/尾/兔耳）各 1 个。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -375,16 +437,18 @@ pub struct CharacterPartRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternate_model_paths: Vec<String>,
     /// 必需部件（小衣 top/dwn、裸肤 glv、脸、发）加载失败即整体失败；小衣
-    /// sho/裸肤 sho（族别可选）、尾部/兔耳（种族可选）文件缺失时静默跳过。
+    /// sho（族别可选，链上必有候选）、尾部/兔耳（种族可选）文件缺失时静默
+    /// 跳过。
     pub required: bool,
 }
 
 /// 角色拼装部件路径。游戏裸装身体 = 小衣装备 e0001（top/dwn = 皮肤网格 +
-/// 内衣网格；sho 仅中原男/女、鲁加男、拉拉男有）+ 裸肤 e0000（glv 手部
-/// 恒有，真实普查 e0000 全槽仅中原男/女/拉拉男有文件，其余族按
-/// [`bare_limb_model_race_candidates`] 版型回退；无 e0001 sho 的族以 e0000
-/// sho 补赤脚）。硌狮/维埃拉无自身 e0001 文件，经
-/// [`smallclothes_model_race_candidates`] 回退（骨变形未应用）。皮肤材质恒
+/// 内衣网格；sho 仅中原男/女、鲁加男、拉拉男有文件，其余族经同一骨变形
+/// 树回退小衣鞋）+ 裸肤 e0000（glv 手部恒有，真实普查 e0000 glv/sho 仅
+/// 中原男/女、鲁加男、拉拉男有文件，其余族按
+/// [`bare_limb_model_race_candidates`] 回退）。硌狮/维埃拉无自身 e0001
+/// 文件，按 [`smallclothes_model_race_candidates`] 的 EQDP + 骨变形树
+/// 语义回退（与装备同一函数，骨变形由加载方烘焙）。皮肤材质恒
 /// `mt_c{肤族}b0001_a`（内嵌名逐族核对，见 [`skin_race_for`]；跨族回退时
 /// 游戏仍用角色自身肤族材质）。脸/尾/兔耳的文件编号规则：文件 1 基（硌狮
 /// 女脸从 f0005 起，见 [`human_face_file_base`]）而捏脸字节 0 基
@@ -396,7 +460,7 @@ pub fn character_part_paths(customize: &CharacterCustomize) -> Vec<CharacterPart
     let race_code = customize.race_code();
     let race = format!("c{race_code:04}");
     let mut parts = Vec::new();
-    // 皮肤身体（小衣 e0001）：候选按种族回退表合并去重。
+    // 皮肤身体（小衣 e0001）：候选按骨变形树祖先链（与装备同一函数）。
     let smallclothes_races = smallclothes_model_race_candidates(race_code);
     let equipment_path = |equipment: u16, race_code: u16, slot: &str| {
         format!("chara/equipment/e{equipment:04}/model/c{race_code:04}e{equipment:04}_{slot}.mdl")
@@ -419,7 +483,8 @@ pub fn character_part_paths(customize: &CharacterCustomize) -> Vec<CharacterPart
             required,
         });
     }
-    // 裸肤手（e0000 glv，恒有）与裸肤足（e0000 sho，无 e0001 sho 的族赤脚）。
+    // 裸肤手（e0000 glv，恒有）。无自身 e0001 sho 的族沿同一骨变形树回退
+    // 小衣鞋（游戏裸装无赤脚），e0000 sho 不进裸装装配。
     let bare_limb_races = bare_limb_model_race_candidates(race_code);
     parts.push(CharacterPartRequest {
         kind: CharacterPartKind::BodyGlv,
@@ -431,23 +496,6 @@ pub fn character_part_paths(customize: &CharacterCustomize) -> Vec<CharacterPart
             .collect(),
         required: true,
     });
-    // e0001 sho 的存在集合（真实普查：中原男/女、鲁加男、拉拉男）——其余族
-    // 赤脚，用 e0000 sho 补双足；有 e0001 sho 时不再叠加裸足（避免重叠）。
-    let has_smallclothes_shoes = smallclothes_races
-        .iter()
-        .any(|candidate| matches!(candidate, 101 | 201 | 901 | 1101));
-    if !has_smallclothes_shoes {
-        parts.push(CharacterPartRequest {
-            kind: CharacterPartKind::BodySho,
-            model_path: equipment_path(0, race_code, "sho"),
-            alternate_model_paths: bare_limb_races
-                .iter()
-                .skip(1)
-                .map(|fallback| equipment_path(0, *fallback, "sho"))
-                .collect(),
-            required: false,
-        });
-    }
     // 脸字节 0 基索引 → 文件号：所有种族从 f0001 起，唯硌狮女（c1601）
     // 脸文件仅 f0005-f0008（4 个），索引从 5 起（真实 SqPack 验证）。
     let head = u16::from(customize.head) + human_face_file_base(race_code);
@@ -863,7 +911,7 @@ pub fn close_bare_limb_junctions(meshes: &mut [ModelMesh], race_code: u16) {
     }
     // 身体参照极值（按左右侧，即 x 符号分组）：小腿皮肤下沿 y、前臂皮肤腕端
     // |x|。参照取自全部 e0001 top/dwn 皮肤网格——无论其自身是否跨族回退件
-    // （如维埃拉小衣来自猫魅），拼接都以当前装配里的身体网格为准。
+    // （如维埃拉小衣来自中原女），拼接都以当前装配里的身体网格为准。
     let mut calf_bottom: [Option<f32>; 2] = [None, None];
     let mut forearm_end: [Option<f32>; 2] = [None, None];
     for mesh in meshes.iter() {
@@ -1248,6 +1296,76 @@ mod tests {
     }
 
     #[test]
+    fn smallclothes_model_race_candidates_follow_deform_tree() {
+        // 与装备同一骨变形树祖先链（EQDP set 1 HasModel 与链上文件存在性
+        // 18 族 × 5 槽真实数据一一对应，见
+        // probe_smallclothes_bare_limb_race_fallback_eqdp）。
+        assert_eq!(smallclothes_model_race_candidates(101), vec![101]);
+        assert_eq!(smallclothes_model_race_candidates(201), vec![201, 101]);
+        assert_eq!(smallclothes_model_race_candidates(301), vec![301, 101]);
+        assert_eq!(smallclothes_model_race_candidates(401), vec![401, 201, 101]);
+        assert_eq!(smallclothes_model_race_candidates(501), vec![501, 101]);
+        assert_eq!(smallclothes_model_race_candidates(601), vec![601, 201, 101]);
+        assert_eq!(smallclothes_model_race_candidates(701), vec![701, 101]);
+        assert_eq!(smallclothes_model_race_candidates(801), vec![801, 201, 101]);
+        assert_eq!(smallclothes_model_race_candidates(901), vec![901, 101]);
+        assert_eq!(
+            smallclothes_model_race_candidates(1001),
+            vec![1001, 201, 101]
+        );
+        assert_eq!(smallclothes_model_race_candidates(1101), vec![1101, 101]);
+        assert_eq!(
+            smallclothes_model_race_candidates(1201),
+            vec![1201, 1101, 101]
+        );
+        assert_eq!(smallclothes_model_race_candidates(1301), vec![1301, 101]);
+        assert_eq!(
+            smallclothes_model_race_candidates(1401),
+            vec![1401, 201, 101]
+        );
+        // 无自身 e0001 的四族：链上首个有模型祖先即游戏实际来源（硌狮男→
+        // 鲁加男、硌狮女/维埃拉女→中原女、维埃拉男→中原男）。
+        assert_eq!(
+            smallclothes_model_race_candidates(1501),
+            vec![1501, 901, 101]
+        );
+        assert_eq!(
+            smallclothes_model_race_candidates(1601),
+            vec![1601, 201, 101]
+        );
+        assert_eq!(smallclothes_model_race_candidates(1701), vec![1701, 101]);
+        assert_eq!(
+            smallclothes_model_race_candidates(1801),
+            vec![1801, 201, 101]
+        );
+    }
+
+    #[test]
+    fn bare_limb_model_race_candidates_stop_at_first_file_race() {
+        // e0000 glv/sho 仅中原男/女、鲁加男、拉拉男有文件：候选链截至首个
+        // 有文件种族（EQDP set 0 HasModel 与文件存在性逐族逐槽一致）。
+        assert_eq!(bare_limb_model_race_candidates(101), vec![101]);
+        assert_eq!(bare_limb_model_race_candidates(201), vec![201]);
+        assert_eq!(bare_limb_model_race_candidates(301), vec![301, 101]);
+        assert_eq!(bare_limb_model_race_candidates(401), vec![401, 201]);
+        assert_eq!(bare_limb_model_race_candidates(501), vec![501, 101]);
+        assert_eq!(bare_limb_model_race_candidates(601), vec![601, 201]);
+        assert_eq!(bare_limb_model_race_candidates(701), vec![701, 101]);
+        assert_eq!(bare_limb_model_race_candidates(801), vec![801, 201]);
+        assert_eq!(bare_limb_model_race_candidates(901), vec![901]);
+        assert_eq!(bare_limb_model_race_candidates(1001), vec![1001, 201]);
+        assert_eq!(bare_limb_model_race_candidates(1101), vec![1101]);
+        assert_eq!(bare_limb_model_race_candidates(1201), vec![1201, 1101]);
+        assert_eq!(bare_limb_model_race_candidates(1301), vec![1301, 101]);
+        assert_eq!(bare_limb_model_race_candidates(1401), vec![1401, 201]);
+        // 硌狮男 → 鲁加男（c0901 有 e0000 文件），其余无文件族按树回退。
+        assert_eq!(bare_limb_model_race_candidates(1501), vec![1501, 901]);
+        assert_eq!(bare_limb_model_race_candidates(1601), vec![1601, 201]);
+        assert_eq!(bare_limb_model_race_candidates(1701), vec![1701, 101]);
+        assert_eq!(bare_limb_model_race_candidates(1801), vec![1801, 201]);
+    }
+
+    #[test]
     fn part_paths_cover_body_face_hair_for_all_races() {
         let customize = hyur_male();
         let parts = character_part_paths(&customize);
@@ -1288,7 +1406,8 @@ mod tests {
                 .any(|part| part.kind == CharacterPartKind::Zear)
         );
 
-        // 高地男（c0301）：无 e0001 sho，补 e0000 裸足（版型回退中原男）。
+        // 高地男（c0301）：无自身 e0001 sho，按骨变形树回退中原男小衣鞋
+        // （游戏裸装无赤脚，不补 e0000 裸足）。
         let mut highlander = hyur_male();
         highlander.race = 1;
         highlander.tribe = 2;
@@ -1297,20 +1416,24 @@ mod tests {
             hyur_parts[0].model_path,
             "chara/equipment/e0001/model/c0301e0001_top.mdl"
         );
-        let bare_shoes = hyur_parts
+        assert_eq!(
+            hyur_parts[0].alternate_model_paths,
+            ["chara/equipment/e0001/model/c0101e0001_top.mdl"]
+        );
+        let shoes = hyur_parts
             .iter()
             .filter(|part| part.kind == CharacterPartKind::BodySho)
             .collect::<Vec<_>>();
-        assert_eq!(bare_shoes.len(), 2, "无 e0001 sho 的族补 e0000 裸足");
+        assert_eq!(shoes.len(), 1, "裸装无赤脚，e0000 sho 不进装配");
         assert_eq!(
-            bare_shoes[1].model_path,
-            "chara/equipment/e0000/model/c0301e0000_sho.mdl"
+            shoes[0].model_path,
+            "chara/equipment/e0001/model/c0301e0001_sho.mdl"
         );
         assert_eq!(
-            bare_shoes[1].alternate_model_paths,
-            ["chara/equipment/e0000/model/c0101e0000_sho.mdl"]
+            shoes[0].alternate_model_paths,
+            ["chara/equipment/e0001/model/c0101e0001_sho.mdl"]
         );
-        // 拉拉男（c1101）：小衣/裸肤均自有文件，无回退。
+        // 拉拉男（c1101）：小衣/裸肤均自有文件，候选链带树根兜底。
         let mut lala_male = hyur_male();
         lala_male.race = RACE_LALAFELL;
         lala_male.tribe = 9;
@@ -1319,7 +1442,10 @@ mod tests {
             lala_parts[0].model_path,
             "chara/equipment/e0001/model/c1101e0001_top.mdl"
         );
-        assert!(lala_parts[0].alternate_model_paths.is_empty());
+        assert_eq!(
+            lala_parts[0].alternate_model_paths,
+            ["chara/equipment/e0001/model/c0101e0001_top.mdl"]
+        );
         // 拉拉女（c1201）：小衣自有文件；裸肤手回退拉拉男。
         let mut lala_female = hyur_male();
         lala_female.race = RACE_LALAFELL;
@@ -1330,7 +1456,13 @@ mod tests {
             lala_female_parts[0].model_path,
             "chara/equipment/e0001/model/c1201e0001_top.mdl"
         );
-        assert!(lala_female_parts[0].alternate_model_paths.is_empty());
+        assert_eq!(
+            lala_female_parts[0].alternate_model_paths,
+            [
+                "chara/equipment/e0001/model/c1101e0001_top.mdl",
+                "chara/equipment/e0001/model/c0101e0001_top.mdl",
+            ]
+        );
         let lala_female_glv = lala_female_parts
             .iter()
             .find(|part| part.kind == CharacterPartKind::BodyGlv)
@@ -1343,7 +1475,8 @@ mod tests {
             lala_female_glv.alternate_model_paths,
             ["chara/equipment/e0000/model/c1101e0000_glv.mdl"]
         );
-        // 硌狮女（c1601）：小衣回退鲁加女；裸肤手回退中原女。
+        // 硌狮女（c1601）：小衣回退中原女（EQDP + 骨变形树语义）；裸肤手回退
+        // 中原女；小衣鞋同样回退中原女。
         let mut hroth_female = hyur_male();
         hroth_female.race = RACE_HROTHGAR;
         hroth_female.tribe = 13;
@@ -1352,7 +1485,25 @@ mod tests {
         let hroth_parts = character_part_paths(&hroth_female);
         assert_eq!(
             hroth_parts[0].alternate_model_paths,
-            ["chara/equipment/e0001/model/c1001e0001_top.mdl"]
+            [
+                "chara/equipment/e0001/model/c0201e0001_top.mdl",
+                "chara/equipment/e0001/model/c0101e0001_top.mdl",
+            ]
+        );
+        let hroth_sho = hroth_parts
+            .iter()
+            .find(|part| part.kind == CharacterPartKind::BodySho)
+            .expect("sho");
+        assert_eq!(
+            hroth_sho.model_path,
+            "chara/equipment/e0001/model/c1601e0001_sho.mdl"
+        );
+        assert_eq!(
+            hroth_sho.alternate_model_paths,
+            [
+                "chara/equipment/e0001/model/c0201e0001_sho.mdl",
+                "chara/equipment/e0001/model/c0101e0001_sho.mdl",
+            ]
         );
         let hroth_glv = hroth_parts
             .iter()
@@ -1559,7 +1710,7 @@ mod tests {
             roe_candidates[1],
             "chara/human/c0401/obj/body/b0001/material/v0001/mt_c0401b0001_a.mtrl"
         );
-        // 维埃拉女加载猫魅女文件（内嵌 mt_c0201b0001_a）：游戏仍用角色自身
+        // 维埃拉女加载中原女文件（内嵌 mt_c0201b0001_a）：游戏仍用角色自身
         // 肤族（c1801）皮肤材质，自身肤族根优先于内嵌的 c0201 根。
         let mut viera = hyur_male();
         viera.race = RACE_VIERA;
@@ -1568,7 +1719,7 @@ mod tests {
         let viera_candidates = character_material_candidate_paths(
             &viera,
             CharacterPartKind::BodyTop,
-            "chara/equipment/e0001/model/c0801e0001_top.mdl",
+            "chara/equipment/e0001/model/c0201e0001_top.mdl",
             "/mt_c0201b0001_a.mtrl",
         );
         assert_eq!(

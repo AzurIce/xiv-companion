@@ -525,6 +525,47 @@ fn probe_au_ra_limb_junction_seams() {
     }
 }
 
+/// 小衣回退修正目标族（维埃拉男 c1701、硌狮女 c1601）的裸装渲染快照：
+/// 回退来源族改变前后各跑一次，对照身体比例差异。
+#[test]
+#[cfg(feature = "game-data")]
+#[ignore = "renders viera-male/hrothgar-female assemblies to target/weapon-render-snapshots; requires XIV_GAME_DIR"]
+fn render_smallclothes_fallback_race_snapshots() {
+    let make = load_make_package();
+    let palette = load_palette_package();
+    let mut resource = SqPackResource::from_existing(&game_dir());
+    for (race_code, label, camera) in [
+        (1701u16, "viera-male", (0.35, 0.12, 2.6, [0.0, -0.1])),
+        (1601, "hrothgar-female", (0.35, 0.12, 2.8, [0.0, 0.0])),
+    ] {
+        let customize = default_customize_for_race_code(&make, race_code)
+            .unwrap_or_else(|| panic!("default customize for race code {race_code}"));
+        let appearance = appearance_colors_from_palette(&customize, &palette.palette);
+        let request =
+            CharacterAssemblyLoadRequest::new(customize, label).with_appearance(appearance);
+        let model = load_character_assembly_from_resource(&mut resource, &request)
+            .unwrap_or_else(|error| panic!("load assembly {label}: {error:#}"));
+        let enabled_attribute_names = character_enabled_attribute_names(&customize, &model);
+        for mesh in &model.meshes {
+            eprintln!("MESH {label}: {}", mesh.path);
+        }
+        let (yaw, pitch, zoom, pan) = camera;
+        let snapshot = render_model_snapshot_with_options(
+            ModelSnapshotOptions::new(format!("smallclothes-fallback-{label}"))
+                .with_viewport(720, 900)
+                .with_camera(yaw, pitch, zoom, pan)
+                .with_prepared_model_options(
+                    PreparedModelOptions::default()
+                        .with_component_preview_layout(false)
+                        .with_enabled_attribute_names(enabled_attribute_names),
+                ),
+            &model,
+        )
+        .unwrap_or_else(|error| panic!("render {label}: {error}"));
+        eprintln!("png: {}", snapshot.png_path.display());
+    }
+}
+
 /// 默认捏脸 + 调色板的四族代表渲染快照（中原男/猫魅女/敖龙女/维埃拉女）。
 #[test]
 #[cfg(feature = "game-data")]

@@ -11,11 +11,14 @@ use web_sys::HtmlCanvasElement;
 use xiv_companion::renderer::{ModelInstance, ModelRenderContext, ModelRenderOptions};
 use xiv_companion::{ModelRenderData, PreparedModelOptions};
 
-/// 场景实例条目：稳定 key（如 "body" / "slot:4"）+ GPU 实例。key 供逐件
-/// 增量更新（换件只重建该件实例、染色只更新该件材质）定位。
+/// 场景实例条目：稳定 key（如 "body" / "slot:4"）+ GPU 实例 + 可选的武器
+/// 挂接规则。key 供逐件增量更新（换件只重建该件实例、染色只更新该件材质）
+/// 定位；`attach` 为 Some 时该实例的 joint 矩阵按挂点骨规则（姿势世界 ×
+/// 校正）逐帧驱动，不走 inverse bind。
 struct SceneEntry {
     key: String,
     instance: ModelInstance,
+    attach: Option<xiv_companion::WeaponAttachInfo>,
 }
 
 /// 单模型模式的场景 key（`set_model` 等单模型 API 的作用目标）。
@@ -171,19 +174,34 @@ impl WebModelCanvasRenderer {
     pub fn set_scene(&mut self, entries: Vec<(String, ModelInstance)>) {
         self.scene = entries
             .into_iter()
-            .map(|(key, instance)| SceneEntry { key, instance })
+            .map(|(key, instance)| SceneEntry {
+                key,
+                instance,
+                attach: None,
+            })
             .collect();
         self.scene_revision += 1;
     }
 
     /// 增/替单件实例：key 已存在则原位替换（保持绘制顺序），不存在则尾部
-    /// 追加。换件/改隐藏标签只重建对应实例，其余实例不动。
-    pub fn upsert_instance(&mut self, key: &str, instance: ModelInstance) {
+    /// 追加。换件/改隐藏标签只重建对应实例，其余实例不动。`attach` 为 Some
+    /// 时该实例是武器挂接件：动画驱动按挂点骨规则（姿势世界 × 校正）逐帧
+    /// 出该实例的 joint 矩阵，不走 inverse bind。
+    pub fn upsert_instance_with_attach(
+        &mut self,
+        key: &str,
+        instance: ModelInstance,
+        attach: Option<xiv_companion::WeaponAttachInfo>,
+    ) {
         match self.scene.iter().position(|entry| entry.key == key) {
-            Some(index) => self.scene[index].instance = instance,
+            Some(index) => {
+                self.scene[index].instance = instance;
+                self.scene[index].attach = attach;
+            }
             None => self.scene.push(SceneEntry {
                 key: key.to_string(),
                 instance,
+                attach,
             }),
         }
         self.scene_revision += 1;
@@ -272,7 +290,7 @@ impl WebModelCanvasRenderer {
     }
 
     /// 实例 joint 名表（单模型模式；蒙皮实例为空表）；动画播放驱动按名计算
-    /// 关节矩阵。多实例场景用 [`Self::scene_joint_names`]。
+    /// 关节矩阵。多实例场景用 [`Self::scene_joint_tables`]。
     pub fn joint_names(&self) -> Vec<String> {
         self.scene
             .iter()
@@ -281,12 +299,21 @@ impl WebModelCanvasRenderer {
             .unwrap_or_default()
     }
 
-    /// 场景全部实例的 joint 名表（key + 名表，绘制顺序）；动画驱动逐件采样
-    /// 上传（各实例只注册自己用到的骨名，映射到同一副骨架）。
-    pub fn scene_joint_names(&self) -> Vec<(String, Vec<String>)> {
+    /// 场景全部实例的 joint 表 + 武器挂接规则（key + 名表 + attach，绘制
+    /// 顺序）。attach 为 Some 的实例按挂点骨规则驱动（姿势世界 × 校正），
+    /// 不走 inverse bind；其余实例走世界 × inverse(bind world)。
+    pub fn scene_joint_tables(
+        &self,
+    ) -> Vec<(String, Vec<String>, Option<xiv_companion::WeaponAttachInfo>)> {
         self.scene
             .iter()
-            .map(|entry| (entry.key.clone(), entry.instance.joint_names().to_vec()))
+            .map(|entry| {
+                (
+                    entry.key.clone(),
+                    entry.instance.joint_names().to_vec(),
+                    entry.attach,
+                )
+            })
             .collect()
     }
 

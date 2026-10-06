@@ -44,8 +44,11 @@ use crate::skeleton::{
 };
 
 #[cfg(feature = "game-data")]
+use crate::racial_scaling::{BodyScaling, HUMAN_CMP_PATH, RacialScalingTable};
+
+#[cfg(feature = "game-data")]
 use crate::chara_assemble::{
-    CharacterCustomize, CharacterPartKind, character_material_candidate_paths,
+    CharacterCustomize, CharacterPartKind, EarConcealment, character_material_candidate_paths,
     character_part_paths, close_bare_limb_junctions, face_paint_decal_texture_candidates,
     race_code_from_character_model_path, snap_bare_hand_cuff_to_forearm,
 };
@@ -60,7 +63,10 @@ use crate::equipment_params::{
 };
 
 #[cfg(feature = "game-data")]
-use crate::model::{MaterialShaderFamily, ModelMaterialCharacterColors, material_shader_family};
+use crate::model::{
+    MaterialShaderFamily, ModelBlendIndices, ModelBlendWeights, ModelBoneTable,
+    ModelMaterialCharacterColors, material_shader_family,
+};
 
 #[cfg(feature = "game-data")]
 use crate::staining::{
@@ -4134,6 +4140,44 @@ async fn load_optional_skeleton_from_async_resource<R: AsyncGameResource>(
     }
 }
 
+/// 由 human.cmp 尾部缩放参数表换算捏脸字节对应的体型缩放（RGSP）。表缺失/
+/// 解析失败返回 None（回退恒等，与无缩放一致）；恒等缩放同样返回 None
+/// （调用方不附着，骨架保持 body_scaling=None 的未缩放语义）。
+#[cfg(feature = "game-data")]
+fn body_scaling_from_cmp_bytes(
+    bytes: Option<&[u8]>,
+    customize: &CharacterCustomize,
+) -> Option<BodyScaling> {
+    let table = RacialScalingTable::from_cmp_bytes(bytes?)
+        .map_err(|error| eprintln!("body scaling unavailable: {HUMAN_CMP_PATH}: {error}"))
+        .ok()?;
+    let scaling = table.body_scaling(customize);
+    (!scaling.is_identity()).then_some(scaling)
+}
+
+/// 读取 human.cmp 并把体型缩放附着到骨架（`ModelSkeleton::body_scaling`）。
+/// human.cmp 缺失/解析失败或缩放为恒等时不附着（回退恒等，不影响渲染）。
+#[cfg(feature = "game-data")]
+fn attach_body_scaling_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    customize: &CharacterCustomize,
+    skeleton: &mut ModelSkeleton,
+) {
+    let bytes = resource.read(HUMAN_CMP_PATH);
+    skeleton.body_scaling = body_scaling_from_cmp_bytes(bytes.as_deref(), customize);
+}
+
+/// [`attach_body_scaling_from_resource`] 的异步版本。
+#[cfg(feature = "game-data")]
+async fn attach_body_scaling_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    customize: &CharacterCustomize,
+    skeleton: &mut ModelSkeleton,
+) {
+    let bytes = resource.read(HUMAN_CMP_PATH).await.ok();
+    skeleton.body_scaling = body_scaling_from_cmp_bytes(bytes.as_deref(), customize);
+}
+
 /// 角色拼装加载请求。`customize` 决定全部部件路径与材质候选（身体 5 槽 +
 /// 脸 + 发 + 种族可选尾/兔耳）；`name` 仅用于展示与诊断；`appearance` 提供时
 /// 在材质合成阶段把角色级颜色写入对应部件材质（按 shader family 落地，
@@ -4264,7 +4308,11 @@ pub fn load_character_assembly_with_skeleton_from_resource<R: physis::resource::
         resource,
         &character_skeleton_path(request.customize.race_code()),
         &request.name,
-    );
+    )
+    .map(|mut skeleton| {
+        attach_body_scaling_from_resource(resource, &request.customize, &mut skeleton);
+        skeleton
+    });
     if let Some(target) = &skeleton {
         bake_assembly_race_deforms_from_resource(
             resource,
@@ -4295,8 +4343,8 @@ pub fn load_character_assembly_with_skeleton_from_resource<R: physis::resource::
 
 /// 角色装配的种族骨变形烘焙：回退文件（mesh.path 的 race code ≠ 角色自身）
 /// 的网格从回退族骨架 rest 烘焙到自身骨架 rest——离线近似游戏的 PBD 骨变形
-/// （维埃拉小衣来自猫魅文件、裸肤手足来自中原/拉拉男文件等）。源族骨架缺失
-/// 时跳过该族（保持回退族比例，与未烘焙一致），不作为加载错误。
+/// （维埃拉/硌狮女小衣来自中原女文件、裸肤手来自中原/鲁加/拉拉男文件等）。
+/// 源族骨架缺失时跳过该族（保持回退族比例，与未烘焙一致），不作为加载错误。
 #[cfg(feature = "game-data")]
 fn bake_assembly_race_deforms_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
@@ -4437,6 +4485,14 @@ pub async fn load_character_assembly_with_skeleton_from_async_resource<R: AsyncG
         &request.name,
     )
     .await;
+    let skeleton = match skeleton {
+        Some(mut skeleton) => {
+            attach_body_scaling_from_async_resource(resource, &request.customize, &mut skeleton)
+                .await;
+            Some(skeleton)
+        }
+        None => None,
+    };
     if let Some(target) = &skeleton {
         bake_assembly_race_deforms_from_async_resource(
             resource,
@@ -4748,9 +4804,44 @@ pub struct DressedPieceModel {
     pub imc_mask: Option<u16>,
     /// 该件套装 EQP 条目（饰品恒 None；表/块缺失 → None，按不遮蔽降级）。
     pub eqp: Option<EquipmentParameterEntry>,
+    /// 武器挂接信息（仅武器件 Some）：该件网格已烘焙为挂点骨单骨蒙皮，
+    /// 渲染/动画驱动按 [`crate::weapon_attach_joint_matrices`] 出关节矩阵
+    /// （姿势世界 × 校正），不走 inverse bind。
+    pub attach: Option<WeaponAttachInfo>,
     /// 该件模型（Rc 共享：免染基准可跨染色组合复用，染色副本由调用方经
     /// [`apply_weapon_model_stains`] 另建）。
     pub model: std::rc::Rc<WeaponModelData>,
+}
+
+/// 主手武器挂点骨（人体骨架；`n_buki_tate_r/l` 是收纳位，不用）。
+#[cfg(feature = "game-data")]
+pub const WEAPON_ATTACH_BONE_MAIN_HAND: &str = "n_buki_r";
+/// 副手武器挂点骨（盾/副手工具）。
+#[cfg(feature = "game-data")]
+pub const WEAPON_ATTACH_BONE_OFF_HAND: &str = "n_buki_l";
+
+/// 武器挂接的常量校正（武器模型局部 → 挂点骨局部）。武器 MDL 是原点在握
+/// 把、轴向对齐挂点骨局部轴的刚性模型，校正为恒等（native 快照目验确认
+/// 剑/盾/大剑在 rest 手下落位正确，见 tests/native_dressed_character.rs）。
+#[cfg(feature = "game-data")]
+pub const WEAPON_ATTACH_CORRECTION: [f32; 16] = crate::skeleton::IDENTITY_MAT4;
+
+/// 武器挂接规则：该件作为刚性模型挂到人体骨架的武器挂点骨上。每帧关节
+/// 矩阵 = 挂点骨姿势世界矩阵 × `correction`（无 inverse bind——武器顶点
+/// 在挂点骨局部空间而非绑定空间）。
+#[cfg(feature = "game-data")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeaponAttachInfo {
+    pub correction: [f32; 16],
+}
+
+#[cfg(feature = "game-data")]
+impl Default for WeaponAttachInfo {
+    fn default() -> Self {
+        Self {
+            correction: WEAPON_ATTACH_CORRECTION,
+        }
+    }
 }
 
 /// 逐件着装场景：裸装身体（含外观色）+ 各装备件独立模型 + race 骨架。与
@@ -4781,12 +4872,15 @@ pub struct DressedConcealmentPlan {
     /// 身体整网格隐藏（`body.meshes` 下标）。
     pub body_hidden_meshes: Vec<usize>,
     /// 身体隐藏的 attribute 名（从 `character_enabled_attribute_names` 结果中
-    /// 去除；含 top/dwn 皮肤遮蔽位与头发 atr_top）。
+    /// 去除；含 top/dwn 皮肤遮蔽位、头发 atr_top、脸部耳/角 attribute）。
     pub body_hidden_attributes: Vec<String>,
     /// 件最终启用的 attribute 名（(equip_slot_category, item_id) → 名单；IMC
     /// 变体位命名 + 跨件规则。双耳环等同类多件按 item_id 区分）。含
     /// attribute submesh 的件必须传给渲染选项；不含的件名单为空、渲染层忽略。
     pub piece_enabled_attributes: Vec<((u32, u32), Vec<String>)>,
+    /// 整件隐藏的件（(equip_slot_category, item_id)；当前仅耳饰件的头部
+    /// EQP 耳饰位门控）。渲染层跳过该件的实例创建。
+    pub hidden_pieces: Vec<(u32, u32)>,
     /// 遮蔽诊断（`{部位}:{细节}`）。
     pub hidden_notes: Vec<String>,
 }
@@ -5193,7 +5287,11 @@ pub fn load_dressed_character_with_skeleton_from_resource<R: physis::resource::R
         resource,
         &character_skeleton_path(request.customize.race_code()),
         &request.name,
-    );
+    )
+    .map(|mut skeleton| {
+        attach_body_scaling_from_resource(resource, &request.customize, &mut skeleton);
+        skeleton
+    });
     if let Some(target) = &skeleton {
         bake_assembly_race_deforms_from_resource(
             resource,
@@ -5205,8 +5303,12 @@ pub fn load_dressed_character_with_skeleton_from_resource<R: physis::resource::R
     }
 
     // 可见性按网格过滤落地（骨变形之后、包围盒之前）。
-    let hidden_body_attributes =
-        apply_dressed_visibility(&mut meshes, body_mesh_count, &loaded_pieces);
+    let hidden_body_attributes = apply_dressed_visibility(
+        &mut meshes,
+        body_mesh_count,
+        &loaded_pieces,
+        &request.customize,
+    );
     let equipment_material_ranges = loaded_pieces
         .iter()
         .map(|piece| EquipmentMaterialRange {
@@ -5476,6 +5578,14 @@ pub async fn load_dressed_character_with_skeleton_from_async_resource<R: AsyncGa
         &request.name,
     )
     .await;
+    let skeleton = match skeleton {
+        Some(mut skeleton) => {
+            attach_body_scaling_from_async_resource(resource, &request.customize, &mut skeleton)
+                .await;
+            Some(skeleton)
+        }
+        None => None,
+    };
     if let Some(target) = &skeleton {
         bake_assembly_race_deforms_from_async_resource(
             resource,
@@ -5487,8 +5597,12 @@ pub async fn load_dressed_character_with_skeleton_from_async_resource<R: AsyncGa
         .await;
     }
 
-    let hidden_body_attributes =
-        apply_dressed_visibility(&mut meshes, body_mesh_count, &loaded_pieces);
+    let hidden_body_attributes = apply_dressed_visibility(
+        &mut meshes,
+        body_mesh_count,
+        &loaded_pieces,
+        &request.customize,
+    );
     let equipment_material_ranges = loaded_pieces
         .iter()
         .map(|piece| EquipmentMaterialRange {
@@ -5547,10 +5661,305 @@ struct DressedPieceLoadContext<'a> {
     eqp_table: Option<&'a EquipmentParameterTable>,
 }
 
+/// 武器网格的单骨挂接烘焙：bone table 覆写为 `[挂点骨]`，全部顶点 blend
+/// 强制关节 0、权重 1.0。武器 MDL 是刚性独立模型（原点在握把、顶点在挂点
+/// 骨局部空间），烘焙后实例 joint 表 = `[挂点骨]`，joint 矩阵按
+/// [`crate::weapon_attach_joint_matrices`]（姿势世界 × 校正）驱动。
+/// 返回内部可动的网格数（有顶点蒙皮到多于一根武器骨——单骨化后其内部
+/// 动画丢失，罕见如部分书的内页；调用方记诊断）。
+#[cfg(feature = "game-data")]
+fn bake_weapon_attach(meshes: &mut [WeaponModelMesh], bone_name: &str) -> usize {
+    let mut articulated = 0;
+    for mesh in meshes {
+        let skinned_to_multiple_bones = mesh.vertices.iter().any(|vertex| {
+            let (Some(weights), Some(indices)) = (vertex.blend_weights, vertex.blend_indices)
+            else {
+                return false;
+            };
+            let count = usize::from(weights.count.min(indices.count).min(8));
+            (1..count)
+                .any(|slot| weights.values[slot] > 0.0 && indices.values[slot] != indices.values[0])
+        });
+        if skinned_to_multiple_bones {
+            articulated += 1;
+        }
+        mesh.bone_table = Some(ModelBoneTable {
+            index: 0,
+            bone_count: 1,
+            bone_indices: vec![0],
+            bone_names: vec![Some(bone_name.to_string())],
+        });
+        for vertex in &mut mesh.vertices {
+            vertex.blend_indices = Some(ModelBlendIndices {
+                count: 1,
+                values: [0; 8],
+            });
+            vertex.blend_weights = Some(ModelBlendWeights {
+                count: 1,
+                values: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            });
+        }
+    }
+    articulated
+}
+
+/// 加载逐件着装场景的一件武器（主手槽位 1/13/14、副手槽位 2）：走武器路
+/// 径（[`ModelPathContext::Weapon`]，与武器预览页同链），网格经
+/// [`bake_weapon_attach`] 烘焙为挂点骨单骨蒙皮——主手件挂
+/// [`WEAPON_ATTACH_BONE_MAIN_HAND`]，副手件（盾等）挂
+/// [`WEAPON_ATTACH_BONE_OFF_HAND`]；次模型（model_sub 与主模型不同：成对
+/// 副武器/刀鞘等）挂 [`WEAPON_ATTACH_BONE_OFF_HAND`]。武器是刚性模型
+/// （顶点在挂点骨局部空间），不做种族骨变形烘焙。单件失败记 Secondary
+/// 诊断并返回 None（不阻断整体）。
+#[cfg(feature = "game-data")]
+fn load_dressed_weapon_piece_from_resource<R: physis::resource::Resource>(
+    resource: &mut R,
+    piece: &DressedEquipmentPiece,
+    context: &DressedPieceLoadContext<'_>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+    loaded_paths: &mut Vec<String>,
+) -> Option<DressedPieceModel> {
+    let model_main = PackedModelId::from_raw(piece.model_main);
+    if model_main.model_id == 0 {
+        return None;
+    }
+    let piece_staining = staining_templates_for_piece(context.equipment_staining, piece.stain_ids);
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let mut articulated_meshes = 0_usize;
+
+    let main_bone = if piece.equip_slot_category == 2 {
+        WEAPON_ATTACH_BONE_OFF_HAND
+    } else {
+        WEAPON_ATTACH_BONE_MAIN_HAND
+    };
+    if let Err(failure) = load_model_meshes_from_resource(
+        resource,
+        ModelPathContext::Weapon(model_main),
+        &piece_staining,
+        loaded_paths,
+        &mut materials,
+        &mut textures,
+        &mut meshes,
+        &mut color_table_sources,
+    ) {
+        load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+        return None;
+    }
+    articulated_meshes += bake_weapon_attach(&mut meshes, main_bone);
+
+    let model_sub = (piece.model_sub != 0)
+        .then(|| PackedModelId::from_raw(piece.model_sub))
+        .filter(|model_sub| {
+            model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw
+        });
+    if let Some(model_sub) = model_sub {
+        let sub_start = meshes.len();
+        match load_model_meshes_from_resource(
+            resource,
+            ModelPathContext::Weapon(model_sub),
+            &piece_staining,
+            loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        ) {
+            Ok(()) => {
+                articulated_meshes +=
+                    bake_weapon_attach(&mut meshes[sub_start..], WEAPON_ATTACH_BONE_OFF_HAND);
+            }
+            Err(failure) => {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        loaded_paths,
+    );
+
+    if meshes.is_empty() {
+        load_diagnostics.push(WeaponModelLoadDiagnostic {
+            role: WeaponModelLoadRole::Secondary,
+            model: model_main,
+            candidates: Vec::new(),
+            error: format!("{} has no renderable model meshes", piece.item_name),
+        });
+        return None;
+    }
+    if articulated_meshes > 0 {
+        load_diagnostics.push(WeaponModelLoadDiagnostic {
+            role: WeaponModelLoadRole::Secondary,
+            model: model_main,
+            candidates: Vec::new(),
+            error: format!(
+                "{}: {articulated_meshes} mesh(es) skinned to multiple weapon bones; single-joint attach drops their internal articulation",
+                piece.item_name
+            ),
+        });
+    }
+
+    Some(DressedPieceModel {
+        item_id: piece.item_id,
+        item_name: piece.item_name.clone(),
+        equip_slot_category: piece.equip_slot_category,
+        is_accessory: false,
+        stain_ids: piece.stain_ids,
+        imc_mask: None,
+        eqp: None,
+        attach: Some(WeaponAttachInfo::default()),
+        model: Rc::new(WeaponModelData {
+            item_id: piece.item_id,
+            item_name: piece.item_name.clone(),
+            model_main,
+            model_sub,
+            stain_ids: normalize_stain_ids(piece.stain_ids),
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        }),
+    })
+}
+
+/// [`load_dressed_weapon_piece_from_resource`] 的异步 Resource 版本。
+#[cfg(feature = "game-data")]
+async fn load_dressed_weapon_piece_from_async_resource<R: AsyncGameResource>(
+    resource: &mut R,
+    piece: &DressedEquipmentPiece,
+    context: &DressedPieceLoadContext<'_>,
+    load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
+    loaded_paths: &mut Vec<String>,
+) -> Option<DressedPieceModel> {
+    let model_main = PackedModelId::from_raw(piece.model_main);
+    if model_main.model_id == 0 {
+        return None;
+    }
+    let piece_staining = staining_templates_for_piece(context.equipment_staining, piece.stain_ids);
+    let mut materials = Vec::new();
+    let mut textures = Vec::new();
+    let mut meshes = Vec::new();
+    let mut color_table_sources = HashMap::new();
+    let mut articulated_meshes = 0_usize;
+
+    let main_bone = if piece.equip_slot_category == 2 {
+        WEAPON_ATTACH_BONE_OFF_HAND
+    } else {
+        WEAPON_ATTACH_BONE_MAIN_HAND
+    };
+    if let Err(failure) = load_model_meshes_from_async_resource(
+        resource,
+        ModelPathContext::Weapon(model_main),
+        &piece_staining,
+        loaded_paths,
+        &mut materials,
+        &mut textures,
+        &mut meshes,
+        &mut color_table_sources,
+    )
+    .await
+    {
+        load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+        return None;
+    }
+    articulated_meshes += bake_weapon_attach(&mut meshes, main_bone);
+
+    let model_sub = (piece.model_sub != 0)
+        .then(|| PackedModelId::from_raw(piece.model_sub))
+        .filter(|model_sub| {
+            model_sub.model_id != model_main.model_id || model_sub.raw != model_main.raw
+        });
+    if let Some(model_sub) = model_sub {
+        let sub_start = meshes.len();
+        match load_model_meshes_from_async_resource(
+            resource,
+            ModelPathContext::Weapon(model_sub),
+            &piece_staining,
+            loaded_paths,
+            &mut materials,
+            &mut textures,
+            &mut meshes,
+            &mut color_table_sources,
+        )
+        .await
+        {
+            Ok(()) => {
+                articulated_meshes +=
+                    bake_weapon_attach(&mut meshes[sub_start..], WEAPON_ATTACH_BONE_OFF_HAND);
+            }
+            Err(failure) => {
+                load_diagnostics.push(failure.into_diagnostic(WeaponModelLoadRole::Secondary));
+            }
+        }
+    }
+
+    attach_shared_material_arrays_from_async_resource(
+        resource,
+        &mut materials,
+        &mut textures,
+        loaded_paths,
+    )
+    .await;
+
+    if meshes.is_empty() {
+        load_diagnostics.push(WeaponModelLoadDiagnostic {
+            role: WeaponModelLoadRole::Secondary,
+            model: model_main,
+            candidates: Vec::new(),
+            error: format!("{} has no renderable model meshes", piece.item_name),
+        });
+        return None;
+    }
+    if articulated_meshes > 0 {
+        load_diagnostics.push(WeaponModelLoadDiagnostic {
+            role: WeaponModelLoadRole::Secondary,
+            model: model_main,
+            candidates: Vec::new(),
+            error: format!(
+                "{}: {articulated_meshes} mesh(es) skinned to multiple weapon bones; single-joint attach drops their internal articulation",
+                piece.item_name
+            ),
+        });
+    }
+
+    Some(DressedPieceModel {
+        item_id: piece.item_id,
+        item_name: piece.item_name.clone(),
+        equip_slot_category: piece.equip_slot_category,
+        is_accessory: false,
+        stain_ids: piece.stain_ids,
+        imc_mask: None,
+        eqp: None,
+        attach: Some(WeaponAttachInfo::default()),
+        model: Rc::new(WeaponModelData {
+            item_id: piece.item_id,
+            item_name: piece.item_name.clone(),
+            model_main,
+            model_sub,
+            stain_ids: normalize_stain_ids(piece.stain_ids),
+            load_diagnostics: Vec::new(),
+            loaded_paths: Vec::new(),
+            bounds: calculate_model_bounds(&meshes),
+            materials,
+            textures,
+            meshes,
+        }),
+    })
+}
+
 /// 加载逐件着装场景的一件装备：独立网格/材质/纹理（IMC 材质版本解析、
 /// 主/副模型、共享材质数组、种族骨变形烘焙到 `skeleton`）。单件失败记
 /// Secondary 诊断并返回 None（不阻断整体）。网格/材质语义与合并版该件
-/// 区间逐字节一致（烘焙目标骨架相同）。
+/// 区间逐字节一致（烘焙目标骨架相同）。武器槽位（1/13/14/2）走
+/// [`load_dressed_weapon_piece_from_resource`]（挂点骨单骨蒙皮）。
 #[cfg(feature = "game-data")]
 fn load_dressed_piece_from_resource<R: physis::resource::Resource>(
     resource: &mut R,
@@ -5560,6 +5969,15 @@ fn load_dressed_piece_from_resource<R: physis::resource::Resource>(
     load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
     loaded_paths: &mut Vec<String>,
 ) -> Option<DressedPieceModel> {
+    if is_weapon_equip_slot_category(piece.equip_slot_category) {
+        return load_dressed_weapon_piece_from_resource(
+            resource,
+            piece,
+            context,
+            load_diagnostics,
+            loaded_paths,
+        );
+    }
     let Some(slot) = equipment_slot_info(piece.equip_slot_category) else {
         load_diagnostics.push(WeaponModelLoadDiagnostic {
             role: WeaponModelLoadRole::Secondary,
@@ -5679,6 +6097,7 @@ fn load_dressed_piece_from_resource<R: physis::resource::Resource>(
         is_accessory: slot.is_accessory,
         stain_ids: piece.stain_ids,
         imc_mask: imc_entry.map(|entry| entry.attribute_mask()),
+        attach: None,
         eqp: if slot.is_accessory {
             None
         } else {
@@ -5712,6 +6131,16 @@ async fn load_dressed_piece_from_async_resource<R: AsyncGameResource>(
     load_diagnostics: &mut Vec<WeaponModelLoadDiagnostic>,
     loaded_paths: &mut Vec<String>,
 ) -> Option<DressedPieceModel> {
+    if is_weapon_equip_slot_category(piece.equip_slot_category) {
+        return load_dressed_weapon_piece_from_async_resource(
+            resource,
+            piece,
+            context,
+            load_diagnostics,
+            loaded_paths,
+        )
+        .await;
+    }
     let Some(slot) = equipment_slot_info(piece.equip_slot_category) else {
         load_diagnostics.push(WeaponModelLoadDiagnostic {
             role: WeaponModelLoadRole::Secondary,
@@ -5837,6 +6266,7 @@ async fn load_dressed_piece_from_async_resource<R: AsyncGameResource>(
         is_accessory: slot.is_accessory,
         stain_ids: piece.stain_ids,
         imc_mask: imc_entry.map(|entry| entry.attribute_mask()),
+        attach: None,
         eqp: if slot.is_accessory {
             None
         } else {
@@ -6091,13 +6521,18 @@ pub async fn load_dressed_piece_model_from_async_resource<R: AsyncGameResource>(
 /// 计算逐件着装场景的遮蔽计划（纯函数，不动模型数据）：规则与合并版
 /// [`DressedCharacterData`] 的加载期网格过滤一致（EQP 位语义见
 /// [`EquipmentParameterEntry`]），以隐藏标签表达——身体整网格隐藏记
-/// `body_hidden_meshes` 下标，top/dwn 皮肤与头发遮蔽记
+/// `body_hidden_meshes` 下标，top/dwn 皮肤、头发 atr_top、脸部耳/角遮蔽记
 /// `body_hidden_attributes` 名单（从默认启用名集合去除后按名过滤，网格粒
-/// 度与"任一所需名被隐藏即整网格隐藏"等价），各件的 IMC 变体位映射回该件
-/// MDL 本地 attribute 名得到启用名单（`sho` 在身时另去除 `dwn` 件的
-/// `atr_leg`）。
+/// 度与"任一所需名被隐藏即整网格隐藏"等价），耳饰件整件隐藏记
+/// `hidden_pieces`，各件的 IMC 变体位映射回该件 MDL 本地 attribute 名得到
+/// 启用名单（`sho` 在身时另去除 `dwn` 件的 `atr_leg`）。
+///
+/// 头部规则（发 41-43/颈 44/耳饰 46-49/耳 50-53）的数据源：默认读 met
+/// 条目；top 条目 BodyShowHead（10）关闭时改读 top 条目，且脸部网格整体
+/// 隐藏（全身套装遮头）。
 #[cfg(feature = "game-data")]
 pub fn plan_dressed_concealment(
+    customize: &CharacterCustomize,
     body: &WeaponModelData,
     pieces: &[DressedPieceModel],
 ) -> DressedConcealmentPlan {
@@ -6113,11 +6548,22 @@ pub fn plan_dressed_concealment(
     let glv = piece_in_slot(5);
     let dwn = piece_in_slot(7);
     let sho = piece_in_slot(8);
+    // 耳饰件（slot 9 饰品）：头部条目的种族组耳饰位门控。
+    let earring = pieces
+        .iter()
+        .find(|piece| piece.equip_slot_category == 9 && piece.is_accessory);
     let top_eqp = top.and_then(|piece| piece.eqp);
     // 身体显示位关闭时，对应区域的遮蔽数据改从 top 套装条目解析；条目缺失
     // 按显示处理（同合并版）。
     let body_show_leg = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_LEG));
     let body_show_hand = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_HAND));
+    let body_show_head = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_HEAD));
+    // 头部遮蔽数据源（发/颈/耳饰/耳）：BodyShowHead 关闭时改读 top 条目。
+    let head_eqp = if body_show_head {
+        met.and_then(|piece| piece.eqp)
+    } else {
+        top_eqp
+    };
 
     let mut top_skin_hide: Vec<&'static str> = Vec::new();
     // top_eqp 为 Some 蕴含 top 在场（top_eqp = top.and_then(eqp)）。
@@ -6174,7 +6620,11 @@ pub fn plan_dressed_concealment(
 
     let mut hair_hide_scalp = false;
     let mut hair_hide_all = false;
-    if let Some((met, eqp)) = met.and_then(|met| met.eqp.map(|eqp| (met, eqp))) {
+    let mut face_hide_attributes: Vec<&'static str> = Vec::new();
+    let mut zear_hide = false;
+    let mut earring_hide = false;
+    let mut ear_unsupported = false;
+    if let Some(eqp) = head_eqp {
         if eqp.flag(E::HEAD_HIDE_SCALP) {
             hair_hide_scalp = true;
         }
@@ -6184,13 +6634,38 @@ pub fn plan_dressed_concealment(
         if eqp.flag(E::HEAD_HIDE_NECK) {
             top_skin_hide.push("atr_nek");
         }
-        if (E::HEAD_SHOW_EARRINGS..=E::HEAD_SHOW_EAR_VIERA).any(|bit| !eqp.flag(bit)) {
-            eprintln!(
-                "dressed character: head piece {} gates earrings/ears (EQP bits 47-53); accessory visibility gating not implemented",
-                met.item_id
-            );
+        // 耳饰件（slot 9）：角色种族组的耳饰位关闭 → 整件隐藏（无 met 且
+        // BodyShowHead 未关闭时 head_eqp 为 None，耳饰恒显示）。
+        earring_hide = earring.is_some() && !eqp.flag(customize.earring_eqp_bit());
+        // 耳朵几何：按种族机制（脸部 attribute / zear 部件 / 不可隔离记诊断）。
+        match customize.ear_concealment() {
+            EarConcealment::FaceAttribute(bit, name) => {
+                if !eqp.flag(bit) {
+                    face_hide_attributes.push(name);
+                }
+            }
+            EarConcealment::ZearPart(bit) => {
+                zear_hide = !eqp.flag(bit);
+            }
+            EarConcealment::Unsupported(bit) => {
+                ear_unsupported = !eqp.flag(bit);
+            }
+            EarConcealment::None => {}
         }
     }
+    // 全身套装（top 条目 BodyShowHead 关闭）：脸部网格整体隐藏。
+    let face_hide_all = top.is_some() && !body_show_head;
+    // 尾部显隐（猫魅/敖龙）：top 条目 ShowTail(13) 或腿部来源（dwn 条目，
+    // BodyShowLeg 关闭时改读 top 条目）LegShowTail(22) 任一关闭即隐藏
+    // （任一说藏即藏；TT 未规定优先级，取保守交集）。
+    let leg_eqp = if body_show_leg {
+        dwn.and_then(|piece| piece.eqp)
+    } else {
+        top_eqp
+    };
+    let tail_hide = customize.has_tail()
+        && (!top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_TAIL))
+            || !leg_eqp.is_none_or(|eqp| eqp.flag(E::LEG_SHOW_TAIL)));
 
     let mut plan = DressedConcealmentPlan::default();
     fn record_note(plan: &mut DressedConcealmentPlan, note: String) {
@@ -6250,11 +6725,42 @@ pub fn plan_dressed_concealment(
                     record_note(&mut plan, "hair:atr_top".to_string());
                 }
             }
+            DressedBodyRegion::Face => {
+                if face_hide_all {
+                    plan.body_hidden_meshes.push(index);
+                    record_note(&mut plan, "face:all".to_string());
+                } else {
+                    for name in submesh_zipped_attribute_names(mesh) {
+                        if face_hide_attributes.contains(&name) {
+                            push_hidden_attribute(&mut plan, name);
+                            record_note(&mut plan, format!("face:{name}"));
+                        }
+                    }
+                }
+            }
+            DressedBodyRegion::Zear if zear_hide => {
+                plan.body_hidden_meshes.push(index);
+                record_note(&mut plan, "zear:all".to_string());
+            }
+            DressedBodyRegion::Tail if tail_hide => {
+                plan.body_hidden_meshes.push(index);
+                record_note(&mut plan, "tail:all".to_string());
+            }
             _ => {}
         }
     }
+    if ear_unsupported {
+        // 猫魅耳在脸部基础网格内、无 attribute 隔离（真实探测结论）：不隐藏，
+        // 仅记诊断。
+        record_note(&mut plan, "face:ear-miqo-unsupported".to_string());
+    }
 
     for piece in pieces {
+        // 武器件不参与遮蔽：无 IMC/EQP，网格全显示（挂点骨挂接与身体遮蔽
+        // 规则无关）。
+        if piece.attach.is_some() {
+            continue;
+        }
         // IMC 变体位 → 该件 MDL 本地 attribute 名启用名单（位是该件本地表序，
         // 名单跨件不可比，只能逐件判定）；IMC 缺失 → 全部名启用。
         let mut enabled = Vec::new();
@@ -6286,15 +6792,22 @@ pub fn plan_dressed_concealment(
         }
         plan.piece_enabled_attributes
             .push(((piece.equip_slot_category, piece.item_id), enabled));
+        // 耳饰件整件隐藏（头部条目耳饰位门控）。
+        if earring_hide && piece.is_accessory && piece.equip_slot_category == 9 {
+            plan.hidden_pieces
+                .push((piece.equip_slot_category, piece.item_id));
+            record_note(&mut plan, "ear:gear".to_string());
+        }
     }
 
     plan
 }
 
 /// 着装合并的身体区域判定。身体网格按 `mesh.path` 识别（小衣 e0001 / 裸肤
-/// e0000 装备域路径 + `/obj/hair/` 头发；布料/皮肤按内嵌材质名 `b0001`
-/// 区分，同 [`close_bare_limb_junctions`] 的判定）。跨族回退件路径含回退
-/// race code，但 `e0001_top` 等标记段不变。
+/// e0000 装备域路径 + `/obj/hair/` 头发 + `/obj/face/` 脸 + `/obj/tail/` 尾 +
+/// `/obj/zear/` 兔耳；布料/皮肤按内嵌材质名 `b0001` 区分，同
+/// [`close_bare_limb_junctions`] 的判定）。跨族回退件路径含回退 race
+/// code，但 `e0001_top` 等标记段不变。
 #[cfg(feature = "game-data")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DressedBodyRegion {
@@ -6305,6 +6818,9 @@ enum DressedBodyRegion {
     BodySho,
     BodyGlv,
     Hair,
+    Face,
+    Tail,
+    Zear,
     Other,
 }
 
@@ -6313,6 +6829,15 @@ fn classify_dressed_body_mesh(mesh: &WeaponModelMesh) -> DressedBodyRegion {
     let path = mesh.path.as_str();
     if path.contains("/obj/hair/") {
         return DressedBodyRegion::Hair;
+    }
+    if path.contains("/obj/face/") {
+        return DressedBodyRegion::Face;
+    }
+    if path.contains("/obj/tail/") {
+        return DressedBodyRegion::Tail;
+    }
+    if path.contains("/obj/zear/") {
+        return DressedBodyRegion::Zear;
     }
     let is_skin = mesh.material_name.contains("b0001");
     if path.contains("e0001_top") {
@@ -6365,22 +6890,30 @@ fn submesh_zipped_attribute_names(mesh: &WeaponModelMesh) -> Vec<&str> {
 ///
 /// 规则（EQP 位语义见 [`EquipmentParameterEntry`]；身体 attribute 名为真实
 /// 数据探测结论：top 皮肤 atr_hij 肘/atr_ude 腕前臂/atr_nek 颈，dwn 皮肤
-/// atr_hiz 膝/atr_sne 小腿踝，e0000 裸肤手足无 attribute）：
+/// atr_hiz 膝/atr_sne 小腿踝，e0000 裸肤手足无 attribute；人族耳 atr_mim、
+/// 敖龙角 atr_hrn 在脸部 MDL）：
 /// - top 装备：丢弃全部 e0001_top 布料网格；皮肤按 top 条目 HideGorget→
 ///   atr_nek、HideShortGloves|HideMidGloves→atr_ude、HideLongGloves→atr_hij
 ///   +atr_ude；手部遮蔽（HandHideForearm→atr_ude、HandHideElbow+Forearm→
 ///   atr_hij）默认读 glv 条目，top 条目 BodyShowHand 关闭时改读 top 条目。
+///   猫魅/敖龙的尾（`/obj/tail/` 网格）在 top 条目 ShowTail 关闭时丢弃。
 /// - glv 装备：丢弃全部 e0000_glv 裸肤手网格（露指手套自带皮肤网格）。
 /// - dwn 装备：丢弃全部 e0001_dwn 布料网格；皮肤按 dwn 条目
 ///   LegHideKneePads→atr_hiz、LegHideShortBoot|LegHideHalfBoot→atr_sne，加
 ///   sho 条目 FootHideKnee(+Calf)→atr_hiz、FootHideAnkle→atr_sne；top 条目
 ///   BodyShowLeg 关闭时两者都改读 top 条目。sho 装备时额外丢弃 dwn 装备自身
-///   的 atr_leg 子网格（裤脚塞靴）。
+///   的 atr_leg 子网格（裤脚塞靴）。尾部另受腿部来源（dwn 条目，
+///   BodyShowLeg 关闭时改读 top 条目）LegShowTail 关闭影响；top/腿任一
+///   关闭即隐藏。
 /// - sho 装备：丢弃全部 e0001_sho/e0000_sho 网格。
 /// - met 装备：身体不动；HeadHideScalp→丢弃带 atr_top 的头发子网格，
 ///   HeadHideHair 且无 HeadShowHairOverride→丢弃全部头发网格，
-///   HeadHideNeck→top 皮肤 atr_nek。耳饰/耳显隐位（47-53）暂不落地，仅
-///   eprintln 诊断。
+///   HeadHideNeck→top 皮肤 atr_nek；耳饰位（46-49，按种族分组）关闭时丢弃
+///   耳饰件（slot 9 饰品）网格；耳部位（50-53）关闭时按种族机制丢弃脸部
+///   耳/角子网格（atr_mim/atr_hrn）或维埃拉 zear 部件网格（猫魅耳在脸部
+///   基础网格内无法隔离，仅记诊断不隐藏）。top 条目 BodyShowHead 关闭时
+///   上述头部规则（发/颈/耳饰/耳）全部改读 top 条目，且脸部网格整体丢弃
+///   （全身套装遮头）。
 /// - 每件装备再按自身 IMC 条目 attribute 位裁剪变体子网格（位是该件 MDL
 ///   本地表序，数值比较仅在同 MDL 内有效）；IMC 缺失 → 全显示。
 #[cfg(feature = "game-data")]
@@ -6388,6 +6921,7 @@ fn apply_dressed_visibility(
     meshes: &mut Vec<WeaponModelMesh>,
     body_mesh_count: usize,
     pieces: &[DressedPieceLoad],
+    customize: &CharacterCustomize,
 ) -> Vec<String> {
     use EquipmentParameterEntry as E;
 
@@ -6401,11 +6935,21 @@ fn apply_dressed_visibility(
     let glv = piece_in_slot(5);
     let dwn = piece_in_slot(7);
     let sho = piece_in_slot(8);
+    let earring = pieces
+        .iter()
+        .find(|piece| piece.equip_slot_category == 9 && piece.is_accessory);
     let top_eqp = top.and_then(|piece| piece.eqp);
     // 身体显示位关闭时，对应区域的遮蔽数据改从 top 套装条目解析
     // （xivModdingFramework `EquipmentParameterFlag` 注释）；条目缺失按显示处理。
     let body_show_leg = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_LEG));
     let body_show_hand = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_HAND));
+    let body_show_head = top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_HEAD));
+    // 头部遮蔽数据源（发/颈/耳饰/耳）：BodyShowHead 关闭时改读 top 条目。
+    let head_eqp = if body_show_head {
+        met.and_then(|piece| piece.eqp)
+    } else {
+        top_eqp
+    };
 
     let mut top_skin_hide: Vec<&'static str> = Vec::new();
     if top.is_some() {
@@ -6463,25 +7007,50 @@ fn apply_dressed_visibility(
 
     let mut hair_hide_scalp = false;
     let mut hair_hide_all = false;
-    if let Some(met) = met {
-        if let Some(eqp) = met.eqp {
-            if eqp.flag(E::HEAD_HIDE_SCALP) {
-                hair_hide_scalp = true;
+    let mut face_hide_attributes: Vec<&'static str> = Vec::new();
+    let mut zear_hide = false;
+    let mut earring_hide = false;
+    let mut ear_unsupported = false;
+    if let Some(eqp) = head_eqp {
+        if eqp.flag(E::HEAD_HIDE_SCALP) {
+            hair_hide_scalp = true;
+        }
+        if eqp.flag(E::HEAD_HIDE_HAIR) && !eqp.flag(E::HEAD_SHOW_HAIR_OVERRIDE) {
+            hair_hide_all = true;
+        }
+        if eqp.flag(E::HEAD_HIDE_NECK) {
+            top_skin_hide.push("atr_nek");
+        }
+        // 耳饰件（slot 9 饰品）：角色种族组耳饰位关闭 → 整件网格丢弃。
+        earring_hide = earring.is_some() && !eqp.flag(customize.earring_eqp_bit());
+        // 耳朵几何：按种族机制（脸部 attribute / zear 部件 / 不可隔离记诊断）。
+        match customize.ear_concealment() {
+            EarConcealment::FaceAttribute(bit, name) => {
+                if !eqp.flag(bit) {
+                    face_hide_attributes.push(name);
+                }
             }
-            if eqp.flag(E::HEAD_HIDE_HAIR) && !eqp.flag(E::HEAD_SHOW_HAIR_OVERRIDE) {
-                hair_hide_all = true;
+            EarConcealment::ZearPart(bit) => {
+                zear_hide = !eqp.flag(bit);
             }
-            if eqp.flag(E::HEAD_HIDE_NECK) {
-                top_skin_hide.push("atr_nek");
+            EarConcealment::Unsupported(bit) => {
+                ear_unsupported = !eqp.flag(bit);
             }
-            if (E::HEAD_SHOW_EARRINGS..=E::HEAD_SHOW_EAR_VIERA).any(|bit| !eqp.flag(bit)) {
-                eprintln!(
-                    "dressed character: head piece {} gates earrings/ears (EQP bits 47-53); accessory visibility gating not implemented",
-                    met.item_id
-                );
-            }
+            EarConcealment::None => {}
         }
     }
+    // 全身套装（top 条目 BodyShowHead 关闭）：脸部网格整体丢弃。
+    let face_hide_all = top.is_some() && !body_show_head;
+    // 尾部（猫魅/敖龙）：top 条目 ShowTail 或腿部来源 LegShowTail 任一关闭
+    // 即丢弃（任一说藏即藏；TT 未规定优先级，取保守交集）。
+    let leg_eqp = if body_show_leg {
+        dwn.and_then(|piece| piece.eqp)
+    } else {
+        top_eqp
+    };
+    let tail_hide = customize.has_tail()
+        && (!top_eqp.is_none_or(|eqp| eqp.flag(E::BODY_SHOW_TAIL))
+            || !leg_eqp.is_none_or(|eqp| eqp.flag(E::LEG_SHOW_TAIL)));
 
     let mut dropped = vec![false; meshes.len()];
     let mut hidden: Vec<String> = Vec::new();
@@ -6535,11 +7104,43 @@ fn apply_dressed_visibility(
                     record(&mut hidden, "hair:atr_top".to_string());
                 }
             }
+            DressedBodyRegion::Face => {
+                if face_hide_all {
+                    dropped[index] = true;
+                    record(&mut hidden, "face:all".to_string());
+                } else {
+                    for name in submesh_zipped_attribute_names(mesh) {
+                        if face_hide_attributes.contains(&name) {
+                            dropped[index] = true;
+                            record(&mut hidden, format!("face:{name}"));
+                        }
+                    }
+                }
+            }
+            DressedBodyRegion::Zear if zear_hide => {
+                dropped[index] = true;
+                record(&mut hidden, "zear:all".to_string());
+            }
+            DressedBodyRegion::Tail if tail_hide => {
+                dropped[index] = true;
+                record(&mut hidden, "tail:all".to_string());
+            }
             _ => {}
         }
     }
+    if ear_unsupported {
+        record(&mut hidden, "face:ear-miqo-unsupported".to_string());
+    }
 
     for piece in pieces {
+        // 耳饰件整件丢弃（头部条目耳饰位门控）。
+        if earring_hide && piece.is_accessory && piece.equip_slot_category == 9 {
+            for index in piece.mesh_start..piece.mesh_end {
+                dropped[index] = true;
+            }
+            record(&mut hidden, "ear:gear".to_string());
+            continue;
+        }
         if let Some(mask) = piece.imc_mask {
             for index in piece.mesh_start..piece.mesh_end {
                 let Some(submesh) = &meshes[index].submesh else {
@@ -14301,6 +14902,15 @@ mod dressed_character_tests {
         meshes.iter().map(|mesh| mesh.path.as_str()).collect()
     }
 
+    /// 指定 race 的捏脸夹具（race byte：1 中原、2 精灵、3 拉拉、4 猫魅、
+    /// 5 鲁加、6 敖龙、7 硌狮、8 维埃拉）。
+    fn customize(race: u8) -> CharacterCustomize {
+        CharacterCustomize {
+            race,
+            ..Default::default()
+        }
+    }
+
     const TOP_CLOTH: &str = "chara/equipment/e0001/model/c1301e0001_top.mdl#part-0-submesh-0";
     const TOP_SKIN: &str = "chara/equipment/e0001/model/c1301e0001_top.mdl#part-0-submesh-1";
     const DWN_CLOTH: &str = "chara/equipment/e0001/model/c1301e0001_dwn.mdl#part-0-submesh-0";
@@ -14309,6 +14919,10 @@ mod dressed_character_tests {
     const BARE_SHO: &str = "chara/equipment/e0000/model/c1301e0000_sho.mdl#part-0-submesh-0";
     const SMALL_SHO: &str = "chara/equipment/e0001/model/c1301e0001_sho.mdl#part-0-submesh-0";
     const HAIR: &str = "chara/human/c1301/obj/hair/h0001/model/c1301h0001_hir.mdl#part-0-submesh-0";
+    const FACE: &str = "chara/human/c1301/obj/face/f0001/model/c1301f0001_fac.mdl#part-0-submesh-0";
+    const TAIL: &str = "chara/human/c1301/obj/tail/t0001/model/c1301t0001_til.mdl";
+    const ZEAR: &str = "chara/human/c1801/obj/zear/z0001/model/c1801z0001_zer.mdl";
+    const EAR_GEAR: &str = "chara/accessory/a0043/model/c1301a0043_ear.mdl";
     const GEAR_TOP: &str = "chara/equipment/e0908/model/c1301e0908_top.mdl#part-0-submesh-0";
     const SKIN_MAT: &str = "mt_c1301b0001_a.mtrl";
     const CLOTH_MAT: &str = "mt_c1301e0001_top_a.mtrl";
@@ -14324,7 +14938,7 @@ mod dressed_character_tests {
         ];
         let eqp = (1 << E::BODY_HIDE_SHORT_GLOVES) | (1 << E::BODY_HIDE_GORGET);
         let pieces = [piece(4, 3, 4, None, eqp)];
-        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
         assert_eq!(kept_paths(&meshes), [GEAR_TOP]);
         assert_eq!(
             hidden,
@@ -14336,7 +14950,7 @@ mod dressed_character_tests {
             mesh(TOP_CLOTH, CLOTH_MAT, 0x1, &["atr_nek"]),
             mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_ude"]),
         ];
-        let hidden = apply_dressed_visibility(&mut meshes, 2, &[]);
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &[], &customize(6));
         assert!(hidden.is_empty());
         assert_eq!(meshes.len(), 2);
     }
@@ -14349,7 +14963,7 @@ mod dressed_character_tests {
             mesh(BARE_SHO, SKIN_MAT, 0, &[]),
         ];
         let pieces = [piece(5, 3, 3, None, 0), piece(8, 3, 3, None, 0)];
-        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
         assert!(meshes.is_empty());
         assert_eq!(hidden, ["glv:body", "sho:body"]);
 
@@ -14360,7 +14974,7 @@ mod dressed_character_tests {
             mesh(BARE_SHO, SKIN_MAT, 0, &[]),
         ];
         let pieces = [piece(5, 3, 3, None, 0)];
-        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
         assert_eq!(kept_paths(&meshes), [SMALL_SHO, BARE_SHO]);
         assert_eq!(hidden, ["glv:body"]);
     }
@@ -14386,7 +15000,7 @@ mod dressed_character_tests {
             ),
         ];
         let pieces = [piece(5, 1, 3, Some(0b001), 1 << E::HAND_HIDE_FOREARM)];
-        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert_eq!(
             kept_paths(&meshes),
             ["chara/equipment/e0908/model/c1301e0908_glv.mdl#part-0-submesh-0"]
@@ -14403,7 +15017,7 @@ mod dressed_character_tests {
             piece(4, 1, 1, None, 1 << E::BODY_SHOW_HAND),
             piece(5, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
         ];
-        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert!(meshes.is_empty());
 
         // top 条目 BodyShowHand 关闭：改读 top 条目自身（无手部位）→ 不遮蔽。
@@ -14412,7 +15026,7 @@ mod dressed_character_tests {
             piece(4, 1, 1, None, 0),
             piece(5, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
         ];
-        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert_eq!(meshes.len(), 1);
         assert!(hidden.is_empty());
 
@@ -14422,7 +15036,7 @@ mod dressed_character_tests {
             piece(4, 1, 1, None, 1 << E::HAND_HIDE_FOREARM),
             piece(5, 1, 1, None, 0),
         ];
-        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert!(meshes.is_empty());
     }
 
@@ -14438,14 +15052,14 @@ mod dressed_character_tests {
         // HeadHideScalp：只去 atr_top 子网格。
         let mut meshes = hair_pair();
         let pieces = [piece(3, 2, 2, None, 1 << E::HEAD_HIDE_SCALP)];
-        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(6));
         assert_eq!(meshes.len(), 1);
         assert_eq!(hidden, ["hair:atr_top"]);
 
         // HeadHideHair：全部头发网格。
         let mut meshes = hair_pair();
         let pieces = [piece(3, 2, 2, None, 1 << E::HEAD_HIDE_HAIR)];
-        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(6));
         assert!(meshes.is_empty());
         assert_eq!(hidden, ["hair:all"]);
 
@@ -14458,14 +15072,14 @@ mod dressed_character_tests {
             None,
             (1 << E::HEAD_HIDE_HAIR) | (1 << E::HEAD_SHOW_HAIR_OVERRIDE),
         )];
-        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(6));
         assert_eq!(meshes.len(), 2);
         assert!(hidden.is_empty());
 
         // HeadHideNeck → top 皮肤 atr_nek。
         let mut meshes = vec![mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_nek"])];
         let pieces = [piece(3, 1, 1, None, 1 << E::HEAD_HIDE_NECK)];
-        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert!(meshes.is_empty());
         assert_eq!(hidden, ["top:skin:atr_nek"]);
     }
@@ -14486,7 +15100,7 @@ mod dressed_character_tests {
             piece(7, 3, 5, None, 1 << E::LEG_HIDE_KNEE_PADS),
             piece(8, 5, 5, None, 1 << E::FOOT_HIDE_ANKLE),
         ];
-        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
         assert_eq!(kept_paths(&meshes), [gear_dwn_hip]);
         assert_eq!(
             hidden,
@@ -14504,7 +15118,7 @@ mod dressed_character_tests {
             piece(4, 1, 1, None, 1 << E::LEG_HIDE_KNEE_PADS),
             piece(7, 1, 1, None, 0),
         ];
-        apply_dressed_visibility(&mut meshes, 1, &pieces);
+        apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
         assert!(meshes.is_empty());
 
         // 对照：BodyShowLeg 开启时 top 条目的 LEG 位不生效。
@@ -14519,7 +15133,227 @@ mod dressed_character_tests {
             ),
             piece(7, 1, 1, None, 0),
         ];
-        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces);
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert_eq!(meshes.len(), 1);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn visibility_earring_piece_gated_by_race_group_bit() {
+        use EquipmentParameterEntry as E;
+        // 耳饰件（slot 9 饰品）：头部条目清角色种族组的耳饰位 → 整件丢弃。
+        let meshes = || {
+            vec![
+                mesh(EAR_GEAR, "mt_c1301a0043_ear_a.mtrl", 0, &[]),
+                mesh(EAR_GEAR, "mt_c1301a0043_ear_a.mtrl", 0, &[]),
+            ]
+        };
+        // 中原（耳饰位 46）：met 清 46 → 丢弃。
+        let mut m = meshes();
+        let pieces = [piece(3, 2, 2, None, 0), piece(9, 0, 2, None, 0)];
+        let hidden = apply_dressed_visibility(&mut m, 2, &pieces, &customize(1));
+        assert!(m.is_empty());
+        assert_eq!(hidden, ["ear:gear"]);
+
+        // 敖龙（耳饰位 49）：met 清 46 但置 49 → 保留（种族组区分）。
+        let mut m = meshes();
+        let pieces = [
+            piece(3, 2, 2, None, 1 << E::HEAD_SHOW_EARRINGS_AURA),
+            piece(9, 0, 2, None, 0),
+        ];
+        let hidden = apply_dressed_visibility(&mut m, 2, &pieces, &customize(6));
+        assert_eq!(m.len(), 2);
+        assert!(hidden.is_empty());
+
+        // 无 met：耳饰恒显示。
+        let mut m = meshes();
+        let pieces = [piece(9, 0, 2, None, 0)];
+        let hidden = apply_dressed_visibility(&mut m, 2, &pieces, &customize(1));
+        assert_eq!(m.len(), 2);
+        assert!(hidden.is_empty());
+
+        // BodyShowHead 关闭：耳饰位改读 top 条目（top 清 46 → 中原耳饰隐藏，
+        // 即使 met 条目置位）。
+        let mut m = meshes();
+        let pieces = [
+            piece(3, 2, 2, None, 1 << E::HEAD_SHOW_EARRINGS_HYUR_ROE),
+            piece(4, 2, 2, None, 1 << E::BODY_SHOW_LEG),
+            piece(9, 0, 2, None, 0),
+        ];
+        let hidden = apply_dressed_visibility(&mut m, 2, &pieces, &customize(1));
+        assert!(m.is_empty());
+        assert_eq!(hidden, ["ear:gear"]);
+    }
+
+    #[test]
+    fn visibility_ear_geometry_by_race_mechanism() {
+        use EquipmentParameterEntry as E;
+        // 人族（中原 race 1，bit 50）：脸部 atr_mim 子网格隐藏。
+        let mut meshes = vec![
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_mim"]),
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_kao"]),
+        ];
+        let pieces = [piece(3, 2, 2, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(1));
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(hidden, ["face:atr_mim"]);
+
+        // 敖龙（bit 52）：脸部 atr_hrn 子网格隐藏；含 atr_hrn 的组合网格同隐。
+        let mut meshes = vec![
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_hrn"]),
+            mesh(
+                FACE,
+                "mt_c1301f0001_fac_a.mtrl",
+                0x3,
+                &["atr_hrn", "atr_fv_c"],
+            ),
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_kao"]),
+        ];
+        let pieces = [piece(3, 2, 2, None, 1 << E::HEAD_SHOW_EAR_HUMAN)];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(hidden, ["face:atr_hrn"]);
+
+        // 维埃拉（bit 53）：zear 部件整网格隐藏，脸部不动。
+        let mut meshes = vec![
+            mesh(ZEAR, "mt_c1801z0001_zer_a.mtrl", 0, &[]),
+            mesh(FACE, "mt_c1801f0001_fac_a.mtrl", 0, &[]),
+        ];
+        let pieces = [piece(3, 2, 2, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(8));
+        assert_eq!(kept_paths(&meshes), [FACE]);
+        assert_eq!(hidden, ["zear:all"]);
+
+        // 猫魅（bit 51）：耳朵无 attribute 隔离 → 不隐藏，记诊断。
+        let mut meshes = vec![mesh(FACE, "mt_c0801f0001_fac_a.mtrl", 0, &[])];
+        let pieces = [piece(3, 1, 1, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(4));
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(hidden, ["face:ear-miqo-unsupported"]);
+
+        // 对应耳位置位 → 全部保留。
+        let mut meshes = vec![
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_hrn"]),
+            mesh(ZEAR, "mt_c1801z0001_zer_a.mtrl", 0, &[]),
+        ];
+        let pieces = [piece(
+            3,
+            2,
+            2,
+            None,
+            (1 << E::HEAD_SHOW_EAR_AURA) | (1 << E::HEAD_SHOW_EAR_VIERA),
+        )];
+        let hidden = apply_dressed_visibility(&mut meshes, 2, &pieces, &customize(6));
+        assert_eq!(meshes.len(), 2);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn visibility_body_show_head_clear_hides_face_and_drives_head_rules() {
+        use EquipmentParameterEntry as E;
+        // 全身套装（top 清 BodyShowHead）：脸部网格整体丢弃，头发/颈/耳规则
+        // 改读 top 条目（41+42 → 全发、44 → atr_nek）。
+        let mut meshes = vec![
+            mesh(FACE, "mt_c1301f0001_fac_a.mtrl", 0x1, &["atr_kao"]),
+            mesh(HAIR, "mt_c1301h0001_a.mtrl", 0x1, &["atr_top"]),
+            mesh(TOP_SKIN, SKIN_MAT, 0x1, &["atr_nek"]),
+        ];
+        let top_eqp =
+            (1 << E::HEAD_HIDE_SCALP) | (1 << E::HEAD_HIDE_HAIR) | (1 << E::HEAD_HIDE_NECK);
+        let pieces = [piece(4, 3, 3, None, top_eqp)];
+        let hidden = apply_dressed_visibility(&mut meshes, 3, &pieces, &customize(6));
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["face:all", "hair:all", "top:skin:atr_nek"]);
+
+        // top 清 BodyShowHead 时 met 条目的头发位不再生效（全发仍按 top
+        // 条目的 41+42 隐藏——top 条目 41/42 未置位时头发保留）。
+        let mut meshes = vec![mesh(HAIR, "mt_c1301h0001_a.mtrl", 0x1, &["atr_top"])];
+        let pieces = [
+            piece(4, 1, 1, None, 0), // BodyShowHead 清、头发位全清
+            piece(3, 1, 1, None, 1 << E::HEAD_HIDE_HAIR),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert_eq!(meshes.len(), 1, "BodyShowHead 清时头发规则读 top 条目");
+        assert!(hidden.is_empty());
+
+        // 对照：BodyShowHead 置位时头发规则读 met 条目。
+        let mut meshes = vec![mesh(HAIR, "mt_c1301h0001_a.mtrl", 0x1, &["atr_top"])];
+        let pieces = [
+            piece(4, 1, 1, None, 1 << E::BODY_SHOW_HEAD),
+            piece(3, 1, 1, None, 1 << E::HEAD_HIDE_HAIR),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["hair:all"]);
+    }
+
+    #[test]
+    fn visibility_tail_gated_by_top_or_leg_entry() {
+        use EquipmentParameterEntry as E;
+        let tail_mesh = || mesh(TAIL, "mt_c1301t0001_a.mtrl", 0, &[]);
+        // 猫魅/敖龙 + top 清 ShowTail(13) → 尾丢弃（top 置 BodyShowHead/
+        // BodyShowLeg 以隔离头部/腿部跨槽规则）。
+        let mut meshes = vec![tail_mesh()];
+        let pieces = [piece(
+            4,
+            1,
+            1,
+            None,
+            (1 << E::LEG_SHOW_TAIL) | (1 << E::BODY_SHOW_HEAD) | (1 << E::BODY_SHOW_LEG),
+        )];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(4));
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["tail:all"]);
+
+        // top 置 13 但 dwn 清 LegShowTail(22) → 任一关闭即藏。
+        let mut meshes = vec![tail_mesh()];
+        let pieces = [
+            piece(
+                4,
+                1,
+                1,
+                None,
+                (1 << E::BODY_SHOW_TAIL) | (1 << E::BODY_SHOW_LEG) | (1 << E::BODY_SHOW_HEAD),
+            ),
+            piece(7, 1, 1, None, 0),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["tail:all"]);
+
+        // 两件都置位 → 保留。
+        let mut meshes = vec![tail_mesh()];
+        let pieces = [
+            piece(
+                4,
+                1,
+                1,
+                None,
+                (1 << E::BODY_SHOW_TAIL) | (1 << E::BODY_SHOW_LEG) | (1 << E::BODY_SHOW_HEAD),
+            ),
+            piece(7, 1, 1, None, 1 << E::LEG_SHOW_TAIL),
+        ];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert_eq!(meshes.len(), 1);
+        assert!(hidden.is_empty());
+
+        // BodyShowLeg 关闭：LegShowTail 改读 top 条目（top 置 13 但清 22 → 藏）。
+        let mut meshes = vec![tail_mesh()];
+        let pieces = [piece(
+            4,
+            1,
+            1,
+            None,
+            (1 << E::BODY_SHOW_TAIL) | (1 << E::BODY_SHOW_HEAD),
+        )];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(6));
+        assert!(meshes.is_empty());
+        assert_eq!(hidden, ["tail:all"]);
+
+        // 无尾种族（中原）：位全清也不动（无尾网格部件，规则空转）。
+        let mut meshes = vec![tail_mesh()];
+        let pieces = [piece(4, 1, 1, None, 0)];
+        let hidden = apply_dressed_visibility(&mut meshes, 1, &pieces, &customize(1));
         assert_eq!(meshes.len(), 1);
         assert!(hidden.is_empty());
     }
@@ -14809,6 +15643,282 @@ mod dressed_character_tests {
         );
     }
 
+    /// 头部 EQP 规则测试集的真实数据探针：EQP 条目位 + 脸部/尾/兔耳 MDL
+    /// attribute 表（规则实现的地面真值）。
+    ///
+    /// 测试集（assets/collection-catalog.json 查证）：
+    /// - 暗黑之面（16091，set 393，slot 3）：全盔——41/42/44 置位，46-53 全清。
+    /// - C1战术兜帽（41544，set 836，slot 3）：开面帽——耳饰位仅 48（猫魅/硌狮/
+    ///   维埃拉组）清；耳位 51（猫魅）清，50/52/53 置。
+    /// - 黯云制敌头盔（44610，set 871，slot 3）：开面盔——41/42 清、44 置，
+    ///   耳饰/耳位（46-53）全清。
+    /// - 波奇服/波奇头套（15479/15478，set 6023）：BodyShowHead(10)/ShowTail(13)/
+    ///   LegShowTail(22) 全清，41/42 置位，46-53 全清。
+    /// - 先锋御敌战甲（42398，set 846，slot 4）：ShowTail(13) 清。
+    /// - 维埃拉束膝裤（33945，set 744，slot 7）：LegShowTail(22) 清。
+    #[test]
+    #[ignore = "probes EQP head-rule sets from the installed game; requires XIV_GAME_DIR"]
+    fn probe_eqp_head_rule_sets_from_installed_game() {
+        use physis::resource::Resource;
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let bytes = resource
+            .read(EQUIPMENT_PARAMETER_PATH)
+            .expect("read equipmentparameter.eqp");
+        let table = EquipmentParameterTable::from_bytes(&bytes);
+        use EquipmentParameterEntry as E;
+
+        let entry = |set_id: u16| table.entry(set_id).expect("EQP entry");
+        // 暗黑之面：全盔（遮头皮+全发+颈），耳饰/耳全族关闭。
+        let helm = entry(393);
+        assert!(helm.flag(E::HEAD_HIDE_SCALP) && helm.flag(E::HEAD_HIDE_HAIR));
+        assert!(helm.flag(E::HEAD_HIDE_NECK));
+        for bit in 46..=53 {
+            assert!(!helm.flag(bit), "set 393 bit {bit} must be clear");
+        }
+        // C1战术兜帽：耳饰仅猫魅/硌狮/维埃拉组关闭（48），耳位仅猫魅（51）清。
+        let hood = entry(836);
+        assert!(hood.flag(E::HEAD_SHOW_EARRINGS_HYUR_ROE));
+        assert!(hood.flag(E::HEAD_SHOW_EARRINGS_LALA_ELEZEN));
+        assert!(!hood.flag(E::HEAD_SHOW_EARRINGS_MIQO_HROTH_VIERA));
+        assert!(hood.flag(E::HEAD_SHOW_EARRINGS_AURA));
+        assert!(hood.flag(E::HEAD_SHOW_EAR_HUMAN));
+        assert!(!hood.flag(E::HEAD_SHOW_EAR_MIQO));
+        assert!(hood.flag(E::HEAD_SHOW_EAR_AURA));
+        assert!(hood.flag(E::HEAD_SHOW_EAR_VIERA));
+        // 黯云制敌头盔：开面（41/42 清）但耳饰/耳全族关闭。
+        let kabuto = entry(871);
+        assert!(!kabuto.flag(E::HEAD_HIDE_SCALP) && !kabuto.flag(E::HEAD_HIDE_HAIR));
+        for bit in 46..=53 {
+            assert!(!kabuto.flag(bit), "set 871 bit {bit} must be clear");
+        }
+        // 波奇套装：met 驱动遮头（BodyShowHead 置位——头套件自身条目驱动），
+        // 全发 + 遮尾（13/22 双清）。
+        let pig = entry(6023);
+        assert!(pig.flag(E::BODY_SHOW_HEAD));
+        assert!(pig.flag(E::HEAD_HIDE_SCALP) && pig.flag(E::HEAD_HIDE_HAIR));
+        assert!(!pig.flag(E::BODY_SHOW_TAIL));
+        assert!(!pig.flag(E::LEG_SHOW_TAIL));
+        for bit in 46..=53 {
+            assert!(!pig.flag(bit), "set 6023 bit {bit} must be clear");
+        }
+        // 幽灵套装：全身套装遮头（BodyShowHead 清）+ 全发 + 耳饰/耳全族关闭；
+        // BodyShowLeg 清 → 腿部规则（含 LegShowTail 22 清 → 遮尾）也读本条目。
+        let ghost = entry(137);
+        assert!(!ghost.flag(E::BODY_SHOW_HEAD));
+        assert!(!ghost.flag(E::BODY_SHOW_LEG));
+        assert!(ghost.flag(E::HEAD_HIDE_SCALP) && ghost.flag(E::HEAD_HIDE_HAIR));
+        assert!(!ghost.flag(E::LEG_SHOW_TAIL));
+        for bit in 46..=53 {
+            assert!(!ghost.flag(bit), "set 137 bit {bit} must be clear");
+        }
+        // 先锋御敌战甲：top 遮尾（13 清）；维埃拉束膝裤：dwn 遮尾（22 清）。
+        assert!(!entry(846).flag(E::BODY_SHOW_TAIL));
+        assert!(!entry(744).flag(E::LEG_SHOW_TAIL));
+        // 小衣参照：全部显示。
+        let small = entry(1);
+        for bit in 46..=53 {
+            assert!(small.flag(bit), "set 1 bit {bit} must be set");
+        }
+
+        // 测试集的模型文件存在性（c1401 敖龙女 + c0101 回退链）。
+        for set_id in [137u16, 6023, 846, 744] {
+            let mut row = String::new();
+            for slot in ["met", "top", "glv", "dwn", "sho"] {
+                for race in [1401u16, 101] {
+                    let path = format!(
+                        "chara/equipment/e{set_id:04}/model/c{race:04}e{set_id:04}_{slot}.mdl"
+                    );
+                    if resource.exists(&path) {
+                        row.push_str(&format!(" c{race:04}_{slot}"));
+                    }
+                }
+            }
+            eprintln!("set {set_id} models:{row}");
+        }
+
+        // 脸部 MDL attribute 表：人族（中原/精灵/拉拉/鲁加）含 atr_mim，敖龙含
+        // atr_hrn，猫魅/硌狮/维埃拉两者皆无（猫魅耳在脸部基础网格内，不可隔离）。
+        let mut face_attribute_names = |race_code: u16, face: u16| -> Vec<String> {
+            let path = format!(
+                "chara/human/c{race_code:04}/obj/face/f{face:04}/model/c{race_code:04}f{face:04}_fac.mdl"
+            );
+            let bytes = resource.read(&path).expect("read face mdl");
+            let meshes = meshes_from_mdl_bytes(&path, &bytes).expect("parse face mdl");
+            meshes
+                .iter()
+                .flat_map(|mesh| {
+                    mesh.submesh
+                        .iter()
+                        .flat_map(|submesh| submesh.attribute_names.iter().cloned())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        for race_code in [101u16, 201, 501, 601, 901, 1001, 1101, 1201] {
+            let names = face_attribute_names(race_code, 1);
+            assert!(
+                names.iter().any(|name| name == "atr_mim"),
+                "c{race_code:04} face must carry atr_mim: {names:?}"
+            );
+        }
+        for race_code in [701u16, 801, 1501, 1701, 1801] {
+            let names = face_attribute_names(race_code, 1);
+            assert!(
+                !names
+                    .iter()
+                    .any(|name| name == "atr_mim" || name == "atr_hrn"),
+                "c{race_code:04} face must not carry ear attributes: {names:?}"
+            );
+        }
+        // 硌狮女（脸文件从 f0005 起）。
+        let names = face_attribute_names(1601, 5);
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "atr_mim" || name == "atr_hrn")
+        );
+        for race_code in [1301u16, 1401] {
+            let names = face_attribute_names(race_code, 1);
+            assert!(
+                names.iter().any(|name| name == "atr_hrn"),
+                "c{race_code:04} face must carry atr_hrn: {names:?}"
+            );
+        }
+    }
+
+    /// 头部/尾部 EQP 规则的真实数据着装探针：合并版隐藏标签与场景版遮蔽计划
+    /// 一致驱动（猫魅女 + 全盔 ⇒ 耳饰件隐藏 + 头发全隐 + 猫耳诊断；敖龙女 +
+    /// 开面盔 ⇒ 角隐藏；敖龙女 + 波奇套装 ⇒ 脸/发/尾/耳饰全隐）。
+    #[test]
+    #[ignore = "drives dressed EQP visibility tags from the installed game; requires XIV_GAME_DIR"]
+    fn dressed_eqp_visibility_tags_from_installed_game() {
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+        let miqo_female = CharacterCustomize {
+            race: 4,
+            gender: 1,
+            age: 1,
+            height: 50,
+            tribe: 5,
+            head: 1,
+            hair: 1,
+            ..Default::default()
+        };
+        assert_eq!(miqo_female.race_code(), 801);
+        let au_ra_female = CharacterCustomize {
+            race: 6,
+            gender: 1,
+            age: 1,
+            height: 50,
+            tribe: 11,
+            head: 1,
+            hair: 1,
+            ..Default::default()
+        };
+        let piece =
+            |item_id: u32, name: &str, category: u32, model_main: u64| DressedEquipmentPiece {
+                item_id,
+                item_name: name.to_string(),
+                model_main,
+                model_sub: 0,
+                equip_slot_category: category,
+                stain_ids: [0, 0],
+            };
+        // 暗黑之面（set 393）+ 亚拉戈高位咏咒耳坠（7215，set 43）。
+        let full_helm = piece(16091, "暗黑之面", 3, 0x1_0189);
+        let earring = piece(7215, "亚拉戈高位咏咒耳坠", 9, 0x1_002B);
+
+        // 猫魅女 + 全盔 + 耳坠：耳饰件隐藏（48 清）、头发全隐、猫耳诊断。
+        let request = DressedCharacterLoadRequest::new(miqo_female, "miqo-full-helm")
+            .with_equipment(vec![full_helm.clone(), earring.clone()]);
+        let (merged, _) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+                .expect("merged miqo load");
+        for expected in ["hair:all", "ear:gear", "face:ear-miqo-unsupported"] {
+            assert!(
+                merged
+                    .hidden_body_attributes
+                    .iter()
+                    .any(|entry| entry == expected),
+                "merged must record {expected}: {:?}",
+                merged.hidden_body_attributes
+            );
+        }
+        let scene_request = DressedCharacterLoadRequest::new(miqo_female, "miqo-full-helm-scene")
+            .with_equipment(vec![full_helm.clone(), earring.clone()]);
+        let scene = load_dressed_character_scene_from_resource(&mut resource, &scene_request)
+            .expect("scene miqo load");
+        let plan = plan_dressed_concealment(&miqo_female, &scene.body, &scene.pieces);
+        assert!(
+            plan.hidden_pieces.contains(&(9, 7215)),
+            "scene plan must hide the earring piece: {:?}",
+            plan.hidden_pieces
+        );
+        assert!(plan.hidden_notes.contains(&"hair:all".to_string()));
+
+        // 敖龙女 + 黯云制敌头盔（871）：角隐藏（face:atr_hrn）、头发保留。
+        let kabuto = piece(44610, "黯云制敌头盔", 3, 0x2_0367);
+        let request = DressedCharacterLoadRequest::new(au_ra_female, "au-ra-kabuto")
+            .with_equipment(vec![kabuto]);
+        let (merged, _) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+                .expect("merged au-ra load");
+        assert!(
+            merged
+                .hidden_body_attributes
+                .iter()
+                .any(|entry| entry == "face:atr_hrn"),
+            "merged must hide au-ra horns: {:?}",
+            merged.hidden_body_attributes
+        );
+        assert!(
+            !merged
+                .hidden_body_attributes
+                .iter()
+                .any(|entry| entry == "hair:all"),
+            "kabuto keeps hair: {:?}",
+            merged.hidden_body_attributes
+        );
+
+        // 敖龙女 + 幽灵套装（top 语义加载）：全身套装（BodyShowHead 清）→
+        // 脸/发/角/尾全隐（尾：BodyShowLeg 清 → LegShowTail 读 top 条目，22 清）。
+        let ghost_top = piece(6107, "尖啸幽灵套装", 4, 0x1_0089);
+        let request = DressedCharacterLoadRequest::new(au_ra_female, "au-ra-ghost")
+            .with_equipment(vec![ghost_top]);
+        let (merged, _) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+                .expect("merged ghost load");
+        for expected in ["face:all", "hair:all", "tail:all"] {
+            assert!(
+                merged
+                    .hidden_body_attributes
+                    .iter()
+                    .any(|entry| entry == expected),
+                "mascot suit must record {expected}: {:?}",
+                merged.hidden_body_attributes
+            );
+        }
+
+        // 猫魅女 + 先锋御敌战甲（846，top ShowTail 清）：尾隐藏。
+        let vanguard_top = piece(42398, "先锋御敌战甲", 4, 0x1_034E);
+        let request = DressedCharacterLoadRequest::new(miqo_female, "miqo-vanguard")
+            .with_equipment(vec![vanguard_top]);
+        let (merged, _) =
+            load_dressed_character_with_skeleton_from_resource(&mut resource, &request)
+                .expect("merged vanguard load");
+        assert!(
+            merged
+                .hidden_body_attributes
+                .iter()
+                .any(|entry| entry == "tail:all"),
+            "vanguard top must hide the tail: {:?}",
+            merged.hidden_body_attributes
+        );
+    }
+
     /// 女仆装（e6016）种族变体与 EQDP 地面真值探针：
     /// 1. 全部 18 族 × 5 槽的 `c{race}e6016_{slot}.mdl` 存在性矩阵；
     /// 2. 各族 EQDP（`chara/xls/charadb/equipmentdeformerparameter/c{race}.eqdp`）
@@ -15048,6 +16158,130 @@ mod dressed_character_tests {
             eprintln!("c{body_id:04} deform chain to root: {chain:04?}");
         }
     }
+
+    /// 小衣（e0001）与裸肤（e0000）回退语义探针：
+    /// 1. 18 族 × 5 槽的 `c{race}e0001/e0000_{slot}.mdl` 文件存在性矩阵与各族
+    ///    EQDP set 1 / set 0 条目的 HasModel 位（布局同 e6016 探针）；
+    /// 2. 骨变形树祖先链（[`crate::model::equipment_model_race_candidates`]）上
+    ///    "首个文件存在者"与"首个 EQDP HasModel=1 者"逐族逐槽对照（set 1 硬
+    ///    断言，set 0 仅报告——set 0 是否走 EQDP 由本探针判定）；
+    /// 3. 逐族打印 e0001/e0000 各槽的有效来源族，对照
+    ///    [`crate::chara_assemble::smallclothes_model_race_candidates`] /
+    ///    [`crate::chara_assemble::bare_limb_model_race_candidates`] 的当前回退。
+    #[test]
+    #[ignore = "probes smallclothes/bare-limb race fallback from the installed game; requires XIV_GAME_DIR"]
+    fn probe_smallclothes_bare_limb_race_fallback_eqdp() {
+        use physis::resource::Resource;
+        let game_dir =
+            std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string());
+        let mut resource = physis::resource::SqPackResource::from_existing(&game_dir);
+
+        let races: [u16; 18] = [
+            101, 201, 301, 401, 501, 601, 701, 801, 901, 1001, 1101, 1201, 1301, 1401, 1501, 1601,
+            1701, 1801,
+        ];
+        let slots = ["met", "top", "glv", "dwn", "sho"];
+
+        let eqdp_entry = |bytes: &[u8], set_id: u16| -> Option<u16> {
+            let block_size = usize::from(u16::from_le_bytes([bytes[2], bytes[3]]));
+            let block_count = usize::from(u16::from_le_bytes([bytes[4], bytes[5]]));
+            let header_entry_offset = 6 + 2 * (usize::from(set_id) / block_size);
+            let base_data_offset =
+                u16::from_le_bytes([bytes[header_entry_offset], bytes[header_entry_offset + 1]]);
+            if base_data_offset == 0xFFFF {
+                return None;
+            }
+            let full_header = 6 + 2 * block_count;
+            let offset = full_header
+                + usize::from(base_data_offset) * 2
+                + (usize::from(set_id) % block_size) * 2;
+            Some(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
+        };
+        let eqdp_has_model = |bytes: &[u8], set_id: u16, slot_idx: usize| -> Option<bool> {
+            eqdp_entry(bytes, set_id).map(|raw| (raw >> (slot_idx * 2 + 1)) & 1 != 0)
+        };
+        let eqdp_by_race: HashMap<u16, Option<Vec<u8>>> = races
+            .iter()
+            .map(|race| {
+                let bytes = resource.read(&format!(
+                    "chara/xls/charadb/equipmentdeformerparameter/c{race:04}.eqdp"
+                ));
+                (*race, bytes)
+            })
+            .collect();
+
+        for set_id in [1u16, 0] {
+            eprintln!("== e{set_id:04} MDL existence (f) vs EQDP HasModel (e), race x slot ==");
+            for race in races {
+                let mut row = String::new();
+                for (idx, slot) in slots.iter().enumerate() {
+                    let path = format!(
+                        "chara/equipment/e{set_id:04}/model/c{race:04}e{set_id:04}_{slot}.mdl"
+                    );
+                    let file = resource.exists(&path);
+                    let eqdp = eqdp_by_race
+                        .get(&race)
+                        .and_then(|bytes| bytes.as_ref())
+                        .and_then(|bytes| eqdp_has_model(bytes, set_id, idx))
+                        .unwrap_or(false);
+                    row.push_str(&format!(" {slot}=f{}e{}", u8::from(file), u8::from(eqdp)));
+                }
+                eprintln!("c{race:04}:{row}");
+            }
+        }
+
+        // 链一致性：骨变形树祖先链上首个文件存在者 == 首个 EQDP HasModel=1 者。
+        let mut mismatches = 0usize;
+        for set_id in [1u16, 0] {
+            for (slot_idx, slot) in slots.iter().enumerate() {
+                for race in races {
+                    let chain = crate::model::equipment_model_race_candidates(race);
+                    let file_pick = chain.iter().copied().find(|candidate| {
+                        resource.exists(&format!(
+                            "chara/equipment/e{set_id:04}/model/c{candidate:04}e{set_id:04}_{slot}.mdl"
+                        ))
+                    });
+                    let eqdp_pick = chain.iter().copied().find(|candidate| {
+                        eqdp_by_race
+                            .get(candidate)
+                            .and_then(|bytes| bytes.as_ref())
+                            .and_then(|bytes| eqdp_has_model(bytes, set_id, slot_idx))
+                            .unwrap_or(false)
+                    });
+                    if file_pick != eqdp_pick {
+                        mismatches += 1;
+                        eprintln!(
+                            "MISMATCH e{set_id:04} {slot} c{race:04}: file={file_pick:?} eqdp={eqdp_pick:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(mismatches, 0, "chain existence probing must match EQDP");
+
+        // 逐族有效来源（链上首个文件存在者）对照当前回退表首个回退族。
+        eprintln!("== effective e0001/e0000 source race vs current tables ==");
+        for race in races {
+            let chain = crate::model::equipment_model_race_candidates(race);
+            let mut pick = |set_id: u16, slot: &str| {
+                chain.iter().copied().find(|candidate| {
+                    resource.exists(&format!(
+                        "chara/equipment/e{set_id:04}/model/c{candidate:04}e{set_id:04}_{slot}.mdl"
+                    ))
+                })
+            };
+            let smallclothes = crate::chara_assemble::smallclothes_model_race_candidates(race);
+            let bare_limb = crate::chara_assemble::bare_limb_model_race_candidates(race);
+            eprintln!(
+                "c{race:04}: e0001 top={:?} dwn={:?} sho={:?} | e0000 glv={:?} sho={:?} | smallclothes={smallclothes:04?} bare_limb={bare_limb:04?}",
+                pick(1, "top"),
+                pick(1, "dwn"),
+                pick(1, "sho"),
+                pick(0, "glv"),
+                pick(0, "sho"),
+            );
+        }
+    }
 }
 
 #[cfg(all(test, feature = "game-data"))]
@@ -15116,16 +16350,25 @@ mod dressed_scene_tests {
             item_id: u32::from(equip_slot_category),
             item_name: format!("piece-{equip_slot_category}"),
             equip_slot_category,
-            is_accessory: false,
+            is_accessory: equip_slot_category >= 9,
             stain_ids: [0, 0],
             imc_mask,
             eqp: (eqp_raw != 0).then(|| EquipmentParameterEntry { raw: eqp_raw }),
+            attach: None,
             model: std::rc::Rc::new(piece_model(meshes)),
         }
     }
 
     fn eqp_bits(bits: &[u8]) -> u64 {
         bits.iter().fold(0_u64, |raw, bit| raw | (1 << bit))
+    }
+
+    /// 指定 race 的捏脸夹具（race byte：1 中原、4 猫魅、6 敖龙、8 维埃拉）。
+    fn customize(race: u8) -> CharacterCustomize {
+        CharacterCustomize {
+            race,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -15171,7 +16414,7 @@ mod dressed_scene_tests {
             piece(8, 0, None, Vec::new()),
         ];
 
-        let plan = plan_dressed_concealment(&body, &pieces);
+        let plan = plan_dressed_concealment(&customize(6), &body, &pieces);
 
         // 整网格隐藏：top 布料(0)、dwn 布料(3)、裸肤足(4)。
         assert_eq!(plan.body_hidden_meshes, vec![0, 3, 4]);
@@ -15201,7 +16444,7 @@ mod dressed_scene_tests {
             ),
         ]);
 
-        let plan = plan_dressed_concealment(&body, &[]);
+        let plan = plan_dressed_concealment(&customize(6), &body, &[]);
 
         assert!(plan.body_hidden_meshes.is_empty());
         assert!(plan.body_hidden_attributes.is_empty());
@@ -15223,7 +16466,11 @@ mod dressed_scene_tests {
             )],
         );
 
-        let plan = plan_dressed_concealment(&piece_model(Vec::new()), std::slice::from_ref(&piece));
+        let plan = plan_dressed_concealment(
+            &customize(6),
+            &piece_model(Vec::new()),
+            std::slice::from_ref(&piece),
+        );
 
         assert_eq!(
             plan.piece_enabled_attributes,
@@ -15248,9 +16495,264 @@ mod dressed_scene_tests {
             Vec::new(),
         );
 
-        let plan = plan_dressed_concealment(&body, std::slice::from_ref(&met));
+        let plan = plan_dressed_concealment(&customize(6), &body, std::slice::from_ref(&met));
 
         assert_eq!(plan.body_hidden_meshes, vec![0, 1]);
         assert!(plan.hidden_notes.contains(&"hair:all".to_string()));
+    }
+
+    #[test]
+    fn concealment_plan_gates_earring_piece_by_race_group() {
+        use EquipmentParameterEntry as E;
+        let earring_meshes = || {
+            vec![body_mesh(
+                "chara/accessory/a0043/model/c1301a0043_ear.mdl",
+                "a0001",
+            )]
+        };
+        // 敖龙（耳饰位 49）：met 清 49 → 耳饰件整件隐藏。
+        let met = piece(
+            3,
+            eqp_bits(&[E::HEAD_SHOW_EARRINGS_HYUR_ROE]),
+            None,
+            Vec::new(),
+        );
+        let earring = piece(9, 0, None, earring_meshes());
+        let plan =
+            plan_dressed_concealment(&customize(6), &piece_model(Vec::new()), &[met, earring]);
+        assert_eq!(plan.hidden_pieces, vec![(9, 9)]);
+        assert!(plan.hidden_notes.contains(&"ear:gear".to_string()));
+
+        // 中原（耳饰位 46）：同一 met（置 46）→ 显示。
+        let met = piece(
+            3,
+            eqp_bits(&[E::HEAD_SHOW_EARRINGS_HYUR_ROE]),
+            None,
+            Vec::new(),
+        );
+        let earring = piece(9, 0, None, earring_meshes());
+        let plan =
+            plan_dressed_concealment(&customize(1), &piece_model(Vec::new()), &[met, earring]);
+        assert!(plan.hidden_pieces.is_empty());
+
+        // 无 met（BodyShowHead 未关）→ 显示。
+        let earring = piece(9, 0, None, earring_meshes());
+        let plan = plan_dressed_concealment(&customize(6), &piece_model(Vec::new()), &[earring]);
+        assert!(plan.hidden_pieces.is_empty());
+    }
+
+    #[test]
+    fn concealment_plan_ear_geometry_by_race_mechanism() {
+        use EquipmentParameterEntry as E;
+        // 敖龙角：脸部 atr_hrn 进入隐藏名单；其余脸部名保留。
+        let body = piece_model(vec![
+            mesh_with_attributes(
+                "chara/human/c1401/obj/face/f0001/fac.mdl",
+                "b0001",
+                &["atr_kao", "atr_hrn"],
+            ),
+            mesh_with_attributes(
+                "chara/human/c1401/obj/face/f0001/horn.mdl",
+                "b0001",
+                &["atr_hrn"],
+            ),
+        ]);
+        let met = piece(3, eqp_bits(&[E::HEAD_HIDE_SCALP]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(6), &body, std::slice::from_ref(&met));
+        assert_eq!(plan.body_hidden_attributes, vec!["atr_hrn".to_string()]);
+        assert!(plan.body_hidden_meshes.is_empty());
+        assert!(plan.hidden_notes.contains(&"face:atr_hrn".to_string()));
+
+        // 维埃拉耳：zear 网格整网格隐藏。
+        let body = piece_model(vec![body_mesh(
+            "chara/human/c1801/obj/zear/z0001/model/c1801z0001_zer.mdl",
+            "a0001",
+        )]);
+        let met = piece(3, eqp_bits(&[E::HEAD_HIDE_SCALP]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(8), &body, std::slice::from_ref(&met));
+        assert_eq!(plan.body_hidden_meshes, vec![0]);
+        assert!(plan.hidden_notes.contains(&"zear:all".to_string()));
+
+        // 猫魅耳：无 attribute 隔离 → 仅诊断。
+        let body = piece_model(vec![body_mesh(
+            "chara/human/c0801/obj/face/f0001/fac.mdl",
+            "b0001",
+        )]);
+        let met = piece(3, eqp_bits(&[E::HEAD_HIDE_SCALP]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(4), &body, std::slice::from_ref(&met));
+        assert!(plan.body_hidden_meshes.is_empty());
+        assert!(plan.body_hidden_attributes.is_empty());
+        assert!(
+            plan.hidden_notes
+                .contains(&"face:ear-miqo-unsupported".to_string())
+        );
+    }
+
+    #[test]
+    fn concealment_plan_body_show_head_clear_hides_face_and_drives_head_rules() {
+        use EquipmentParameterEntry as E;
+        // 全身套装（top 清 BodyShowHead + 置 41/42）：脸部/头发整体隐藏。
+        let body = piece_model(vec![
+            mesh_with_attributes(
+                "chara/human/c1401/obj/face/f0001/fac.mdl",
+                "b0001",
+                &["atr_kao"],
+            ),
+            body_mesh("chara/human/c1401/obj/hair/h0001/h0001.mdl", "a0001"),
+        ]);
+        let top = piece(
+            4,
+            eqp_bits(&[E::HEAD_HIDE_SCALP, E::HEAD_HIDE_HAIR]),
+            None,
+            Vec::new(),
+        );
+        let plan = plan_dressed_concealment(&customize(6), &body, std::slice::from_ref(&top));
+        assert_eq!(plan.body_hidden_meshes, vec![0, 1]);
+        assert!(plan.hidden_notes.contains(&"face:all".to_string()));
+        assert!(plan.hidden_notes.contains(&"hair:all".to_string()));
+
+        // top 清 BodyShowHead 且头发位全清：met 的 HEAD_HIDE_HAIR 不再生效。
+        let body = piece_model(vec![body_mesh(
+            "chara/human/c1401/obj/hair/h0001/h0001.mdl",
+            "a0001",
+        )]);
+        let top = piece(4, eqp_bits(&[E::BODY_SHOW_LEG]), None, Vec::new());
+        let met = piece(3, eqp_bits(&[E::HEAD_HIDE_HAIR]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(6), &body, &[top, met]);
+        assert!(plan.body_hidden_meshes.is_empty());
+    }
+
+    #[test]
+    fn concealment_plan_tail_gated_by_top_or_leg_entry() {
+        use EquipmentParameterEntry as E;
+        let tail_body = || {
+            piece_model(vec![body_mesh(
+                "chara/human/c0801/obj/tail/t0001/model/c0801t0001_til.mdl",
+                "b0001",
+            )])
+        };
+        // top 清 ShowTail → 尾隐藏。
+        let top = piece(
+            4,
+            eqp_bits(&[E::BODY_SHOW_LEG, E::LEG_SHOW_TAIL]),
+            None,
+            Vec::new(),
+        );
+        let plan =
+            plan_dressed_concealment(&customize(4), &tail_body(), std::slice::from_ref(&top));
+        assert_eq!(plan.body_hidden_meshes, vec![0]);
+        assert!(plan.hidden_notes.contains(&"tail:all".to_string()));
+
+        // top 置 13、dwn 清 22 → 任一关闭即藏。
+        let top = piece(
+            4,
+            eqp_bits(&[E::BODY_SHOW_TAIL, E::BODY_SHOW_LEG]),
+            None,
+            Vec::new(),
+        );
+        let dwn = piece(7, eqp_bits(&[E::LEG_SHOW_FOOT]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(4), &tail_body(), &[top, dwn]);
+        assert_eq!(plan.body_hidden_meshes, vec![0]);
+
+        // 两件都置位 → 保留；无尾种族（中原）位全清也不藏。
+        let top = piece(
+            4,
+            eqp_bits(&[E::BODY_SHOW_TAIL, E::BODY_SHOW_LEG]),
+            None,
+            Vec::new(),
+        );
+        let dwn = piece(7, eqp_bits(&[E::LEG_SHOW_TAIL]), None, Vec::new());
+        let plan = plan_dressed_concealment(&customize(4), &tail_body(), &[top, dwn]);
+        assert!(plan.body_hidden_meshes.is_empty());
+        let top = piece(4, eqp_bits(&[]), None, Vec::new());
+        let plan =
+            plan_dressed_concealment(&customize(1), &tail_body(), std::slice::from_ref(&top));
+        assert!(plan.body_hidden_meshes.is_empty());
+    }
+
+    #[test]
+    fn concealment_plan_skips_weapon_pieces() {
+        // 武器件不参与遮蔽：不进 piece_enabled_attributes（渲染层全显示），
+        // 也不影响身体隐藏（武器槽位无任何 EQP 遮蔽位）。
+        let body = piece_model(vec![body_mesh(
+            "chara/equipment/e0001_top/top_cloth.mdl",
+            "a0001",
+        )]);
+        let mut weapon = piece(
+            1,
+            0,
+            None,
+            vec![mesh_with_attributes(
+                "chara/weapon/w0001/obj/body/b0001/model/w0001b0001.mdl",
+                "a0001",
+                &["atr_wp"],
+            )],
+        );
+        weapon.attach = Some(WeaponAttachInfo::default());
+
+        let plan = plan_dressed_concealment(&customize(6), &body, std::slice::from_ref(&weapon));
+
+        assert!(plan.body_hidden_meshes.is_empty());
+        assert!(plan.body_hidden_attributes.is_empty());
+        assert!(plan.piece_enabled_attributes.is_empty());
+        assert!(plan.hidden_notes.is_empty());
+    }
+
+    #[test]
+    fn weapon_attach_bake_forces_single_joint_and_reports_articulation() {
+        let skinned_vertex = |first: u8, second: u8, w2: f32| WeaponModelVertex {
+            position: [0.0; 3],
+            blend_weights: Some(ModelBlendWeights {
+                count: 2,
+                values: [1.0 - w2, w2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            }),
+            blend_indices: Some(ModelBlendIndices {
+                count: 2,
+                values: [first, second, 0, 0, 0, 0, 0, 0],
+            }),
+            normal: [0.0, 1.0, 0.0],
+            uv0: [0.0; 2],
+            uv1: [0.0; 2],
+            uv2: [0.0; 2],
+            uv3: [0.0; 2],
+            bitangent: [0.0; 4],
+            normal1: None,
+            bitangent1: None,
+            color: [0.0; 4],
+            color1: None,
+            flow0: None,
+            flow1: None,
+        };
+        let mut meshes = vec![
+            // 刚性网格：全部顶点只引用骨 0（即使 bone table 有多根骨）。
+            body_mesh("w_rigid", "a"),
+            // 内部可动网格：顶点蒙皮到骨 0+1（单骨化丢失内部动画）。
+            {
+                let mut mesh = body_mesh("w_articulated", "a");
+                mesh.vertices = vec![skinned_vertex(0, 1, 0.25), skinned_vertex(0, 0, 0.0)];
+                mesh
+            },
+        ];
+
+        let articulated = bake_weapon_attach(&mut meshes, WEAPON_ATTACH_BONE_MAIN_HAND);
+
+        assert_eq!(articulated, 1, "only the multi-bone mesh is reported");
+        for mesh in &meshes {
+            let bone_table = mesh.bone_table.as_ref().expect("bone table baked");
+            assert_eq!(bone_table.bone_count, 1);
+            assert_eq!(
+                bone_table.bone_names,
+                vec![Some(WEAPON_ATTACH_BONE_MAIN_HAND.to_string())]
+            );
+            for vertex in &mesh.vertices {
+                let weights = vertex.blend_weights.expect("weights forced");
+                let indices = vertex.blend_indices.expect("indices forced");
+                assert_eq!(weights.count, 1);
+                assert_eq!(weights.values[0], 1.0);
+                assert!(weights.values[1..].iter().all(|weight| *weight == 0.0));
+                assert_eq!(indices.count, 1);
+                assert!(indices.values.iter().all(|index| *index == 0));
+            }
+        }
     }
 }

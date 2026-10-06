@@ -1707,8 +1707,9 @@ pub async fn load_dressed_character_with_skeleton_from_local(
 
 /// 单件装备增量加载（幻化场景逐件换装）：染剂恒 `[0, 0]` 加载免染基准件
 /// （对 (model_main, model_sub, 槽位, race) 恒定，调用方可做件级缓存），骨架
-/// 传入时种族变形烘焙到该骨架。件缺失/无模型返回 Ok(None)，读取失败记入
-/// 返回件诊断；游戏目录不可达为 Err。
+/// 传入时种族变形烘焙到该骨架；武器槽位（主手 1/13/14、副手 2）走武器路径
+/// 并烘焙为挂点骨单骨蒙皮（见 `DressedPieceModel::attach`）。件缺失/无模型
+/// 返回 Ok(None)，读取失败记入返回件诊断；游戏目录不可达为 Err。
 pub async fn load_dressed_piece_from_local(
     piece: DressedEquipmentPiece,
     race_code: u16,

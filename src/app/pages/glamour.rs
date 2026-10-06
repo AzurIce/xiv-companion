@@ -9,7 +9,7 @@ use xiv_companion::{
     CollectionCatalogPackage, CollectionItem, DressedConcealmentPlan, DressedEquipmentPiece,
     DressedPieceModel, ModelAnimationSet, ModelSkeleton, PreparedModelOptions, WeaponModelData,
     WeaponStain, appearance_colors_from_palette, apply_weapon_model_stains,
-    character_enabled_attribute_names, is_weapon_equip_slot_category, plan_dressed_concealment,
+    character_enabled_attribute_names, plan_dressed_concealment,
 };
 
 use crate::app::character_customize::{
@@ -208,7 +208,7 @@ fn content_revision<T: std::hash::Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
-/// 预览装备件的免染色身份：染色变化不改变它（不重载模型，走增量染色路径）。
+/// 预览的装备件身份：染色变化不改变它（不重载模型，走增量染色路径）。
 #[derive(Clone, PartialEq)]
 struct PreviewPieceIdentity {
     item_id: u32,
@@ -216,11 +216,6 @@ struct PreviewPieceIdentity {
     model_main: u64,
     model_sub: u64,
     equip_slot_category: u8,
-}
-
-/// 预览暂不支持的武器槽位（EquipSlotCategory 1/13/2 主手/副手）。
-fn is_previewable_piece(piece: &GlamourPiece) -> bool {
-    !is_weapon_equip_slot_category(u32::from(piece.equip_slot_category))
 }
 
 #[component]
@@ -283,6 +278,7 @@ pub fn GlamourPage() -> Element {
         let set = GlamourSet {
             id: new_glamour_id(),
             name: "未命名套装".to_string(),
+            customize: None,
             pieces: BTreeMap::new(),
             updated_at: now_timestamp(),
         };
@@ -515,13 +511,9 @@ fn GlamourSetList(
         let Some(original) = glamour_state.read().find_set(&set_id).cloned() else {
             return;
         };
-        let copy = GlamourSet {
-            id: new_glamour_id(),
-            name: format!("{}（副本）", original.name),
-            updated_at: now_timestamp(),
-            ..original
-        };
-        glamour_state.write().upsert_set(copy);
+        glamour_state
+            .write()
+            .upsert_set(original.duplicate(new_glamour_id(), now_timestamp()));
     };
 
     rsx! {
@@ -582,7 +574,12 @@ fn GlamourSetCard(
                         title: "{set.name}",
                         "{set.name}"
                     }
-                    Badge { "{set.piece_count()}/12" }
+                    div { class: "flex shrink-0 items-center gap-1.5",
+                        if set.customize.is_some() {
+                            Badge { title: "本套装使用独立角色形象", "独立形象" }
+                        }
+                        Badge { "{set.piece_count()}/12" }
+                    }
                 }
                 if set.pieces.is_empty() {
                     div { class: "text-xs text-muted-foreground", "尚未选择装备" }
@@ -656,8 +653,8 @@ fn GlamourSetEditor(
     let staining_templates = use_resource(load_weapon_staining_templates);
 
     let set_id_for_identity = set_id.clone();
-    // 预览重载键：可预览（非武器）件按槽位序的免染色身份；增删/换装改变它，
-    // 染色改变不改变它（染色走下方增量染色路径）。
+    // 预览重载键：全部件（含主手/副手武器）按槽位序的免染色身份；增删/换装
+    // 改变它，染色改变不改变它（染色走下方增量染色路径）。
     let preview_identity = use_memo(move || {
         let state = glamour_state.read();
         let Some(set) = state.find_set(&set_id_for_identity) else {
@@ -665,7 +662,6 @@ fn GlamourSetEditor(
         };
         set.pieces
             .values()
-            .filter(|piece| is_previewable_piece(piece))
             .map(|piece| PreviewPieceIdentity {
                 item_id: piece.item_id,
                 item_name: piece.name.clone(),
@@ -675,14 +671,28 @@ fn GlamourSetEditor(
             })
             .collect::<Vec<_>>()
     });
+    // 生效捏脸：套装有独立形象（hex 通过完整校验）时优先，否则跟随页面级预览
+    // 捏脸。预览加载键、遮蔽计划与形象控件全部以生效值为准。
+    let set_id_for_customize = set_id.clone();
+    let effective_customize = use_memo(move || {
+        let state = glamour_state.read();
+        let set_override = state
+            .find_set(&set_id_for_customize)
+            .and_then(|set| set.customize.as_deref())
+            .and_then(customize_from_hex);
+        match set_override {
+            Some(customize) => (customize, true),
+            None => (preview_customize(), false),
+        }
+    });
     // 身体加载（捏脸/调色板变化时重载；换装/染色不触发）：裸装装配 + 骨架 +
     // 动画集。装备件走下方独立资源，不再整身合并重读。
     let body_load = use_resource(move || {
         let adopted = preview_default_adopted();
-        let customize = preview_customize();
+        let (customize, from_set) = effective_customize();
         let palette = palette_package.read().as_ref().cloned();
         async move {
-            if !adopted || customize.validate().is_err() {
+            if (!from_set && !adopted) || customize.validate().is_err() {
                 return None;
             }
             let palette = match palette {
@@ -712,7 +722,7 @@ fn GlamourSetEditor(
     // 才读该件的 MDL/IMC/EQP 链——换一件只加载那一件，其余件同步 Rc 直传。
     let preview_pieces = use_resource(move || {
         let identity = preview_identity();
-        let customize = preview_customize();
+        let (customize, _) = effective_customize();
         let body = body_load
             .read()
             .clone()
@@ -769,10 +779,9 @@ fn GlamourSetEditor(
     let mut scene_pieces = use_signal(|| Vec::<(u32, Rc<DressedPieceModel>)>::new());
     let mut preview_error = use_signal(|| None::<String>);
     {
-        let mut body_signal = body_load;
-        let mut customize_signal = preview_customize;
+        let body_signal = body_load;
         use_effect(move || {
-            let customize_hex = customize_to_hex(&customize_signal());
+            let customize_hex = customize_to_hex(&effective_customize().0);
             let body = body_signal.read().cloned().flatten();
             match body {
                 // 完成：接受新身体（同捏脸的重跑 Pending 不动旧值）。
@@ -840,13 +849,9 @@ fn GlamourSetEditor(
     let picker_slot_snapshot = picker_slot();
     let dye_slot_snapshot = dye_slot();
 
-    let customize_snapshot = preview_customize();
+    let (customize_snapshot, has_set_override) = effective_customize();
     let race_code = customize_snapshot.race_code();
-    let has_weapon_pieces = set
-        .pieces
-        .keys()
-        .any(|slot| matches!(slot, GlamourSlot::MainHand | GlamourSlot::OffHand));
-    let has_previewable_pieces = set.pieces.values().any(is_previewable_piece);
+    let has_pieces = !set.pieces.is_empty();
 
     let assets_snapshot = scene_assets();
     let error_snapshot = preview_error();
@@ -862,8 +867,7 @@ fn GlamourSetEditor(
     let current_progress = model_progress().filter(|progress| {
         progress.item_id == u32::from(race_code) || piece_item_ids.contains(&progress.item_id)
     });
-    let preview_loading =
-        has_previewable_pieces && assets_snapshot.is_none() && error_snapshot.is_none();
+    let preview_loading = has_pieces && assets_snapshot.is_none() && error_snapshot.is_none();
 
     // 场景组装（渲染期纯计算）：身体 + 各件 → 多实例画布条目。染色在此按件
     // 落地（漂移件克隆重染，未染件 Rc 直传零拷贝）；遮蔽隐藏标签按当前件组合
@@ -882,7 +886,7 @@ fn GlamourSetEditor(
                 .iter()
                 .map(|(_, piece)| (**piece).clone())
                 .collect();
-            let plan = plan_dressed_concealment(&assets.body, &piece_models);
+            let plan = plan_dressed_concealment(&customize_snapshot, &assets.body, &piece_models);
             // 身体启用名 = 捏脸默认集合（脸部特征件等）− 遮蔽名。
             let mut body_names =
                 character_enabled_attribute_names(&customize_snapshot, &assets.body);
@@ -902,10 +906,18 @@ fn GlamourSetEditor(
                 prepared_options: body_options,
                 revision: content_revision(&(body_ptr, &plan.body_hidden_meshes, &body_names)),
                 materials_revision: content_revision(&(body_ptr,)),
+                attach: None,
             });
             concealment = Some(plan);
         }
         for (category, piece) in &pieces_snapshot {
+            // 整件隐藏的件（如头部 EQP 耳饰位门控的耳饰件）不建实例。
+            if concealment
+                .as_ref()
+                .is_some_and(|plan| plan.hidden_pieces.contains(&(*category, piece.item_id)))
+            {
+                continue;
+            }
             let stains = set
                 .pieces
                 .values()
@@ -945,20 +957,43 @@ fn GlamourSetEditor(
                 prepared_options: piece_options,
                 revision: content_revision(&(Rc::as_ptr(&piece.model) as usize, &enabled_names)),
                 materials_revision: content_revision(&(Rc::as_ptr(&stained) as usize, stains)),
+                attach: piece.attach,
             });
         }
         entries
     };
     let orbit_reset_revision = content_revision(&customize_to_hex(&customize_snapshot));
 
-    // 捏脸变更：持久化 hex 到 GlamourState（页面级保存 effect 落盘），并阻止
-    // 待进行的默认捏脸采用覆盖用户选择。
-    let mut apply_preview_customize = move |next: CharacterCustomize| {
-        preview_default_adopted.set(true);
-        glamour_state.write().preview_customize = Some(customize_to_hex(&next));
-        preview_customize.set(next);
+    // 捏脸变更：套装有独立形象时写入套装（走 mutate/persist，刷新 updated_at）；
+    // 否则持久化 hex 到 GlamourState 页面级 preview_customize（页面级保存
+    // effect 落盘），并阻止待进行的默认捏脸采用覆盖用户选择。
+    let set_id_for_apply = set_id.clone();
+    let mut apply_customize = move |next: CharacterCustomize| {
+        if effective_customize.peek().1 {
+            mutate_glamour_set(glamour_state, &set_id_for_apply, move |set| {
+                set.customize = Some(customize_to_hex(&next));
+            });
+        } else {
+            preview_default_adopted.set(true);
+            glamour_state.write().preview_customize = Some(customize_to_hex(&next));
+            preview_customize.set(next);
+        }
     };
-    let mut apply_preview_customize_for_hex = apply_preview_customize.clone();
+    let mut apply_customize_for_hex = apply_customize.clone();
+    // 独立形象开关：绑定 = 把当前生效捏脸固化进套装；清除 = 回退跟随页面级。
+    let set_id_for_pin = set_id.clone();
+    let pin_set_customize = move |_| {
+        let hex = customize_to_hex(&effective_customize.peek().0);
+        mutate_glamour_set(glamour_state, &set_id_for_pin, move |set| {
+            set.customize = Some(hex);
+        });
+    };
+    let set_id_for_unpin = set_id.clone();
+    let clear_set_customize = move |_| {
+        mutate_glamour_set(glamour_state, &set_id_for_unpin, |set| {
+            set.customize = None;
+        });
+    };
 
     rsx! {
         div { class: "min-h-0 flex-1 overflow-y-auto",
@@ -1035,12 +1070,12 @@ fn GlamourSetEditor(
                                 .and_then(|assets| assets.skeleton.clone()),
                             orbit_reset_revision,
                         }
-                        if !has_previewable_pieces {
+                        if !has_pieces {
                             div { class: "absolute inset-0 flex items-center justify-center bg-[#0e1117] p-4",
                                 EmptyState {
                                     icon: rsx! { Icon { kind: IconKind::PersonStanding, class: "h-6 w-6" } },
                                     title: "暂无可预览的装备".to_string(),
-                                    description: Some("为套装选择防具或饰品后，在此预览着装效果。".to_string()),
+                                    description: Some("为套装选择装备后，在此预览着装效果。".to_string()),
                                 }
                             }
                         } else if let Some(error) = &error_snapshot {
@@ -1068,10 +1103,31 @@ fn GlamourSetEditor(
                         }
                     }
                     div { class: "space-y-3 border-t p-3 lg:max-h-96 lg:overflow-y-auto",
-                        if has_weapon_pieces {
-                            p { class: "text-xs text-muted-foreground", "预览暂不含主手/副手武器" }
-                        }
-                        if has_previewable_pieces {
+                        if has_pieces {
+                            div { class: "flex items-center justify-between gap-2",
+                                div { class: "text-xs text-muted-foreground",
+                                    if has_set_override {
+                                        "本套装使用独立形象"
+                                    } else {
+                                        "当前使用页面预览形象"
+                                    }
+                                }
+                                if has_set_override {
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        size: ButtonSize::Sm,
+                                        onclick: clear_set_customize,
+                                        "清除独立形象"
+                                    }
+                                } else {
+                                    Button {
+                                        variant: ButtonVariant::Outline,
+                                        size: ButtonSize::Sm,
+                                        onclick: pin_set_customize,
+                                        "为本套装单独设置"
+                                    }
+                                }
+                            }
                             RaceSelect {
                                 customize: customize_snapshot,
                                 on_change: move |(race, tribe, gender)| {
@@ -1088,12 +1144,12 @@ fn GlamourSetEditor(
                                             height: 50,
                                             ..Default::default()
                                         });
-                                    apply_preview_customize(next);
+                                    apply_customize(next);
                                 },
                             }
                             GlamourCustomizeHexInput {
                                 customize: customize_snapshot,
-                                on_apply: move |next| apply_preview_customize_for_hex(next),
+                                on_apply: move |next| apply_customize_for_hex(next),
                             }
                             if let Some(animations) = assets_snapshot
                                 .as_ref()

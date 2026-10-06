@@ -11,9 +11,6 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
-#[cfg(target_arch = "wasm32")]
-use xiv_companion::PreparedModelOptions;
-
 use crate::app::icons::{Icon, IconKind};
 #[cfg(target_arch = "wasm32")]
 use crate::app::model_canvas_renderer::WebWeaponCanvasRenderer;
@@ -29,8 +26,8 @@ use xiv_companion::{
     CollectionCatalogPackage, CollectionItem, EQUIPMENT_MODEL_FALLBACK_RACE_ID,
     FurnitureCatalogItem, FurnitureCatalogPackage, FurnitureModelKind, ModelAnimationSet,
     ModelAttributeOption, ModelSkeleton, PackedCharaModelId, PackedEquipmentModelId, PackedModelId,
-    WeaponModelData, WeaponModelTextureKind, WeaponStain, equipment_slot_info,
-    is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
+    PreparedModelOptions, WeaponModelData, WeaponModelTextureKind, WeaponStain,
+    equipment_slot_info, is_weapon_equip_slot_category, model_attribute_options, weapon_slot_label,
 };
 
 use super::crafting::ItemIcon;
@@ -2171,6 +2168,8 @@ pub(crate) fn WeaponModelCanvas(
 /// 与按名启用的 attribute 名单）+ 两个修订号。`revision` 变化重建该件 GPU
 /// 实例（换件/换隐藏标签，只动这一件）；`materials_revision` 变化只做该件
 /// 材质增量更新（染色，毫秒级）。Rc 相等按指针——页面以新 Rc 表达新数据。
+/// `attach` 为武器挂接规则（武器件 Some）：该实例 joint 矩阵按挂点骨规则
+/// （姿势世界 × 校正）逐帧驱动，不走 inverse bind。
 #[derive(Clone)]
 pub(crate) struct SceneCanvasModel {
     pub key: String,
@@ -2178,6 +2177,7 @@ pub(crate) struct SceneCanvasModel {
     pub prepared_options: PreparedModelOptions,
     pub revision: u64,
     pub materials_revision: u64,
+    pub attach: Option<xiv_companion::WeaponAttachInfo>,
 }
 
 impl PartialEq for SceneCanvasModel {
@@ -2187,6 +2187,7 @@ impl PartialEq for SceneCanvasModel {
             && self.materials_revision == other.materials_revision
             && Rc::ptr_eq(&self.model, &other.model)
             && self.prepared_options == other.prepared_options
+            && self.attach == other.attach
     }
 }
 
@@ -2326,7 +2327,24 @@ pub(crate) fn CharacterSceneCanvas(
                         entry.prepared_options.clone(),
                         apply_skeleton.as_deref(),
                     );
-                    renderer.upsert_instance(&entry.key, instance);
+                    // 武器挂接件：创建时 joint 初值是 rest 的 world×inverse(bind)
+                    // （恒等）——对挂点骨局部空间的武器顶点等于停在原点，这里
+                    // 立即按挂接规则上传 rest 挂接矩阵兜底（无动画集也正确）。
+                    let rest_attach = entry.attach.and_then(|attach| {
+                        apply_skeleton.as_deref().map(|skeleton| {
+                            let rest = skeleton.scaled_rest_pose();
+                            xiv_companion::weapon_attach_joint_matrices(
+                                skeleton,
+                                &rest,
+                                instance.joint_names(),
+                                attach.correction,
+                            )
+                        })
+                    });
+                    renderer.upsert_instance_with_attach(&entry.key, instance, entry.attach);
+                    if let Some(matrices) = rest_attach {
+                        renderer.update_scene_joint_matrices(&entry.key, &matrices);
+                    }
                     applied.insert(entry.key.clone(), entry.revision);
                     applied_materials.insert(entry.key.clone(), entry.materials_revision);
                 }
@@ -2412,13 +2430,13 @@ pub(crate) fn CharacterSceneCanvas(
     }
 }
 
-/// rAF 场景动画运行时：逐件 joint 名表 + 共享 inverse bind 缓存，随场景
-/// 结构修订号（实例增删/替换）刷新；`playing` 记录当前各件 joint buffer
-/// 对应的动画（None = 已是 rest）。
+/// rAF 场景动画运行时：逐件 joint 表（名表 + 武器挂接规则）+ 共享 inverse
+/// bind 缓存，随场景结构修订号（实例增删/替换）刷新；`playing` 记录当前各件
+/// joint buffer 对应的动画（None = 已是 rest）。
 #[cfg(target_arch = "wasm32")]
 struct SceneAnimationRuntime {
     revision: u64,
-    tables: Vec<(String, Vec<String>)>,
+    tables: Vec<(String, Vec<String>, Option<xiv_companion::WeaponAttachInfo>)>,
     inverse_bind: xiv_companion::SkeletonInverseBindCache,
     playing: Option<usize>,
     started_at_ms: f64,
@@ -2473,9 +2491,11 @@ fn start_scene_render_loop(
     }
 }
 
-/// 每帧场景动画驱动：场景结构变化时刷新逐件 joint 名表；选中动画时采样一次
-/// 时间、逐件按名计算并上传关节矩阵（各实例 joint 表都对到同一副骨架）；
-/// 切回 Rest 时对全部实例一次性上传 rest 关节矩阵。
+/// 每帧场景动画驱动：场景结构变化时刷新逐件 joint 表；选中动画时采样一次
+/// 时间、逐件计算并上传关节矩阵（各实例 joint 表都对到同一副骨架；武器挂
+/// 接件走挂点骨规则——姿势世界 × 校正，采样姿势每帧最多算一次）；切回
+/// Rest 时对全部实例一次性上传 rest 关节矩阵。武器件的创建时 joint 初值
+/// 由实例应用处上传 rest 挂接矩阵兜底（无动画集时也不会停在原点）。
 #[cfg(target_arch = "wasm32")]
 fn drive_scene_animation_playback(
     renderer: &mut WebWeaponCanvasRenderer,
@@ -2487,7 +2507,7 @@ fn drive_scene_animation_playback(
     if runtime.as_ref().map(|runtime| runtime.revision) != Some(revision) {
         *runtime = Some(SceneAnimationRuntime {
             revision,
-            tables: renderer.scene_joint_names(),
+            tables: renderer.scene_joint_tables(),
             inverse_bind: xiv_companion::SkeletonInverseBindCache::new(),
             playing: None,
             started_at_ms: time_ms,
@@ -2519,23 +2539,50 @@ fn drive_scene_animation_playback(
             }
             let duration_ms = animation.duration_ms.max(1.0);
             let time = ((time_ms - *started_at_ms) as f32).rem_euclid(duration_ms);
-            for (key, names) in tables.iter() {
-                let matrices = xiv_companion::animation_joint_matrices(
-                    &playback.set,
-                    index,
-                    time,
-                    &playback.skeleton,
-                    names,
-                    inverse_bind,
-                );
+            let mut attach_pose = None;
+            for (key, names, attach) in tables.iter() {
+                let matrices = if let Some(attach) = attach {
+                    let pose = attach_pose.get_or_insert_with(|| {
+                        xiv_companion::sample_animation_pose(
+                            &playback.set,
+                            index,
+                            time,
+                            &playback.skeleton,
+                        )
+                    });
+                    xiv_companion::weapon_attach_joint_matrices(
+                        &playback.skeleton,
+                        pose,
+                        names,
+                        attach.correction,
+                    )
+                } else {
+                    xiv_companion::animation_joint_matrices(
+                        &playback.set,
+                        index,
+                        time,
+                        &playback.skeleton,
+                        names,
+                        inverse_bind,
+                    )
+                };
                 renderer.update_scene_joint_matrices(key, &matrices);
             }
         }
         None => {
             if playing.take().is_some() {
-                let rest = xiv_companion::SkeletonPose::rest_pose(&playback.skeleton);
-                for (key, names) in tables.iter() {
-                    let matrices = inverse_bind.joint_matrices(&playback.skeleton, &rest, names);
+                let rest = playback.skeleton.scaled_rest_pose();
+                for (key, names, attach) in tables.iter() {
+                    let matrices = if let Some(attach) = attach {
+                        xiv_companion::weapon_attach_joint_matrices(
+                            &playback.skeleton,
+                            &rest,
+                            names,
+                            attach.correction,
+                        )
+                    } else {
+                        inverse_bind.joint_matrices(&playback.skeleton, &rest, names)
+                    };
                     renderer.update_scene_joint_matrices(key, &matrices);
                 }
             }
@@ -2656,7 +2703,7 @@ fn drive_animation_playback(
         }
         None => {
             if runtime.playing.take().is_some() {
-                let rest = xiv_companion::SkeletonPose::rest_pose(&playback.skeleton);
+                let rest = playback.skeleton.scaled_rest_pose();
                 let matrices = runtime.inverse_bind.joint_matrices(
                     &playback.skeleton,
                     &rest,

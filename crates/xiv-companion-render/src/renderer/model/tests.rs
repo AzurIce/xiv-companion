@@ -3008,6 +3008,7 @@ fn skinned_test_skeleton() -> xiv_companion_data::ModelSkeleton {
         bone_names: vec!["n_root".to_string(), "n_spine".to_string()],
         parent_indices: vec![-1, 0],
         rest_pose: vec![xiv_companion_data::BoneTransform::IDENTITY; 2],
+        body_scaling: None,
     }
 }
 

@@ -276,12 +276,21 @@ impl EquipmentParameterEntry {
     pub const HEAD_SHOW_HAIR_OVERRIDE: u8 = 43;
     pub const HEAD_HIDE_NECK: u8 = 44;
     pub const HEAD_SHOW_NECKLACE: u8 = 45;
-    pub const HEAD_SHOW_EARRINGS: u8 = 47;
-    pub const HEAD_SHOW_EARRINGS_HUMAN: u8 = 48;
+    /// 耳饰显隐按种族分组，无通用位（Penumbra `EqpEntry`，对游戏运行时行为
+    /// 核实；xivModdingFramework `EquipmentParameterFlag` 把 46 标为未用、47
+    /// 标为通用，与真实数据矛盾——真实条目存在 46-49 任意组合的部分置位，
+    /// 如耳饰仅对猫魅/硌狮/维埃拉组关闭的套装）。
+    pub const HEAD_SHOW_EARRINGS_HYUR_ROE: u8 = 46;
+    pub const HEAD_SHOW_EARRINGS_LALA_ELEZEN: u8 = 47;
+    pub const HEAD_SHOW_EARRINGS_MIQO_HROTH_VIERA: u8 = 48;
     pub const HEAD_SHOW_EARRINGS_AURA: u8 = 49;
+    /// 人族耳（中原/精灵/拉拉/鲁加脸部 `atr_mim` 子网格）。
     pub const HEAD_SHOW_EAR_HUMAN: u8 = 50;
+    /// 猫魅耳（脸部基础网格内，无 attribute 隔离）。
     pub const HEAD_SHOW_EAR_MIQO: u8 = 51;
+    /// 敖龙角（脸部 `atr_hrn` 子网格）。
     pub const HEAD_SHOW_EAR_AURA: u8 = 52;
+    /// 维埃拉耳（独立 zear 部件）。
     pub const HEAD_SHOW_EAR_VIERA: u8 = 53;
     pub const HEAD_SHOW_HROTHGAR_HAT: u8 = 56;
     pub const HEAD_SHOW_VIERA_HAT: u8 = 57;
@@ -433,8 +442,8 @@ mod tests {
         // `01 3f 61 73 03 e0 3f 00`：byte1=0x3f → 腿/手/头/项链/手镯/尾全显示；
         // byte2=0x61 → 足/尾显示；byte3=0x73 → 隐藏肘（前臂位未置，按规则不
         // 生效）、手镯/左右戒显示；byte4=0x03 → FootHideKnee；byte5=0xe0 →
-        // 项链+耳饰显示；byte6=0x3f → 各族耳饰/耳全显示；byte7=0x00 →
-        // 硌狮/维埃拉帽不显示。
+        // 项链+耳饰（中原/鲁加、精灵/拉拉组）显示；byte6=0x3f → 耳饰（猫魅/硌狮/
+        // 维埃拉、敖龙组）+各族耳全显示；byte7=0x00 → 硌狮/维埃拉帽不显示。
         assert!(entry.flag(E::BODY_SHOW_LEG));
         assert!(entry.flag(E::BODY_SHOW_HAND));
         assert!(entry.flag(E::BODY_SHOW_HEAD));
@@ -449,7 +458,10 @@ mod tests {
         assert!(!entry.flag(E::FOOT_HIDE_CALF));
         assert!(!entry.flag(E::FOOT_HIDE_ANKLE));
         assert!(entry.flag(E::HEAD_SHOW_NECKLACE));
-        assert!(entry.flag(E::HEAD_SHOW_EARRINGS));
+        assert!(entry.flag(E::HEAD_SHOW_EARRINGS_HYUR_ROE));
+        assert!(entry.flag(E::HEAD_SHOW_EARRINGS_LALA_ELEZEN));
+        assert!(entry.flag(E::HEAD_SHOW_EARRINGS_MIQO_HROTH_VIERA));
+        assert!(entry.flag(E::HEAD_SHOW_EARRINGS_AURA));
         assert!(entry.flag(E::HEAD_SHOW_EAR_VIERA));
         assert!(!entry.flag(E::HEAD_SHOW_HROTHGAR_HAT));
         assert!(!entry.flag(E::HEAD_SHOW_VIERA_HAT));

@@ -442,23 +442,34 @@ pub fn load_animation_set_from_pap_bytes(
 
 /// 采样动画 `index` 在 `time_ms` 的局部 TRS 覆盖（未覆盖骨骼保持 rest）。
 /// 时间越界按 `[0, duration_ms]` 钳制；未知 index 返回 rest pose。
+/// 骨架带体型缩放（`ModelSkeleton::body_scaling`）时，缩放合成在采样结果
+/// 之上（逐骨局部 scale 相乘，见 [`SkeletonPose::apply_body_scaling`]）——
+/// 动画 track 的 scale 通常是 1.0（会覆盖 rest 值），RGSP 必须每帧在采样后
+/// 重新叠加，rest 与动画路径因此一致（rest 侧对应
+/// [`ModelSkeleton::scaled_rest_pose`]）。
 pub fn sample_animation_pose(
     set: &ModelAnimationSet,
     index: usize,
     time_ms: f32,
     skeleton: &ModelSkeleton,
 ) -> SkeletonPose {
+    let with_scaling = |mut pose: SkeletonPose| {
+        if let Some(scaling) = skeleton.body_scaling {
+            pose.apply_body_scaling(skeleton, &scaling);
+        }
+        pose
+    };
     let mut pose = SkeletonPose::rest_pose(skeleton);
     let (Some(animation), Some(&binding_index)) =
         (set.animations.get(index), set.animation_bindings.get(index))
     else {
-        return pose;
+        return with_scaling(pose);
     };
     let (Some(Some(binding)), Some(map)) = (
         set.bindings.get(binding_index).map(Option::as_ref),
         set.track_bone_maps.get(binding_index),
     ) else {
-        return pose;
+        return with_scaling(pose);
     };
     let clamped = time_ms.clamp(0.0, animation.duration_ms.max(0.0));
     let sampled = binding.animation.sample(clamped);
@@ -484,7 +495,7 @@ pub fn sample_animation_pose(
             },
         );
     }
-    pose
+    with_scaling(pose)
 }
 
 /// `sample_animation_pose` + 关节矩阵直出（网页/测试播放驱动的便捷封装；
@@ -545,6 +556,7 @@ mod tests {
                     scale: [1.0; 3],
                 },
             ],
+            body_scaling: None,
         }
     }
 
@@ -662,6 +674,30 @@ mod tests {
         let pose = sample_animation_pose(&set, 0, 500.0, &skeleton);
         assert_eq!(pose, SkeletonPose::rest_pose(&skeleton));
         assert_eq!(pose.bone_count(), 2);
+    }
+
+    #[test]
+    fn sampled_pose_keeps_body_scaling_on_all_fallback_paths() {
+        // 体型缩放合成在采样结果之上：未知 index / 空动画集的回退路径也应
+        // 返回缩放后的姿势（与 `ModelSkeleton::scaled_rest_pose` 一致）。
+        let mut skeleton = test_skeleton();
+        skeleton.bone_names[0] = "n_root".to_string();
+        skeleton.body_scaling = Some(crate::racial_scaling::BodyScaling {
+            height: 1.5,
+            ..crate::racial_scaling::BodyScaling::IDENTITY
+        });
+        let mut set = ModelAnimationSet::empty();
+        set.animations.push(ModelAnimation {
+            name: "dummy".to_string(),
+            duration_ms: 1000.0,
+        });
+        let pose = sample_animation_pose(&set, 0, 500.0, &skeleton);
+        assert_eq!(pose, skeleton.scaled_rest_pose());
+        assert_eq!(
+            pose.transform(0).unwrap().scale,
+            [1.5; 3],
+            "n_root 局部 scale 含身高系数"
+        );
     }
 
     #[test]
