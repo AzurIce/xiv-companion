@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         let result = (|| -> anyhow::Result<Value> {
             let bytes = resource
                 .read(&path)
-                .ok_or_else(|| anyhow::anyhow!("missing AVFX {path}"))?;
+                .map_err(|error| anyhow::anyhow!("read AVFX {path}: {error}"))?;
             let file = AvfxFile::parse(&bytes)?;
             parse_warnings += file.warnings.len();
             let model_path = weapon_model_candidate_paths(PackedModelId::from_raw(
@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
             if !points.contains_key(&(model_id, body_id)) {
                 let bytes = resource
                     .read(&model_path)
-                    .ok_or_else(|| anyhow::anyhow!("missing owner {model_path}"))?;
+                    .map_err(|error| anyhow::anyhow!("read owner {model_path}: {error}"))?;
                 points.insert(
                     (model_id, body_id),
                     mdl_element_ids_from_mdl_bytes(&bytes)?
@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
                 let skeleton_path = weapon_skeleton_path(model_id);
                 let bytes = resource
                     .read(&skeleton_path)
-                    .ok_or_else(|| anyhow::anyhow!("missing skeleton {skeleton_path}"))?;
+                    .map_err(|error| anyhow::anyhow!("read skeleton {skeleton_path}: {error}"))?;
                 skeletons.insert(model_id, load_skeleton_from_sklb_bytes(&bytes)?);
             }
             let points = &points[&(model_id, body_id)];

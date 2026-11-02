@@ -33,7 +33,7 @@ pub use xiv_companion_data::model::{
     weapon_model_mesh_component_index, weapon_slot_label, weapon_vfx_avfx_candidate_paths,
 };
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 pub use xiv_companion_data::game_data::normalize_game_dir;
 #[cfg(feature = "game-data")]
 pub use xiv_companion_data::mdl_metadata::mdl_metadata_from_mdl_bytes;
@@ -54,7 +54,7 @@ pub use xiv_companion_data::weapon_models::{
     apply_weapon_model_stains, load_chara_model_from_async_resource,
     load_chara_model_with_skeleton_from_async_resource,
     load_chara_model_with_skeleton_from_resource, load_character_assembly_from_async_resource,
-    load_character_assembly_from_game_dir, load_character_assembly_from_resource,
+    load_character_assembly_from_resource,
     load_character_assembly_with_skeleton_from_async_resource,
     load_character_assembly_with_skeleton_from_resource,
     load_dressed_character_scene_from_async_resource, load_dressed_character_scene_from_resource,
@@ -62,10 +62,13 @@ pub use xiv_companion_data::weapon_models::{
     load_dressed_piece_model_from_async_resource, load_dressed_piece_model_from_resource,
     load_equipment_model_from_async_resource, load_furniture_model_from_async_resource,
     load_furniture_model_from_resource, load_weapon_model_from_async_resource,
-    load_weapon_model_from_game_dir, load_weapon_model_from_resource,
-    load_weapon_model_from_resource_request, load_weapon_vfx_attachments_from_async_resource,
-    load_weapon_vfx_attachments_from_resource, load_weapon_vfx_from_async_resource,
-    load_weapon_vfx_from_resource, material_debug_info_from_mtrl_bytes,
-    material_debug_info_from_resource, meshes_from_mdl_bytes, plan_dressed_concealment,
-    weapon_vfx_imc_path,
+    load_weapon_model_from_resource, load_weapon_model_from_resource_request,
+    load_weapon_vfx_attachments_from_async_resource, load_weapon_vfx_attachments_from_resource,
+    load_weapon_vfx_from_async_resource, load_weapon_vfx_from_resource,
+    material_debug_info_from_mtrl_bytes, material_debug_info_from_resource, meshes_from_mdl_bytes,
+    plan_dressed_concealment, weapon_vfx_imc_path,
+};
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
+pub use xiv_companion_data::weapon_models::{
+    load_character_assembly_from_game_dir, load_weapon_model_from_game_dir,
 };

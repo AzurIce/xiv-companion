@@ -28,7 +28,7 @@ fn main() {
     let mut tc1_both = 0;
     let mut tc1_neither_enabled = 0;
     for path in &paths {
-        let Some(bytes) = resource.read(path) else {
+        let Ok(bytes) = resource.read(path) else {
             continue;
         };
         let Ok(file) = xiv_companion::AvfxFile::parse(&bytes) else {

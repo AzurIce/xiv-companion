@@ -277,7 +277,7 @@ fn probe_character_file_numbering_and_cmp_layout() {
         ),
     ];
     for (label, path, expected) in paths {
-        let exists = resource.read(path).is_some();
+        let exists = resource.read(path).is_ok();
         println!("EXISTS {exists} (expected {expected}) {label} = {path}");
         assert_eq!(exists, expected, "{label}: {path}");
     }
@@ -563,7 +563,11 @@ fn sync_and_async_assembly_loads_are_identical() {
         type Error = String;
         type ReadFuture<'a> = std::future::Ready<Result<Vec<u8>, String>>;
         fn read<'a>(&'a mut self, path: &'a str) -> Self::ReadFuture<'a> {
-            std::future::ready(self.0.read(path).ok_or_else(|| format!("missing {path}")))
+            std::future::ready(
+                self.0
+                    .read(path)
+                    .map_err(|error| format!("read {path}: {error}")),
+            )
         }
         fn platform(&self) -> physis::Platform {
             self.0.platform()
@@ -670,7 +674,7 @@ fn all_race_hair_files() -> &'static Vec<std::collections::HashSet<u16>> {
                     let path = format!(
                         "chara/human/{race}/obj/hair/h{hair:04}/model/{race}h{hair:04}_hir.mdl"
                     );
-                    if resource.read(&path).is_some() {
+                    if resource.read(&path).is_ok() {
                         found.insert(hair);
                     }
                 }
@@ -721,7 +725,7 @@ fn load_all_32_default_character_assemblies_from_installed_game() {
             .expect("face part");
         let face_exists = std::iter::once(&face_part.model_path)
             .chain(face_part.alternate_model_paths.iter())
-            .any(|path| resource.read(path).is_some());
+            .any(|path| resource.read(path).is_ok());
         if !face_exists {
             failures.push(format!("{label}: no face model candidate exists"));
         }

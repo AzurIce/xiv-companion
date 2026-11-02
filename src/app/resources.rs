@@ -839,22 +839,25 @@ impl ResourceProvider for BrowserSqPackProvider {
                     )
                 })?;
             let texture = physis::tex::Texture::from_existing(physis::Platform::Win32, &bytes)
+                .map_err(|error| {
+                    ResourceError::new(
+                        ResourceErrorKind::DecodeFailed,
+                        resource_kind.clone(),
+                        Some(self.source()),
+                        format!("failed to decode local icon texture {path}: {error}"),
+                    )
+                })?;
+            let rgba = texture
+                .decode(0, 0)
+                .map(|decoded| decoded.data)
                 .ok_or_else(|| {
                     ResourceError::new(
                         ResourceErrorKind::DecodeFailed,
                         resource_kind.clone(),
                         Some(self.source()),
-                        format!("failed to decode local icon texture {path}"),
+                        format!("failed to convert local icon texture {path} to RGBA"),
                     )
                 })?;
-            let rgba = texture.to_rgba().ok_or_else(|| {
-                ResourceError::new(
-                    ResourceErrorKind::DecodeFailed,
-                    resource_kind.clone(),
-                    Some(self.source()),
-                    format!("failed to convert local icon texture {path} to RGBA"),
-                )
-            })?;
             log::info(
                 "resource",
                 format!(

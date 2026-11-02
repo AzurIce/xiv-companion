@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let inner_index = definition["inner"]["index"]
             .as_u64()
             .ok_or("missing inner Binder index")? as usize;
-        let bytes = resource.read(path).ok_or("missing AVFX")?;
+        let bytes = resource.read(path)?;
         let file = xiv_companion::AvfxFile::parse(&bytes)?;
         let outer = file
             .binders

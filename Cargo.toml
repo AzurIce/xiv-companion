@@ -12,8 +12,6 @@ crate-type = ["rlib", "cdylib"]
 default = []
 game-data = [
     "dep:anyhow",
-    "dep:binrw",
-    "dep:flate2",
     "dep:physis",
     "xiv-companion-data/game-data",
 ]
@@ -48,9 +46,7 @@ wasm = [
 
 [dependencies]
 anyhow = { version = "1.0.102", optional = true }
-binrw = { version = "0.15", optional = true }
-flate2 = { version = "1.1.5", default-features = false, features = ["rust_backend"], optional = true }
-physis = { git = "https://github.com/AzurIce/physis.git", optional = true }
+physis = { workspace = true, optional = true }
 raphael-simulator = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-sim", tag = "v0.28.4", optional = true }
 raphael-solver = { git = "https://github.com/KonaeAkira/raphael-rs.git", package = "raphael-solver", tag = "v0.28.4", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -97,10 +93,11 @@ web-sys = { version = "0.3.83", features = [
     "WebSocket",
 ], optional = true }
 wgpu = { version = "29", optional = true }
-xiv-companion-data = { path = "crates/xiv-companion-data", default-features = false }
+xiv-companion-data = { workspace = true }
 xiv-companion-render = { path = "crates/xiv-companion-render", default-features = false }
 
 [dev-dependencies]
+binrw = "0.15"
 futures-executor = "0.3.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -175,6 +172,10 @@ required-features = ["game-data"]
 [workspace]
 members = ["crates/*", "xtask/*"]
 resolver = "3"
+
+[workspace.dependencies]
+physis = { git = "https://github.com/redstrate/Physis.git", rev = "3f1f6534644e1cbbb40c8338856f394450b243bd" }
+xiv-companion-data = { package = "icexiv-data", git = "https://github.com/icexiv/icexiv-data.git", rev = "7fa1b24b9cac1b9892e8f6cdf290eb857fc9c08d", default-features = false }
 
 [workspace.package]
 version = "0.1.0"

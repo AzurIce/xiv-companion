@@ -1975,6 +1975,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "icexiv-data"
+version = "0.1.0"
+source = "git+https://github.com/icexiv/icexiv-data.git?rev=7fa1b24b9cac1b9892e8f6cdf290eb857fc9c08d#7fa1b24b9cac1b9892e8f6cdf290eb857fc9c08d"
+dependencies = [
+ "anyhow",
+ "bcdec_rs",
+ "clap",
+ "half",
+ "physis",
+ "serde",
+ "serde_json",
+ "tsify",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2410,15 +2426,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "libz-rs-sys"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1116a951fd9d5110720bb2ae66f72ce5d7b10bd8aa8744924677157089ce13f"
-dependencies = [
- "zlib-rs",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2847,9 +2854,9 @@ dependencies = [
 
 [[package]]
 name = "owo-colors"
-version = "4.3.0"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
+checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
 
 [[package]]
 name = "parking_lot"
@@ -2902,15 +2909,15 @@ dependencies = [
 
 [[package]]
 name = "physis"
-version = "0.6.0"
-source = "git+https://github.com/AzurIce/physis.git#e2d0ab167acd07c68239765f177e424e4c6d57fc"
+version = "0.8.0"
+source = "git+https://github.com/redstrate/Physis.git?rev=3f1f6534644e1cbbb40c8338856f394450b243bd#3f1f6534644e1cbbb40c8338856f394450b243bd"
 dependencies = [
  "binrw",
  "bitflags",
  "half",
- "libz-rs-sys",
  "strum 0.28.0",
  "strum_macros 0.28.0",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -3748,9 +3755,6 @@ name = "strum"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
-dependencies = [
- "strum_macros 0.28.0",
-]
 
 [[package]]
 name = "strum_macros"
@@ -5085,10 +5089,10 @@ dependencies = [
  "dioxus",
  "dioxus-flow",
  "dioxus-free-icons",
- "flate2",
  "futures-executor",
  "gloo-net",
  "gloo-timers",
+ "icexiv-data",
  "image",
  "indexed-db",
  "js-sys",
@@ -5104,23 +5108,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
- "xiv-companion-data",
  "xiv-companion-render",
-]
-
-[[package]]
-name = "xiv-companion-data"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bcdec_rs",
- "futures-executor",
- "half",
- "physis",
- "serde",
- "serde_json",
- "tsify",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -5130,12 +5118,12 @@ dependencies = [
  "bytemuck",
  "glam",
  "half",
+ "icexiv-data",
  "image",
  "pollster",
  "serde_json",
  "wesl",
  "wgpu",
- "xiv-companion-data",
 ]
 
 [[package]]

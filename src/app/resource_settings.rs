@@ -4,7 +4,7 @@ use xiv_companion::{
     CraftDataKind, FurnitureCatalogKind, ItemIconKind, ResourceHub, ResourceSource, SourcePolicy,
     WeaponCatalogKind,
 };
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 use xiv_companion::{LocalCraftDataProvider, LocalItemIconProvider};
 
 use crate::app::resources::default_web_resource_hub;
@@ -122,7 +122,7 @@ pub fn configured_web_resource_hub() -> ResourceHub {
 
 pub fn configured_web_resource_hub_for(settings: &ResourceSettings) -> ResourceHub {
     let mut hub = default_web_resource_hub();
-    #[cfg(feature = "game-data")]
+    #[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
     {
         let user_local_path = settings.user_local_path.trim();
         if path_user_local_provider_available_for_runtime()

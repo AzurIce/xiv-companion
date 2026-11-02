@@ -1,9 +1,9 @@
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 use std::path::PathBuf;
 
 use crate::CraftDataPackage;
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 use crate::{LocalItemIconProvider, register_item_icon_resource};
 
 use super::{
@@ -11,7 +11,7 @@ use super::{
     ResourceErrorKind, ResourceHub, ResourceKindKey, ResourceKindLabel, ResourceSource,
     ResourceSpec, SourcePolicy,
 };
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 use super::{ResourceBlob, ResourceFuture, ResourceProvider};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -74,13 +74,13 @@ pub fn register_craft_data_resource(hub: &mut ResourceHub) {
     hub.register_resource::<CraftDataResource>();
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 #[derive(Clone, Debug)]
 pub struct LocalCraftDataProvider {
     game_dir: PathBuf,
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 impl LocalCraftDataProvider {
     pub fn new(game_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -89,7 +89,7 @@ impl LocalCraftDataProvider {
     }
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 pub fn local_craft_data_hub(game_dir: impl Into<PathBuf>) -> ResourceHub {
     let game_dir = game_dir.into();
     let mut hub = ResourceHub::new();
@@ -102,7 +102,7 @@ pub fn local_craft_data_hub(game_dir: impl Into<PathBuf>) -> ResourceHub {
     hub
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 pub fn local_game_resource_hub(game_dir: impl Into<PathBuf>) -> ResourceHub {
     let game_dir = game_dir.into();
     let mut hub = ResourceHub::new();
@@ -113,7 +113,7 @@ pub fn local_game_resource_hub(game_dir: impl Into<PathBuf>) -> ResourceHub {
     hub
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 impl ResourceProvider for LocalCraftDataProvider {
     fn source(&self) -> ResourceSource {
         ResourceSource::UserLocal
@@ -173,7 +173,7 @@ impl ResourceProvider for LocalCraftDataProvider {
     }
 }
 
-#[cfg(feature = "game-data")]
+#[cfg(all(feature = "game-data", not(target_arch = "wasm32")))]
 fn local_generated_at() -> String {
     std::process::Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])

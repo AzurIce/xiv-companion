@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut records = Vec::new();
     for path in paths {
-        let file = AvfxFile::parse(&resource.read(path).ok_or("missing AVFX")?)?;
+        let file = AvfxFile::parse(&resource.read(path)?)?;
         let playback = VfxPlayback::new(VfxRuntime::new(&file));
         let Some(
             reason @ ("staged playback: unsupported Timeline Binder"

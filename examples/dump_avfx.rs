@@ -19,7 +19,7 @@ fn main() {
     // 解码全部 Tex 贴图存 PNG（诊断 TC1/TC2 采样内容）。
     let file0 = xiv_companion::AvfxFile::parse(&bytes).expect("parse");
     for (index, texture_path) in file0.texture_paths.iter().enumerate() {
-        let Some(tex_bytes) = resource.read(texture_path) else {
+        let Ok(tex_bytes) = resource.read(texture_path) else {
             eprintln!("tex {index}: MISSING {texture_path}");
             continue;
         };
@@ -29,7 +29,7 @@ fn main() {
         } else {
             &tex_bytes
         };
-        if let Some(tex) = <physis::tex::Texture as physis::ReadableFile>::from_existing(
+        if let Ok(tex) = <physis::tex::Texture as physis::ReadableFile>::from_existing(
             physis::Platform::Win32,
             stripped,
         ) {

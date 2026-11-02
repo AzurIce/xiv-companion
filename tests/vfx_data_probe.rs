@@ -33,7 +33,7 @@ fn probe_weapon_imc_paths() {
                         ""
                     }
                 ))
-                .unwrap_or_else(|| "MISSING".to_string())
+                .unwrap_or_else(|error| format!("READ FAILED: {error}"))
         );
     }
 }
@@ -107,7 +107,7 @@ fn scan_shared_vw_files() {
                 return;
             }
             scanned += 1;
-            let Some(bytes) = resource.read(path) else {
+            let Ok(bytes) = resource.read(path) else {
                 continue;
             };
             let Ok(file) = xiv_companion::AvfxFile::parse(&bytes) else {

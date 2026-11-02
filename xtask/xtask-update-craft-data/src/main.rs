@@ -443,6 +443,7 @@ const CHARA_MAKE_CUSTOMIZE_CSV: &str = "CharaMakeCustomize.csv";
 /// `character_make` 的解析器（Ktisis/Anamnesis 布局）导出全部色板段为
 /// character-palette.json。只更新 resource-manifest.json 的 character-palette 条目。
 fn export_character_palette(out_dir: &Path, args: &Args) -> Result<()> {
+    use physis::ReadableFile;
     use physis::resource::Resource;
 
     let game_dir = args
@@ -455,14 +456,17 @@ fn export_character_palette(out_dir: &Path, args: &Args) -> Result<()> {
             .to_str()
             .ok_or_else(|| anyhow!("game dir is not valid UTF-8: {}", game_dir.display()))?,
     );
-    let bytes = resource.read(HUMAN_CMP_PATH).ok_or_else(|| {
+    let bytes = resource.read(HUMAN_CMP_PATH).map_err(|error| {
         anyhow!(
-            "failed to read {HUMAN_CMP_PATH} from {}",
+            "failed to read {HUMAN_CMP_PATH} from {}: {error}",
             game_dir.display()
         )
     })?;
-    let palette = xiv_companion::character_palette_from_cmp_bytes(&bytes)
-        .map_err(|error| anyhow!("failed to parse {HUMAN_CMP_PATH}: {error}"))?;
+    let palette = {
+        let cmp = physis::cmp::CMP::from_existing(physis::Platform::Win32, &bytes)
+            .map_err(|error| anyhow!("failed to parse {HUMAN_CMP_PATH}: {error}"))?;
+        xiv_companion::character_palette_from_cmp(&cmp)
+    };
 
     let generated_at = chrono_like_timestamp();
     let game_version = xiv_companion::game_data::game_version(&game_dir);

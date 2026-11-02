@@ -10574,7 +10574,7 @@ fn scan_model<R: Resource>(
 ) {
     let Some((model_path, model_bytes)) = weapon_model_candidate_paths(model)
         .into_iter()
-        .find_map(|path| resource.read(&path).map(|bytes| (path, bytes)))
+        .find_map(|path| resource.read(&path).ok().map(|bytes| (path, bytes)))
     else {
         report.failures.push(format!(
             "model {:016X} ({}) has no readable candidate",
@@ -10633,8 +10633,8 @@ fn scan_model<R: Resource>(
         let platform = resource.platform();
         let (material, readable_candidates) = first_valid_candidate(
             &material_candidates,
-            |path| resource.read(path),
-            |bytes| physis::mtrl::Material::from_existing(platform, bytes),
+            |path| resource.read(path).ok(),
+            |bytes| physis::mtrl::Material::from_existing(platform, bytes).ok(),
         );
         let Some((material_path, material_bytes, material)) = material else {
             if !readable_candidates.is_empty() {

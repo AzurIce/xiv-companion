@@ -22,6 +22,44 @@ The app currently includes:
 
 ## Development
 
+### Independent FF14 data library
+
+Parsing, SqPack routing/extraction, model/material preparation, skeletons,
+animation and CPU VFX live in [icexiv-data](https://github.com/icexiv/icexiv-data).
+Companion and its renderer consume the same library; the Cargo dependency alias
+`xiv-companion-data` preserves existing imports, but no local data crate remains.
+Browser permissions, file handles, application caching and GPU rendering stay here.
+Both projects use upstream Physis pinned to a reviewed commit, not our old fork.
+
+The independent repository also provides a native CLI:
+
+```sh
+cargo run --manifest-path ../icexiv-data/Cargo.toml -p icexiv-data-cli -- \
+  --game-dir /path/to/game extract chara/base_material/stainingtemplate.stm \
+  -o stainingtemplate.stm
+```
+
+For coordinated local changes, clone that repository alongside this one and use
+a temporary Cargo path override; normal builds use the pinned Git dependency.
+
+### Model and VFX pipeline book
+
+The [Notist Book sources](docs/render-book/README.not) trace game-file lookup,
+SqPack extraction, geometry/material parsing, skeletons and animation, mounted
+VFX, and GPU rendering. The book also records runtime-input boundaries and the
+limitations of glTF conversion and CDN Range delivery.
+
+```bash
+nix run .#notist -- build --target render-book
+# Or, inside nix develop:
+just book-build
+```
+
+The static output is `target/notist/render-book/index.html`. Building the book
+does not start a server or require a game installation or GPU.
+
+### Application toolchain
+
 Install the web toolchain once:
 
 ```bash

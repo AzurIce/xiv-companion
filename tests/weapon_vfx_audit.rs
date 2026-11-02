@@ -234,7 +234,7 @@ fn audit_model_vfx(
     let mut found_any_imc = false;
     for body_id in weapon_body_ids(model) {
         let imc_path = xiv_companion::weapon_body_imc_path(model.model_id, body_id);
-        let Some(bytes) = resource.read(&imc_path) else {
+        let Ok(bytes) = resource.read(&imc_path) else {
             continue;
         };
         let imc = match ImcFile::parse(&bytes) {
@@ -324,7 +324,7 @@ fn audit_model_shader_packages(
 ) -> Vec<String> {
     let mut packages = HashSet::new();
     'models: for model_path in weapon_model_candidate_paths(*model) {
-        let Some(mdl_bytes) = resource.read(&model_path) else {
+        let Ok(mdl_bytes) = resource.read(&model_path) else {
             continue;
         };
         let Ok(metadata) = mdl_metadata_from_mdl_bytes(&model_path, &mdl_bytes) else {
@@ -336,7 +336,7 @@ fn audit_model_shader_packages(
             };
             for material_path in weapon_material_candidate_paths(*model, &model_path, material_name)
             {
-                let Some(mtrl_bytes) = resource.read(&material_path) else {
+                let Ok(mtrl_bytes) = resource.read(&material_path) else {
                     continue;
                 };
                 if let Ok(debug) = material_debug_info_from_mtrl_bytes(&material_path, &mtrl_bytes)
@@ -362,7 +362,7 @@ fn resolve_vw_avfx(
     vfx_id: u8,
 ) -> Option<(String, String, Vec<u8>)> {
     for (padding, file) in vw_avfx_path_candidates(model_id, body_id, vfx_id) {
-        if let Some(bytes) = resource.read(&file) {
+        if let Ok(bytes) = resource.read(&file) {
             return Some((padding, file, bytes));
         }
     }

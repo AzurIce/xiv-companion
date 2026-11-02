@@ -2,8 +2,8 @@
 
 //! 骨骼动画解析层的本地真实数据批量验证（需 XIV_GAME_DIR 指向游戏安装目录）。
 //!
-//! 覆盖四条链路，全部走 vendored 的 `xiv_companion_data::vendor::physis_havok`
-//!（derived from physis, MIT）：
+//! 覆盖四条链路，全部走 `icexiv-data` 的受检 Havok reader
+//!（`formats/havok/{tagfile,spline}.rs`，项目自有实现）：
 //! - sklb：角色骨架 c0101..c1801 + 怪物/半人骨架批量解析，断言 bone 数一致、
 //!   层级无环、reference pose 有限值，并统计 bone 数分布；
 //! - pap：动画名表 + 内嵌 hkaAnimationContainer 解码，统计 animations/bindings
@@ -12,17 +12,14 @@
 //!   bone_table 映射回 c0101 骨骼名，验证窗口链路自洽；
 //! - 采样冒烟：joy.pap 首动画在 t=0/500/1500ms 采样，断言输出长度与取值有限。
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 use physis::resource::{Resource, SqPackResource};
+use xiv_companion_data::animation::{load_animation_set_from_pap_bytes, sample_animation_pose};
+use xiv_companion_data::formats::havok::spline::SplineAnimation;
+use xiv_companion_data::formats::havok::tagfile::Tagfile;
 use xiv_companion_data::mdl_metadata_from_mdl_bytes;
-use xiv_companion_data::vendor::physis_havok::{
-    HavokAnimationContainer, HavokBinaryTagFileReader, HavokSplineCompressedAnimation,
-    animation_binding::HavokAnimationBlendHint, object::HavokObject,
-};
+use xiv_companion_data::skeleton::load_skeleton_from_sklb_bytes;
 
 fn game_dir() -> String {
     std::env::var("XIV_GAME_DIR").unwrap_or_else(|_| r"E:\_ff14\game".to_string())
@@ -168,66 +165,87 @@ fn pap_havok_bytes<'a>(bytes: &'a [u8], header: &PapHeader) -> Result<&'a [u8], 
 }
 
 // ---------------------------------------------------------------------------
-// vendored havok 解码（包一层 catch_unwind：上游对不支持项直接 panic，这里先统计分布）
+// 受检 havok 解码（直接使用 icexiv-data 的 tagfile/spline）
 // ---------------------------------------------------------------------------
 
+struct DecodedBinding {
+    animation_index: usize,
+    track_count: usize,
+    blend_hint: i32,
+}
+
 struct DecodedContainer {
-    container: HavokAnimationContainer,
-    /// hkaAnimationContainer.animations 数组（上游容器结构未保留，读原始对象）
-    animation_objects: Vec<Arc<RefCell<HavokObject>>>,
-    /// 每个 binding 的 animation 对象在 animations 数组中的下标（Arc 指针比对）
+    skeleton_count: usize,
+    /// Parallel to `container.animations`; non-spline entries stay `None`.
+    animations: Vec<Option<SplineAnimation>>,
+    bindings: Vec<DecodedBinding>,
+    /// `bindings[i]`'s animation object index in the animations array.
     binding_animation_indices: Vec<Option<usize>>,
 }
 
 impl DecodedContainer {
     fn animations_len(&self) -> usize {
-        self.animation_objects.len()
+        self.animations.len()
     }
 }
 
 fn decode_tagfile_container(havok: &[u8]) -> Result<DecodedContainer, String> {
-    catch_unwind(AssertUnwindSafe(|| {
-        let root = HavokBinaryTagFileReader::read(havok);
-        let container_obj = root.find_object_by_type("hkaAnimationContainer");
+    let tagfile = Tagfile::parse(havok).map_err(|error| error.to_string())?;
+    let container = tagfile
+        .animation_container()
+        .map_err(|error| error.to_string())?;
 
-        let animation_objects = {
-            let borrowed = container_obj.borrow();
-            borrowed
-                .get("animations")
-                .as_array()
-                .iter()
-                .map(|value| value.as_object())
-                .collect::<Vec<_>>()
+    let skeleton_count = tagfile
+        .objects(container, "skeletons")
+        .map(<[usize]>::len)
+        .unwrap_or(0);
+
+    let animation_ids = tagfile
+        .objects(container, "animations")
+        .ok_or_else(|| "container has no animations array".to_string())?
+        .to_vec();
+    let mut animations = Vec::with_capacity(animation_ids.len());
+    for &id in &animation_ids {
+        let animation = if tagfile.type_name(id) == Some("hkaSplineCompressedAnimation") {
+            Some(SplineAnimation::from_tagfile(&tagfile, id).map_err(|error| error.to_string())?)
+        } else {
+            None
         };
+        animations.push(animation);
+    }
 
-        let binding_animation_indices = {
-            let borrowed = container_obj.borrow();
-            borrowed
-                .get("bindings")
-                .as_array()
-                .iter()
-                .map(|value| {
-                    let bound = value.as_object().borrow().get("animation").as_object();
-                    animation_objects
-                        .iter()
-                        .position(|candidate| Arc::ptr_eq(candidate, &bound))
-                })
-                .collect::<Vec<_>>()
-        };
+    let binding_ids = tagfile
+        .objects(container, "bindings")
+        .ok_or_else(|| "container has no bindings array".to_string())?
+        .to_vec();
+    let mut bindings = Vec::with_capacity(binding_ids.len());
+    let mut binding_animation_indices = Vec::with_capacity(binding_ids.len());
+    for &id in &binding_ids {
+        let animation_id = tagfile
+            .object_value(id, "animation")
+            .ok_or_else(|| "binding has no animation".to_string())?;
+        let index = animation_ids
+            .iter()
+            .position(|&candidate| candidate == animation_id)
+            .ok_or_else(|| "binding animation is not in the animations array".to_string())?;
+        let track_count = tagfile
+            .ints(id, "transformTrackToBoneIndices")
+            .map(<[i32]>::len)
+            .unwrap_or(0);
+        let blend_hint = tagfile.int(id, "blendHint").unwrap_or(0);
+        bindings.push(DecodedBinding {
+            animation_index: index,
+            track_count,
+            blend_hint,
+        });
+        binding_animation_indices.push(Some(index));
+    }
 
-        DecodedContainer {
-            container: HavokAnimationContainer::new(container_obj),
-            animation_objects,
-            binding_animation_indices,
-        }
-    }))
-    .map_err(|panic| {
-        let message = panic
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_else(|| "<non-string panic>".to_string());
-        format!("havok decode panic: {message}")
+    Ok(DecodedContainer {
+        skeleton_count,
+        animations,
+        bindings,
+        binding_animation_indices,
     })
 }
 
@@ -237,72 +255,20 @@ struct SkeletonSummary {
 }
 
 fn parse_skeleton_file(bytes: &[u8]) -> Result<SkeletonSummary, String> {
+    // 受检入口已经校验长度、父索引、环与非有限值；这里仅额外读取容器骨架数。
+    let skeleton = load_skeleton_from_sklb_bytes(bytes).map_err(|error| error.to_string())?;
     let (_version, havok_offset, _scanned) = sklb_havok_offset(bytes)?;
-    let decoded = decode_tagfile_container(&bytes[havok_offset..])?;
-    if decoded.container.skeletons.is_empty() {
-        return Err("container has no skeleton".to_string());
-    }
-    let skeleton = &decoded.container.skeletons[0];
-    let bone_count = skeleton.bone_names.len();
-    if bone_count == 0 {
-        return Err("empty skeleton".to_string());
-    }
-    if skeleton.parent_indices.len() != bone_count || skeleton.reference_pose.len() != bone_count {
-        return Err(format!(
-            "array length mismatch: names={} parents={} poses={}",
-            bone_count,
-            skeleton.parent_indices.len(),
-            skeleton.reference_pose.len()
-        ));
-    }
-    for (index, name) in skeleton.bone_names.iter().enumerate() {
-        if name.is_empty() {
-            return Err(format!("bone {index} has empty name"));
-        }
-    }
-    // 层级：parent 为 -1（usize 回转）或合法下标、无自环、沿父链走 N 步必到根（无环）
-    for (index, &parent) in skeleton.parent_indices.iter().enumerate() {
-        let parent = parent as i64;
-        if parent == -1 {
-            continue;
-        }
-        if parent < 0 || parent as usize >= bone_count {
-            return Err(format!("bone {index} parent {parent} out of range"));
-        }
-        if parent as usize == index {
-            return Err(format!("bone {index} is its own parent"));
-        }
-    }
-    for start in 0..bone_count {
-        let mut seen = BTreeSet::new();
-        let mut cursor = start;
-        loop {
-            if !seen.insert(cursor) {
-                return Err(format!("parent cycle involving bone {start}"));
-            }
-            let parent = skeleton.parent_indices[cursor] as i64;
-            if parent == -1 {
-                break;
-            }
-            cursor = parent as usize;
-        }
-    }
-    // reference pose 有限值
-    for (index, pose) in skeleton.reference_pose.iter().enumerate() {
-        for value in pose
-            .translation
-            .iter()
-            .chain(pose.rotation.iter())
-            .chain(pose.scale.iter())
-        {
-            if !value.is_finite() {
-                return Err(format!("bone {index} reference pose has non-finite value"));
-            }
-        }
-    }
+    let tagfile = Tagfile::parse(&bytes[havok_offset..]).map_err(|error| error.to_string())?;
+    let container = tagfile
+        .animation_container()
+        .map_err(|error| error.to_string())?;
+    let skeleton_count = tagfile
+        .objects(container, "skeletons")
+        .map(<[usize]>::len)
+        .unwrap_or(0);
     Ok(SkeletonSummary {
-        bone_count,
-        skeleton_count: decoded.container.skeletons.len(),
+        bone_count: skeleton.bone_count(),
+        skeleton_count,
     })
 }
 
@@ -335,7 +301,7 @@ fn probe_skeleton(
     path: &str,
     distribution: &mut BTreeMap<usize, Vec<String>>,
 ) -> ProbeOutcome {
-    let Some(bytes) = resource.read(path) else {
+    let Ok(bytes) = resource.read(path) else {
         return ProbeOutcome::Missing;
     };
     match parse_skeleton_file(&bytes) {
@@ -376,7 +342,6 @@ fn scan_skeletons(
 #[ignore = "parses skeleton files from the installed game; requires XIV_GAME_DIR"]
 fn parse_skeleton_files_from_installed_game() {
     let mut resource = SqPackResource::from_existing(&game_dir());
-    resource.preload_index_files();
 
     let mut distribution: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut failures: Vec<(String, String)> = Vec::new();
@@ -460,7 +425,7 @@ fn parse_animation_files_from_installed_game() {
         println!("== {path} ==");
         let bytes = resource
             .read(path)
-            .unwrap_or_else(|| panic!("读取失败: {path}"));
+            .unwrap_or_else(|error| panic!("读取失败: {path}: {error}"));
         let header = parse_pap_header(&bytes).expect("pap header");
         println!(
             "  名表 {} 条 (havok_position={}, tmb_offset={})",
@@ -479,9 +444,10 @@ fn parse_animation_files_from_installed_game() {
         let decoded = decode_tagfile_container(havok).expect("decode container");
 
         println!(
-            "  container: animations={}, bindings={}",
+            "  container: skeletons={}, animations={}, bindings={}",
+            decoded.skeleton_count,
             decoded.animations_len(),
-            decoded.container.bindings.len()
+            decoded.bindings.len()
         );
 
         // 关键验证素材：名表数 vs animations 长度 vs bindings 长度
@@ -492,11 +458,11 @@ fn parse_animation_files_from_installed_game() {
         );
         assert_eq!(
             header.entries.len(),
-            decoded.container.bindings.len(),
+            decoded.bindings.len(),
             "名表数量应等于 container.bindings 长度"
         );
 
-        // binding → animation 对象对应（Arc 指针比对），确认两数组是否平行
+        // binding → animation 对象对应，确认两数组是否平行
         let mut parallel = true;
         for (binding_index, mapped) in decoded.binding_animation_indices.iter().enumerate() {
             println!("    binding[{binding_index}] -> animation[{mapped:?}]");
@@ -510,25 +476,23 @@ fn parse_animation_files_from_installed_game() {
         let mut total_rotation = [0u32; 16];
         let mut total_translation = [0u32; 4];
         let mut total_scale = [0u32; 4];
-        for (anim_index, binding) in decoded.container.bindings.iter().enumerate() {
-            // duration 经 trait（dyn HavokAnimation）读取
-            let duration = binding.animation.duration();
-
-            // 量化/tracks 经具体类型读取：binding.animation 由上游装箱，这里从
-            // container.animations 同位对象重建具体类型（已验证二者一一对应）。
-            let animation_object = decoded.animation_objects[anim_index].clone();
-            let type_name = animation_object.borrow().object_type.name.clone();
-            assert_eq!(
-                &*type_name, "hkaSplineCompressedAnimation",
-                "只支持 spline 压缩动画，其余分支上游会 panic"
-            );
-            let spline = HavokSplineCompressedAnimation::new(animation_object);
-            let (rotation, translation, scale) = spline.quantization_histogram();
+        for (anim_index, binding) in decoded.bindings.iter().enumerate() {
+            let animation = decoded.animations[binding.animation_index]
+                .as_ref()
+                .unwrap_or_else(|| panic!("animation[{anim_index}] 不是 spline 压缩动画"));
+            animation
+                .validate()
+                .expect("真实动画应通过受检量化/结构预检");
+            let duration = animation.duration;
+            let (rotation, translation, scale) = animation
+                .quantization_histogram()
+                .expect("quantization histogram");
             println!(
-                "    animation[{anim_index}]: duration={duration:.3}s tracks={} frames={} blocks={}",
-                spline.number_of_transform_tracks(),
-                spline.num_frames(),
-                spline.num_blocks()
+                "    animation[{anim_index}]: duration={duration:.3}s tracks={} frames={} blocks={} blend_hint={}",
+                animation.number_of_transform_tracks,
+                animation.num_frames,
+                animation.num_blocks,
+                binding.blend_hint
             );
             println!(
                 "      rotation量化 POLAR32={} THREECOMP40={} THREECOMP48={} THREECOMP24={} STRAIGHT16={} UNCOMPRESSED={} 其它={}",
@@ -562,8 +526,7 @@ fn parse_animation_files_from_installed_game() {
 
             // 采样输出长度 == track 数 == binding 的 transformTrackToBoneIndices 长度
             assert_eq!(
-                spline.number_of_transform_tracks(),
-                binding.transform_track_to_bone_indices.len(),
+                animation.number_of_transform_tracks, binding.track_count,
                 "animation[{anim_index}] tracks 与 binding 骨骼映射长度不一致"
             );
         }
@@ -612,16 +575,10 @@ fn parse_animation_files_from_installed_game() {
 fn load_skeleton_name_set(resource: &mut SqPackResource, path: &str) -> (usize, BTreeSet<String>) {
     let bytes = resource
         .read(path)
-        .unwrap_or_else(|| panic!("读取失败: {path}"));
-    let summary = parse_skeleton_file(&bytes).expect("parse skeleton");
-    let (_version, havok_offset, _) = sklb_havok_offset(&bytes).unwrap();
-    let decoded = decode_tagfile_container(&bytes[havok_offset..]).unwrap();
-    let names = decoded.container.skeletons[0]
-        .bone_names
-        .iter()
-        .cloned()
-        .collect();
-    (summary.bone_count, names)
+        .unwrap_or_else(|error| panic!("读取失败: {path}: {error}"));
+    let skeleton = load_skeleton_from_sklb_bytes(&bytes).expect("parse skeleton");
+    let count = skeleton.bone_count();
+    (count, skeleton.bone_names.into_iter().collect())
 }
 
 #[test]
@@ -632,7 +589,7 @@ fn validate_submesh_bone_window_links_to_skeleton_names() {
     let model_path = "chara/demihuman/d0001/obj/equipment/e0001/model/d0001e0001_top.mdl";
     let model_bytes = resource
         .read(model_path)
-        .unwrap_or_else(|| panic!("读取失败: {model_path}"));
+        .unwrap_or_else(|error| panic!("读取失败: {model_path}: {error}"));
     let metadata = mdl_metadata_from_mdl_bytes(model_path, &model_bytes).expect("parse mdl");
 
     // demihuman 模型绑定的是自身骨架（skl_d0001b0001），不是 c0101；
@@ -718,7 +675,7 @@ fn sample_joy_animation_smoke() {
     let path = PAP_SAMPLES[0];
     let bytes = resource
         .read(path)
-        .unwrap_or_else(|| panic!("读取失败: {path}"));
+        .unwrap_or_else(|error| panic!("读取失败: {path}: {error}"));
     let header = parse_pap_header(&bytes).expect("pap header");
     assert_eq!(
         header.entries.len(),
@@ -728,25 +685,20 @@ fn sample_joy_animation_smoke() {
     );
     let havok = pap_havok_bytes(&bytes, &header).expect("embedded tagfile");
     let decoded = decode_tagfile_container(havok).expect("decode container");
-    assert_eq!(
-        decoded.container.bindings.len(),
-        1,
-        "joy.pap 预期单 binding"
-    );
+    assert_eq!(decoded.bindings.len(), 1, "joy.pap 预期单 binding");
 
-    let binding = &decoded.container.bindings[0];
-    let expected_tracks = binding.transform_track_to_bone_indices.len();
+    let binding = &decoded.bindings[0];
+    let animation = decoded.animations[binding.animation_index]
+        .as_ref()
+        .expect("joy.pap 应为 spline 压缩动画");
+    let expected_tracks = animation.number_of_transform_tracks;
     println!(
         "joy.pap: tracks={expected_tracks}, havok_index={}, blend_hint={}",
-        header.entries[0].havok_index,
-        match &binding.blend_hint {
-            HavokAnimationBlendHint::Normal => "Normal",
-            HavokAnimationBlendHint::Additive => "Additive",
-        }
+        header.entries[0].havok_index, binding.blend_hint
     );
 
     for time_ms in [0.0f32, 500.0, 1500.0] {
-        let transforms = binding.animation.sample(time_ms);
+        let transforms = animation.sample(time_ms).expect("sample spline");
         assert_eq!(
             transforms.len(),
             expected_tracks,
@@ -774,5 +726,36 @@ fn sample_joy_animation_smoke() {
             &first.rotation[..4],
             &first.scale[..3]
         );
+    }
+
+    // 公开 PAP → ModelAnimationSet → SkeletonPose 路径。
+    let skeleton_bytes = resource
+        .read(&human_skeleton_path(101))
+        .expect("读取 c0101 骨架");
+    let skeleton = load_skeleton_from_sklb_bytes(&skeleton_bytes).expect("parse skeleton");
+    let set = load_animation_set_from_pap_bytes(&bytes, &skeleton).expect("load animation set");
+    assert_eq!(set.animations.len(), 1);
+    assert!(
+        set.animations[0].name.ends_with("joy"),
+        "unexpected animation name {:?}",
+        set.animations[0].name
+    );
+    for time_ms in [0.0f32, 500.0, 1500.0] {
+        let pose = sample_animation_pose(&set, 0, time_ms, &skeleton);
+        assert_eq!(pose.bone_count(), skeleton.bone_count());
+        for bone in 0..pose.bone_count() {
+            let transform = pose.transform(bone).unwrap();
+            for value in transform
+                .translation
+                .iter()
+                .chain(transform.rotation.iter())
+                .chain(transform.scale.iter())
+            {
+                assert!(
+                    value.is_finite(),
+                    "pose t={time_ms}ms bone {bone} 出现非有限值"
+                );
+            }
+        }
     }
 }

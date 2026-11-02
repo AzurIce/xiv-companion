@@ -28,7 +28,9 @@ fn audit_installed_model_skin_uv_references() {
     let mut definitions = 0;
     let mut enabled_layers = 0;
     for path in MODEL_SKIN_PATHS {
-        let bytes = resource.read(path).unwrap_or_else(|| panic!("read {path}"));
+        let bytes = resource
+            .read(path)
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         let file = xiv_companion::AvfxFile::parse(&bytes)
             .unwrap_or_else(|error| panic!("parse {path}: {error}"));
         for (particle_index, particle) in file.particles.iter().enumerate() {
@@ -83,7 +85,9 @@ fn audit_installed_model_skin_staged_lifetimes() {
     let mut observed = 0_usize;
     let mut draw_age_differences = 0_usize;
     for path in MODEL_SKIN_PATHS {
-        let bytes = resource.read(path).unwrap_or_else(|| panic!("read {path}"));
+        let bytes = resource
+            .read(path)
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         let file = xiv_companion::AvfxFile::parse(&bytes)
             .unwrap_or_else(|error| panic!("parse {path}: {error}"));
         let indexes = file
@@ -461,7 +465,7 @@ fn audit_installed_decal_pass_slots() {
         let path = format!("shader/sm5/shpk/{name}.shpk");
         let bytes = resource
             .read(&path)
-            .unwrap_or_else(|| panic!("read {path}"));
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         let package = AuditShaderPackage::read_options(
             &mut std::io::Cursor::new(&bytes),
             binrw::Endian::Little,
@@ -564,7 +568,9 @@ fn audit_installed_model_skin_aura_textures() {
     let mut enabled_counts = [0_usize; 3];
     let mut target_counts = [0_usize; 2];
     for path in MODEL_SKIN_PATHS {
-        let bytes = resource.read(path).unwrap_or_else(|| panic!("read {path}"));
+        let bytes = resource
+            .read(path)
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         let file = xiv_companion::AvfxFile::parse(&bytes)
             .unwrap_or_else(|error| panic!("parse {path}: {error}"));
         let texture_path = |index: i32| {
@@ -625,9 +631,9 @@ fn audit_installed_model_skin_aura_textures() {
                     texture_path.ends_with(".atex"),
                     "not an ATEX: {texture_path}"
                 );
-                let bytes = resource
-                    .read(texture_path)
-                    .unwrap_or_else(|| panic!("unreadable Aura texture {texture_path} in {path}"));
+                let bytes = resource.read(texture_path).unwrap_or_else(|error| {
+                    panic!("unreadable Aura texture {texture_path} in {path}: {error}")
+                });
                 let decoded = xiv_companion_data::avfx::decode_atex_rgba(&bytes)
                     .unwrap_or_else(|| panic!("undecodable Aura texture {texture_path} in {path}"));
                 let is_hdr = !decoded.rgba16f_mips.is_empty();
@@ -740,7 +746,7 @@ fn audit_installed_model_skin_surface_targets() {
         let imc = ImcFile::parse(
             &resource
                 .read(&imc_path)
-                .unwrap_or_else(|| panic!("read {imc_path}")),
+                .unwrap_or_else(|error| panic!("read {imc_path}: {error}")),
         )
         .unwrap_or_else(|error| panic!("parse {imc_path}: {error}"));
         let imc_variants = imc
@@ -863,7 +869,7 @@ fn audit_installed_model_skin_surface_targets() {
             let shader_path = format!("shader/sm5/shpk/{name}");
             let bytes = resource
                 .read(&shader_path)
-                .unwrap_or_else(|| panic!("read {shader_path}"));
+                .unwrap_or_else(|error| panic!("read {shader_path}: {error}"));
             let package = AuditShaderPackage::read_options(
                 &mut std::io::Cursor::new(&bytes),
                 binrw::Endian::Little,
@@ -957,7 +963,7 @@ fn audit_installed_model_skin_aura_shaders() {
         let path = format!("shader/sm5/shpk/{name}.shpk");
         let bytes = resource
             .read(&path)
-            .unwrap_or_else(|| panic!("read {path}"));
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         let package = AuditShaderPackage::read_options(
             &mut std::io::Cursor::new(&bytes),
             binrw::Endian::Little,
@@ -1205,7 +1211,7 @@ fn export_installed_vfx_shaders() {
         let path = format!("shader/sm5/shpk/{name}.shpk");
         let bytes = resource
             .read(&path)
-            .unwrap_or_else(|| panic!("read {path}"));
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
         fs::write(output_dir.join(format!("{name}.shpk")), &bytes).expect("write package");
         let package = AuditShaderPackage::read_options(
             &mut std::io::Cursor::new(&bytes),

@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         for path in paths.as_array().ok_or("invalid fallback examples")? {
             let path = path.as_str().ok_or("invalid fallback path")?;
-            let bytes = resource.read(path).ok_or("missing AVFX")?;
+            let bytes = resource.read(path)?;
             let file = xiv_companion::AvfxFile::parse(&bytes)?;
             let emitters = file
                 .emitters

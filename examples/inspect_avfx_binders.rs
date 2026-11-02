@@ -13,10 +13,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let raw_dir = std::path::PathBuf::from(std::env::var("XIV_GAME_DIR")?);
     let game_dir = normalize_game_dir(&raw_dir)?;
     let mut resource = SqPackResource::from_existing(game_dir.to_str().ok_or("game dir UTF-8")?);
-    let bytes = resource.read(&path).ok_or("missing AVFX")?;
+    let bytes = resource.read(&path)?;
     let file = AvfxFile::parse(&bytes)?;
     if let Some(model_path) = std::env::args().nth(2) {
-        let model_bytes = resource.read(&model_path).ok_or("missing MDL")?;
+        let model_bytes = resource.read(&model_path)?;
         let points =
             xiv_companion_data::mdl_metadata::mdl_element_ids_from_mdl_bytes(&model_bytes)?;
         println!(

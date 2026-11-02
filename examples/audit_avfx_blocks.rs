@@ -34,7 +34,7 @@ fn main() {
     let mut tp_borders = BTreeMap::<i32, usize>::new();
     let mut tp_indexes = BTreeMap::<i32, usize>::new();
     for path in &paths {
-        let Some(bytes) = resource.read(path) else {
+        let Ok(bytes) = resource.read(path) else {
             continue;
         };
         files += 1;
