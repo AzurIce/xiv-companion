@@ -1,0 +1,77 @@
+= VFX 时钟、模拟与宿主输入
+
+AVFX 是定义；一个运行中的特效还包含实例、历史、时钟、随机消费顺序和外部查询结果。成功解析字段只是起点。
+
+通用对象与参数说明从 [XIV Dev Wiki：Visual Effects](https://xiv.dev/game-data/visual-effects) 下的专题阅读，生命周期的入门说明见 [Object Life](https://xiv.dev/game-data/visual-effects/object-life)。本章保留的是当前模拟器的执行阶段、provider 和支持条件，不重述其通用定义。
+
+== 运行时层次
+
+`formats/avfx/sim.rs` 的 `VfxRuntime` 持有解析定义、bind points 和可选宿主输入。`formats/avfx/sim/playback.rs` 的 `VfxPlayback` 管理受支持的逐步播放路径；renderer 的 `WeaponVfxPlayback` / `WeaponVfxParticles` 协调多个挂载与 GPU 批次。
+
+```text
+WeaponVfxAttachments
+  → 每个挂载的定义、纹理与索引空间
+  → 宿主 pose / Binder targets / 相机 / 随机环境
+  → Scheduler / Timeline / Emitter / Particle 生命周期
+  → 曲线、运动、颜色、UV、几何、排序数据
+  → VfxQuad / VfxMeshInstance / Polyline / Decal / ModelSkin
+  → VfxParticles GPU upload + Aura binding
+```
+
+多个挂载可以共享最终 GPU 批次，但不能混淆各自的粒子、贴图、模型定义下标。
+
+== 时间不是一个统一的 t
+
+至少区分：
+
+- Web / renderer 播放时钟：秒。
+- AVFX authored curve / lifespan：帧语义，经运行时边界换算。
+- local age：循环内的年龄。
+- total / accumulated age：跨循环累计时钟。
+- update 阶段与 draw 阶段：部分状态只在相应阶段推进。
+
+Add / Repeat、出生延迟、父实例死亡回调和重新循环可能选择不同年龄。把所有参数都改成对总时间直接 evaluate，会改变创建次数、拖尾和随机消费。
+
+`clock.rs`、`timeline.rs`、`scheduling.rs`、`scheduler_ordinary.rs`、`playback.rs` 和 `trace.rs` 分担这些阶段。连续求值与 staged 路径有各自准入检查和 fallback，不能声称任意配置都能在两条路径间等价切换。
+
+== 曲线与随机
+
+`formats/avfx/parser.rs` 保留单轴、多轴、颜色曲线。标量 key 的 x / y 与 z 不一定是三个值分量；它们还参与样条切线编码。颜色 RGB 又有自己的插值与时间规则。
+
+`client_random.rs`、scalar / vector / color / particle / binder curve 模块区分构造期随机、逐事件随机与共享随机流。
+
+“种子相同”不足以保证回放一致：构造顺序、跳过的更新、实际提交的绘制和共享随机调用数量也会影响结果。排序不仅影响透明像素，有些路径还影响 draw 阶段随机调用。
+
+== 宿主与相机 provider
+
+VfxRuntime 可接收 Binder targets、owner / target objects、Document transform / scale、camera snapshot、ModelSkin target 和相关曲线环境。
+
+这些输入有不同 owner，不能以“缺失时全部给原点 / identity”假装完整实现：
+
+| 输入 | 来源 | 缺失的影响 |
+| --- | --- | --- |
+| Binder BPID 与骨骼姿态 | owner MDL ElementId + SKLB + 当前 pose | 挂点及跟随不正确 |
+| 目标 / 角色对象 | 角色与目标宿主 | 不能完整执行目标查询与相关绑定 |
+| camera view / binder camera | 当前预览相机 | 面向、缩放与屏幕相关行为不同 |
+| Document / 创建顺序 | 播放宿主与生命周期 | Aura 选择、比例和历史有差异 |
+| 场景深度 / 屏幕资源 | GPU 场景 | soft particle、decal、扭曲等不完整 |
+
+状态可静态构造、可接收显式输入、网页实际逐帧提供，是三种不同支持程度。
+
+== 运动与几何
+
+`motion.rs` 和形状模块处理发射方向、初速度、阻力、重力等受支持子集。Disc、Polygon、Laser、Line、Polyline、Decal 等各自有专门数据 / 几何路径。
+
+Polyline 需要历史点，其 draw / update 时序不能用“每次 seek 都补齐所有绘制”代替。跳过中间绘制、直接跳到四秒和逐帧播放到四秒，不一定得到同一结果。
+
+== Aura / ModelSkin
+
+这类效果作用于目标模型表面，不是简单漂浮 quad。`WeaponVfxAuraBindings` 维护 target model path、priority、instance / attachment 身份、creation order 与最后参数。
+
+同目标、同优先级时有创建顺序规则；效果结束与较早资源恢复也影响绑定。不能仅遍历定义、取第一个 Aura 贴图就完成等价实现。
+
+== 怎样描述覆盖
+
+使用粒子类型、具体配置、运行路径和 provider 条件描述支持范围。未知 / 不支持配置保持 warnings / diagnostics；部分 fallback 会显示结果，但不是原行为。
+
+安装审计的定义数量、有限数值数量和测试通过数量都不能直接换算成全游戏 VFX 完成百分比。要证明视觉一致，需要固定宿主、相机、帧序列和场景，见 [验证方法](verification.not)。

@@ -1,0 +1,274 @@
+#import "../_components/pele/lib.notc" as pele;
+= SqPack 资料与项目补充
+
+通用格式直接阅读 [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)，本书不逐节复述字段规范。下面用一条路径贯穿图中的各个位置，区分可以直接计算的值和必须从实际资源读取的值。
+
+本章只保留该页面尚未展开的 DAT 条目 / 压缩块，以及当前实现需要注意的差异。项目调用链与读取限制见 [资源入口](resources.not)。以下补充以 Win32 小端路径为主，不是所有平台、版本的完整规范。
+
+== 贯穿例子：先确定内部路径
+
+以下是游戏内部路径，不是磁盘上单独存在的文件，也不是 DAT 的文件名：
+
+```text
+chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl
+```
+
+可以用 `category/[repository/]path` 概括内部路径，但方括号表示可省略，不是实际路径字符。本例 category 为 `chara`，repository 隐含为 `ffxiv`；`weapon` 是资源子路径，不是 repository。不要自行插入 `ffxiv/`：`chara/ffxiv/weapon/...` 是另一条字符串，不是本例完整路径的补全形式。
+
+扩展仓库的某些内部路径会显式出现 repository，例如 Wiki 中的 `music/ex2/bgm_ex2_system_title.scd`。内部路径如何选择仓库与物理文件存放在 `sqpack/ffxiv/` 或 `sqpack/ex2/` 下，是相关但不同的两件事；上述完整原字符串才参与本例 hash 计算。
+
+== 从内部路径选择哪组 index
+
+查找分成两步：先由路径的分类 / 仓库选出候选索引文件，再在这些索引里查 hash。不是先对全部 index 做一次全局 hash 搜索，也不是用 hash 数值来推算 index 文件名。
+
+本例对应的一个候选物理路径可以拆成：
+
+```text
+game / sqpack / ffxiv / 04 00 00 . win32 . index2
+  │      │       │      │  │  │      │       │
+  │      │       │      │  │  │      │       └─ 索引种类
+  │      │       │      │  │  │      └───────── 平台标记
+  │      │       │      │  │  └──────────────── chunk 编号
+  │      │       │      │  └─────────────────── 扩展 / 仓库编号
+  │      │       │      └────────────────────── category 编号
+  │      │       └───────────────────────────── repository 目录
+  │      └───────────────────────────────────── 资源包目录
+  └──────────────────────────────────────────── 安装内的游戏目录
+```
+
+上面为了标注插入了空格，实际文件名是 `040000.win32.index2`，实际相对安装路径为 `game/sqpack/ffxiv/040000.win32.index2`。如果用户选择的已经是 game 目录，则从 `sqpack/ffxiv/...` 开始，不再加一个 game。
+
+| 本例片段 | 值从哪里来 | 含义 |
+| --- | --- | --- |
+| ffxiv | 内部路径没有显式 exN，当前路由默认选基础仓库 | 选择物理 repository 目录 |
+| 04 | 内部路径首段 chara，经 category_for_path 映射 | chara 分类编号 0x04，不是路径 hash |
+| 第一个 00 | ffxiv 经 expansion_id_for_repository 得到 0 | 基础仓库编号，不是补丁号 |
+| 第二个 00 | 本例 chara 使用 chunk 0 | 该分类 / 仓库中的索引分组编号 |
+| win32 | 当前浏览器后端所读的平台 | 与资源文件平台对应，不是当前操作系统名称 |
+| index2 | 当前尝试的索引种类 | 同组也可尝试 index，不是 chunk 2 或 dat2 |
+
+本例的两份候选索引是：
+
+```text
+game/sqpack/ffxiv/040000.win32.index
+game/sqpack/ffxiv/040000.win32.index2
+```
+
+`040000.win32` 是本例整组文件的共同前缀；换成 `.dat0`、`.dat1` 就是同组的数据分卷。chunk 已经包含在 `040000` 里，不能把它与后缀 `.dat1` 的分卷编号混为一谈。
+
+== 其他路径与多 chunk 分类怎样查
+
+把例子换成 `music/ex2/bgm_ex2_system_title.scd`：首段 music 选择 category `0c`，第二段 ex2 选择 repository `ex2` 和扩展编号 `02`。当前代码首先尝试：
+
+```text
+game/sqpack/ex2/0c0200.win32.index
+game/sqpack/ex2/0c0200.win32.index2
+```
+
+音乐属于当前实现允许多个 chunk 的分类；如果尚未命中，再尝试 chunk 1 的 `0c0201.win32.index` / `.index2`，依此继续。这些是候选文件名示例，不是对某个安装版本中文件存在性的声明。
+
+`sqpack_index_candidates_for_path` 的当前策略如下：
+
+- category 与 repository 先由路径确定，不探测其他不相关分类 / 仓库。
+- 每个候选 chunk 先尝试 `.index`，再尝试 `.index2`；任一文件查到记录就停止，不要求两份都读。
+- chara 等非可变 chunk 分类只生成 chunk 0 的候选。
+- bg、cut、sound、music 分类先生成 chunk 0，再生成 1～254 的候选；这是本项目当前的范围和探测策略，不是游戏客户端的行为规范。
+- 不存在的索引会跳过并记入 missing_index_cache；可用索引解析后进入 index_cache；成功的路径到索引位置进入 entry_location_cache。这些缓存随 BrowserSqPack 实例存在，不是跨所有页面的永久缓存。
+
+因此“能由路径知道查哪个”应理解为：本例可以直接缩小到两份候选；多 chunk 分类仍可能需要探测一个候选集合。目录里看到很多 index，并不意味着每个资源请求都从头遍历全部文件。
+
+路由依据和候选构造在 `src/app/browser_sqpack.rs` 的 `category_for_path`、`repository_for_path`、`sqpack_index_candidates_for_path`；实际尝试和缓存由 `find_entry_location` 完成。这里跟踪的是浏览器后端，不将它推广为所有 Resource 实现的策略。
+
+== 在选定索引里查 hash
+
+回到最初的武器路径：当前 Physis 将它拆成下面两个字符串，目录末尾没有斜杠：
+
+```text
+目录：chara/weapon/w2001/obj/body/b0102/model
+文件：w2001b0102.mdl
+```
+
+按小写 UTF-8 字节计算 JamCRC，得到这些确定的值：
+
+| 对应位置 | 本例实算值 |
+| --- | --- |
+| index 的 directory hash | 0xD92E2155 |
+| index 的 filename hash | 0x1E11E89B |
+| index 的组合查询键 | 0xD92E21551E11E89B |
+| index2 的完整路径查询键 | 0x89E0188F |
+
+index 使用上面两个部分组成的键；index2 对完整路径另算一次，不是将两个部分 hash 拼接或再次 hash。它们是两种查找入口，不需要先经过 index 再经过 index2。
+
+这些 hash 只由路径和算法决定；它们不证明该文件在某个安装版本中存在，也不能算出文件存在哪个 DAT、哪个位置。后两项必须查该版本索引。
+
+== 项目的读取边界
+
+#pele.diagram(r#"""
+flowchart TB
+    path["chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl"] --> route[category 04 / repository ffxiv / chunk 00]
+    route --> group[选定索引组：sqpack/ffxiv/040000.win32]
+    group --> index[.index 查询键：0xD92E21551E11E89B]
+    group --> index2[.index2 查询键：0x89E0188F]
+    index --> location[任一索引命中：data = 0x00020002]
+    index2 --> location
+    location --> header
+    subgraph entry[演示：040000.win32.dat1 中的一个 entry]
+        header[0x00100000：entry 头与块表] --> block0[0x00100180：数据块 0]
+        header --> block1[0x00100200：数据块 1 / 其他块]
+    end
+    block0 --> unpack[解压并按类型重建]
+    block1 --> unpack
+    unpack --> bytes[逻辑文件字节]
+    bytes --> parser[MDL / MTRL / TEX / AVFX parser]
+"""#)
+
+图中连接的是项目的查找、读取和解包步骤，不重复 Wiki 的索引字段布局。entry 中只画出块组织示意，不按字节大小或实际偏移比例绘制；当前固定读取窗口与图中的逻辑条目边界也不等价。
+
+图中使用完整内部路径。两条索引边表示两种替代查法，不表示必须同时读取两份索引。hash 为实算值；data、DAT 分卷、entry / block 偏移均为下文明确设定的演示值，不是从本地游戏安装提取的记录。
+
+== 索引命中后：DAT 编号与 entry 偏移
+
+对于这条 chara 路径，当前项目会查询 `sqpack/ffxiv/040000.win32.index` 或同名前缀的 `.index2`。假设普通、非 synonym 记录的数据位置字段是：
+
+```text
+data = 0x00020002                  ← 本例设定的演示值
+DAT 编号 = 1                     ← 选择 .dat1
+entry 偏移 = 0x00100000           ← DAT 文件开头起的字节位置
+           = 1048576 bytes = 1 MiB
+```
+
+此时选择的物理文件为：
+
+```text
+game/sqpack/ffxiv/040000.win32.dat1
+```
+
+DAT 编号是一个整数；在普通记录的编码字段里占 3 位，在磁盘文件名里写成 `.dat0`、`.dat1` 等后缀。编号 1 不是“1 字节偏移”、不是 LOD1，也不保证本例路径实际位于 `.dat1`。
+
+entry 偏移指向 DAT 内这条记录的头部，不指向 index 表项、解压后 MDL 的第几个字节，也不直接指向压缩 payload。不同安装 / 补丁版本可以给同一内部路径分配不同的物理位置。
+
+== entry 和数据都在 DAT 内
+
+是的：索引记录在 `.index` / `.index2`；entry 的头、类型专用块表和数据块都位于被选中的 `.datN`。一个 entry 描述一个逻辑文件的存储，数据块是这个 entry 的组成部分，不是存在另一种“data 文件”里。
+
+继续设定一个 Model 类型条目：header size 为 `0x180`，首块相对 entry 内容区的 offset 为 0，块头为 `0x10` 字节，压缩 payload 长 `0x60` 字节；加上 padding 后下一块在 `0x00100200`。这些长度也都是教学假设，不是一份完整、可解析的 MDL 样本。
+
+| DAT 内的绝对位置 | 本例放置的内容 |
+| --- | --- |
+| 0x00000000 起 | DAT 的全局容器头等其他内容；不是本 entry 起点 |
+| 0x00100000 | 本 entry 头：size=0x180、type=3，以及模型专用元数据 / 块表 |
+| 0x00100180 | 首个数据块的块头 |
+| 0x00100190 | 首块的压缩 payload 开始 |
+| 0x001001F0 | 首块 payload 结束，随后是本例的 padding |
+| 0x00100200 | 下一数据块的块头；后续块省略 |
+
+这里把首块 offset 设为零，方便区分 entry 起点、内容区起点和 payload 起点；真实 Model 的各段位置应按其专用元数据计算。不能给所有资源固定加 `0x180` 或 `0x10`，也不能由本例推断其他类型使用同一布局。
+
+独立库 `sqpack::read_entry` 调用上游 `SqPackData::read_from_reader`，根据条目类型重建完整逻辑字节，再由 MDL parser 解释。恢复出来的 MDL 通常先在内存中，并不是索引还会指向磁盘上的另一份裸 `.mdl` 文件。
+
+== 复算 hash、编码位置与索引记录
+
+下面只用 Python 标准库复算本例，不读取游戏、不创建 DAT，也不声称本例文件已存在。`data` 的构造只用于本例的普通、非 synonym 条目。
+
+```python
+import struct
+import zlib
+
+path = "chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl"
+directory, filename = path.lower().rsplit("/", 1)
+
+def jamcrc(text):
+    return zlib.crc32(text.encode("utf-8")) ^ 0xFFFFFFFF
+
+index_hash = (jamcrc(directory) << 32) | jamcrc(filename)
+index2_hash = jamcrc(path.lower())
+
+# 只是假设查到的位置，不是从路径计算得到。
+dat_id = 1
+entry_offset = 0x00100000
+assert 0 <= dat_id < 8 and entry_offset % 128 == 0
+data = (entry_offset // 8) | (dat_id << 1)
+assert (data & 1) == 0
+assert ((data & 0x0E) >> 1) == dat_id
+assert (data & ~0x0F) * 8 == entry_offset
+
+print(f"index  = 0x{index_hash:016X}")
+print(f"index2 = 0x{index2_hash:08X}")
+print(f"data   = 0x{data:08X}")
+print("index record :", struct.pack("<QII", index_hash, data, 0).hex(" "))
+print("index2 record:", struct.pack("<II", index2_hash, data).hex(" "))
+```
+
+Win32 小端记录示例输出如下。第一行 index 的 u64 查询键以低位字节先写，因此先看到 filename hash，再看到 directory hash；两种记录中相同的 `02 00 02 00` 都是演示位置字段。
+
+```text
+index  = 0xD92E21551E11E89B
+index2 = 0x89E0188F
+data   = 0x00020002
+index record : 9b e8 11 1e 55 21 2e d9 02 00 02 00 00 00 00 00
+index2 record: 8f 18 e0 89 02 00 02 00
+```
+
+== 对照 Wiki 时的实现注意点
+
+- 当前 Physis 的 `SqPackIndex::calculate_hash` 使用小写路径和 JamCRC，拆分目录时不带末尾斜杠；实现应以实际代码与样本核对，避免只按 Wiki 的简述替换 CRC 算法。
+- Wiki 标为 unknown 的位置字段最低位，在 Lumina / Physis 中命名为 is_synonym；完整 reader 还需处理相关碰撞记录。当前项目能读取普通条目不代表覆盖全部特殊索引情况。
+- Wiki 中固定仓库数量、文件大小限制等具有年代性，不作为本项目的跨版本常量。
+
+== DAT 里面是 entry，不是一个裸 MDL
+
+到达条目偏移后，先读取 entry header。常见开头是：
+
+```text
++0x00  u32  entry header size
++0x04  u32  content type
++0x08  u32  解包后的逻辑文件大小
+…            类型专用字段 / 块表
+```
+
+内容类型决定后面的读取与重建方式：
+
+- 1 Empty：空占位。
+- 2 Standard：一般二进制文件，按块表解压并拼接；许多 MTRL、AVFX、EXD 等走这一类。
+- 3 Model：模型专用分段，组织 stack / runtime、各 LOD vertex / index 等并重建逻辑 MDL。
+- 4 Texture：纹理专用块组及相关头信息，重建逻辑 TEX。
+
+“类型 2”不是“贴图 2 号”，也不是游戏逻辑文件的统一扩展名编号。
+
+Standard 的块表记录相对偏移与大小信息，块位置通常按 `entry_start + entry_header_size + block_offset` 计算。Model / Texture 有不同的分段表，不能套用同一套 Standard 拼接公式。
+
+== 压缩块和两层解码
+
+常见数据块包含 16 字节块头：header size、保留字段、压缩长度 / 未压缩标记、解压长度，后跟 payload 和可能的对齐。
+
+`32000`（0x7D00）是常见未压缩标记；压缩块采用 Deflate，当前项目用 raw Deflate decoder。旧研究可能笼统称它为 zlib，不能据此假设每块都有 zlib wrapper。
+
+#pele.diagram(r#"""
+flowchart TB
+    subgraph storage[第一层：容器解包]
+        direction LR
+        blocks[SqPack 数据块] --> unpack[解压与重建]
+        unpack --> tex[TEX 逻辑字节]
+    end
+    subgraph content[第二层：纹理内容处理]
+        direction LR
+        decode[TEX / BC 解码] --> pixels[RGBA / float 像素]
+        pixels --> gpu[GPU texture]
+    end
+    tex --> decode
+"""#)
+
+这说明“DAT 已解压”仍不等于“贴图像素已解码”。类似地，恢复 MDL 后还要解析顶点布局、mesh、材质引用和 shape。
+
+DAT 不是一个从头连续压缩到尾的大流。因此可以直接读取某个条目的相关块；但不能在一个 Deflate 块中间随意开始解压。文件长度、块表、对齐与边界都应校验，不能把旧文档中的 2 GB 或 16 KiB 观察值当成跨版本安全常量。
+
+HTTP Range 与资源接口的衔接、当前 64 MiB 读取窗口和网络设计见 [资源入口](resources.not) 与 [分发边界](portability.not)。
+
+== 现成网页与源码
+
+- [Lumina：SqPackIndexHeader.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Structs/SqPackIndexHeader.cs)：完整一些的索引头、16 / 8 字节表项、synonym 与位置解码。
+- [Lumina：SqPackFileInfo.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Structs/SqPackFileInfo.cs)：Standard、Model、Texture 的 entry / block 结构，适合对照 DAT。
+- [早期 DAT 研究](https://github.com/xivapi/ffxiv-datamining/blob/master/research/explorer_sqpack_dat_files.txt)：有十六进制偏移说明，但更新于 2014 年，包含未知字段、旧限制及旧命名，仅作历史参考。
+- [xivModdingFramework 的 SqPack 实现](https://github.com/TexTools/xivModdingFramework/tree/master/xivModdingFramework/SqPack)：需要完整读写与碰撞处理时继续核对现代实现。
+
+本仓 `src/app/browser_sqpack.rs` 负责浏览器文件访问与读取窗口；独立库 `storage/sqpack.rs` 提供路由与解包入口，上游 Physis 的 `src/sqpack/index.rs`、`data.rs` 负责索引和 DAT。它们说明“我们现在怎么读”，不能自动充当已覆盖所有格式边界的规范。

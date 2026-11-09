@@ -1,0 +1,66 @@
+= GPU 上传、场景与合成
+
+GPU crate 为 `crates/xiv-companion-render`，feature `renderer` 启用 wgpu / WESL 等依赖。它依赖 data crate 的 CPU 类型，但不开启 game-data 也可以消费提前准备的模型。
+
+== 三个主要对象
+
+| 对象 | 生命周期与职责 |
+| --- | --- |
+| ModelRenderContext | device / queue、管线、layout、相机 uniform、场景与后处理资源；应跨模型复用 |
+| ModelInstance | 一个模型的 vertex / index、draw batches、材质绑定、joint 表和 buffer |
+| ModelRenderer | context + 单实例的便利封装 |
+
+`ModelRenderData` 暴露 bounds、materials、textures、meshes，另可报告 mesh component。它是 Rust CPU 接口，不是直接传 MDL、PNG、glTF URL 的文件加载 API。
+
+== 实例创建
+
+`create_model_with_skeleton` 大致执行：
+
+```text
+ModelRenderData + PreparedModelOptions + 可选 ModelSkeleton
+  → prepare / flatten / shape / visibility
+  → 汇总 joint names，重映射顶点 blend indices
+  → 上传 vertex / index / transparent index buffers
+  → 材质 uniform、纹理、sampler、bind groups
+  → 初始化 joint storage
+  → ModelInstance
+```
+
+纹理在实例批次间去重，缓存随实例生命周期；不能据此假定不同模型实例之间已经有全局纹理资产池。
+
+`set_model` 重建实例而复用 context；`update_materials` 刷新材质；`update_joint_matrices` 更新姿态，不要求重建材质。MSAA 1× / 4× 属于 context / target 创建参数，不能只改每帧 options 就当作管线已经重建。
+
+== 场景入口与相机
+
+`ModelRenderContext::render_scene` 接受实例引用数组、输出 / 深度 TextureView、viewport、yaw / pitch / zoom / pan、ModelRenderOptions、可选 VfxParticles 与 Aura 资源。
+
+单模型便利接口为 `ModelRenderer::render_to`。这些函数绘制到 GPU 目标，不返回 PNG；离屏回读由 test_support 等调用方完成。
+
+相机根据场景包围球自动取景，属于轨道预览接口。实例集合不是完整通用 scene graph，也没有通过该接口直接暴露自由灯光编辑系统。
+
+== 模型与 VFX 绘制
+
+- opaque / cutout：正常深度与 Alpha test。
+- transparent / glass：跨实例三角形中心 back-to-front 排序，写入各实例动态透明索引。
+- dither depth：预览用的独立深度覆盖策略，不是游戏完整抖动公式证明。
+- additive / lightshaft：独立合成路径。
+- VFX：按 authored draw layer、priority、document / draw order 等信息安排，特殊几何和 soft / decal 进入相应管线。
+- Aura：按绑定结果作用于目标模型 batch，而不是任意覆盖所有实例。
+
+`context.rs` 提供场景 depth / screen copy / previous scene、reflection cube、portrait 等接口或资源。必须区分默认回退资源与真实宿主提供的有效内容。
+
+Decal 的前向接收面与游戏水面 stencil / deferred GBuffer 存在边界；拥有投射几何和 shader 不代表所有游戏 pass 都已复刻。
+
+== Shader 与后处理
+
+模型 shader 按 samples → surface state → output 分层，源码在 `renderer/shaders/`，由 build.rs 编译 WESL。VFX 有独立 shader 与 1× / 4× decal 模块。
+
+场景使用 HDR 中间目标，之后进行 bloom 与 tone mapping，再根据输出格式做一次正确的 sRGB 编码。固定工作室灯光是 presentation policy，不是从游戏天气、时段和场景完整重建的光照。
+
+材质语义修正不能靠调灯光掩盖；相同资产交给另一个通用渲染器，也不会自动复现这里的光照和后处理。
+
+== Web 画布接线
+
+`src/app/model_canvas_renderer.rs` 的 `WebModelCanvasRenderer` 初始化 Canvas / WebGPU surface、轨道操作、逐件 scene entries、VFX 与 joint 更新。当前浏览器后端选择 BROWSER_WEBGPU，不应因 limits 使用 downlevel 命名就宣传成已有 WebGL fallback。
+
+这层是应用 Rust/WASM 代码，不是已经发布的稳定 JavaScript SDK。独立抽取时可以保留 GPU crate，同时另行整理 Canvas 生命周期、JS 导出和资源 provider。

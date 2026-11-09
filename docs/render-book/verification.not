@@ -1,0 +1,73 @@
+= 验证方法与故障定位
+
+本书描述的是代码链路。文档构建成功不意味着游戏格式、GPU 输出或像素一致性已经通过验证。
+
+== 分层验证，不跨层推论
+
+| 层 | 应验证什么 | 不足以证明什么 |
+| --- | --- | --- |
+| 解包 | 索引定位、块边界、解压长度、重建字节 | 材质公式正确 |
+| parser | 字段偏移、计数、枚举、曲线、索引关系 | 字段已被运行时消费 |
+| prepared | 显隐、pass、采样、资源状态、unsupported | GPU 像素正确 |
+| 模拟 | 帧序列、生命周期、随机、宿主历史 | 最终合成与游戏一致 |
+| GPU fixture | 上传、采样、混合、深度、HDR 数值 | 所有真实资产均支持 |
+| 安装资源回归 | 指定游戏版本和代表样本 | 全游戏覆盖率 |
+| 同条件游戏对照 | 同宿主 / 相机 / 时间 / 场景下的差异 | 任意配置或未来补丁等价 |
+
+== 普通检查
+
+以下命令不会启动开发服务器：
+
+```sh
+nix run .#notist -- build --target render-book
+cargo test --manifest-path ../icexiv-data/Cargo.toml -p icexiv-data --features game-data
+cargo test -p xiv-companion-render --features renderer
+cargo check --target wasm32-unknown-unknown --features web
+```
+
+renderer 的普通测试中有显式 ignored 的 GPU 项，不会因为运行普通 cargo test 就自动得到原生 GPU 验证。game-data 相关覆盖需要对应 feature，真实游戏资源用例还需要本地安装和各自的环境变量。
+
+构建本书只验证 Notist 配置、章节和内容；不应为文档整理启动 WebGPU、应用服务器或批量 GPU 快照。
+
+== GPU 与真实资源的显式门禁
+
+`test_support.rs` 要求 `XIV_ALLOW_GPU_TESTS=1` 才允许初始化原生 GPU。相关测试通常还需要 `--ignored`。真实安装资源用例使用 `XIV_GAME_DIR`，其他过滤条件见测试和历史验收说明。
+
+示例为单个显式授权的回归入口，不是本次文档任务已执行的验证声明：
+
+```sh
+XIV_ALLOW_GPU_TESTS=1 XIV_GAME_DIR=/path/to/game \
+  cargo test --features game-data,render-test-support \
+  --test weapon_vfx_real_smoke render_installed_weapon_vfx_smoke \
+  -- --ignored --exact --test-threads=1 --nocapture
+```
+
+Web/WASM 编译不代替浏览器 shader 编译；shader 编译不代替真实画布显示。MSAA 1× 与 4× 也应分别覆盖相关深度和贴花路径。
+
+== 主要用例定位
+
+- `material_fixture_matrix.rs`、`weapon_shader_family_audit.rs`：材质准备和安装资源语义。
+- renderer `model/tests.rs`：采样、pass、shader 与合成的定向测试。
+- `native_weapon_snapshot.rs`、`phantom_weapon_snapshots.rs`：武器离屏与代表样本。
+- `native_character_assembly.rs`、`native_dressed_character.rs`：装配、遮蔽、体型与场景。
+- `native_skeleton_smoke.rs`、`native_animation_smoke.rs`、`native_havok_validation.rs`：骨架和动画。
+- `vfx_render_semantics.rs`、`vfx_shader_audit.rs`、`weapon_vfx_real_smoke.rs`：VFX 合成与真实挂载。
+- `avfx_curve_tests.rs`、`formats/avfx/sim/` 内测试：曲线、模拟、调度和宿主边界。
+
+测试文件名是入口，不代表文件中的每个用例都不需要游戏或 GPU；运行前应阅读其 feature / ignore / 环境要求。
+
+== 故障定位顺序
+
+模型完全没显示：先查实际 MDL / load_diagnostics，再查 attribute / shape / hidden mesh、bounds 和 camera，最后查 GPU。
+
+模型有形状但材质异常：查实际 MTRL 路径、SHPK key 合成、sampler kind、纹理布局 / 色彩空间，再看 UnsupportedInputs、BaseColor、Normal、Alpha 等 debug；不要先改灯光补偿。
+
+VFX 不出现：查实际成功的主副 MDL、IMC variant / VfxId、AVFX 候选、占位纹理、ElementId / SKLB、生命周期与时间输入，最后检查 draw layer / pass 和 Aura target。
+
+VFX 可见但重播不同：固定帧序列、seed / shared random、构造顺序、宿主 pose、相机、update / draw 次数。不能只比较最终 time。
+
+== 维护约定
+
+变更字段语义时先核对 [参考来源](source-map.not)，添加 focused test，再更新对应章节。诊断应保留具体参数与来源，不能为了减少警告而把未知输入静默归零。
+
+历史报告中的数字、截图和“verified”只对其声明的样本、版本、路径与条件有效。本书不重新发布旧数字作为当前完成度。

@@ -207,6 +207,10 @@
 
 - 新增捏脸数据资产：`character-make.json`（32 组默认捏脸与捏脸菜单，CharaMakeType + CharaMakeCustomize 生成，发型/面妆选项索引表）与 `character-palette.json`（human.cmp 全色板：眼/挑染/唇/特征/面妆公共区 + 32 组肤色/发色，RGBA 非 squared），随资源缓存体系分发；xtask 新增 `--character-make`/`--character-palette` 生成子命令。修正 CharaMakeCustomize 提取的槽映射：真实结构为 18 槽（槽序即 c 编码序，key 步长 130，选项按 Data 序号排序），替换此前"32 组 × 125 行"的错误假设——旧提取下 4 组默认发型指向不存在的文件（敖龙女 h0024、北洋鲁加男 h0130、硌狮女 h0028/h0008），其馀多组选项列表错位；32 组全量真实装配守护测试现已覆盖。
 
+## 2026-11-09
+
+- 文档站配置适配 Notist 的 package/site 与内置 Book 主题，静态输出保持在 `target/notist/render-book/`；根目录构建入口与 CI 校验使用 flake 锁定的 Notist。
+
 ## 2026-09-11
 
 - 侧边栏展开宽度由 240px 收窄至 192px，减少导航标签两侧的空白。

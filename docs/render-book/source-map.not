@@ -1,0 +1,91 @@
+= 源码与参考资料索引
+
+应用与 renderer 路径相对 companion 仓库；`icexiv-data:` 前缀的路径相对独立库仓库。应用在线链接指向 dev，独立库指向 main；本书从 `1286ba32d156` 整理并随抽离更新，查证时优先使用锁定版本的同名符号，不依赖固定行号。
+
+== 资源与依赖
+
+| 本地文件 | 优先查找的符号 |
+| --- | --- |
+| src/app/user_local_directory.rs | ensure_window_user_local_directory_handle、目录权限与布局 |
+| src/app/browser_sqpack.rs | BrowserSqPack、find_entry_location、浏览器 slice / 权限接线 |
+| src/app/resources.rs | AsyncGameResource impl、BrowserSqPackGameResource、各领域加载接线 |
+| icexiv-data: src/storage/resource.rs | AsyncGameResource、MemoryResource、Resource |
+| icexiv-data: src/storage/sqpack.rs | read_entry、sqpack_index_candidates_for_path |
+| icexiv-data: src/assets/loaders.rs | ModelPathContext、load_*_from_async_resource |
+| icexiv-data: src/formats/imc.rs | ImcFile、ImcEntry、subset_for_variant |
+| icexiv-data: src/chara/models.rs | PackedCharaModelId、chara_model_candidate_paths |
+| icexiv-data: src/catalog/furniture.rs | furniture_sgb_path、extract_sgb_asset_paths |
+
+[浏览器 SqPack 源码](https://github.com/AzurIce/xiv-companion/blob/dev/src/app/browser_sqpack.rs) · [领域 loader 源码](https://github.com/icexiv/icexiv-data/blob/main/src/assets/loaders.rs)
+
+== 模型、材质与角色
+
+| 本地文件 | 优先查找的符号 / 职责 |
+| --- | --- |
+| icexiv-data: src/formats/mdl/metadata.rs | mdl_metadata_from_mdl_bytes、mdl_element_ids_from_mdl_bytes |
+| icexiv-data: src/formats/mdl/geometry.rs | extract_mdl_lod0_geometry、vertex declarations、shape replacement |
+| icexiv-data: src/assets/model.rs | ModelRenderData、ModelData、ModelMaterial、ModelTexture、prepare_model_for_render_with_options |
+| icexiv-data: src/formats/tex.rs | decode_texture_rgba、数组与像素解码 |
+| icexiv-data: src/formats/stm.rs | StainingTemplate、Legacy / Dawntrail STM |
+| icexiv-data: src/chara/make.rs | 外观选择与颜色 |
+| icexiv-data: src/chara/assemble.rs | 身体部件、装备和种族路径基础 |
+| icexiv-data: src/formats/eqp.rs | EquipmentParameterTable、EQP 遮蔽 |
+| icexiv-data: src/chara/scaling.rs | human.cmp、BodyScaling |
+| icexiv-data: src/formats/havok/skeleton.rs | ModelSkeleton、SkeletonPose、joint_matrices、bake_race_deform |
+| icexiv-data: src/formats/havok/animation.rs | ModelAnimationSet、PAP / Havok binding、sample_animation_pose |
+| icexiv-data: src/formats/havok/tagfile.rs | 受检 Havok v3 tagfile、类型表与对象引用解析 |
+| icexiv-data: src/formats/havok/spline.rs | SplineAnimation、量化校验与采样 |
+
+[CPU 模型契约](https://github.com/icexiv/icexiv-data/blob/main/src/assets/model.rs) · [骨架](https://github.com/icexiv/icexiv-data/blob/main/src/formats/havok/skeleton.rs) · [动画](https://github.com/icexiv/icexiv-data/blob/main/src/formats/havok/animation.rs)
+
+== VFX 与 GPU
+
+| 本地文件 / 目录 | 优先查找的符号 / 职责 |
+| --- | --- |
+| icexiv-data: src/assets/loaders.rs | load_weapon_vfx_attachments_from_async_resource、weapon_vfx_imc_path |
+| icexiv-data: src/formats/avfx/parser.rs | AvfxFile::parse、WeaponVfxAttachments、VfxDrawModel、decode_atex_rgba |
+| icexiv-data: src/formats/avfx/sim.rs | VfxRuntime、VfxQuad、VfxMeshInstance、provider |
+| icexiv-data: src/formats/avfx/sim/ | playback、clock、binder、timeline、random、各几何模块 |
+| crates/xiv-companion-render/src/renderer/model/context.rs | ModelRenderContext、ModelInstance、create_model_with_skeleton、render_scene |
+| crates/xiv-companion-render/src/renderer/model/instance.rs | flatten / joint remap / batch 数据准备 |
+| crates/xiv-companion-render/src/renderer/model/material/ | textures、uniforms、params、bind_groups |
+| crates/xiv-companion-render/src/renderer/model/vfx.rs | VfxParticles、纹理与特殊几何上传 |
+| crates/xiv-companion-render/src/renderer/model/vfx_attachments.rs | WeaponVfxPlayback、WeaponVfxParticles、WeaponVfxAuraBindings |
+| crates/xiv-companion-render/src/renderer/shaders/ | surface、shading、lighting、skinning、VFX、decal、postprocess |
+| src/app/model_canvas_renderer.rs | WebModelCanvasRenderer、逐件场景、相机与 Canvas |
+| crates/xiv-companion-render/src/test_support.rs | 显式 GPU 授权、快照、HDR 回读 |
+
+[AVFX parser](https://github.com/icexiv/icexiv-data/blob/main/src/formats/avfx/parser.rs) · [VFX runtime](https://github.com/icexiv/icexiv-data/blob/main/src/formats/avfx/sim.rs) · [GPU context](https://github.com/AzurIce/xiv-companion/blob/dev/crates/xiv-companion-render/src/renderer/model/context.rs)
+
+== 仓库内深层说明
+
+- [武器渲染管线与材质证据](https://github.com/AzurIce/xiv-companion/blob/dev/docs/weapon-render-pipeline.md)：ColorTable、采样、SHPK、runtime fallback 和 GPU 流程。
+- [shader 家族对照](https://github.com/AzurIce/xiv-companion/blob/dev/docs/render-shader-parity.md)：MeddleTools 参考及各家族记录；状态需要与当前源码交叉核对。
+- [VFX 首版范围](https://github.com/AzurIce/xiv-companion/blob/dev/docs/vfx-v1.md)：首版条件与历史验证，不代表当前全量覆盖。
+- [幻化 / VFX 整合边界](https://github.com/AzurIce/xiv-companion/blob/dev/docs/dev-glamour-vfx-integration.md)：共享场景已完成与产品挂载接线未完成的区别。
+- `docs/vfx-progress.html` / `docs/vfx-progress-data.js`：覆盖领域和后续缺口。
+- `TODO.md`：PBD 近似、穿搭页武器 VFX 等待办。
+
+== 格式文档网站
+
+- [XIV Dev Wiki](https://xiv.dev/)：FF14 社区开发与游戏文件格式文档网站，适合作为查询格式资料的入口；不是 Square Enix 官方规范，部分页面包含旧版本观察或尚未确认的字段。
+- [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)：通用容器与索引说明直接以此为阅读入口；本书仅保留 [DAT 与项目差异补充](sqpack-format.not)，不重复其内容。
+- [XIV Dev Wiki：AVFX Files](https://xiv.dev/game-data/visual-effects/avfx-files)：AVFX 块、容器、嵌入模型和曲线布局；本书只记录 [资产加载与类型映射](vfx-assets.not)。
+- [XIV Dev Wiki：Visual Effects](https://xiv.dev/game-data/visual-effects)：通过子页面查阅 scheduler、timeline、emitter、particle、binder、effector 与生命周期等概念；本书保留 [模拟器实现与边界](vfx-runtime.not)。
+
+== 外部语义参考
+
+- [Lumina SqPack 结构](https://github.com/NotAdam/Lumina/tree/master/src/Lumina/Data/Structs)：索引头、哈希表项以及 DAT entry / block 的实现参考。
+- [Meddle](https://github.com/PassiveModding/Meddle)：运行时 exporter、顶点与材质资源语义；本地 gitignored 副本在 `third_party/Meddle`。优先看 Export/Model.cs、Mesh.cs、Vertex.cs、ColorTableRow.cs、MaterialComposer 和 OnRenderMaterialUtil。
+- [MeddleTools](https://github.com/PassiveModding/MeddleTools)：Blender 材质节点与烘焙；本地通常在 `~/Files/repos/MeddleTools`。优先看 node_configs.py、node_mappings.py、shaders.blend。它是交叉验证源，不是游戏像素级 shader 规范。
+- [xivModdingFramework](https://github.com/TexTools/xivModdingFramework)：MDL / MTRL 路径、Gear / Housing / Companions、ModelChara、IMC / EQP / EQDP / PBD 相关语义；不能以 Meddle 的运行时已解析路径代替路径构造依据。
+- [Dalamud-VFXEditor](https://github.com/0ceal0t/Dalamud-VFXEditor)：AVFX 块、曲线容器及各 Data 布局；重点是 Formats/AvfxFormat。
+- [AVFXTools](https://github.com/0ceal0t/AVFXTools)：旧查看器 Graphics 下模拟与 shader 合成实现；不能把它的所有近似直接当客户端事实。
+- [ffxiv-datamining-cn](https://github.com/thewakingsands/ffxiv-datamining-cn)：无游戏安装时的目录表形状与资源映射参考。
+- [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 与 [扩展注册表](https://github.com/KhronosGroup/glTF/blob/main/extensions/README.md)：判断标准表达边界，不用于证明 FF14 shader 等价。
+
+== 更新原则
+
+本书保留“来源事实 → 当前解析 → 当前消费 → 缺失输入 / 近似 → 验证条件”的链条。引用外部实现时标明它证明了什么；不要将反编译研究、节点接线、静态资源统计和最终游戏画面混成同一个证据等级。
+
+XIV Dev Wiki 已解释的通用格式以链接引用，不在本书复述；新增正文应聚焦本项目的实现，或明确指出 Wiki 未覆盖的内容与差异。

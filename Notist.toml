@@ -1,0 +1,13 @@
+[package]
+name = "xiv-companion"
+
+[site]
+title = "FFXIV 模型与 VFX：从游戏文件到渲染"
+content = "docs/render-book"
+output = "target/notist/render-book"
+theme = "builtins.book"
+directory_urls = true
+copy_content_assets = false
+
+[site.extensions.builtins.book]
+select = true

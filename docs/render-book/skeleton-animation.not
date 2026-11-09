@@ -1,0 +1,68 @@
+= 角色装配、骨架与动画
+
+模型 JSON 不是一个完整角色。当前链路将几何 / 材质、骨架、动画和姿态分开管理，再在实例层汇合。
+
+== 外观与装备装配
+
+`CharacterAssemblyLoadRequest` 驱动身体、脸、头发等装配；`DressedCharacterLoadRequest` 在外观上加入各槽装备与武器。`chara/make.rs`、`chara/assemble.rs`、`formats/eqp.rs` 和 `assets/loaders.rs` 分担目录、颜色与装配规则。
+
+需要的文件与状态不止 MDL：
+
+- IMC：variant / material-set / attribute 等条目。
+- EQDP：目标 race / sex 的模型可用性与候选回退。
+- EQP：跨槽遮蔽、身体部件、耳 / 尾等显示规则。
+- customize 与颜色来源：角色外观与材质乘色、decal。
+- `human.cmp`：身高、尾长、胸围等体型缩放参数。
+- SKLB：源 / 目标骨架以及姿态计算。
+
+遮蔽结果通过 attribute 名称和 hidden mesh 等准备参数表达。不能把所有可找到的 MDL 无条件叠在一起。
+
+家具多模型、武器主副件的拆开展示与角色原位装配不同；预览 component offset 不应混入游戏世界或绑点矩阵。
+
+== SKLB → ModelSkeleton
+
+`formats/havok/skeleton.rs` 解析 SKLB 容器，定位 Havok tagfile，再由 `formats/havok/tagfile.rs` 的受检 v3 reader 读取骨架；截断或非法数据返回错误而不 panic。
+
+`ModelSkeleton` 包含 bone_names、parent_indices、rest_pose 和可选 body_scaling。`BoneTransform` 是 translation / quaternion rotation / scale；四元数为 xyzw，矩阵统一为列主序 `[f32; 16]`。
+
+```text
+SKLB / Havok skeleton
+  → bone names + parents + local rest TRS
+  → SkeletonPose（rest 或动画）
+  → world matrices
+  → world × inverse(bind world)
+  → 按 GPU 实例 joint_names 重排
+  → update_joint_matrices
+```
+
+骨架和动画刻意不随 ModelData 一起做 Serde 持久快照；独立资产包若只保存模型 JSON，会缺少它们。
+
+== 体型、跨种族与武器挂接
+
+`chara/scaling.rs` 将 `human.cmp` 和外观字节转换成展示姿态缩放，rest 与动画采样使用相同路径。展示缩放不应反向改写原始 bind pose。
+
+跨种族装备目前由 `bake_race_deform` 等按源 / 目标 rest 骨架做近似烘焙；不等于游戏 `human.pbd` 的 deform 矩阵完全实现。可用性 / 回退链与 PBD 思路有关，也不能据此宣称矩阵消费已完成。
+
+武器刚性挂接与普通网格蒙皮也不是同一种矩阵语义。应用逐件场景有 `WeaponAttachInfo` 路径，按挂点骨姿态世界矩阵和校正驱动；另一类装配路径会把刚性武器整理成单骨权重形式。应跟随具体调用点，不能对所有实例都盲目再乘 inverse bind。
+
+== PAP → 动画采样
+
+`formats/havok/animation.rs` 解析 PAP 头与名字表，使用 havok_index 关联内嵌动画 / binding；transform_track_to_bone_indices 负责 track 到骨骼的映射。
+
+当前采样针对支持的 Havok spline-compressed animation 和量化类型。加载阶段检查不支持类型，不能把“文件读到了”当成“可安全采样”。
+
+PAP 采样时间入参为毫秒。VFX 存在秒与帧的边界，不能复用同一个裸 float 而忽略单位。
+
+`sample_animation_pose` 输出姿态，后续计算 joint matrices；renderer 接受最终矩阵，不直接解析 PAP，也不负责完整游戏动画状态机、IK、混合和事件系统。
+
+== 与 VFX 的不同姿态接口
+
+VFX 的 ElementId / Binder 需要宿主骨骼上的原始绑点变换，不是直接拿 skinning 矩阵替代。
+
+`WeaponVfxData::binder_targets_for_pose` 根据 owner skeleton 与 pose 生成 Binder targets。GPU 实例 joint_names、武器挂接矩阵和 Binder targets 虽然都来自骨骼，却有不同坐标与用途。
+
+== 当前 GPU 边界
+
+`create_model_with_skeleton` 汇集 mesh bone table 名称、映射到实例 joint 表并初始化 rest 矩阵。`update_joint_matrices` 增量写 buffer，不重建材质。
+
+当前 joint storage 固定最多 256 个矩阵，超出有截断边界。bounds / 取景也不应被当成每帧完整计算过的动画包围体；长武器和体型变化仍需留意画面裁切。

@@ -50,7 +50,7 @@ VFX, and GPU rendering. The book also records runtime-input boundaries and the
 limitations of glTF conversion and CDN Range delivery.
 
 ```bash
-nix run .#notist -- build --target render-book
+nix run .#notist -- build
 # Or, inside nix develop:
 just book-build
 ```

@@ -1,0 +1,24 @@
+= 阅读目录
+
+[FFXIV 模型与 VFX 解析链](README.not)
+
+= 从文件到资产
+
+- [SqPack 资料与项目补充](sqpack-format.not)
+- [资源入口与 SqPack 解包](resources.not)
+- [模型定位与依赖发现](model-routing.not)
+- [MDL 几何、部件与 Shape](geometry.not)
+- [MTRL、SHPK、TEX 与染色](materials.not)
+- [角色装配、骨架与动画](skeleton-animation.not)
+
+= 从特效到画面
+
+- [IMC 挂载与 AVFX 资产解析](vfx-assets.not)
+- [VFX 时钟、模拟与宿主输入](vfx-runtime.not)
+- [GPU 上传、场景与合成](gpu-renderer.not)
+
+= 边界与查证
+
+- [独立资产、glTF 与网络分发](portability.not)
+- [验证方法与故障定位](verification.not)
+- [源码与参考资料索引](source-map.not)

@@ -1,0 +1,78 @@
+#import "../_components/pele/lib.notc" as pele;
+= FFXIV 模型与 VFX 解析链
+
+本书解释 xiv-companion 当前如何把 FF14 游戏文件变成 Web / 原生预览画面：文件从哪里读取，如何找到依赖，解析成什么结构，哪些数据必须逐帧提供，最终由谁上传和绘制。
+
+整理基线为仓库提交 `1286ba32d156`。这是实现导航，不是全格式规范、游戏画面一致性证明，也不是已经完成的 glTF / CDN 方案。修改链路时应同步更新相应章节和源码索引；函数名优先于容易漂移的行号。
+
+数据层现已抽离到 [icexiv-data](https://github.com/icexiv/icexiv-data)，使用上游 Physis `3f1f6534`；旧 `xiv-companion-data` 仅作为应用的 Cargo 依赖别名保留。通用资源接口、SqPack 路由与解包、CPU 模型和模拟在独立库，浏览器句柄、应用缓存与 GPU 在 companion。独立仓库附带按路径解包和目录 JSON 导出 CLI；不意味着 glTF 或 HTTP Range 后端已实现。
+
+XIV Dev Wiki 已覆盖的通用格式直接链接原文，不在本书重新讲解；这里只记录项目解析链、消费方式、实现差异、验证边界，以及 Wiki 尚未覆盖的必要补充。
+
+== 先分清四个边界
+
+| 层 | 输入 | 输出 | 主要 owner |
+| --- | --- | --- | --- |
+| 存储与解包 | 本地 SqPack 的 index / DAT | 指定游戏路径的逻辑文件字节 | BrowserSqPack / Physis Resource |
+| 解析与装配 | MDL、MTRL、TEX、IMC、SKLB、PAP、AVFX 等 | ModelData、骨架、动画和挂载特效资产 | icexiv-data |
+| 运行时求值 | 资产 + 时间、姿态、相机、随机与宿主状态 | joint 矩阵、粒子、轨迹和 Aura 参数 | data 数学 / avfx_sim + 应用接线 |
+| GPU 与呈现 | CPU 模型、求值结果、场景资源 | HDR 场景及最终 TextureView | xiv-companion-render |
+
+#pele.diagram(r#"""
+flowchart TB
+    request[物品 / 外观 / 模型请求] --> resource[路径与依赖解析 / Resource]
+    resource --> bytes[SqPack 读取与解包]
+    bytes --> model[MDL / MTRL / SHPK / TEX / STM]
+    model --> cpu[CPU 模型与材质]
+    bytes --> animation[SKLB / PAP / 外观与装备规则]
+    animation --> pose[骨架 / 姿态 / joint 矩阵]
+    model --> mount[实际武器 MDL / IMC 挂载]
+    bytes --> mount
+    mount --> assets[AVFX / ATEX / ElementId / SKLB]
+    assets --> vfx[VFX 运行时求值]
+    host[宿主 / 相机 / 时间与历史输入] --> vfx
+    cpu --> gpu[GPU 实例 / 粒子批次 / Aura]
+    pose --> gpu
+    vfx --> gpu
+    gpu --> output[场景绘制与后处理]
+"""#)
+
+图中是依赖关系，不是要求所有请求严格串行执行的调度算法。目录 JSON 也可能已经提供 Item / ModelChara 等映射，不必每次预览重新读取 EXD。
+
+== 本书使用的状态词
+
+- 已解析：字段进入 CPU 结构，不意味着 shader 或模拟器已经消费。
+- 已消费：某条具体运行路径使用了该字段，不意味着所有组合均支持。
+- 近似：有明确的替代公式或预览策略，不能当作游戏原公式。
+- 缺失运行时输入：静态文件不能提供，必须由角色、相机或场景 owner 注入。
+- 待实现 / 未验证：保留诊断或证据边界，不把可见截图当作完整支持。
+
+尤其不要混淆“成功解包”“AVFX 能 parse”“特效可见”“与游戏逐帧一致”。它们是四种不同结论。
+
+== 建议阅读顺序
+
+第一次阅读先查 [SqPack 资料与项目补充](sqpack-format.not) 中的格式入口，再从 [资源入口](resources.not) 跟到 [GPU 场景](gpu-renderer.not)。排查模型材质错误可以先读 [材质](materials.not)，排查拖尾、随机和播放差异先读 [VFX 运行时](vfx-runtime.not)。
+
+讨论独立抽取和 Range 加载时，读 [可移植性与分发](portability.not)；它明确区分当前实现和未来设计，不将本书误读为已经接入网络后端。
+
+== 构建与产物
+
+仓库根目录的 `Notist.toml` 声明 `render-book` target，章节顺序由本目录 `SUMMARY.not` 维护。
+
+```sh
+# 不需要启动应用、WebGPU 或文档服务器。
+nix run .#notist -- build --target render-book
+
+# 已进入 nix develop 时：
+just book-build
+```
+
+输出为 `target/notist/render-book/index.html` 及其静态资源。`.not` 是本书源码；不提交生成 HTML，也不打包游戏资源。上游 Notist 当前提供 x86_64-linux、aarch64-linux、aarch64-darwin 包，flake 只在这些系统加入工具，不改变应用原有系统列表。
+
+流程图复用 `docs/_components/pele` 的本地声明与浏览器组件，使用 Pele 1.6.0 渲染 Mermaid 语法，跟随书籍主题。首次浏览需要联网加载固定版本的 Pele；静态构建成功只证明组件调用与资源发布成功，不等于浏览器已经绘图或可离线使用。
+
+== 与旧文档的关系
+
+本书集中解释当前链路和接口；`docs/weapon-render-pipeline.md` 保留详细材质证据，`docs/render-shader-parity.md` 保留家族对照，VFX scope / verification / progress 文档保留各自验收范围。它们不在本次整理中迁移或覆盖。
+
+旧文档的“当时未实现”可能已经变化，旧测试数量和安装审计数字也不是全游戏覆盖率。请从 [源码与参考资料](source-map.not) 交叉核对。

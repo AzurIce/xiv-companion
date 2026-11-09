@@ -1,0 +1,83 @@
+#import "../_components/pele/lib.notc" as pele;
+= MTRL、SHPK、TEX 与染色
+
+材质链将文件负载转成可审计的 FF14 语义，再由 shader 消费。它不是将全部游戏材质直接改写为标准 glTF metallic-roughness。
+
+== 依赖链与入口
+
+`load_model_material_from_resource` 与异步 counterpart 根据实际 MDL 和材质引用尝试候选 MTRL。成功后执行：
+
+#pele.diagram(r#"""
+flowchart TB
+    mtrl[MTRL] --> shpk[SHPK 默认 keys / 常量 / sampler 语义]
+    mtrl --> semantics[ComposedMaterialSemantics]
+    shpk --> semantics
+    mtrl --> textures[TEX 读取与像素解码]
+    mtrl --> rows[ColorTable / ColorDyeTable]
+    stain[stain_ids / STM] --> rows
+    rows --> maps[染色后的行 / ColorTable 派生 maps]
+    semantics --> cpu[ModelMaterial / ModelTexture]
+    textures --> cpu
+    maps --> cpu
+    cpu --> prepared[PreparedMaterial]
+"""#)
+
+MTRL 到 ComposedMaterialSemantics 的直接边表示材质 override，与 SHPK 默认值共同参与求值；箭头表示数据依赖，不表示 SHPK 已作为游戏 shader 执行。PreparedMaterial 的采样、pass 和缺失项见下文。
+
+SHPK 在这里提供语义与默认信息；renderer 并不直接执行游戏 SHPK 中的原生 shader 二进制。现有 WESL 实现受支持公式，未知路径保留诊断。
+
+== 材质语义如何组合
+
+`load_composed_material_semantics_from_resource` / async counterpart 读取 shader package 默认值，再叠加 MTRL 的 keys 与常量。后续 `composed_material_*` 函数把 raw 值解释成 alpha、depth、lighting、flow、skin、scroll、water 等参数。
+
+纹理用途优先来自 sampler / SHPK resource name，再用 known CRC 与文件名等兜底。`_id.tex` / SamplerIndex 是行选择数据，不是颜色或普通 mask。
+
+ModelMaterial 保留大量 family-specific 字段；“有字段”“有 uniform”“debug 能看到”都不代表 Final 已使用。
+
+== TEX 解包之后还要解码
+
+`formats/tex.rs` 补充 BC2、BC4、A8 等处理，其他支持格式调用 Physis。普通模型贴图进入 `ModelTexture`：宽高、用途、RGBA8、可选浮点通道、数组布局。
+
+共享 tile / detail 数组按层解码为 vertical atlas，并保留 array_size / array_layer_height。当前路径会解析 TEX header 的 array-size 信息，不能仅用普通 2D `to_rgba` 的首层结果代替整个数组。
+
+注意区分三个“压缩”：SqPack 压缩块、TEX 内 BC 像素压缩、网络 HTTP Content-Encoding。它们发生在不同层。
+
+== ColorTable 与 STM
+
+`formats/stm.rs` 读取 Legacy 与 Dawntrail staining templates：
+
+```text
+chara/base_material/stainingtemplate.stm
+chara/base_material/stainingtemplate_gud.stm
+```
+
+染剂目录中的 UI 色值只用于选择器展示；真正的材质染色使用 ColorDyeTable 与 STM 对 ColorTable 行做覆盖，不是给 base color 统一乘一层色。
+
+`apply_weapon_model_stains` 可根据保留的基础行重新染色，再刷新派生纹理。应从未染色来源求值，避免在上次结果上反复累乘。
+
+当前支持 Legacy 16 行和 Dawntrail 32 行表。Index 的 R 选择行对，G 控制 A/B 混合；renderer 保留相邻 A/B payload，并在 shader 中求值，而不是无条件离线合并成一张最终颜色图。
+
+派生资源包括 diffuse、specular、material-properties、emissive、tile、sheen、sphere 与 tile-matrix。Float payload 用于保留 HDR / 非 UNORM 数值；tile matrix 还可能有负值和大于 1 的变换，不能都截到 RGBA8。
+
+Compatibility 路径仍可能需要原始全分辨率 diffuse 与 ColorTable ramp 在线性空间组合。现代 character 的某些 A/B shaping 还依赖法线 / 视线；当前 ramp 并不是已经烘好的通用 PBR 贴图。
+
+== GPU 采样语义
+
+Prepared 阶段记录每个 role 的 UV、address、filter 和 color space。上传时按语义选择 sRGB / NonColor / float 格式；不是所有名为 specular 的纹理都具有同一种编码。
+
+tile normal / ORB 和 detail diffuse / normal 在 GPU 侧组成 pair atlas，以控制 WebGPU binding 数量。mip 生成需要隔离 atlas half 和 array layer；普通整图平均会让相邻层串色。packed normal 的 mip 还需要正确处理法线编码。
+
+== 诊断与能力边界
+
+| 信息 | 解释 |
+| --- | --- |
+| resourceAvailability / array status | binding 和纹理布局是否真正可用 |
+| runtimeInputRequirements | 谁需要提供角色实例、on-render 输出、GPU ColorTable 或资源句柄 |
+| unsupportedInputs | 当前公式 / 资源 / 行为尚不能正确消费的细项 |
+| runtimeFallbacks | 缺失时实际采用的替代策略 |
+
+玻璃完整 permutation、部分反射和 detail 最终组合等仍有边界。Sheen / Sphere 等数据即使保存并提供 debug，也不能仅凭参数名引入猜测光照。
+
+静态 MTRL 无法提供所有角色颜色、crest / decal、动态 GPU override 与场景 key。角色 loader 已注入的外观参数与仍缺的 live provider 应分别描述，不要把全部角色输入统称为永远不可用。
+
+深层证据见 [参考索引](source-map.not) 中的管线文档和 Meddle / MeddleTools；较早的家族总览不应覆盖当前源码里的 unsupported 边界。

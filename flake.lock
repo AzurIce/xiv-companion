@@ -106,11 +106,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793422339,
-        "narHash": "sha256-ohNmamrcWyOpWwS8UTkMLJP5PZUtVlK+9jxaoc3OT0E=",
+        "lastModified": 1794231561,
+        "narHash": "sha256-xfHix5nCOSf6HrxgPyb0fs4KZY3bQGzrlxe7BBkmR1o=",
         "owner": "AzurIce",
         "repo": "notist",
-        "rev": "574db843ead119315468b0d16d9a3742b33f109c",
+        "rev": "3d17013b60a01a7e53e68bd076540494f4c5549a",
         "type": "github"
       },
       "original": {

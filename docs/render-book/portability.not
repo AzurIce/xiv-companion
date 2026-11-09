@@ -1,0 +1,61 @@
+= 独立资产、glTF 与网络分发
+
+本章是基于现有边界的设计结论。当前仓库没有本章所讨论的完整 glTF 转换器或 HTTP Range SqPack 后端；不得把建议读成已实现 API。
+
+独立 Rust 库这一边界已落地为 `icexiv-data`：字节 parser、同步/异步资源接口、SqPack 解包和 writer 导出可脱离应用使用，并支持 WASM 编译。它不依赖 Dioxus、wgpu 或浏览器文件 API；其 CLI 是原生入口，不是浏览器运行时。
+
+== 独立部署不等于保留游戏原始编码
+
+可以提前解析 / 转码，部署自己的资产包，只要提供 renderer 所需的 CPU 数据、骨架、VFX 定义、纹理和外部输入。
+
+真正应保留的是语义与来源：shader family、通道含义、曲线、生命周期、绑定、采样策略等。MDL / MTRL / AVFX 原文件适合作为可重新导入的依据，但运行时不必每帧重新读取原文件。
+
+当前 ModelData 不是完整无损包：主要保留 LOD0，骨架 / 动画不随它序列化，AVFX 未知块也不都保留原始负载。若设计版本化中间包，需另审计依赖、字段、精度、未知载荷及 runtime requirements。
+
+== 标准 glTF 的边界
+
+普通网格、UV、颜色、骨架和 morph 数据可映射到 glTF；8 权重也可用多组 JOINTS / WEIGHTS。目标引擎是否消费这些属性仍需验证。
+
+材质需要逐家族转换或烘焙：ColorTable / Index、打包 normal、tile、动态 A/B shaping 与 FF14 shader permutation 并不等于标准 PBR。动画采样也不能自动保留原 Havok 曲线和游戏状态机。
+
+VFX 还需要发射、历史、随机、宿主和场景；静态 glTF 材质不能承载完整 soft particle、投射 decal 和屏幕扭曲流程。固定时长 / 种子 / 相机的烘焙，只保存一次执行结果。
+
+`KHR_animation_pointer`、`KHR_interactivity` 等扩展扩大了标准动态能力，但不自动提供 FF14 粒子或 shader 实现。自定义扩展可以保存专用数据，通用查看器仍需插件；GLB 是容器，不是通用游戏 shader 执行器。
+
+建议将标准 PBR glTF 定位为可审计降级的交换产物，而不是取代全部 FF14 语义的唯一资产来源。
+
+== 原始 SqPack + CDN Range
+
+格式允许随机定位条目和读取独立压缩块，因此可以在浏览器请求 DAT 区间、解包后继续使用现有 loader。
+
+建议的后端边界是“按游戏内部路径读取逻辑文件”，底层再把本地 slice 与 HTTP range 抽象为随机读取能力。不能让上层模型材质 loader 到处拼 CDN URL。
+
+必要改造：
+
+- 读取条目头和块表，再计算压缩区间；不能把解压后 file_size 当作下载长度。
+- 替换当前 64 MiB 固定窗口；合并相邻区间、限制并发、去重和取消。
+- 将异步获取与同步 Read + Seek 解包分开，或重构为适合异步的区间计划。
+- 缓存索引、区间、逻辑文件和解码结果时使用不同层级的 key / 内存预算。
+
+可以先全量下载选中的索引，也可预生成紧凑 locator / 依赖清单；后者不要求改游戏文件语义。
+
+== HTTP 与缓存契约
+
+```http
+Range: bytes=<start>-<inclusive-end>
+
+HTTP/1.1 206 Partial Content
+Content-Range: bytes <start>-<end>/<total>
+```
+
+必须检查状态、Content-Range 和返回长度，处理 416。服务器忽略 Range 返回完整 200 时，不应无条件把大 DAT 读入内存。
+
+跨域需正确 CORS，并暴露 Content-Range / ETag 等需要检查的响应头；不能使用 opaque response 解包。DAT 应保持稳定的原始字节表示，避免自动 HTTP 内容编码破坏偏移假设。
+
+采用不可变版本 / 内容哈希路径，使 index、DAT 和缓存保持同一版本。小 Range 的客户端下载量不保证 CDN 冷回源同样小，实际切片和缓存行为需对所选 CDN 验证。
+
+== 更适合 Web 的替代布局
+
+可将解包后的逻辑 MDL / MTRL / TEX / AVFX 分对象存储，或整理成带独立压缩块与依赖索引的分发包。它们仍可保留 FF14 语义，与“烘成通用 PBR”是独立选择。
+
+公开托管游戏文件属于资源分发问题，需核对授权与适用条款；Range、私有 CDN 或签名 URL 本身不产生分发授权。本书及静态构建不包含游戏文件。
