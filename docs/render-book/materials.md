@@ -1,9 +1,9 @@
-#import "../_components/pele/lib.notc" as pele;
-= MTRL、SHPK、TEX 与染色
+#import "../_components/pele/lib.not" as pele;
+# MTRL、SHPK、TEX 与染色
 
 材质链将文件负载转成可审计的 FF14 语义，再由 shader 消费。它不是将全部游戏材质直接改写为标准 glTF metallic-roughness。
 
-== 依赖链与入口
+## 依赖链与入口
 
 `load_model_material_from_resource` 与异步 counterpart 根据实际 MDL 和材质引用尝试候选 MTRL。成功后执行：
 
@@ -26,7 +26,7 @@ MTRL 到 ComposedMaterialSemantics 的直接边表示材质 override，与 SHPK 
 
 SHPK 在这里提供语义与默认信息；renderer 并不直接执行游戏 SHPK 中的原生 shader 二进制。现有 WESL 实现受支持公式，未知路径保留诊断。
 
-== 材质语义如何组合
+## 材质语义如何组合
 
 `load_composed_material_semantics_from_resource` / async counterpart 读取 shader package 默认值，再叠加 MTRL 的 keys 与常量。后续 `composed_material_*` 函数把 raw 值解释成 alpha、depth、lighting、flow、skin、scroll、water 等参数。
 
@@ -34,7 +34,7 @@ SHPK 在这里提供语义与默认信息；renderer 并不直接执行游戏 SH
 
 ModelMaterial 保留大量 family-specific 字段；“有字段”“有 uniform”“debug 能看到”都不代表 Final 已使用。
 
-== TEX 解包之后还要解码
+## TEX 解包之后还要解码
 
 `formats/tex.rs` 补充 BC2、BC4、A8 等处理，其他支持格式调用 Physis。普通模型贴图进入 `ModelTexture`：宽高、用途、RGBA8、可选浮点通道、数组布局。
 
@@ -42,7 +42,7 @@ ModelMaterial 保留大量 family-specific 字段；“有字段”“有 unifor
 
 注意区分三个“压缩”：SqPack 压缩块、TEX 内 BC 像素压缩、网络 HTTP Content-Encoding。它们发生在不同层。
 
-== ColorTable 与 STM
+## ColorTable 与 STM
 
 `formats/stm.rs` 读取 Legacy 与 Dawntrail staining templates：
 
@@ -61,13 +61,13 @@ chara/base_material/stainingtemplate_gud.stm
 
 Compatibility 路径仍可能需要原始全分辨率 diffuse 与 ColorTable ramp 在线性空间组合。现代 character 的某些 A/B shaping 还依赖法线 / 视线；当前 ramp 并不是已经烘好的通用 PBR 贴图。
 
-== GPU 采样语义
+## GPU 采样语义
 
 Prepared 阶段记录每个 role 的 UV、address、filter 和 color space。上传时按语义选择 sRGB / NonColor / float 格式；不是所有名为 specular 的纹理都具有同一种编码。
 
 tile normal / ORB 和 detail diffuse / normal 在 GPU 侧组成 pair atlas，以控制 WebGPU binding 数量。mip 生成需要隔离 atlas half 和 array layer；普通整图平均会让相邻层串色。packed normal 的 mip 还需要正确处理法线编码。
 
-== 诊断与能力边界
+## 诊断与能力边界
 
 | 信息 | 解释 |
 | --- | --- |
@@ -80,4 +80,4 @@ tile normal / ORB 和 detail diffuse / normal 在 GPU 侧组成 pair atlas，以
 
 静态 MTRL 无法提供所有角色颜色、crest / decal、动态 GPU override 与场景 key。角色 loader 已注入的外观参数与仍缺的 live provider 应分别描述，不要把全部角色输入统称为永远不可用。
 
-深层证据见 [参考索引](source-map.not) 中的管线文档和 Meddle / MeddleTools；较早的家族总览不应覆盖当前源码里的 unsupported 边界。
+深层证据见 [参考索引](source-map.md) 中的管线文档和 Meddle / MeddleTools；较早的家族总览不应覆盖当前源码里的 unsupported 边界。

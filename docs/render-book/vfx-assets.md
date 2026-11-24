@@ -1,11 +1,11 @@
-#import "../_components/pele/lib.notc" as pele;
-= IMC 挂载与 AVFX 资产解析
+#import "../_components/pele/lib.not" as pele;
+# IMC 挂载与 AVFX 资产解析
 
 本章说明如何找到和读取武器常驻特效，不将它等同于整个 FF14 技能 / 战斗特效触发系统。
 
 AVFX 的块布局、容器组织、嵌入模型与曲线记录见 [XIV Dev Wiki：AVFX Files](https://xiv.dev/game-data/visual-effects/avfx-files)。本章只说明这些资源在项目中的加载、类型映射和降级，不重复上游格式定义。
 
-== 挂载入口取实际成功的模型
+## 挂载入口取实际成功的模型
 
 当前主要入口：
 
@@ -37,7 +37,7 @@ VfxId 为零、候选读取失败和局部降级的处理见下文；图只展�
 
 声明存在、实际加载失败的副模型不能借用主模型的 MDL 来创建副手挂载。
 
-== 无特效、加载失败和局部降级
+## 无特效、加载失败和局部降级
 
 - 确认没有 IMC 或 VfxId=0：正常返回 None。
 - 明确读取 / 解析错误，或挂载 AVFX 候选全部失败：错误。
@@ -46,30 +46,30 @@ VfxId 为零、候选读取失败和局部降级的处理见下文；图只展�
 
 原生同步 Resource 对缺失与某些读取错误的区分能力有限；异步 `read_optional` 应保留更明确的错误语义。
 
-== 项目的类型化输出
+## 项目的类型化输出
 
 `AvfxFile` 输出：global、schedulers、timelines、emitters、particles、binders、effectors、texture_paths、models、warnings、unknown_blocks。
 
 未知根块会记录名称与数量；这不代表它们的全部原始负载进入 AvfxFile。部分已知 Data 保留 raw payload，也不代表整个解析结果可以无损重建原 AVFX。需要无损来源时应另保留原字节。
 
-== Modl 不是普通模型 loader 的同义词
+## Modl 不是普通模型 loader 的同义词
 
 `AvfxFile::parse` 将内嵌模型映射为 `VfxModelGeometry` / `VfxDrawModel`，不经普通 MDL loader。VFX 上传与 shader 负责该路径的 UV / normal 解码及 UvSN 选择，不能套用普通 ModelVertex 的纹理约定；原始记录布局见上述 Wiki 链接。
 
-== ATEX 与普通材质纹理不能混用处理
+## ATEX 与普通材质纹理不能混用处理
 
 `decode_atex_rgba` 产生 `VfxTextureRgba`，保留适用的 mip、cube faces 与浮点信息；会检查 source mip chain 是否完整。普通 VFX 资产解码对数组层存在子集限制，不等于支持任意数组纹理行为。
 
 Aura / ModelSkin 有独立的纹理组合和上传路径。贴图资产的槽位、Mip 与 cube 信息必须在运行时到 GPU 的过程中继续保留；一张 RGBA8 base image 不能替代所有 VFX 纹理输入。
 
-== ElementId 与 owner skeleton
+## ElementId 与 owner skeleton
 
 `mdl_element_ids_from_mdl_bytes` 从实际 owner MDL 取 ElementId，保存 id、parent_bone、translate、rotate。再读取对应 SKLB，后续将 Binder 的 BPID 解析为姿态上的绑点。
 
 WeaponVfxData 的 skeleton 不参与 Serde 快照。不要只序列化 AVFX 和贴图后，就认为独立包已经包含完整的动态绑点能力。
 
-== 目前的触发范围
+## 目前的触发范围
 
 武器常驻 IMC 挂载已经有产品入口；这不是完整 action timeline / TMB、战斗事件、角色 / 召唤兽目标查询和任意特效宿主系统。
 
-幻化页共享模型 / VFX 绘制能力也不等于已接上每件武器的 IMC→AVFX 和动画宿主链；当前 TODO 仍保留这项接线。资产读取之后继续看 [VFX 运行时](vfx-runtime.not)。
+幻化页共享模型 / VFX 绘制能力也不等于已接上每件武器的 IMC→AVFX 和动画宿主链；当前 TODO 仍保留这项接线。资产读取之后继续看 [VFX 运行时](vfx-runtime.md)。

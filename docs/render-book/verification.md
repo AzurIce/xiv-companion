@@ -1,8 +1,8 @@
-= 验证方法与故障定位
+# 验证方法与故障定位
 
 本书描述的是代码链路。文档构建成功不意味着游戏格式、GPU 输出或像素一致性已经通过验证。
 
-== 分层验证，不跨层推论
+## 分层验证，不跨层推论
 
 | 层 | 应验证什么 | 不足以证明什么 |
 | --- | --- | --- |
@@ -14,7 +14,7 @@
 | 安装资源回归 | 指定游戏版本和代表样本 | 全游戏覆盖率 |
 | 同条件游戏对照 | 同宿主 / 相机 / 时间 / 场景下的差异 | 任意配置或未来补丁等价 |
 
-== 普通检查
+## 普通检查
 
 以下命令不会启动开发服务器：
 
@@ -29,7 +29,7 @@ renderer 的普通测试中有显式 ignored 的 GPU 项，不会因为运行普
 
 构建本书只验证 Notist 配置、章节和内容；不应为文档整理启动 WebGPU、应用服务器或批量 GPU 快照。
 
-== GPU 与真实资源的显式门禁
+## GPU 与真实资源的显式门禁
 
 `test_support.rs` 要求 `XIV_ALLOW_GPU_TESTS=1` 才允许初始化原生 GPU。相关测试通常还需要 `--ignored`。真实安装资源用例使用 `XIV_GAME_DIR`，其他过滤条件见测试和历史验收说明。
 
@@ -44,7 +44,7 @@ XIV_ALLOW_GPU_TESTS=1 XIV_GAME_DIR=/path/to/game \
 
 Web/WASM 编译不代替浏览器 shader 编译；shader 编译不代替真实画布显示。MSAA 1× 与 4× 也应分别覆盖相关深度和贴花路径。
 
-== 主要用例定位
+## 主要用例定位
 
 - `material_fixture_matrix.rs`、`weapon_shader_family_audit.rs`：材质准备和安装资源语义。
 - renderer `model/tests.rs`：采样、pass、shader 与合成的定向测试。
@@ -56,7 +56,7 @@ Web/WASM 编译不代替浏览器 shader 编译；shader 编译不代替真实�
 
 测试文件名是入口，不代表文件中的每个用例都不需要游戏或 GPU；运行前应阅读其 feature / ignore / 环境要求。
 
-== 故障定位顺序
+## 故障定位顺序
 
 模型完全没显示：先查实际 MDL / load_diagnostics，再查 attribute / shape / hidden mesh、bounds 和 camera，最后查 GPU。
 
@@ -66,8 +66,8 @@ VFX 不出现：查实际成功的主副 MDL、IMC variant / VfxId、AVFX 候选
 
 VFX 可见但重播不同：固定帧序列、seed / shared random、构造顺序、宿主 pose、相机、update / draw 次数。不能只比较最终 time。
 
-== 维护约定
+## 维护约定
 
-变更字段语义时先核对 [参考来源](source-map.not)，添加 focused test，再更新对应章节。诊断应保留具体参数与来源，不能为了减少警告而把未知输入静默归零。
+变更字段语义时先核对 [参考来源](source-map.md)，添加 focused test，再更新对应章节。诊断应保留具体参数与来源，不能为了减少警告而把未知输入静默归零。
 
 历史报告中的数字、截图和“verified”只对其声明的样本、版本、路径与条件有效。本书不重新发布旧数字作为当前完成度。

@@ -1,8 +1,8 @@
-= 模型定位与依赖发现
+# 模型定位与依赖发现
 
 模型加载不是“给一个物品 ID，拼一个 MDL 路径”这么简单。先确定领域与模型标识，再探测资源路径，最后从实际成功的文件继续解析依赖。
 
-== 目录与加载请求
+## 目录与加载请求
 
 目录数据提供 Item、槽位、模型号、ModelChara 或家具 ModelKey 等信息。它可以来自 EXD 导出，也可以由 xtask 从 datamining CSV 生成；目录包不包含全部模型和纹理。
 
@@ -16,7 +16,7 @@
 | 家具 / 庭具 | FurnitureModelLoadRequest、ModelKey | bgcommon/hou 下 SGB，再发现 MDL |
 | 裸体 / 着装角色 | CharacterAssemblyLoadRequest / DressedCharacterLoadRequest | 身体部件 + 外观 + 各槽装备与武器 |
 
-== 武器模型号与回退
+## 武器模型号与回退
 
 `PackedModelId::from_raw` 的段顺序是 model、body、variant，而不是 model、variant、body。
 
@@ -29,21 +29,21 @@ model_id=2001, body_id=102, variant_id=1
 
 材质版本候选也有回退；MDL 中的材质名可能指向另一个武器目录。双持副模型引用主手材质时，需要由材质文件名恢复其真实根目录，而不是仅以当前 MDL 的目录猜测。
 
-== IMC 不是所有领域的一条隐式统一前置链
+## IMC 不是所有领域的一条隐式统一前置链
 
 `formats/imc.rs` 是共享 parser，条目包含 material_set、decal、mask、vfx、animation。默认子集与 variant 子集分开保存，Set 型按槽位取条目；mask 低 10 位是 attribute 位，高 6 位是 sound id。
 
-具体 loader 是否查询 IMC、如何选 material-set 与显隐，要看该领域调用点。不要把概念上的“variant”直接当成所有模型都无条件执行同一段 IMC 流程。武器 VFX 的 IMC 查询是 [特效挂载](vfx-assets.not) 中独立、明确的一条链。
+具体 loader 是否查询 IMC、如何选 material-set 与显隐，要看该领域调用点。不要把概念上的“variant”直接当成所有模型都无条件执行同一段 IMC 流程。武器 VFX 的 IMC 查询是 [特效挂载](vfx-assets.md) 中独立、明确的一条链。
 
-== 其他领域
+## 其他领域
 
 宠物 / 坐骑目录链为 ItemAction → Companion / Mount → ModelChara。当前 `CharaModelType` 支持 Type 2 demihuman 与 Type 3 monster；demihuman 按 met / top / glv / dwn / sho 探测，不能把它当成一个固定单 MDL。
 
 家具先经 `furniture_sgb_path` 定位 SGB，再由 `extract_sgb_asset_paths` 提取模型及关联 SGB 字符串路径，递归发现依赖。当前字符串提取不等于已经完整解释 SGB 的场景节点、实例变换和行为。
 
-角色还需要 race / sex / customize、装备可用性和遮蔽规则；见 [角色与动画](skeleton-animation.not)。
+角色还需要 race / sex / customize、装备可用性和遮蔽规则；见 [角色与动画](skeleton-animation.md)。
 
-== 公共加载骨架
+## 公共加载骨架
 
 同步与异步 loader 最终都遵循相似顺序：
 
@@ -59,6 +59,6 @@ model_id=2001, body_id=102, variant_id=1
 
 不要把 `material_index`、装配后的 `material_slot` 和贴图数组下标混为同一个索引空间。跨多个 MDL 合并时，它们需要各自保持关联。
 
-== 扩展资源来源时的影响
+## 扩展资源来源时的影响
 
 HTTP 后端应实现“读取游戏路径”，不应让上层模型 loader 自己拼 DAT URL。这样路径候选、主副模型失败策略、材质引用和染色逻辑仍可共用。缓存键还需要包含版本、平台以及影响解析结果的请求参数。

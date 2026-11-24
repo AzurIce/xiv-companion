@@ -1,10 +1,10 @@
-= 独立资产、glTF 与网络分发
+# 独立资产、glTF 与网络分发
 
 本章是基于现有边界的设计结论。当前仓库没有本章所讨论的完整 glTF 转换器或 HTTP Range SqPack 后端；不得把建议读成已实现 API。
 
 独立 Rust 库这一边界已落地为 `icexiv-data`：字节 parser、同步/异步资源接口、SqPack 解包和 writer 导出可脱离应用使用，并支持 WASM 编译。它不依赖 Dioxus、wgpu 或浏览器文件 API；其 CLI 是原生入口，不是浏览器运行时。
 
-== 独立部署不等于保留游戏原始编码
+## 独立部署不等于保留游戏原始编码
 
 可以提前解析 / 转码，部署自己的资产包，只要提供 renderer 所需的 CPU 数据、骨架、VFX 定义、纹理和外部输入。
 
@@ -12,7 +12,7 @@
 
 当前 ModelData 不是完整无损包：主要保留 LOD0，骨架 / 动画不随它序列化，AVFX 未知块也不都保留原始负载。若设计版本化中间包，需另审计依赖、字段、精度、未知载荷及 runtime requirements。
 
-== 标准 glTF 的边界
+## 标准 glTF 的边界
 
 普通网格、UV、颜色、骨架和 morph 数据可映射到 glTF；8 权重也可用多组 JOINTS / WEIGHTS。目标引擎是否消费这些属性仍需验证。
 
@@ -24,7 +24,7 @@ VFX 还需要发射、历史、随机、宿主和场景；静态 glTF 材质不�
 
 建议将标准 PBR glTF 定位为可审计降级的交换产物，而不是取代全部 FF14 语义的唯一资产来源。
 
-== 原始 SqPack + CDN Range
+## 原始 SqPack + CDN Range
 
 格式允许随机定位条目和读取独立压缩块，因此可以在浏览器请求 DAT 区间、解包后继续使用现有 loader。
 
@@ -39,7 +39,7 @@ VFX 还需要发射、历史、随机、宿主和场景；静态 glTF 材质不�
 
 可以先全量下载选中的索引，也可预生成紧凑 locator / 依赖清单；后者不要求改游戏文件语义。
 
-== HTTP 与缓存契约
+## HTTP 与缓存契约
 
 ```http
 Range: bytes=<start>-<inclusive-end>
@@ -54,7 +54,7 @@ Content-Range: bytes <start>-<end>/<total>
 
 采用不可变版本 / 内容哈希路径，使 index、DAT 和缓存保持同一版本。小 Range 的客户端下载量不保证 CDN 冷回源同样小，实际切片和缓存行为需对所选 CDN 验证。
 
-== 更适合 Web 的替代布局
+## 更适合 Web 的替代布局
 
 可将解包后的逻辑 MDL / MTRL / TEX / AVFX 分对象存储，或整理成带独立压缩块与依赖索引的分发包。它们仍可保留 FF14 语义，与“烘成通用 PBR”是独立选择。
 

@@ -1,8 +1,8 @@
-= GPU 上传、场景与合成
+# GPU 上传、场景与合成
 
 GPU crate 为 `crates/xiv-companion-render`，feature `renderer` 启用 wgpu / WESL 等依赖。它依赖 data crate 的 CPU 类型，但不开启 game-data 也可以消费提前准备的模型。
 
-== 三个主要对象
+## 三个主要对象
 
 | 对象 | 生命周期与职责 |
 | --- | --- |
@@ -12,7 +12,7 @@ GPU crate 为 `crates/xiv-companion-render`，feature `renderer` 启用 wgpu / W
 
 `ModelRenderData` 暴露 bounds、materials、textures、meshes，另可报告 mesh component。它是 Rust CPU 接口，不是直接传 MDL、PNG、glTF URL 的文件加载 API。
 
-== 实例创建
+## 实例创建
 
 `create_model_with_skeleton` 大致执行：
 
@@ -30,7 +30,7 @@ ModelRenderData + PreparedModelOptions + 可选 ModelSkeleton
 
 `set_model` 重建实例而复用 context；`update_materials` 刷新材质；`update_joint_matrices` 更新姿态，不要求重建材质。MSAA 1× / 4× 属于 context / target 创建参数，不能只改每帧 options 就当作管线已经重建。
 
-== 场景入口与相机
+## 场景入口与相机
 
 `ModelRenderContext::render_scene` 接受实例引用数组、输出 / 深度 TextureView、viewport、yaw / pitch / zoom / pan、ModelRenderOptions、可选 VfxParticles 与 Aura 资源。
 
@@ -38,7 +38,7 @@ ModelRenderData + PreparedModelOptions + 可选 ModelSkeleton
 
 相机根据场景包围球自动取景，属于轨道预览接口。实例集合不是完整通用 scene graph，也没有通过该接口直接暴露自由灯光编辑系统。
 
-== 模型与 VFX 绘制
+## 模型与 VFX 绘制
 
 - opaque / cutout：正常深度与 Alpha test。
 - transparent / glass：跨实例三角形中心 back-to-front 排序，写入各实例动态透明索引。
@@ -51,7 +51,7 @@ ModelRenderData + PreparedModelOptions + 可选 ModelSkeleton
 
 Decal 的前向接收面与游戏水面 stencil / deferred GBuffer 存在边界；拥有投射几何和 shader 不代表所有游戏 pass 都已复刻。
 
-== Shader 与后处理
+## Shader 与后处理
 
 模型 shader 按 samples → surface state → output 分层，源码在 `renderer/shaders/`，由 build.rs 编译 WESL。VFX 有独立 shader 与 1× / 4× decal 模块。
 
@@ -59,7 +59,7 @@ Decal 的前向接收面与游戏水面 stencil / deferred GBuffer 存在边界�
 
 材质语义修正不能靠调灯光掩盖；相同资产交给另一个通用渲染器，也不会自动复现这里的光照和后处理。
 
-== Web 画布接线
+## Web 画布接线
 
 `src/app/model_canvas_renderer.rs` 的 `WebModelCanvasRenderer` 初始化 Canvas / WebGPU surface、轨道操作、逐件 scene entries、VFX 与 joint 更新。当前浏览器后端选择 BROWSER_WEBGPU，不应因 limits 使用 downlevel 命名就宣传成已有 WebGL fallback。
 

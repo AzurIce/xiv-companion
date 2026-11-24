@@ -1,8 +1,8 @@
-= MDL 几何、部件与 Shape
+# MDL 几何、部件与 Shape
 
 本章从已经解包的 MDL 字节开始。核心实现为 `formats/mdl/metadata.rs`、`formats/mdl/geometry.rs`、`assets/loaders.rs` 和 `assets/model.rs`。
 
-== 为什么有自己的 geometry extractor
+## 为什么有自己的 geometry extractor
 
 `extract_mdl_lod0_geometry` 基于原始 MDL 元数据和 vertex declarations 读取 LOD0，而不是只使用普通 normal mesh 列表。
 
@@ -10,7 +10,7 @@
 
 “解析到分类”不等于“主场景会绘制分类”：shadow / terrainShadow / verticalFog 当前不会作为普通 surface 提交，glass / lightShaft 则进入各自 prepared role。
 
-== 从 vertex declarations 到 ModelVertex
+## 从 vertex declarations 到 ModelVertex
 
 每个 element 指定 stream、offset、type、usage 与 usage_index。读取时结合 stream stride 和 vertex-buffer 起点解码，不应假定所有 MDL 有固定顶点布局。
 
@@ -23,9 +23,9 @@
 
 bone table 保留原始索引与解析出的骨名。几何提取阶段还会验证 index 是否越过顶点范围。输出 ModelMesh 使用 u32 索引，但这不是原始 MDL 索引布局的字节级复刻。
 
-顶点色、flow 等是 shader 输入，不保证按“普通 RGB 乘色”解释；它们的消费由 [材质语义](materials.not) 决定。
+顶点色、flow 等是 shader 输入，不保证按“普通 RGB 乘色”解释；它们的消费由 [材质语义](materials.md) 决定。
 
-== submesh 与 attribute
+## submesh 与 attribute
 
 `ModelSubmeshInfo` 保留 index range、attribute mask / 名称、bone range 等信息。`PreparedModelOptions` 决定可见性：
 
@@ -34,7 +34,7 @@ bone table 保留原始索引与解析出的骨名。几何提取阶段还会验
 - `hidden_mesh_indices` 用于整网格遮蔽，不修改原始模型数据。
 - `component_preview_layout` 默认可将多 component 沿 X 拆开展示；角色场景应按需关闭，不能将预览平铺当成游戏挂接位置。
 
-== Shape 的实际表示
+## Shape 的实际表示
 
 MDL Shape 不直接等于一个现成的 glTF morph target。当前链路先保留替换关系，再转成输出顶点上的 sparse position / normal delta。
 
@@ -51,7 +51,7 @@ MDL shape / replacement metadata
 
 当前 shape 选择主要发生在 CPU 准备 / 实例重建阶段，不是一个任意权重、逐帧 GPU morph 系统。离线 table-order bit 也不代表游戏运行时的 shape name / id mapping。
 
-== PreparedModel 的边界
+## PreparedModel 的边界
 
 `prepare_model_for_render_with_options` 产生每个 mesh 的 draw role、显隐、prepared material 与运行时几何要求。
 
@@ -59,7 +59,7 @@ MDL shape / replacement metadata
 
 `runtime_geometry_requirements` 中 skeleton_pose / skinning_matrices 表示蒙皮模型需要这些输入；调用方传入骨架并更新矩阵后可以满足它们。标志本身不会自动感知外部 provider 已满足要求。race_deformer 也不能当成已实现游戏 PBD 的证明。
 
-== 输出与限制
+## 输出与限制
 
 `ModelData` 包含 bounds、materials、textures、meshes；`WeaponModelData` 另含物品、主副模型号、stain_ids、实际路径与诊断。两者实现 `ModelRenderData`。
 

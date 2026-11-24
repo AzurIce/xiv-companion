@@ -1,5 +1,5 @@
-#import "../_components/pele/lib.notc" as pele;
-= FFXIV 模型与 VFX 解析链
+#import "../_components/pele/lib.not" as pele;
+# FFXIV 模型与 VFX 解析链
 
 本书解释 xiv-companion 当前如何把 FF14 游戏文件变成 Web / 原生预览画面：文件从哪里读取，如何找到依赖，解析成什么结构，哪些数据必须逐帧提供，最终由谁上传和绘制。
 
@@ -9,7 +9,7 @@
 
 XIV Dev Wiki 已覆盖的通用格式直接链接原文，不在本书重新讲解；这里只记录项目解析链、消费方式、实现差异、验证边界，以及 Wiki 尚未覆盖的必要补充。
 
-== 先分清四个边界
+## 先分清四个边界
 
 | 层 | 输入 | 输出 | 主要 owner |
 | --- | --- | --- | --- |
@@ -39,7 +39,7 @@ flowchart TB
 
 图中是依赖关系，不是要求所有请求严格串行执行的调度算法。目录 JSON 也可能已经提供 Item / ModelChara 等映射，不必每次预览重新读取 EXD。
 
-== 本书使用的状态词
+## 本书使用的状态词
 
 - 已解析：字段进入 CPU 结构，不意味着 shader 或模拟器已经消费。
 - 已消费：某条具体运行路径使用了该字段，不意味着所有组合均支持。
@@ -49,15 +49,15 @@ flowchart TB
 
 尤其不要混淆“成功解包”“AVFX 能 parse”“特效可见”“与游戏逐帧一致”。它们是四种不同结论。
 
-== 建议阅读顺序
+## 建议阅读顺序
 
-第一次阅读先查 [SqPack 资料与项目补充](sqpack-format.not) 中的格式入口，再从 [资源入口](resources.not) 跟到 [GPU 场景](gpu-renderer.not)。排查模型材质错误可以先读 [材质](materials.not)，排查拖尾、随机和播放差异先读 [VFX 运行时](vfx-runtime.not)。
+第一次阅读先查 [SqPack 资料与项目补充](sqpack-format.md) 中的格式入口，再从 [资源入口](resources.md) 跟到 [GPU 场景](gpu-renderer.md)。排查模型材质错误可以先读 [材质](materials.md)，排查拖尾、随机和播放差异先读 [VFX 运行时](vfx-runtime.md)。
 
-讨论独立抽取和 Range 加载时，读 [可移植性与分发](portability.not)；它明确区分当前实现和未来设计，不将本书误读为已经接入网络后端。
+讨论独立抽取和 Range 加载时，读 [可移植性与分发](portability.md)；它明确区分当前实现和未来设计，不将本书误读为已经接入网络后端。
 
-== 构建与产物
+## 构建与产物
 
-仓库根目录的 `Notist.toml` 声明 `render-book` target，章节顺序由本目录 `SUMMARY.not` 维护。
+仓库根目录的 `Notist.toml` 声明 `render-book` target，章节顺序由本目录 `SUMMARY.md` 维护。
 
 ```sh
 # 不需要启动应用、WebGPU 或文档服务器。
@@ -67,12 +67,12 @@ nix run .#notist -- build --target render-book
 just book-build
 ```
 
-输出为 `target/notist/render-book/index.html` 及其静态资源。`.not` 是本书源码；不提交生成 HTML，也不打包游戏资源。上游 Notist 当前提供 x86_64-linux、aarch64-linux、aarch64-darwin 包，flake 只在这些系统加入工具，不改变应用原有系统列表。
+输出为 `target/notist/render-book/index.html` 及其静态资源。`.md` 是本书源码；不提交生成 HTML，也不打包游戏资源。上游 Notist 当前提供 x86_64-linux、aarch64-linux、aarch64-darwin 包，flake 只在这些系统加入工具，不改变应用原有系统列表。
 
 流程图复用 `docs/_components/pele` 的本地声明与浏览器组件，使用 Pele 1.6.0 渲染 Mermaid 语法，跟随书籍主题。首次浏览需要联网加载固定版本的 Pele；静态构建成功只证明组件调用与资源发布成功，不等于浏览器已经绘图或可离线使用。
 
-== 与旧文档的关系
+## 与旧文档的关系
 
 本书集中解释当前链路和接口；`docs/weapon-render-pipeline.md` 保留详细材质证据，`docs/render-shader-parity.md` 保留家族对照，VFX scope / verification / progress 文档保留各自验收范围。它们不在本次整理中迁移或覆盖。
 
-旧文档的“当时未实现”可能已经变化，旧测试数量和安装审计数字也不是全游戏覆盖率。请从 [源码与参考资料](source-map.not) 交叉核对。
+旧文档的“当时未实现”可能已经变化，旧测试数量和安装审计数字也不是全游戏覆盖率。请从 [源码与参考资料](source-map.md) 交叉核对。

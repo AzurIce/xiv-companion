@@ -1,11 +1,11 @@
-#import "../_components/pele/lib.notc" as pele;
-= SqPack 资料与项目补充
+#import "../_components/pele/lib.not" as pele;
+# SqPack 资料与项目补充
 
 通用格式直接阅读 [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)，本书不逐节复述字段规范。下面用一条路径贯穿图中的各个位置，区分可以直接计算的值和必须从实际资源读取的值。
 
-本章只保留该页面尚未展开的 DAT 条目 / 压缩块，以及当前实现需要注意的差异。项目调用链与读取限制见 [资源入口](resources.not)。以下补充以 Win32 小端路径为主，不是所有平台、版本的完整规范。
+本章只保留该页面尚未展开的 DAT 条目 / 压缩块，以及当前实现需要注意的差异。项目调用链与读取限制见 [资源入口](resources.md)。以下补充以 Win32 小端路径为主，不是所有平台、版本的完整规范。
 
-== 贯穿例子：先确定内部路径
+## 贯穿例子：先确定内部路径
 
 以下是游戏内部路径，不是磁盘上单独存在的文件，也不是 DAT 的文件名：
 
@@ -17,7 +17,7 @@ chara/weapon/w2001/obj/body/b0102/model/w2001b0102.mdl
 
 扩展仓库的某些内部路径会显式出现 repository，例如 Wiki 中的 `music/ex2/bgm_ex2_system_title.scd`。内部路径如何选择仓库与物理文件存放在 `sqpack/ffxiv/` 或 `sqpack/ex2/` 下，是相关但不同的两件事；上述完整原字符串才参与本例 hash 计算。
 
-== 从内部路径选择哪组 index
+## 从内部路径选择哪组 index
 
 查找分成两步：先由路径的分类 / 仓库选出候选索引文件，再在这些索引里查 hash。不是先对全部 index 做一次全局 hash 搜索，也不是用 hash 数值来推算 index 文件名。
 
@@ -56,7 +56,7 @@ game/sqpack/ffxiv/040000.win32.index2
 
 `040000.win32` 是本例整组文件的共同前缀；换成 `.dat0`、`.dat1` 就是同组的数据分卷。chunk 已经包含在 `040000` 里，不能把它与后缀 `.dat1` 的分卷编号混为一谈。
 
-== 其他路径与多 chunk 分类怎样查
+## 其他路径与多 chunk 分类怎样查
 
 把例子换成 `music/ex2/bgm_ex2_system_title.scd`：首段 music 选择 category `0c`，第二段 ex2 选择 repository `ex2` 和扩展编号 `02`。当前代码首先尝试：
 
@@ -79,7 +79,7 @@ game/sqpack/ex2/0c0200.win32.index2
 
 路由依据和候选构造在 `src/app/browser_sqpack.rs` 的 `category_for_path`、`repository_for_path`、`sqpack_index_candidates_for_path`；实际尝试和缓存由 `find_entry_location` 完成。这里跟踪的是浏览器后端，不将它推广为所有 Resource 实现的策略。
 
-== 在选定索引里查 hash
+## 在选定索引里查 hash
 
 回到最初的武器路径：当前 Physis 将它拆成下面两个字符串，目录末尾没有斜杠：
 
@@ -101,7 +101,7 @@ index 使用上面两个部分组成的键；index2 对完整路径另算一次�
 
 这些 hash 只由路径和算法决定；它们不证明该文件在某个安装版本中存在，也不能算出文件存在哪个 DAT、哪个位置。后两项必须查该版本索引。
 
-== 项目的读取边界
+## 项目的读取边界
 
 #pele.diagram(r#"""
 flowchart TB
@@ -126,7 +126,7 @@ flowchart TB
 
 图中使用完整内部路径。两条索引边表示两种替代查法，不表示必须同时读取两份索引。hash 为实算值；data、DAT 分卷、entry / block 偏移均为下文明确设定的演示值，不是从本地游戏安装提取的记录。
 
-== 索引命中后：DAT 编号与 entry 偏移
+## 索引命中后：DAT 编号与 entry 偏移
 
 对于这条 chara 路径，当前项目会查询 `sqpack/ffxiv/040000.win32.index` 或同名前缀的 `.index2`。假设普通、非 synonym 记录的数据位置字段是：
 
@@ -147,7 +147,7 @@ DAT 编号是一个整数；在普通记录的编码字段里占 3 位，在磁�
 
 entry 偏移指向 DAT 内这条记录的头部，不指向 index 表项、解压后 MDL 的第几个字节，也不直接指向压缩 payload。不同安装 / 补丁版本可以给同一内部路径分配不同的物理位置。
 
-== entry 和数据都在 DAT 内
+## entry 和数据都在 DAT 内
 
 是的：索引记录在 `.index` / `.index2`；entry 的头、类型专用块表和数据块都位于被选中的 `.datN`。一个 entry 描述一个逻辑文件的存储，数据块是这个 entry 的组成部分，不是存在另一种“data 文件”里。
 
@@ -166,7 +166,7 @@ entry 偏移指向 DAT 内这条记录的头部，不指向 index 表项、解�
 
 独立库 `sqpack::read_entry` 调用上游 `SqPackData::read_from_reader`，根据条目类型重建完整逻辑字节，再由 MDL parser 解释。恢复出来的 MDL 通常先在内存中，并不是索引还会指向磁盘上的另一份裸 `.mdl` 文件。
 
-== 复算 hash、编码位置与索引记录
+## 复算 hash、编码位置与索引记录
 
 下面只用 Python 标准库复算本例，不读取游戏、不创建 DAT，也不声称本例文件已存在。`data` 的构造只用于本例的普通、非 synonym 条目。
 
@@ -209,13 +209,13 @@ index record : 9b e8 11 1e 55 21 2e d9 02 00 02 00 00 00 00 00
 index2 record: 8f 18 e0 89 02 00 02 00
 ```
 
-== 对照 Wiki 时的实现注意点
+## 对照 Wiki 时的实现注意点
 
 - 当前 Physis 的 `SqPackIndex::calculate_hash` 使用小写路径和 JamCRC，拆分目录时不带末尾斜杠；实现应以实际代码与样本核对，避免只按 Wiki 的简述替换 CRC 算法。
 - Wiki 标为 unknown 的位置字段最低位，在 Lumina / Physis 中命名为 is_synonym；完整 reader 还需处理相关碰撞记录。当前项目能读取普通条目不代表覆盖全部特殊索引情况。
 - Wiki 中固定仓库数量、文件大小限制等具有年代性，不作为本项目的跨版本常量。
 
-== DAT 里面是 entry，不是一个裸 MDL
+## DAT 里面是 entry，不是一个裸 MDL
 
 到达条目偏移后，先读取 entry header。常见开头是：
 
@@ -237,7 +237,7 @@ index2 record: 8f 18 e0 89 02 00 02 00
 
 Standard 的块表记录相对偏移与大小信息，块位置通常按 `entry_start + entry_header_size + block_offset` 计算。Model / Texture 有不同的分段表，不能套用同一套 Standard 拼接公式。
 
-== 压缩块和两层解码
+## 压缩块和两层解码
 
 常见数据块包含 16 字节块头：header size、保留字段、压缩长度 / 未压缩标记、解压长度，后跟 payload 和可能的对齐。
 
@@ -262,9 +262,9 @@ flowchart TB
 
 DAT 不是一个从头连续压缩到尾的大流。因此可以直接读取某个条目的相关块；但不能在一个 Deflate 块中间随意开始解压。文件长度、块表、对齐与边界都应校验，不能把旧文档中的 2 GB 或 16 KiB 观察值当成跨版本安全常量。
 
-HTTP Range 与资源接口的衔接、当前 64 MiB 读取窗口和网络设计见 [资源入口](resources.not) 与 [分发边界](portability.not)。
+HTTP Range 与资源接口的衔接、当前 64 MiB 读取窗口和网络设计见 [资源入口](resources.md) 与 [分发边界](portability.md)。
 
-== 现成网页与源码
+## 现成网页与源码
 
 - [Lumina：SqPackIndexHeader.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Structs/SqPackIndexHeader.cs)：完整一些的索引头、16 / 8 字节表项、synonym 与位置解码。
 - [Lumina：SqPackFileInfo.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Structs/SqPackFileInfo.cs)：Standard、Model、Texture 的 entry / block 结构，适合对照 DAT。

@@ -1,10 +1,10 @@
-= 资源入口与 SqPack 解包
+# 资源入口与 SqPack 解包
 
 本章负责从“游戏内部路径”到“逻辑文件字节”。这一层不负责理解材质、动画或特效行为。
 
-通用容器与索引格式见 [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)，本书不重复其格式说明。该页未展开的 DAT 细节见 [SqPack 资料与项目补充](sqpack-format.not)；本章只跟踪项目的读取接口与实现。
+通用容器与索引格式见 [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)，本书不重复其格式说明。该页未展开的 DAT 细节见 [SqPack 资料与项目补充](sqpack-format.md)；本章只跟踪项目的读取接口与实现。
 
-== 两套现有资源接口
+## 两套现有资源接口
 
 原生 loader 使用 `physis::resource::Resource`，通常由 `SqPackResource` 读取安装目录。迁移后的上游同步 `read` 返回 Result，缺失为 FileNotFound，I/O 与解析失败保留错误来源。
 
@@ -21,13 +21,13 @@ fn platform(&self) -> physis::Platform;
 
 `src/app/resources.rs` 为 `BrowserSqPack` 实现该 trait，另有带进度上报的 `BrowserSqPackGameResource` 包装器。上层模型与 VFX loader 不直接操作浏览器文件句柄。
 
-== 浏览器本地目录
+## 浏览器本地目录
 
 `user_local_directory.rs` 保存和恢复 File System Access 目录句柄，识别游戏目录或安装根目录；权限与目录布局有效后才构造 `BrowserSqPack`。
 
 这是用户授权的本地文件读取，不是浏览器获知一个系统路径后任意打开文件，也不是 CDN 接口。`ffxivgame.ver` 提供安装版本文本；模型依赖通过内部路径寻址。
 
-== index 到 DAT
+## index 到 DAT
 
 入口为 `BrowserSqPack::read_game_file` / `try_read_optional_game_file`：
 
@@ -44,7 +44,7 @@ normalize_game_path
 
 `index_cache`、`missing_index_cache` 与 `entry_location_cache` 分别避免重复索引解析、重复探测不存在的索引、重复定位成功的路径。它们是 BrowserSqPack 实例内缓存，不能直接等同于全局持久资源缓存。
 
-== DAT 中的条目类型
+## DAT 中的条目类型
 
 独立库将字节窗口或 seekable reader 交给上游 `SqPackData::read_from_reader`。浏览器不再维护一份重复的 DAT 解包器；上游按平台端序读取条目头并按类型派发：
 
@@ -59,7 +59,7 @@ normalize_game_path
 
 Model 条目的解包和 MDL 几何解析是两步：前者恢复逻辑 MDL，后者解释 vertex declarations、mesh、材质名等。Texture 条目解包同样不等于已经把 BC 压缩贴图解码成 RGBA。
 
-== 当前读取窗口的限制
+## 当前读取窗口的限制
 
 `SQPACK_READ_WINDOW` 为 64 MiB。当前实现从条目起点调用 `File.slice(start, start + window)`，把结果放入内存 Cursor，再同步解包。
 
@@ -68,10 +68,10 @@ Model 条目的解包和 MDL 几何解析是两步：前者恢复逻辑 MDL，�
 - 索引仍是整份读取，不是远程 B-tree 式查找。
 - 现有同步 `Read + Seek` 解包器不能在 WASM 中同步阻塞等待 fetch。
 
-这不影响“可做 Range 后端”的判断，但实现网络版本之前应先设计精确区间计划。详见 [网络分发](portability.not)。
+这不影响“可做 Range 后端”的判断，但实现网络版本之前应先设计精确区间计划。详见 [网络分发](portability.md)。
 
-== 输出契约
+## 输出契约
 
-本层输出的是原始逻辑资源，例如完整 `.mtrl` 字节，不是 ModelData，也不是 JSON。上层继续负责按 [模型路径](model-routing.not) 和 [AVFX 挂载](vfx-assets.not) 扩展依赖图。
+本层输出的是原始逻辑资源，例如完整 `.mtrl` 字节，不是 ModelData，也不是 JSON。上层继续负责按 [模型路径](model-routing.md) 和 [AVFX 挂载](vfx-assets.md) 扩展依赖图。
 
 资源来源、平台、游戏版本必须匹配；尤其不能将新 DAT 与旧 index 混用。

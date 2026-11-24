@@ -1,8 +1,8 @@
-= 源码与参考资料索引
+# 源码与参考资料索引
 
 应用与 renderer 路径相对 companion 仓库；`icexiv-data:` 前缀的路径相对独立库仓库。应用在线链接指向 dev，独立库指向 main；本书从 `1286ba32d156` 整理并随抽离更新，查证时优先使用锁定版本的同名符号，不依赖固定行号。
 
-== 资源与依赖
+## 资源与依赖
 
 | 本地文件 | 优先查找的符号 |
 | --- | --- |
@@ -18,7 +18,7 @@
 
 [浏览器 SqPack 源码](https://github.com/AzurIce/xiv-companion/blob/dev/src/app/browser_sqpack.rs) · [领域 loader 源码](https://github.com/icexiv/icexiv-data/blob/main/src/assets/loaders.rs)
 
-== 模型、材质与角色
+## 模型、材质与角色
 
 | 本地文件 | 优先查找的符号 / 职责 |
 | --- | --- |
@@ -38,7 +38,7 @@
 
 [CPU 模型契约](https://github.com/icexiv/icexiv-data/blob/main/src/assets/model.rs) · [骨架](https://github.com/icexiv/icexiv-data/blob/main/src/formats/havok/skeleton.rs) · [动画](https://github.com/icexiv/icexiv-data/blob/main/src/formats/havok/animation.rs)
 
-== VFX 与 GPU
+## VFX 与 GPU
 
 | 本地文件 / 目录 | 优先查找的符号 / 职责 |
 | --- | --- |
@@ -57,7 +57,7 @@
 
 [AVFX parser](https://github.com/icexiv/icexiv-data/blob/main/src/formats/avfx/parser.rs) · [VFX runtime](https://github.com/icexiv/icexiv-data/blob/main/src/formats/avfx/sim.rs) · [GPU context](https://github.com/AzurIce/xiv-companion/blob/dev/crates/xiv-companion-render/src/renderer/model/context.rs)
 
-== 仓库内深层说明
+## 仓库内深层说明
 
 - [武器渲染管线与材质证据](https://github.com/AzurIce/xiv-companion/blob/dev/docs/weapon-render-pipeline.md)：ColorTable、采样、SHPK、runtime fallback 和 GPU 流程。
 - [shader 家族对照](https://github.com/AzurIce/xiv-companion/blob/dev/docs/render-shader-parity.md)：MeddleTools 参考及各家族记录；状态需要与当前源码交叉核对。
@@ -66,14 +66,14 @@
 - `docs/vfx-progress.html` / `docs/vfx-progress-data.js`：覆盖领域和后续缺口。
 - `TODO.md`：PBD 近似、穿搭页武器 VFX 等待办。
 
-== 格式文档网站
+## 格式文档网站
 
 - [XIV Dev Wiki](https://xiv.dev/)：FF14 社区开发与游戏文件格式文档网站，适合作为查询格式资料的入口；不是 Square Enix 官方规范，部分页面包含旧版本观察或尚未确认的字段。
-- [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)：通用容器与索引说明直接以此为阅读入口；本书仅保留 [DAT 与项目差异补充](sqpack-format.not)，不重复其内容。
-- [XIV Dev Wiki：AVFX Files](https://xiv.dev/game-data/visual-effects/avfx-files)：AVFX 块、容器、嵌入模型和曲线布局；本书只记录 [资产加载与类型映射](vfx-assets.not)。
-- [XIV Dev Wiki：Visual Effects](https://xiv.dev/game-data/visual-effects)：通过子页面查阅 scheduler、timeline、emitter、particle、binder、effector 与生命周期等概念；本书保留 [模拟器实现与边界](vfx-runtime.not)。
+- [XIV Dev Wiki：SqPack](https://xiv.dev/data-files/sqpack)：通用容器与索引说明直接以此为阅读入口；本书仅保留 [DAT 与项目差异补充](sqpack-format.md)，不重复其内容。
+- [XIV Dev Wiki：AVFX Files](https://xiv.dev/game-data/visual-effects/avfx-files)：AVFX 块、容器、嵌入模型和曲线布局；本书只记录 [资产加载与类型映射](vfx-assets.md)。
+- [XIV Dev Wiki：Visual Effects](https://xiv.dev/game-data/visual-effects)：通过子页面查阅 scheduler、timeline、emitter、particle、binder、effector 与生命周期等概念；本书保留 [模拟器实现与边界](vfx-runtime.md)。
 
-== 外部语义参考
+## 外部语义参考
 
 - [Lumina SqPack 结构](https://github.com/NotAdam/Lumina/tree/master/src/Lumina/Data/Structs)：索引头、哈希表项以及 DAT entry / block 的实现参考。
 - [Meddle](https://github.com/PassiveModding/Meddle)：运行时 exporter、顶点与材质资源语义；本地 gitignored 副本在 `third_party/Meddle`。优先看 Export/Model.cs、Mesh.cs、Vertex.cs、ColorTableRow.cs、MaterialComposer 和 OnRenderMaterialUtil。
@@ -84,7 +84,7 @@
 - [ffxiv-datamining-cn](https://github.com/thewakingsands/ffxiv-datamining-cn)：无游戏安装时的目录表形状与资源映射参考。
 - [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 与 [扩展注册表](https://github.com/KhronosGroup/glTF/blob/main/extensions/README.md)：判断标准表达边界，不用于证明 FF14 shader 等价。
 
-== 更新原则
+## 更新原则
 
 本书保留“来源事实 → 当前解析 → 当前消费 → 缺失输入 / 近似 → 验证条件”的链条。引用外部实现时标明它证明了什么；不要将反编译研究、节点接线、静态资源统计和最终游戏画面混成同一个证据等级。
 
